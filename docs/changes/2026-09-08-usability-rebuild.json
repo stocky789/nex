@@ -1,0 +1,32 @@
+{
+  "summary": "Rebuild matched usability appliance, host package and ISO; add native guest boot verification. API impact: none \u2014 delivery of already documented contracts.",
+  "paths": [
+    "scripts/build-source.py",
+    "tests/integration/appliance-dhcp-boot.py",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/guide/secure-web-access.md",
+    "docs/qa/appliance/deployment-usability.md",
+    "docs/qa/appliance/usability-rebuild.md",
+    "docs/qa/appliance/usability-dhcp-boot/results.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Current matched artifact availability and new native guest verification are now recorded.",
+    "pages": [
+      "docs/guide/deploy-controller-appliance.md",
+      "docs/guide/secure-web-access.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Build/verification only; no additional Controller/Core/client API changes.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Signed image and embedded package/source checks, actual disposable KVM DHCP and short-password guest boot, package smoke and ISO checksum; full host-local enrollment/physical LAN limits stated.",
+    "evidence": [
+      "docs/qa/appliance/usability-rebuild.md",
+      "docs/qa/appliance/usability-dhcp-boot/results.json"
+    ]
+  }
+}

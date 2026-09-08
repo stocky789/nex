@@ -1,0 +1,48 @@
+replacement_boot_id:
+96e043e4-7c3b-4688-8d24-784f5cb7ab80
+
+replacement_vm_state:
+running
+
+
+replacement_vm_autostart:
+Id:             1
+Name:           nex-controller-recovery
+UUID:           7ccb7371-f9d8-4f14-904a-80cf71dcd3bf
+OS Type:        hvm
+State:          running
+CPU(s):         2
+CPU time:       8.4s
+Max memory:     4194304 KiB
+Used memory:    4194304 KiB
+Persistent:     yes
+Autostart:      enable
+Autostart Once: disable
+Managed save:   no
+Security model: apparmor
+Security DOI:   0
+Security label: libvirt-7ccb7371-f9d8-4f14-904a-80cf71dcd3bf (enforcing)
+
+
+nex_core_local:
+active
+
+disposable_link_fixture:
+active
+
+original_vm_state_and_autostart:
+Id:             -
+Name:           nex-controller
+UUID:           8d5298c9-f86c-449a-96b2-b10ce84fa231
+OS Type:        hvm
+State:          shut off
+CPU(s):         2
+Max memory:     4194304 KiB
+Used memory:    4194304 KiB
+Persistent:     yes
+Autostart:      disable
+Autostart Once: disable
+Managed save:   no
+Security model: apparmor
+Security DOI:   0
+

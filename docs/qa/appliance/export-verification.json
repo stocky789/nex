@@ -1,0 +1,7 @@
+{
+  "result": "Real host helper exported quiesced state via QGA; copied off host and verified all manifest hashes",
+  "archive_sha256": "ccdce43cd508f3e36448ce93c0952fdf371804d39d738f3a5a55091bed1cb451",
+  "source_sha256": "e71508e7979543e9024b92947373c936cc91a509acff2bbf058578ace7293753",
+  "file_count": 6,
+  "private_archive_not_committed": true
+}

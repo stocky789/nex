@@ -1,0 +1,70 @@
+{
+  "summary": "Simplify Controller deployment and local controls. API impact: changed contract \u2014 DHCP/static mode, password bootstrap policy, persisted TLS identity and optional legacy power confirmation; preserve authorization/ownership.",
+  "paths": [
+    "appliance/firstboot.py",
+    "cmd/nex-controller/main.go",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/api/index.html",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/api/openapi.json",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/guide/manage-controller.md",
+    "docs/guide/secure-web-access.md",
+    "docs/plans/2026-09-08-controller-appliance.md",
+    "docs/qa/appliance/deployment-usability.md",
+    "docs/qa/appliance/deployment-usability/deployment-dhcp-desktop.png",
+    "docs/qa/appliance/deployment-usability/deployment-dhcp-mobile.png",
+    "docs/qa/appliance/deployment-usability/deployment-dhcp-review-mobile.png",
+    "docs/qa/appliance/deployment-usability/deployment-static-desktop.png",
+    "docs/qa/appliance/deployment-usability/deployment-submit-error-mobile.png",
+    "docs/qa/appliance/deployment-usability/power-confirmation-mobile.png",
+    "docs/qa/appliance/deployment-usability/results.json",
+    "internal/agent/client.go",
+    "internal/agent/controller_address_test.go",
+    "internal/agent/state.go",
+    "internal/controller/controller.go",
+    "internal/controller/web_security_test.go",
+    "internal/localcore/deploy.go",
+    "internal/localcore/handoff.go",
+    "internal/localcore/handoff_test.go",
+    "internal/localcore/recover.go",
+    "internal/localcore/service.go",
+    "internal/localcore/service_test.go",
+    "internal/vmhost/engine.go",
+    "internal/vmhost/engine_test.go",
+    "internal/websecurity/policy.go",
+    "internal/websecurity/policy_test.go",
+    "tests/integration/localcore_browser.py",
+    "tests/test_api_contract.py",
+    "tests/test_appliance_build.py",
+    "web/src/local.tsx"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Document DHCP/static choices, short passwords, simple power confirmation, lease recovery and required matched artifact rebuild.",
+    "pages": [
+      "docs/guide/deploy-controller-appliance.md",
+      "docs/guide/secure-web-access.md",
+      "docs/guide/manage-controller.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Update existing deployment/recovery/power and bootstrap contracts, defaults/validation/errors/retries, observed URL and agent TLS name with old-state compatibility.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/local-openapi.json",
+      "docs/api/openapi.json",
+      "docs/api/local.html",
+      "docs/api/index.html"
+    ]
+  },
+  "verification": {
+    "method": "Focused Go/race and Python/API contracts, actual TLS checks, real PAM/browser with simulated deployment/power, inspected desktop/mobile captures and independent review; native guest/hardware and new artifact delivery remain unverified.",
+    "evidence": [
+      "docs/qa/appliance/deployment-usability.md"
+    ]
+  }
+}

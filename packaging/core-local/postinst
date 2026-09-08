@@ -1,0 +1,11 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-only
+set -eu
+if [ "$1" = configure ]; then
+    # Enable in installer chroots too; native Debian policy controls starting services.
+    deb-systemd-helper enable nex-core-local.service
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload
+        deb-systemd-invoke restart nex-core-local.service || true
+    fi
+fi

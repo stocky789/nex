@@ -1,0 +1,24 @@
+boot_id:
+465f5cb4-5065-46dc-aa67-a8ee11a4ebbd
+
+local_service:
+active
+
+domain:
+Id:             1
+Name:           nex-controller
+UUID:           91291c3e-b2c9-454a-8f77-4eaeb8bf392e
+OS Type:        hvm
+State:          running
+CPU(s):         2
+CPU time:       11.1s
+Max memory:     4194304 KiB
+Used memory:    4194304 KiB
+Persistent:     yes
+Autostart:      enable
+Autostart Once: disable
+Managed save:   no
+Security model: apparmor
+Security DOI:   0
+Security label: libvirt-91291c3e-b2c9-454a-8f77-4eaeb8bf392e (enforcing)
+

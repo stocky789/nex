@@ -1,0 +1,13 @@
+{
+  "result": "passed",
+  "mode": "blocked-only",
+  "binary_sha256": "7fb479ea77758c44c71fb0e2d3998e898d9e0f1959ff9d4ac9276d14035e38a3",
+  "ui_sha256": {
+    "local.css": "dc94aeab25b9791f09782e32a5272e8a025d062ccaa0a9d29416c89660677b8e",
+    "local.html": "328ec1c90075ef067253ecf34b1993cbd05a23c4d64ee502feec55c9438b2b42",
+    "local.js": "e71e2bbf2aa1734e24459c092c64e0a9f7ca989dcf8af4e74fb343a58f589f7c",
+    "local.js.LEGAL.txt": "7dff61d0cd5b7cff2403db6cf5c586b1218c9e663784caeda7fd06916c997d46"
+  },
+  "vm_commands": "simulated virsh/qemu-img/genisoimage; real HTTPS, auth, storage journals and browser",
+  "unix_time": 1788857097.6899455
+}

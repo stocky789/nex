@@ -1,0 +1,10 @@
+{
+  "admin_login": true,
+  "tls_sha256": "e63bf0aeb73c47e354dfa8d5dd3c428d13208980ee9eb4a0d442c8fad08c5c49",
+  "identities_preserved": true,
+  "agent_connection": "fresh",
+  "vm_state": "running",
+  "vm_id": "91291c3e-b2c9-454a-8f77-4eaeb8bf392e",
+  "browser_errors": [],
+  "source_sha256": "958723923c1e144e517229693a7224f2524030fe79830b761bcb79e6c8aba451"
+}

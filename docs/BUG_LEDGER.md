@@ -60,3 +60,352 @@ not claim physical-hardware or Secure Boot verification.
 - Fix: check Debian's ordinary-user range (1000–60000), preserving its higher reserved service UIDs.
 - Regression evidence: inspection showed root password status `P` and only `libvirt-qemu` in the old range. The corrected installed-host check runs on the same disposable installation; results are recorded in the [root-only QA report](qa/iso/2026-09-08-root-account.md).
 - Avoid: interpreting every UID above 1000 as an installer-created login account; Debian service accounts remain necessary on a root-only host.
+
+## BUG-0007 — Installer header used placeholder branding
+
+- Date: 2026-09-08
+- Symptom: custom installer showed a generic blue letter tile and system-font product name.
+- Root cause: the header recreated branding as text instead of using the approved artwork.
+- Fix: crop and scale the approved Core lockup with existing GTK image support; retain original artwork in the frontend source archive.
+- Regression evidence: [actual 800×600 VM capture](qa/iso/2026-09-08-installer-logo.md) shows the complete approved logo; the initrd regression compares exact artwork bytes.
+- Avoid: substituting typed text for an existing approved product lockup.
+
+## BUG-0008 — Initrd overlay omitted directories needed by new assets
+
+- Date: 2026-09-08
+- Symptom: first logo rebuild booted into the plain-text fallback despite the PNG appearing in the cpio file list.
+- Root cause: the overlay archived files only; the kernel could not extract artwork into a missing parent directory. The previous frontend library reused an existing directory.
+- Fix: include directory entries in the shared overlay archive before their files.
+- Regression evidence: `tests/integration/installer-logo.py` passes against the complete concatenated initrd and verifies parent-before-file ordering and artwork contents; [final VM capture](qa/iso/2026-09-08-installer-logo.md) confirms successful rendering.
+- Avoid: treating an archive member listing as proof the kernel can extract its files.
+
+## BUG-P1-0001 — Controller startup and credential lifecycle regressions
+
+- Date: 2026-09-08
+- Symptom: the initial Phase 1 Controller panicked before listening; review also found that in-flight old credentials or a second replacement token could bypass a completed host revocation/re-enrollment.
+- Root cause: ambiguous Go ServeMux patterns and certificate checks outside the state-changing transaction.
+- Fix: use non-conflicting routes; revalidate the exact certificate inside each transaction and consume replacement tokens only for a still-revoked host.
+- Regression evidence: `go test -race -count=1 ./...` passed; `python3 tests/integration/phase1.py --browser` exercises actual startup and credential lifecycle. Dedicated stale-auth and replacement-token checks detect the race. See [independent review](qa/phase1/review.md) and [process/browser results](qa/phase1/acceptance.md).
+- CI: `.github/workflows/phase1.yml` and `.gitea/workflows/phase1.yml` run the Go checks and process/browser suite on pushes and pull requests; hosted execution is not claimed.
+- Avoid: treating successful compilation or pre-transaction authorization as proof a later operation remains authorized.
+
+## BUG-P1-0002 — Native inventory rejection and misleading probe freshness
+
+- Date: 2026-09-08
+- Symptom: real hosts reported HTTP 400 because their CPU flag list exceeded an assumed limit; stalled probes could retain a healthy appearance, suppress independent observations or discard samples after a clock correction.
+- Root cause: an unrealistically small CPU-feature bound and aggregate/wall-clock-only observation merging. The agent also labeled unrelated CPU flags as virtualization features.
+- Fix: validate realistic bounded reports, publish virtualization-specific flags, merge probes independently using ordered reports and sample identity, and preserve timeout/stale state without renewing old successful observations.
+- Regression evidence: controller merge/freshness and agent virtualization-filter tests pass under `go test -race -count=1 ./...`; the filter regression failed before correction. Process/browser and `bash tests/integration/phase1-debian.sh` checks exercise real reporting and stalled/failed libvirt recovery. See [Debian evidence](qa/phase1/debian.md) and [process/browser results](qa/phase1/acceptance.md) for exact tested builds and limits.
+- CI: both Phase 1 workflows run these Go, browser/process and Debian checks on pushes and pull requests; actual hosted results remain unverified.
+- Avoid: treating a heartbeat as a fresh successful service check, ordering hosts by their wall clocks, or assuming development-machine CPU metadata bounds.
+
+## BUG-P1-0003 — UI health and asynchronous scope races
+
+- Date: 2026-09-08
+- Symptom: healthy checks initially rendered degraded; an older read could overwrite revoked state, a delayed enrollment token could appear under another pool, and the skip link changed the resource route.
+- Root cause: a mismatched status enum and asynchronous responses unguarded by request/session/scope identity; the navigation hash was reused for focus movement.
+- Fix: render contract status/freshness, reject superseded reads, guard workflow changes while mutations are pending, and move focus without changing the object URL.
+- Regression evidence: `python3 tests/integration/phase1.py --browser` passes keyboard, health, delayed-token, delayed-read/revocation and narrow-screen checks with inspected captures in [browser evidence](qa/phase1/acceptance.md).
+- CI: both Phase 1 workflows run the browser regression suite on pushes and pull requests; workflow configuration alone is not hosted CI proof.
+- Avoid: trusting promise completion order as user intent, or using an object-navigation fragment for a skip link.
+
+## BUG-0009 — Initrd overlay replaced the merged-usr library symlink
+
+- Date: 2026-09-08
+- Symptom: The first standalone-wizard image panicked during init.
+- Root cause: Archiving a new /lib directory replaced Debian’s /lib → usr/lib symlink, hiding required startup files.
+- Fix: Install new hooks under usr/lib while preserving the base symlink.
+- Regression evidence: installer-logo.py failed on the broken complete initrd with “Overlay directory replaces base symlink: lib”; the corrected artifact passes and boots the native wizard. See [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
+- Avoid: Creating overlay directories without checking whether the base path is a symlink.
+
+## BUG-0010 — Preseed command failure did not stop automatic partitioning
+
+- Date: 2026-09-08
+- Symptom: Review found that acknowledging a failed disk recheck could allow partitioning to continue.
+- Root cause: The upstream preseed_command helper reports failure but returns success after its error dialog.
+- Fix: Use a direct partman init hook whose nonzero exit aborts initialization.
+- Regression evidence: installer-handoff.py simulates a failed recheck and observes nonzero hook exit; minimal mode remains unaffected. The final disposable install exercised the successful hook. See [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
+- Avoid: Using a diagnostic preseed early command as a fail-closed destructive-operation guard.
+
+## BUG-0011 — Private staging permissions leaked into public host configuration
+
+- Date: 2026-09-08
+- Symptom: Review found that umask 0077 could stage /etc directories as 0700 and resolver files as 0600.
+- Root cause: Requested mkdir/file modes are reduced by umask; copying staged directory attributes would propagate them to the installed system.
+- Fix: Set public target directories to 0755 and files to 0644 explicitly while retaining private staging root and credential files.
+- Regression evidence: installer-network.c runs under umask 0077 and checks public directory/file permissions plus private staging-root preservation; strict compilation and execution pass. See [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
+- Avoid: Assuming a requested mode is the resulting mode under a restrictive process umask.
+
+## BUG-0012 — Selected keyboard did not match credential entry
+
+- Date: 2026-09-08
+- Symptom: Review found that non-US physical keys could produce a different password after reboot; restarting setup also retained an old live layout.
+- Root cause: The original wizard only saved a later keyboard preseed while Xorg continued using its previous layout.
+- Fix: Apply the displayed layout at startup and on selection, clear both credential entries on changes, and reject continuation when layout application fails.
+- Regression evidence: installer-keyboard.py compiles the actual callback with simulated boundaries and covers success, failure, clearing and initialization. Actual VM selection of German made physical Y produce Z and cleared both fields. See [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
+- Avoid: Collecting a password before applying the input layout, or trusting a dropdown’s default to reset Xorg.
+
+## BUG-0013 — Wizard startup changed the installation engine umask
+
+- Date: 2026-09-08
+- Symptom: Review found that native installation would inherit umask 0077.
+- Root cause: The private-handoff script is sourced into the installer shell and did not restore its caller’s mask.
+- Fix: Save and restore the incoming mask around the private handoff.
+- Regression evidence: installer-handoff.py checks the caller remains at 0022 after the real startup script runs with simulated commands. See [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
+- Avoid: Treating a sourced shell script’s process settings as local to that file.
+
+## BUG-0014 — Review text and confirmation recovery were not fully visible
+
+- Date: 2026-09-08
+- Symptom: The live review showed only HOST; after a wrong confirmation, the error layout hid the correction field below the visible area.
+- Root cause: The dynamic multiline wrapping label failed to display the complete summary in the shipped GTK runtime; wrapping error-label sizing also shrank the review viewport.
+- Fix: Render the summary in a read-only scrollable text view and keep the concise error line from expanding vertically.
+- Regression evidence: wizard-review.py boots the actual GUI and checks visible network/disk summary regions, an error, visible correction input and an unchanged disposable disk. The earlier error capture has zero text pixels in the required correction region and fails the new assertion; final KVM check passes. See [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
+- Avoid: Accepting successful string construction as proof the operator can see the review, or checking only the happy-path layout.
+
+## BUG-0015 — Hardware preparation lacked a debconf protocol channel
+
+- Date: 2026-09-08
+- Symptom: The preparation log contained raw PROGRESS protocol commands.
+- Root cause: Native anna was invoked outside an established debconf frontend after its protocol descriptors had been cleared.
+- Fix: Initialize the native noninteractive confmodule before redirecting diagnostic output or calling anna.
+- Regression evidence: wizard-review.py adds a test-only success marker only after rejecting raw PROGRESS lines; complete-initrd checks require the shipped preparation script to match the tested source. See [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
+- Avoid: Redirecting native installer protocol output into a log instead of establishing its frontend channel.
+
+These regressions run through both `.github/workflows/installer.yml` and
+`.gitea/workflows/installer.yml` on pushes and pull requests: `bash installer/check.sh`,
+`python3 tests/integration/installer-shell.py`, the compiled `installer-network.c` check,
+`python3 tests/integration/installer-handoff.py`, `python3 tests/integration/installer-keyboard.py`,
+the complete-initrd `installer-logo.py` check and the native `wizard-review.py` check.
+Local results and artifact limits are in the QA report; hosted runs remain unexecuted.
+
+## BUG-0016 — Wizard stayed at 800×600 on larger displays
+
+- Date: 2026-09-08.
+- Symptom: Black margins surrounded the installer at 1024×768.
+- Root cause: A fixed 800×600 default relied on a maximize request, but Debian Installer runs X without a window manager to honor it.
+- Fix: Size and position the undecorated native window against the actual GDK screen and handle screen size changes.
+- Regression evidence: The old ISO reproduced the black margins in QEMU at 1024×768. `wizard-review.py --resolution 1024x768` checks all display corners; both CI providers also retain the 800×600 walkthrough. Final results are recorded in [QoL QA](qa/iso/2026-09-08-installer-qol.md).
+- Avoid: Assuming a window-manager maximize/fullscreen hint resizes a window in the installer environment.
+
+## BUG-0017 — Timezone completion did not open in the native installer
+
+- Date: 2026-09-08.
+- Symptom: A city matched the timezone data, but typing it produced no selectable popup in the actual installer.
+- Root cause: The window had not been explicitly presented/focused in the installer’s window-manager-free X session; callback-only matching tests did not exercise GTK popup activation.
+- Fix: Present the native wizard after showing and sizing it; retain canonical timezone validation after selecting a match.
+- Regression evidence: Native QEMU reproduced the absent popup, then selected America/New_York and Australia/Sydney after the fix. `installer-qol.py` checks case-insensitive and space/underscore matching; `wizard-review.py` exercises actual popup selection and review at both resolutions in GitHub and Gitea CI. See [QoL QA](qa/iso/2026-09-08-installer-qol.md).
+- Avoid: Treating a successful string-matching unit check as proof that a native GTK popup can be opened and selected.
+
+## BUG-AP-0001 — Appliance ownership must survive management revocation
+
+- Date: 2026-09-08.
+- Symptom: Independent review found that revoking another host could remove its observed VM UUID from appliance-adoption conflict checks.
+- Root cause: The conflict query filtered revoked hosts, confusing loss of management permission with exclusion of a running guest.
+- Fix: Include every other host's conflicting UUID observation; require fresh observations to resolve the conflict. Local power also checks complete domain/disk identity, duplicate writable references and hardlinks.
+- Regression evidence: `.cache/toolchains/go/bin/go test -race -count=1 ./...` passed; `internal/controller/appliance_test.go` covers revoked-host conflicts and restart freshness, and `internal/vmhost/engine_test.go` covers local ownership/duplicate disk rejection. Both GitHub and Gitea Phase 1 workflows run the Go suites on pushes and pull requests.
+- Avoid: Treating revocation, a timeout, or a stopped management service as storage fencing.
+
+## BUG-AP-0002 — Appliance recovery must preserve complete private identity
+
+- Date: 2026-09-08.
+- Symptom: Review found that a partial recovery archive could omit the host CA, and safe archive extraction could leave private state owned by root rather than the Controller service account.
+- Root cause: Path validation alone did not prove archive completeness, integrity, matching source, or usable restored ownership.
+- Fix: Require the database, CA pair, TLS pair and initialization marker; verify the recorded file set and hashes before mutation, serialize against live Controller state, and restore private service ownership.
+- Regression evidence: `python3 -m unittest discover -s tests -p 'test_*.py'` passed 42 checks at this verification point, including missing-CA, tampered-file, traversal/link, and restored-ownership checks in `tests/test_appliance_build.py`. Both CI providers run this discovery command; real replacement recovery is tracked separately in [appliance lab evidence](qa/appliance/lab.md).
+- Avoid: Reporting a successful file extraction as a working Controller recovery.
+
+## BUG-AP-0003 — Guest package inventory format was expanded by the shell
+
+- Date: 2026-09-08.
+- Symptom: The first appliance image build failed while recording the installed package/source inventory.
+- Root cause: The guest shell expanded dpkg-query's `${source:Package}` format expression and rejected it as shell substitution.
+- Fix: Preserve literal dpkg-query format variables through the guest shell.
+- Regression evidence: `tests/test_appliance_build.py` runs the actual `/bin/sh` quoting boundary with a fake dpkg-query and verifies the exact format argument; the original quoting fails and the corrected command passes. The full Python suite passes and is discovered on pushes and pull requests by both CI providers.
+- Avoid: Assuming nested shell quotation preserves a downstream tool's dollar-prefixed syntax.
+
+## BUG-AP-0004 — QEMU could not create the appliance console socket
+
+- Date: 2026-09-08.
+- Symptom: Real nested-KVM deployment retained its defined VM but failed to start when QEMU could not bind `console.sock` in the private disk directory.
+- Root cause: Domain XML placed a QEMU-created socket inside a directory owned by the host service; a simulated virsh success did not exercise QEMU's filesystem permissions.
+- Fix: Let libvirt allocate its native private UNIX socket path using a socket listener with no explicit pathname. Keep restricted disk-directory permissions and no public VNC listener.
+- Regression evidence: `TestConsoleSocketUsesLibvirtRuntimeDirectory` failed before the XML fix and `go test -race ./internal/vmhost` passes afterward. Both GitHub and Gitea run this suite. [Real failure and subsequent lab verification](qa/appliance/lab.md) distinguish actual QEMU behavior from command simulation.
+- Avoid: Making the disk directory generally writable or exposing TCP VNC to work around a private-socket ownership error.
+
+## BUG-AP-0005 — Package builder could not create a nested read-only mountpoint
+
+- Date: 2026-09-08.
+- Symptom: The first real host-package Docker run failed before compilation because `/input/bundle` did not exist under the read-only input mount.
+- Root cause: The builder expected Docker to create a nested mount destination inside an already read-only parent mount.
+- Fix: Create the bundle mountpoint in the staged input before launching Docker.
+- Regression evidence: `tests/test_core_local_package.py` exercises the valid signed-bundle orchestration and checks the staged mountpoint. The corrected package built and passed disposable Debian package installation/removal checks; see [package evidence](qa/appliance/package.md). Both CI providers discover the Python regression suite.
+- Avoid: Treating Dockerfile compilation as proof the actual container mount layout works.
+
+## BUG-AP-0006 — First-boot initialization had a systemd ordering cycle
+
+- Date: 2026-09-08.
+- Symptom: Real Debian boot skipped appliance initialization, although cloud-init configured the VM network.
+- Root cause: The initializer was wanted by `multi-user.target` but ordered after Debian's `cloud-final.service`, which itself runs after that target.
+- Fix: Enable initialization under `cloud-init.target`, retaining the prerequisite ordering without a cycle.
+- Regression evidence: `test_firstboot_has_no_debian_cloud_final_ordering_cycle` runs actual `systemd-analyze verify` against the shipped unit and Debian's relevant target ordering. The old unit fails; the fixed test passes on the workstation and Debian 13 builder. Both CI workflows discover it; real boot evidence is recorded in [the lab report](qa/appliance/lab.md).
+- Avoid: Treating valid unit syntax as proof that a dependency graph can start.
+
+## BUG-AP-0007 — Private build permissions made public Controller files unreadable
+
+- Date: 2026-09-08.
+- Symptom: Controller API login worked in the actual guest, but the browser GUI returned 403 and corresponding source was unreadable.
+- Root cause: The build's private umask propagated root-only modes onto public UI/source files served by the unprivileged Controller account.
+- Fix: Apply readable/traversable modes to the public share only; retain private credentials and state permissions.
+- Regression evidence: `test_public_guest_assets_are_readable_by_service_user` executes the shipped chmod boundary on private fixtures and verifies resulting access bits. Real GUI/source checks accompany [package](qa/appliance/package.md) and [guest](qa/appliance/lab.md) evidence. Both CI providers run the Python regression.
+- Avoid: Weakening credential/state permissions to make public assets readable.
+
+## BUG-AP-0008 — API success was mistaken for completed appliance installation
+
+- Date: 2026-09-08.
+- Symptom: The first real build reported Ready while its GUI returned 403 and first-boot credential cleanup had not finished.
+- Root cause: Handoff proved enrollment/adoption but not the first-boot completion boundary; cleanup failures could also have been ignored.
+- Fix: Publish a per-instance readiness marker only after successful GUI access and verified cleanup of both persistent and runtime cloud-init caches. Handoff requires that versioned marker and GUI HTTP 200 over pinned HTTPS before completion; completed handoff records retain readiness-version evidence.
+- Regression evidence: The handoff integration test failed before the fix when API success completed without the marker/GUI. Focused and combined Go race suites pass afterward. The firstboot test injects cleanup failure, verifies no ready marker, and proves retry succeeds; both CI providers run these suites.
+- Avoid: Treating a booted VM or a successful API call as a finished user workflow, or swallowing credential-cleanup errors.
+
+## BUG-AP-0009 — Virsh interactive framing broke recovery transfer parsing
+
+- Date: 2026-09-08.
+- Symptom: Actual host-root recovery export failed while parsing domain XML and guest-agent replies.
+- Root cause: Stdin keeps private recovery payloads out of process arguments, but virsh adds prompts and can truncate or wrap echoed commands; the original parser expected plain output.
+- Fix: Validate short-command framing and require exactly one guest-agent return/error JSON response, withholding ambiguous output and secrets from errors.
+- Regression evidence: `tests/test_host_recovery.py` covers prompt framing, ambiguous replies, transfer and secret transport; six checks pass. Real QGA export then transferred the archive off the host and verified its six required file hashes. Both CI providers discover this test file.
+- Avoid: Exposing archive contents in process arguments or assuming a simulated subprocess returns the same framing as the real tool.
+
+## BUG-AP-0010 — The packaged service umask removed QEMU directory traversal
+
+- Date: 2026-09-08.
+- Symptom: A clean deployment through the real systemd package failed because the per-VM directory was 0700, so QEMU could not open its disk.
+- Root cause: `mkdir`'s requested 0711 was reduced by the service's required `UMask=0077`; the earlier directly launched development process did not reproduce that environment.
+- Fix: Exclusively create the owned VM directory, then explicitly set 0711. Keep state/seed directories 0700 and disk, seed ISO, and credential files 0600.
+- Regression evidence: `TestApplianceDirectoryTraversableUnderPrivateUmask` sets the actual process umask to 0077 and failed with mode 0700 before the correction. The full vmhost race suite passes afterward; both CI providers run it. The rejected package and subsequent clean package walkthrough are distinguished in [lab evidence](qa/appliance/lab.md).
+- Avoid: Weakening the service umask, or treating a requested creation mode as the resulting filesystem mode.
+
+## BUG-0018 — Installer rejected valid qualified hostnames
+
+- Date: 2026-09-08.
+- Symptom: `nexcore.matthome` was rejected on Host and Network.
+- Root cause: GUI and backend separately enforced a single-label 63-character rule; generated configuration also assumed a short name.
+- Fix: Shared standards-based ASCII hostname validation and root-dot handling; split Debian short hostname/domain and retain full/short hosts aliases.
+- Regression evidence: User screenshot and prior validation reproduced rejection. `installer-network.c`, `installer-hostname.py` and native `wizard-review.py` cover syntax boundaries, generated configuration and qualified-name UI flow, invoked in both GitHub and Gitea installer workflows. Actual results and standards are in [hostname QA](qa/iso/2026-09-08-installer-hostname.md).
+- Avoid: Merely permitting dots in a UI regex while backend validation or installed hostname configuration still assumes one label.
+
+## BUG-0019 — NIC status confused disabled interfaces with absent link
+
+- Date: 2026-09-08.
+- Symptom: A connected virtual NIC displayed `down` during setup.
+- Root cause: The GUI read raw operstate before administrative activation and only refreshed on selection.
+- Fix: Perform a link-only probe, read carrier with administrative-state checks, and refresh status without reloading form values.
+- Regression evidence: `installer-link.py` covers probe/status behavior; native `wizard-review.py` checks QEMU link disconnect/reconnect and preservation of input. Both GitHub and Gitea installer workflows run them. See [link QA](qa/iso/2026-09-08-installer-link.md) for actual results and limits.
+- Avoid: Renaming every `down` state to “No link” without probing carrier, or refreshing the NIC by reloading its editor.
+
+## BUG-0020 — Installer offered Xen disks then rejected them
+
+- Date: 2026-09-08.
+- Symptom: `/dev/xvda` appeared in Disk and Review, but installation failed with “Select a supported physical installation disk.”
+- Root cause: discovery and backend used different disk-name eligibility rules; backend omitted Xen `xvd`.
+- Fix: share the existing name policy and include `xvd`, preserving all subsequent device safety checks.
+- Regression evidence: `tests/integration/installer-disk.py` fails the original validator and passes the fix with simulated device boundaries, including unsafe-target rejection; both installer CI workflows invoke it. See [QA](qa/iso/2026-09-08-installer-xen-disk.md).
+- Avoid: bypassing disk validation or hiding a disk that the supported backend can install onto.
+
+## BUG-SEC-0001 — Unauthenticated requests consumed shared login capacity
+
+- Date: 2026-09-08.
+- Symptom: Two incomplete Controller login bodies caused a separate valid login to receive HTTP 429; both services also coupled clients through one global cooldown.
+- Root cause: Controller reserved password-work slots before reading untrusted bodies; admission state did not distinguish direct network peers.
+- Fix: Finish bounded credential/origin validation before reserving hashing capacity; limit each actual peer to five attempts per minute, bound peer tracking and retain two global hashing slots. Ignore untrusted forwarding headers.
+- Regression evidence: `TestIncompleteLoginDoesNotReserveHashCapacity` failed with 429 before the fix and passes afterward; peer/proxy isolation checks and full Go race suites pass. Both GitHub and Gitea Phase 1 workflows run `go test -race ./...` on push/PR and weekly. See [security checks](qa/security/checks.md).
+- Avoid: Removing expensive-work limits or using a global cooldown that lets one unauthenticated peer block unrelated logins.
+
+## BUG-SEC-0002 — Password byte length did not enforce the displayed character minimum
+
+- Date: 2026-09-08.
+- Symptom: Eight two-byte Unicode characters satisfied the appliance's advertised sixteen-character minimum.
+- Root cause: Backend validation counted UTF-8 bytes instead of Unicode characters; guest firstboot and bootstrap callers also had inconsistent limits.
+- Fix: Shared validation requires at least sixteen Unicode code points and no more than 1024 UTF-8 bytes for newly provisioned passwords; align guest validation and browser feedback while preserving existing password hashes.
+- Regression evidence: `TestPasswordMinimumCountsCharacters` failed before the fix and passes with the full vmhost race suite. Actual browser checks reject eight supplementary characters and oversized UTF-8 input, and accept sixteen characters. Both CI providers execute the Go regression on push/PR and weekly; guest validation is covered by Python discovery.
+- Avoid: Treating byte counts or JavaScript UTF-16 code-unit length as a Unicode character count.
+- Policy supersession (2026-09-08): Matt explicitly removed the sixteen-character minimum.
+  Current bootstrap accepts nonempty UTF-8 passwords within the transport bound; historical
+  minimum-length evidence above describes the former policy. Shared validation still
+  prevents inconsistent byte/encoding handling. See [deployment usability QA](qa/appliance/deployment-usability.md).
+
+## BUG-SEC-0003 — Child processes inherited ownership locks
+
+- Date: 2026-09-08.
+- Symptom: Actual browser restart verification twice found the local service refusing startup after its original process exited; a still-running child retained the ownership lock.
+- Root cause: Three raw `syscall.Open` lock calls in local management, recovery preparation and agent storage omitted close-on-exec. Go's `os.OpenFile` callers already set it.
+- Fix: Set `O_CLOEXEC` atomically on all three raw lock openings; retain the locks' exclusive ownership semantics.
+- Regression evidence: Real subprocess tests in `internal/localcore/lock_test.go` and `internal/agent/lock_test.go` failed before the fix with retained-lock errors. They now prove reacquisition while the child remains alive and after it exits; agent/localcore race suites and actual local browser restart pass. Both CI providers run these regressions through `go test -race ./...` on push/PR and weekly.
+- Avoid: Delaying restart until children happen to finish, removing ownership locks, or setting close-on-exec later through a race-prone separate call.
+
+## BUG-SEC-0004 — Browser CI referenced a binary it never built
+
+- Date: 2026-09-08.
+- Symptom: Both workflow definitions invoked host-local browser QA with its default binary path but did not build that artifact on a clean runner.
+- Root cause: Controller/agent integration built private temporary binaries; that did not provide `dist/nex-core-local` for the independent local browser suite.
+- Fix: Build the local service explicitly before its browser step in both workflows.
+- Regression evidence: `python3 -m unittest discover -s tests -p test_ci_security.py` failed for both providers before the fix and passes afterward; both workflows run this test through Python discovery on push/PR and weekly. Local actual browser suites pass with explicitly built artifacts. No hosted CI execution is claimed.
+- Avoid: Assuming an ignored workstation build artifact will exist on a clean CI runner.
+
+## BUG-0021 — Normal keyboard setup appeared as a startup error
+
+- Date: 2026-09-08.
+- Symptom: initial Welcome page showed a red “Keyboard layout changed” notice.
+- Root cause: successful initial layout application used the shared error-message area.
+- Fix: successful keyboard application clears the message; real application errors and password clearing remain.
+- Regression evidence: `installer-keyboard.py` silent-success assertion failed before the fix and passed afterward. Both installer CI workflows already execute this check.
+- Avoid: removing initial keyboard application or credential clearing to hide the message.
+
+## BUG-0022 — Progress gaps left the installer panel empty
+
+- Date: 2026-09-08.
+- Symptom: the main panel went blank between backend installation steps.
+- Root cause: cdebconf destroys progress widgets at STOP and clears answered question widgets; the custom shell provided no content during the next-step gap.
+- Fix: present a waiting panel between steps, replaced by real progress or interactive prompts.
+- Regression evidence: `tests/integration/installer-progress.py` failed on the original blank gap and passed on the rebuilt ISO, including error/log recovery and completion acknowledgement. Both GitHub and Gitea installer workflows invoke it. See [native progress QA](qa/iso/2026-09-08-installer-progress.md) for actual checks and limits.
+- Avoid: hiding recovery questions, fabricating completion percentages, or retaining a completed task as live progress.
+
+## BUG-0023 — Waiting fallback still swapped with the stock progress layout
+
+- Date: 2026-09-08.
+- Symptom: “Preparing the next installation step” alternated with the differently positioned stock Debian progress bar, still looking like flicker.
+- Root cause: BUG-0022 filled empty intervals but retained two distinct progress presentations and widget lifecycles.
+- Fix: a persistent Nex panel receives actual step updates and remains in place at component boundaries.
+- Regression evidence: native `tests/integration/installer-progress.py` checks active/gap/resumed geometry and failure/log/completion behavior; both installer CI workflows invoke it. Actual results are recorded in [continuous progress QA](qa/iso/2026-09-08-continuous-progress.md).
+- Avoid: treating a nonempty waiting screen as proof of smooth transitions; inspect active and inactive layouts together.
+
+## BUG-0024 — Installer-selected management NIC lacked a deployment bridge
+
+- Date: 2026-09-08.
+- Symptom: after choosing management networking in the GUI installer, local Controller
+  deployment asked the operator to configure an existing management bridge.
+- Root cause: the installer assigned host addressing directly to the NIC/VLAN while
+  deployment requires a Linux bridge; automatic service discovery cannot invent one.
+- Fix: stage native `br0` with the selected NIC/VLAN as its port and management addressing
+  on the bridge, retaining secondary NIC and offline behavior. Bundle bridge-utils.
+- Regression evidence: the generated-config check failed before the fix and passes now;
+  `bash tests/integration/installer-bridge.sh` runs native bringup/recovery;
+  [bridge QA](qa/iso/2026-09-08-management-bridge.md) records commands, results and limits.
+- Avoid: hiding preflight failure or changing live management networking from deployment;
+  build the selected network during fresh installation and verify actual native bringup.
+
+## BUG-0025 — DHCP preview text leaked into static editing during development
+
+- Date: 2026-09-09.
+- Symptom: switching from DHCP preview to static mode retained transient status text.
+- Root cause: mode changes only cleared the address when leaving static mode.
+- Fix: clear transient entries on every mode change, then restore saved static settings
+  only when loading a NIC. Keep DHCP feedback readonly with normal text contrast.
+- Regression evidence: independent source review found the defect before delivery;
+  `tests/integration/wizard-review.py --nics 2` now asserts the static address is blank
+  after a real DHCP preview. [DHCP QA](qa/iso/2026-09-09-installer-dhcp.md) records
+  executed commands/captures; no failing-before runtime run is claimed.
+- Avoid: storing status text in configuration or treating readonly feedback as disabled
+  low-contrast text.

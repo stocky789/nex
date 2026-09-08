@@ -1,0 +1,4 @@
+700 root /usr/local/share/nex/dist
+644 debian /usr/local/share/nex/dist/index.html
+644 debian /usr/local/share/nex/nex-source.tar.gz
+active

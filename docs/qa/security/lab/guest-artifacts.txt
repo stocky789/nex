@@ -1,0 +1,3 @@
+active
+93a5a381edb9636760f1b37c1fafe361829e6145cc3df6c73dfb4f5e06ff1ff9  /usr/local/lib/nex/nex-controller
+958723923c1e144e517229693a7224f2524030fe79830b761bcb79e6c8aba451  /usr/local/share/nex/nex-source.tar.gz

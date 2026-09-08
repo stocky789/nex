@@ -1,0 +1,41 @@
+{
+  "summary": "Show live DHCP lease preview for selected installer NIC/VLAN. API impact: none \u2014 native installer helper only.",
+  "paths": [
+    "installer/gui/nex-wizard.c",
+    "installer/gui/dhcp-preview.sh",
+    "installer/build-gui.sh",
+    "tests/integration/installer-dhcp.sh",
+    "tests/integration/installer-link.py",
+    "tests/integration/wizard-review.py",
+    ".github/workflows/installer.yml",
+    ".gitea/workflows/installer.yml",
+    "docs/guide/install-nex-core.md",
+    "installer/README.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/qa/iso/2026-09-09-installer-dhcp.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/iso/dhcp/dhcp-searching.png",
+    "docs/qa/iso/dhcp/dhcp-address.png",
+    "docs/qa/iso/dhcp/dhcp-retry-no-link.png",
+    "docs/qa/iso/dhcp/dhcp-recovered.png",
+    "docs/qa/iso/dhcp/dhcp-to-static.png"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Selecting DHCP now performs a preview and displays request/address/failure with Retry while final host settings remain staged.",
+    "pages": [
+      "docs/guide/install-nex-core.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core agent command or client-facing API changes; GTK calls a local BusyBox helper.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Native isolated DHCP ACK/no-side-effect/timeout/cancellation tests, C/carrier regression, independent review and native GUI captures; exact evidence and limits in QA report.",
+    "evidence": [
+      "docs/qa/iso/2026-09-09-installer-dhcp.md"
+    ]
+  }
+}

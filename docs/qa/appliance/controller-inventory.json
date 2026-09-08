@@ -1,0 +1,177 @@
+{
+  "sites": [
+    {
+      "id": "b49e6e5db72388771c594b8c0f012ec1c89f16eb2eed881c612d89e3a307ac99",
+      "name": "Main site"
+    }
+  ],
+  "pools": [
+    {
+      "id": "daf10f70ed98b6d150fe32b1ae74e5877b519af2bd03a16620cc1575cce70148",
+      "site_id": "b49e6e5db72388771c594b8c0f012ec1c89f16eb2eed881c612d89e3a307ac99",
+      "name": "Default pool"
+    }
+  ],
+  "hosts": [
+    {
+      "id": "a412179a841f223e194ea6b7318bcd0224b348ae9903dfaf63ef888722fe84fb",
+      "pool_id": "daf10f70ed98b6d150fe32b1ae74e5877b519af2bd03a16620cc1575cce70148",
+      "hostname": "nex-lab",
+      "revoked": false,
+      "connection": "fresh",
+      "last_seen": "2026-09-08T09:01:48.229894572Z",
+      "inventory": {
+        "observed_at": "2026-09-08T09:01:43.225833606Z",
+        "hostname": "nex-lab",
+        "cpu_model": "13th Gen Intel(R) Core(TM) i7-13700K",
+        "cpu_count": 4,
+        "memory_bytes": 8333348864,
+        "virtualization": [
+          "vmx",
+          "tpr_shadow",
+          "flexpriority",
+          "ept",
+          "vpid",
+          "ept_ad",
+          "vnmi"
+        ],
+        "os_version": "Nex Core 0.1.0-alpha1",
+        "agent_version": "0.1.0-dev",
+        "nics": [
+          {
+            "name": "lo",
+            "mac": "",
+            "addresses": [
+              "127.0.0.1/8",
+              "::1/128"
+            ],
+            "state": "unknown"
+          },
+          {
+            "name": "nex0",
+            "mac": "52:54:00:12:34:10",
+            "addresses": [
+              "10.0.2.15/24",
+              "fec0::5054:ff:fe12:3410/64",
+              "fe80::5054:ff:fe12:3410/64"
+            ],
+            "state": "up"
+          },
+          {
+            "name": "nex1",
+            "mac": "52:54:00:12:34:11",
+            "addresses": [
+              "fec0::5054:ff:fe12:3411/64",
+              "fe80::5054:ff:fe12:3411/64"
+            ],
+            "state": "up"
+          },
+          {
+            "name": "nex1.123",
+            "mac": "52:54:00:12:34:11",
+            "addresses": [
+              "10.20.0.2/24",
+              "fe80::5054:ff:fe12:3411/64"
+            ],
+            "state": "up"
+          },
+          {
+            "name": "virbr0",
+            "mac": "52:54:00:8c:79:24",
+            "addresses": [
+              "192.168.122.1/24"
+            ],
+            "state": "up"
+          },
+          {
+            "name": "vnet1",
+            "mac": "fe:54:00:a7:72:27",
+            "addresses": [
+              "fe80::fc54:ff:fea7:7227/64"
+            ],
+            "state": "unknown"
+          }
+        ],
+        "disks": [
+          {
+            "name": "/dev/fd0",
+            "size_bytes": 4096
+          },
+          {
+            "name": "/dev/sr0",
+            "size_bytes": 1073741312
+          },
+          {
+            "name": "/dev/vda",
+            "size_bytes": 25769803776
+          },
+          {
+            "name": "/dev/vdb",
+            "size_bytes": 85899345920
+          },
+          {
+            "name": "/",
+            "size_bytes": 23831412736,
+            "available_bytes": 20691841024
+          }
+        ],
+        "vms": [
+          {
+            "id": "a77227bc-0f96-485e-9880-da9261ecb4f7",
+            "name": "nex-controller",
+            "state": "running"
+          }
+        ],
+        "checks": [
+          {
+            "freshness": "fresh",
+            "name": "block-disks",
+            "status": "healthy",
+            "observed_at": "2026-09-08T09:01:43.225833606Z",
+            "last_success": "2026-09-08T09:01:43.225833606Z"
+          },
+          {
+            "freshness": "fresh",
+            "name": "disk",
+            "status": "healthy",
+            "observed_at": "2026-09-08T09:01:48.22607412Z",
+            "last_success": "2026-09-08T09:01:48.22607412Z"
+          },
+          {
+            "freshness": "fresh",
+            "name": "inventory",
+            "status": "healthy",
+            "observed_at": "2026-09-08T09:01:43.225833606Z",
+            "last_success": "2026-09-08T09:01:43.225833606Z"
+          },
+          {
+            "freshness": "fresh",
+            "name": "kvm",
+            "status": "healthy",
+            "observed_at": "2026-09-08T09:01:43.225833606Z",
+            "last_success": "2026-09-08T09:01:43.225833606Z"
+          },
+          {
+            "freshness": "fresh",
+            "name": "libvirt",
+            "status": "healthy",
+            "observed_at": "2026-09-08T09:01:43.225833606Z",
+            "last_success": "2026-09-08T09:01:43.225833606Z"
+          }
+        ]
+      }
+    }
+  ],
+  "vms": [
+    {
+      "id": "a77227bc-0f96-485e-9880-da9261ecb4f7",
+      "pool_id": "daf10f70ed98b6d150fe32b1ae74e5877b519af2bd03a16620cc1575cce70148",
+      "host_id": "a412179a841f223e194ea6b7318bcd0224b348ae9903dfaf63ef888722fe84fb",
+      "name": "nex-controller",
+      "role": "controller",
+      "protected": true,
+      "state": "running",
+      "freshness": "fresh"
+    }
+  ]
+}

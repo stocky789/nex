@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[Unit]
+Description=Nex Core inventory agent (Phase 1 development)
+After=network-online.target libvirtd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+StateDirectory=nex-core-agent
+StateDirectoryMode=0700
+UMask=0077
+ExecStart=/usr/local/lib/nex/nex-core-agent run --state-dir /var/lib/nex-core-agent --heartbeat 10s --probe-interval 10s --probe-timeout 3s
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

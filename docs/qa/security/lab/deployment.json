@@ -1,0 +1,39 @@
+{
+  "operation": {
+    "id": "ef648e6c-2193-4455-8d08-45bba7f3a10f",
+    "vm_id": "91291c3e-b2c9-454a-8f77-4eaeb8bf392e",
+    "kind": "deploy",
+    "status": "ready",
+    "stage": "ready",
+    "progress": 100,
+    "controller_url": "https://192.168.122.10:8443",
+    "controller_cert_sha256": "e63bf0aeb73c47e354dfa8d5dd3c428d13208980ee9eb4a0d442c8fad08c5c49"
+  },
+  "observed_progress": [
+    [
+      "queued",
+      "running",
+      0
+    ],
+    [
+      "copying_disk",
+      "running",
+      10
+    ],
+    [
+      "initializing",
+      "running",
+      92
+    ],
+    [
+      "cleanup",
+      "running",
+      98
+    ],
+    [
+      "ready",
+      "ready",
+      100
+    ]
+  ]
+}

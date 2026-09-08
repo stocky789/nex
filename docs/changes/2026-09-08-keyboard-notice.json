@@ -1,0 +1,31 @@
+{
+  "summary": "Remove normal keyboard setup from the installer error area. API impact: none.",
+  "paths": [
+    "installer/gui/nex-wizard.c",
+    "tests/integration/installer-keyboard.py",
+    "docs/guide/install-nex-core.md",
+    "docs/BUG_LEDGER.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/qa/iso/2026-09-08-keyboard-notice.md",
+    "docs/qa/iso/keyboard-notice/welcome.png"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Successful keyboard setup is silent while error handling remains.",
+    "pages": [
+      "docs/guide/install-nex-core.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Local GTK display uses no Controller operations, agent commands or client API.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Failing then passing actual callback regression, strict compilation and native ISO walkthrough recorded in QA.",
+    "evidence": [
+      "docs/qa/iso/2026-09-08-keyboard-notice.md",
+      "tests/integration/installer-keyboard.py"
+    ]
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "summary": "Accept Xen installation disks consistently and simplify network feedback. API impact: none, local installer only.",
+  "paths": [
+    "installer/gui/nex-wizard.c",
+    "installer/gui/nex-config.c",
+    "installer/gui/nex-network.c",
+    "installer/gui/nex-network.h",
+    "tests/integration/installer-disk.py",
+    "tests/integration/installer-link.py",
+    ".github/workflows/installer.yml",
+    ".gitea/workflows/installer.yml",
+    "docs/guide/install-nex-core.md",
+    "installer/README.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/iso/2026-09-08-installer-xen-disk.md",
+    "docs/qa/iso/xen-disk/nic-link-detected.png",
+    "docs/qa/iso/xen-disk/nic-no-link.png",
+    "docs/qa/iso/xen-disk/nic-link-recovered.png",
+    "docs/qa/iso/xen-disk/checked-confirmation.png"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Adds Xen disk eligibility and a green carrier indicator.",
+    "pages": [
+      "docs/guide/install-nex-core.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Local discovery, erase validation and GTK presentation change no Controller/Core or client-facing contracts.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Run actual validator with simulated device boundaries and native QEMU GUI walkthrough; see QA for results and limits.",
+    "evidence": [
+      "docs/qa/iso/2026-09-08-installer-xen-disk.md",
+      "tests/integration/installer-disk.py",
+      "tests/integration/installer-link.py",
+      "tests/integration/wizard-review.py"
+    ]
+  }
+}

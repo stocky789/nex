@@ -1,0 +1,19 @@
+{
+  "operation": {
+    "id": "adc3feb8-3b99-4ec6-922c-95e5bba04d68",
+    "vm_id": "8d5298c9-f86c-449a-96b2-b10ce84fa231",
+    "kind": "deploy",
+    "status": "ready",
+    "stage": "ready",
+    "progress": 100,
+    "controller_url": "https://192.168.122.10:8443",
+    "controller_cert_sha256": "64ee325ae0fa7f758611ebde4904e15f4f4c11eb6a289950b66e7fb157696283"
+  },
+  "observed_progress": [
+    [
+      "ready",
+      "ready",
+      100
+    ]
+  ]
+}

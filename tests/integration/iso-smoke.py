@@ -18,12 +18,13 @@ import subprocess
 import time
 
 
-def archive(files):
+def archive(files, modes=None):
     """Minimal newc archive for appending test files to Debian's initramfs."""
     data = bytearray()
     for ino, (name, body) in enumerate([*files.items(), ('TRAILER!!!', b'')], 1):
+        mode = (modes or {}).get(name, 0o100644)
         name = name.encode() + b'\0'
-        values = [ino, 0o100644, 0, 0, 1, 0, len(body), 0, 0, 0, 0, len(name), 0]
+        values = [ino, mode, 0, 0, 1, 0, len(body), 0, 0, 0, 0, len(name), 0]
         data.extend(b'070701' + ''.join(f'{n:08x}' for n in values).encode() + name)
         data.extend(b'\0' * (-len(data) % 4))
         data.extend(body)

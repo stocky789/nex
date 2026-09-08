@@ -147,6 +147,12 @@ when blocked; do not repeatedly ask permission for already authorized work.
   available. Test observable behavior and failure recovery; do not freeze known-bad prototype output.
 - For bugs, reproduce the failure and add a failing regression check before fixing the root cause where
   practical. If the check cannot reproduce it, record the limitation and the alternative evidence.
+- Every bug fix must include a regression test and ensure it runs in both GitHub Actions
+  (`.github/workflows/`) and Gitea Actions (`.gitea/workflows/`) on pushes and pull requests.
+  Reuse an existing test suite when both workflows already run it; otherwise update both workflow
+  files in the same change. The test must detect the original bug, pass with the fix, and fail CI
+  if the bug returns. Record the test command and results in `docs/BUG_LEDGER.md`; missing runner
+  or disposable-lab prerequisites leave regression coverage outstanding, not silently skipped.
 - Check relevant `docs/BUG_LEDGER.md` entries before fixing a previously affected system, if the ledger
   exists. Create it with the first bug fix; append ID, date, symptom, root cause, fix, regression evidence,
   and the wrong approach to avoid. Coordinate append ownership and check IDs for duplicates.

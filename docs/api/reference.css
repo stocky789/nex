@@ -1,0 +1,8 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+body { font: 16px/1.6 system-ui; max-width: 76rem; margin: auto; padding: 1.5rem; color: #172635; background: #fafbfc; }
+a { color: #075c98; }
+pre { overflow: auto; padding: 1rem; background: #eef1f4; }
+section { border-top: 1px solid #bbc7d0; margin-top: 2rem; }
+code { overflow-wrap: anywhere; }
+nav ul { columns: 2; column-width: 22rem; }
+h2 { scroll-margin-top: 1rem; }

@@ -1,0 +1,25 @@
+{
+  "summary": "Review 8\u20139 September development work and expand alpha1 release notes. API impact: none \u2014 documentation summary only; no Controller/Core callers, commands or client contracts change.",
+  "paths": [
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Summarizes existing implemented behavior and links to existing verification; no operator workflow changes.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No runtime change; existing Controller, agent and local API behavior is summarized without modifying contracts.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Cross-checked release notes against current implementation, guides, plans and recorded QA; independent review, local link checks, documentation structure and whitespace checks. Existing QA is reused; no new runtime walkthrough claimed.",
+    "evidence": [
+      "docs/qa/phase1/checks.md",
+      "docs/qa/appliance/usability-rebuild.md",
+      "docs/qa/security/checks.md",
+      "docs/qa/iso/2026-09-09-installer-dhcp.md"
+    ]
+  }
+}

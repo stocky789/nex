@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[Unit]
+Description=Nex Controller (Phase 1 development)
+After=network.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=nex-controller
+StateDirectoryMode=0700
+UMask=0077
+LoadCredential=tls-cert:/etc/nex-controller/tls.crt
+LoadCredential=tls-key:/etc/nex-controller/tls.key
+LoadCredential=admin-password:/etc/nex-controller/admin-password
+ExecStart=/usr/local/lib/nex/nex-controller -data-dir /var/lib/nex-controller -listen :8443 -tls-cert ${CREDENTIALS_DIRECTORY}/tls-cert -tls-key ${CREDENTIALS_DIRECTORY}/tls-key -admin-password-file ${CREDENTIALS_DIRECTORY}/admin-password -ui-dir /usr/local/share/nex/web -docs-dir /usr/local/share/nex/api -source-archive /usr/local/share/nex/nex-source.tar.gz
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

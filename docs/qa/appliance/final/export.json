@@ -1,0 +1,10 @@
+{
+  "result": "Shipped helper exported consistent Controller state; all manifest hashes verified after offhost copy",
+  "vm_id": "8d5298c9-f86c-449a-96b2-b10ce84fa231",
+  "archive_sha256": "8a1345d6333a054743b21056e2babf3193f9b968f7fc959f28c41e5d964b86de",
+  "source_sha256": "d4fc22c13c6f160f03f59fe65892b10182045de5c6ba2b6a7c3d5dc3ce8221f3",
+  "file_count": 6,
+  "private_archive_not_committed": true,
+  "original_state": "shut off",
+  "original_autostart": "disabled"
+}

@@ -1,0 +1,18 @@
+{
+  "summary": "Require regression tests for every bug fix in both GitHub and Gitea Actions. API impact: none; contributor policy only.",
+  "paths": ["AGENTS.md"],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor verification policy only; operator workflows are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No client-facing API, Controller operation, Core command, or observed-state/result flow changes.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Review the rule against both existing workflow locations; run python3 scripts/check_docs.py --all and python3 -m unittest discover -s tests -p 'test_check_docs.py'. Hosted runs and commit-range checks are not part of this uncommitted policy-only change.",
+    "evidence": ["AGENTS.md", "scripts/check_docs.py", "tests/test_check_docs.py"]
+  }
+}

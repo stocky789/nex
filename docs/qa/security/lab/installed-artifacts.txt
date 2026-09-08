@@ -1,0 +1,8 @@
+nex-core-local	0.1.0+security1
+UMask=0077
+ActiveState=inactive
+a0fc17060c66412cbeac642402d83cc203cbf14839dae1a04b2d2a8534c04539  /usr/lib/nex/nex-core-local
+ae9890a20ff84e112441c30abc0a4a1dedfe4f3898208a8c1619bee9ed66202f  /usr/share/nex/appliance/controller.qcow2
+76d28ee4664cad6ddf2661e1221779f3686d0230280dab672dcb46b0c7d1b6fe  /usr/share/nex/appliance/manifest.json
+a6744c8333d54506ece54629b3e24038c1da0610bea59970740fc0c8e6e43be8  /usr/share/nex/core-local/nex-source.tar.gz
+{"architecture":"amd64","format":"qcow2","format_version":1,"image_sha256":"ae9890a20ff84e112441c30abc0a4a1dedfe4f3898208a8c1619bee9ed66202f","minimum_disk_gib":32,"minimum_memory_mib":4096,"minimum_vcpus":2,"protocol_version":1,"version":"dev-20260908-security1"}

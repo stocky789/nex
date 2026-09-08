@@ -1,0 +1,44 @@
+{
+  "summary": "Create management bridge from selected GUI installer NIC. API impact: existing contract \u2014 existing local service discovery/preflight/deployment consumes br0; no Controller/agent wire changes.",
+  "paths": [
+    "installer/gui/nex-network.c",
+    "installer/gui/nex-wizard.c",
+    "installer/packages.txt",
+    "installer/README.md",
+    "tests/integration/installer-network.c",
+    "tests/integration/installer-bridge.sh",
+    "tests/integration/wizard-installed.sh",
+    ".github/workflows/installer.yml",
+    ".gitea/workflows/installer.yml",
+    "docs/LICENSING.md",
+    "docs/BUG_LEDGER.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/plans/2026-09-08-controller-appliance.md",
+    "docs/qa/iso/2026-09-08-management-bridge.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "tests/integration/wizard-review.py",
+    "docs/qa/iso/management-bridge/review.png",
+    "docs/qa/iso/management-bridge/invalid-network-hostname.png",
+    "docs/qa/iso/management-bridge/unchecked-confirmation.png"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Selected management NIC now creates bridge and host addressing lives on br0; document fresh-GUI versus old/minimal hosts.",
+    "pages": [
+      "docs/guide/install-nex-core.md",
+      "docs/guide/deploy-controller-appliance.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Existing local bridge discovery/preflight/deployment fields and authorization remain unchanged; installer writes native OS networking only.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Failing-before/passing-after generated configuration check, native isolated Debian networking and GUI review; actual results and limits in QA report.",
+    "evidence": [
+      "docs/qa/iso/2026-09-08-management-bridge.md"
+    ]
+  }
+}

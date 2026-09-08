@@ -1,0 +1,44 @@
+{
+  "summary": "Add native GUI and minimal text installer selection. API impact: none; boot media and local installer only.",
+  "paths": [
+    "docs/guide/install-nex-core.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/qa/iso/2026-09-08-installer-modes.md",
+    "docs/qa/iso/gui-blank-password.png",
+    "docs/qa/iso/gui-disk-cancelled.png",
+    "docs/qa/iso/gui-disk-confirmation.png",
+    "docs/qa/iso/gui-disk-selection.png",
+    "docs/qa/iso/gui-install-complete.png",
+    "docs/qa/iso/gui-installed-host.png",
+    "docs/qa/iso/gui-language.png",
+    "docs/qa/iso/gui-mismatch-password.png",
+    "docs/qa/iso/gui-root-password.png",
+    "docs/qa/iso/minimal-language.png",
+    "docs/qa/iso/modes-bios-menu.png",
+    "docs/qa/iso/modes-uefi-menu.png",
+    "installer/README.md",
+    "installer/build.sh",
+    "installer/check.sh",
+    "tests/integration/installer-modes.py"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators choose graphical or text installation and need keyboard/mouse and graphics fallback instructions. Both install the same headless Nex host.",
+    "pages": [
+      "docs/guide/install-nex-core.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Boot menus select Debian frontends; existing local preseed/hooks configure the OS. No Controller operation, Core command/result or client API exists in this flow.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Build actual ISO; run installer policy/account checks, diskless BIOS/UEFI frontend capture, graphical password/disk walkthrough and offline installed-host smoke. Inspect captures and log markers; limits recorded in QA.",
+    "evidence": [
+      "docs/qa/iso/2026-09-08-installer-modes.md",
+      "installer/check.sh",
+      "tests/integration/installer-modes.py"
+    ]
+  }
+}

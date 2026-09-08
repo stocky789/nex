@@ -1,0 +1,14 @@
+{
+  "results": [
+    "Real host-local HTTPS invalid login, keyboard sign-in and overview",
+    "Real API rejects anonymous inventory, cross-origin/CSRF-less control and invalid deployment",
+    "Modified signed manifest rejected before VM creation; original restored",
+    "Browser deployment reached ready on real nested KVM",
+    "Page refresh retains one deployment and exactly one libvirt UUID",
+    "Actual guest services active and bootstrap credentials/cloud-init cache removed",
+    "Actual Controller browser sign-in and exactly one Site/Pool/enrolled host/adopted original VM UUID",
+    "Controller service outage preserves running VM and independent local HTTPS inventory",
+    "Wrong shutdown target rejected; actual graceful shutdown/cold start preserves network and initialized Controller without seed",
+    "Local service outage disables stale GUI controls while Controller remains available; restart retains one running UUID"
+  ]
+}

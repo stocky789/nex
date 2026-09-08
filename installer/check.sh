@@ -4,10 +4,35 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 bash -n installer/build.sh
+bash -n installer/build-gui.sh
 sh -n installer/late-install.sh
 sh -n installer/root-account.sh
 python3 - <<'PY'
 from pathlib import Path
+import re
+
+build = Path('installer/build.sh').read_text()
+bios = build.split("<<'BIOS'\n")[2].split('\nBIOS')[0]
+grub = build.split("<<'GRUB'\n")[1].split('\nGRUB')[0]
+# Both firmware menus must offer the same frontend choice and shared safe policy.
+for label, directory in [('GUI install - Nex Core', 'install.amd/gtk'),
+                         ('Minimal install - Nex Core (text)', 'install.amd')]:
+    b = next(entry for entry in re.split(r'(?m)^label ', bios)[1:]
+             if f'menu label {label}\n' in entry)
+    g = grub.split(f"menuentry '{label}' {{\n")[1].split('}')[0]
+    assert 'kernel /install.amd/vmlinuz' in b
+    assert f'initrd=/{directory}/initrd.gz' in b
+    assert 'linux /install.amd/vmlinuz' in g
+    assert f'initrd /{directory}/initrd.gz' in g
+    if directory.endswith('/gtk'):
+        assert 'preseed/file=' not in b + g
+    else:
+        assert 'preseed/file=/cdrom/preseed.cfg' in b and 'preseed/file=/cdrom/preseed.cfg' in g
+    assert 'auto=true' not in b + g
+assert 'timeout 0' in build and 'set timeout=-1' in grub
+assert 'console=ttyS0,115200n8' in bios and 'console=ttyS0,115200n8' in grub
+assert 'rescue/enable=true' in bios and 'rescue/enable=true' in grub
+print('PASS: BIOS/UEFI GUI and minimal text entries, shared preseed, serial/rescue, no timeout')
 
 entries = [line.split(None, 3) for line in Path('installer/preseed.cfg').read_text().splitlines()
            if line.strip() and not line.lstrip().startswith('#')]
@@ -28,11 +53,17 @@ assert entries.count(['d-i', 'preseed/early_command', 'string', '/bin/sh /cdrom/
 
 packages = Path('installer/packages.txt').read_text().split()
 assert len(packages) == len(set(packages)), 'Duplicate package'
-assert {'qemu-system-x86', 'libvirt-daemon-system', 'libvirt-clients', 'openssh-server'} <= set(packages)
+assert {'qemu-system-x86', 'libvirt-daemon-system', 'libvirt-clients', 'openssh-server', 'genisoimage'} <= set(packages)
+assert 'nex-core-local' not in packages, 'Ship nex-core-local via the ISO repo copy, not Debian APT download'
 assert all(p.replace('-', '').isalnum() for p in packages), 'Unexpected package argument'
 late = Path('installer/late-install.sh').read_text()
 assert 'Dir::Etc::sourceparts=-' in late and 'file:/var/cache/nex-install/repo' in late
 assert 'PermitRootLogin no' in late
+assert 'nex-core-local.service' in late
+assert 'Local alpha: no Nex Controller' not in late
+assert r"Host: \n  Console: \l" in late
+assert 'CORE_LOCAL_DEB' in build and 'nex-core-local_*_amd64.deb' in build
+assert "printf 'nex-core-local\\n' >>" in build
 # BUG-0004: raw chroot inherits the installer's stale debconf descriptors.
 assert '\nin-target /bin/sh /var/cache/nex-install/configure.sh\n' in late, 'Use Debian in-target for package configuration'
 assert '\nchroot /target ' not in late, 'Raw chroot bypasses installer setup'

@@ -72,4 +72,7 @@ Use the full Nex Core or Nex Controller lockup at product entry points. Use the 
 
 ## Production asset status
 
-The original blue/platinum identity is approved; supporting colors expand its available palette. Vector masters, separate product lockups, and 16/24/32-pixel icon exports remain to be produced and checked. Review the colors in an actual controller screen when UI work begins. This board does not imply an implemented application, installer branding, or completed production asset set.
+The original blue/platinum identity is approved; supporting colors expand its available palette. Vector masters, separate product lockups, and 16/24/32-pixel icon exports remain to be produced and checked. Review the colors in an actual controller screen when UI work begins. The custom installer header now renders the approved Nex Core lockup directly from this
+board using native image cropping and scaling; it does not approximate the mark with a font.
+This is reuse of the approved raster artwork, not a completed production vector master.
+See [installer logo verification](../qa/iso/2026-09-08-installer-logo.md).

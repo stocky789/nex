@@ -1,0 +1,26 @@
+[
+  {
+    "lab": "nex-appliance-lab._9bdsmj4",
+    "qemu_pid": 420747,
+    "qemu_running": false,
+    "disk_preserved": true
+  },
+  {
+    "lab": "nex-appliance-lab.yf38fvwe",
+    "qemu_pid": 585701,
+    "qemu_running": false,
+    "disk_preserved": true
+  },
+  {
+    "lab": "nex-appliance-lab.c1ko2lyy",
+    "qemu_pid": 595945,
+    "qemu_running": false,
+    "disk_preserved": true
+  },
+  {
+    "lab": "nex-appliance-lab.0fgxooxm",
+    "qemu_pid": 609074,
+    "qemu_running": false,
+    "disk_preserved": true
+  }
+]

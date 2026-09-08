@@ -1,0 +1,41 @@
+{
+  "summary": "Bundle nex-core-local on the Core ISO and show the local web UI URL on the pre-login console. API impact: none; reuse existing local HTTPS listener and issue fragment.",
+  "paths": [
+    "packaging/core-local/core-local-setup",
+    "installer/build.sh",
+    "installer/late-install.sh",
+    "installer/packages.txt",
+    "installer/check.sh",
+    "installer/gui/nex-wizard.c",
+    "installer/README.md",
+    "tests/test_core_local_package.py",
+    "CHANGELOG.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/verify-nex-core.md",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/plans/2026-09-08-controller-appliance.md",
+    "docs/qa/appliance/console-url.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Installed hosts now include the local web UI; console and install docs describe the banner URL.",
+    "pages": [
+      "docs/guide/install-nex-core.md",
+      "docs/guide/verify-nex-core.md",
+      "docs/guide/deploy-controller-appliance.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core or client API changes; installer ships an existing local service and console presentation.",
+    "pages": []
+  },
+  "verification": {
+    "method": "installer/check.sh and python3 -m unittest tests.test_core_local_package; ISO rebuild/boot console walkthrough remains open until a new image is built and installed on a disposable disk.",
+    "evidence": [
+      "docs/qa/appliance/console-url.md",
+      "tests/test_core_local_package.py",
+      "installer/check.sh"
+    ]
+  }
+}

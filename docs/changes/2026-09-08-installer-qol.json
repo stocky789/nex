@@ -1,0 +1,44 @@
+{
+  "summary": "Overhaul native installer layout and controls, fix display sizing, and improve timezone and credential entry. API impact: none; private installer configuration unchanged.",
+  "paths": [
+    "installer/gui/nex-wizard.c",
+    "tests/integration/wizard-review.py",
+    "tests/integration/installer-qol.py",
+    ".github/workflows/installer.yml",
+    ".gitea/workflows/installer.yml",
+    "docs/guide/install-nex-core.md",
+    "installer/README.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/iso/2026-09-08-installer-qol.md",
+    "docs/qa/iso/qol/before-fullscreen.png",
+    "installer/gui/nex-shell.c",
+    "docs/qa/iso/qol/welcome-1024.png",
+    "docs/qa/iso/qol/network-1024.png",
+    "docs/qa/iso/qol/timezone-800.png",
+    "docs/qa/iso/qol/review-800.png",
+    "docs/qa/iso/qol/hostname-and-password-reset-800.png",
+    "docs/qa/iso/qol/confirmation-recovery-800.png",
+    "docs/qa/iso/qol/installation-progress-1024.png"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Screen sizing, searchable timezone and keyboard/password controls change installer interaction.",
+    "pages": [
+      "docs/guide/install-nex-core.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Widget changes use the same private local installer settings; no Controller operation, agent command or client API changes.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Native GUI walkthrough and focused regression checks; actual results and limits recorded in the linked QA report.",
+    "evidence": [
+      "docs/qa/iso/2026-09-08-installer-qol.md",
+      "tests/integration/wizard-review.py",
+      "tests/integration/installer-qol.py"
+    ]
+  }
+}

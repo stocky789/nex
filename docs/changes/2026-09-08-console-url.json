@@ -1,0 +1,30 @@
+{
+  "summary": "Show the local HTTPS management URL before console login. API impact: none; presentation uses existing service configuration.",
+  "paths": [
+    "packaging/core-local/core-local-setup",
+    "packaging/core-local/nex-core-local.service",
+    "tests/test_core_local_package.py",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/plans/2026-09-08-controller-appliance.md",
+    "docs/qa/appliance/console-url.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators see the management URL and unavailable state before console login.",
+    "pages": [
+      "docs/guide/deploy-controller-appliance.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No network API changes; local setup renders its existing TLS listener address in agetty.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Nine package unit tests and native Debian13 agetty rendering in a disposable container; limits recorded in QA.",
+    "evidence": [
+      "docs/qa/appliance/console-url.md",
+      "tests/test_core_local_package.py"
+    ]
+  }
+}

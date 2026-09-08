@@ -1,0 +1,10 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-only
+set -eu
+if [ "$1" = remove ]; then
+    if [ -d /run/systemd/system ]; then
+        deb-systemd-invoke stop nex-core-local.service
+    fi
+    deb-systemd-helper disable nex-core-local.service
+fi
+# Guest disks, VM definitions, configuration and credentials intentionally survive removal.

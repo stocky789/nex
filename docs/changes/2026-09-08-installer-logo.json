@@ -1,0 +1,30 @@
+{
+  "summary": "Use approved Nex Core installer branding and fix new asset extraction. API impact: none; local presentation and packaging only.",
+  "paths": [
+    "installer/gui/nex-shell.c",
+    "installer/build-gui.sh",
+    "tests/integration/installer-logo.py",
+    "docs/brand/README.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/iso/2026-09-08-installer-logo.md",
+    "docs/qa/iso/logo/keyboard-800.png"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Visual identity correction only; existing installation choices, root credentials, disk confirmation and recovery steps are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Local GTK header and initrd archive change no Controller operation, Core command/result, client API or Debian question contract.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Build ISO; inspect actual QEMU/KVM GTK language and keyboard screens at 800x600; run full-initrd artwork regression, installer contract and classifier checks, SHA256 and documentation checks. No full install rerun for this presentation correction.",
+    "evidence": [
+      "docs/qa/iso/2026-09-08-installer-logo.md",
+      "tests/integration/installer-logo.py"
+    ]
+  }
+}

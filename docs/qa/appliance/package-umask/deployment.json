@@ -1,0 +1,29 @@
+{
+  "operation": {
+    "id": "fda2f498-ee57-413d-9f13-fdab1d74a1ca",
+    "vm_id": "81d015b6-fa29-48ea-89b8-7ca02960c8ca",
+    "kind": "deploy",
+    "status": "needs_attention",
+    "stage": "starting_vm",
+    "progress": 80,
+    "error": "VM deployment needs recovery: virsh failed: exit status 1",
+    "controller_url": "https://192.168.122.10:8443"
+  },
+  "observed_progress": [
+    [
+      "queued",
+      "running",
+      0
+    ],
+    [
+      "copying_disk",
+      "running",
+      10
+    ],
+    [
+      "starting_vm",
+      "needs_attention",
+      80
+    ]
+  ]
+}

@@ -12,7 +12,9 @@ see [licensing](../docs/LICENSING.md) before distributing an image.
 
 ## Build
 
-On an amd64 Linux machine with Docker, network access and approximately 8 GB free:
+On an amd64 Linux machine with Docker, network access and approximately 10 GB free.
+A built `nex-core-local_*.deb` must exist under `dist/core-local/` (or set
+`CORE_LOCAL_DEB` to a package path inside this repository):
 
 ```sh
 ./installer/build.sh
@@ -22,11 +24,15 @@ The builder is pinned to a Debian container digest. It verifies the base ISO
 against a pinned SHA256 and Debian's signed checksum list using the documented
 CD-signing fingerprint. APT authenticates additional packages. Complete package
 dependencies are downloaded using an empty dpkg status so build-container packages
-cannot accidentally be omitted. Installation uses only the bundled local repository.
+cannot accidentally be omitted. The host-local UI package is copied into the offline
+repository and installed with the hypervisor packages. Installation uses only the
+bundled local repository.
 
 Output: `dist/nex-core-0.1.0-alpha1-amd64.iso`, its SHA256 file, package manifest,
 and build record. Cache/extracted media: `.cache/nex-iso/`. Exact Nex recipe source,
 license notices and source checksum are included on the ISO and installed host.
+The custom graphical frontend is built from authenticated cdebconf 0.280 source;
+its exact modified source/build configuration and upstream notices ship alongside Nex source.
 The added-package manifest does not yet cover every original installer component;
 this and matching upstream source retention are release gates, not completed claims.
 
@@ -39,21 +45,55 @@ and complete source bundle are required before external release.
 
 Boot the ISO with at least 2 virtual CPUs, 4 GB RAM and a blank 24 GB virtual disk.
 Use hardware acceleration/nested virtualization when testing KVM guests. Select
-**Install Nex Core**; serial installation uses `ttyS0` at 115200 baud.
+**GUI install - Nex Core** for the custom Nex mouse/keyboard wizard, or
+**Minimal install - Nex Core (text)** for the simple keyboard interface. The menu
+waits for your selection in BIOS and UEFI. Serial installation uses `ttyS0` at 115200 baud.
 
-Debian asks for language, networking, hostname, the root password (with confirmation),
-target disk, partitioning and erase confirmation. Select only the disposable disk.
-A mirror is not needed. No ordinary user account is created; Debian service accounts
-remain. Blank passwords and mismatched confirmation prompt again. Use root at the local console after reboot.
-Root SSH remains disabled, so a fresh installation has no SSH login account.
-Eject the ISO and reboot after installation. SSH host keys are generated per installation.
-No Nex Controller, enrollment agent, pool, shared storage, HA or Docker service exists
-in this alpha. Debian's normal text installer follows the branded boot menu.
+The GUI runs Nex's own upfront GTK wizard: Welcome → Host → Network → Disk → Review.
+A vertical step list sits beside a white form panel, with persistent Back/primary-action
+navigation and scrollable page content. Hostname is editable on both Host and Network;
+the fields share one value and the same validation. The native backend progress shell uses matching
+typography and colors while retaining its error and recovery controls.
+It detects adapters, shows MAC/link/driver information, and saves per-NIC disabled, DHCP
+or static IPv4 settings with one optional VLAN (0 untagged, 1–4094 tagged). The selected
+management adapter alone owns the default route and DNS; installed interface names are
+MAC-bound `nexN` names shown in the review. IP settings are staged for first boot. During setup, inactive device NICs are enabled
+only to read carrier, with IPv6 autoconfiguration suppressed and no DHCP or addresses
+assigned. Selecting DHCP later requests a lease preview for the chosen NIC/VLAN,
+showing searching/address/failure with Retry; it does not apply an IP, route or DNS in
+the installer. A green light marks Link detected; No link / Link unknown use a neutral light. Status refreshes without replacing field edits. Selecting management creates `br0` with that NIC (or VLAN) as its port and moves the
+management IP/gateway/DHCP to the bridge on first boot. Bonds, custom bridges, trunks, multiple VLANs per NIC and IPv6 settings
+are outside this alpha. The English UI fills the available installer screen and adapts to
+resolution changes. It offers five named keyboard layouts, area/timezone dropdowns from the bundled list, and a
+password visibility toggle that resets when leaving the host page. Timezone selection
+requires no typing; UTC is the default.
 
-The installer leaves management networking as selected and does not format secondary
-VM data disks. Local disk selection/partitioning remain Debian's interactive workflow.
-Nex doesn't enable a management bridge or a firewall policy silently. Use this alpha
-on an isolated lab network until host access policy has been validated.
+The GUI requires an explicitly selected writable, nonremovable whole sd/vd/xvd/nvme disk of
+at least 16 GiB, plus an unchecked-by-default erase checkbox naming that disk at review
+before whole-disk ext4 installation. Returning to Review resets the confirmation.
+The validation handoff rechecks disk identity before partitioning. Minimal text installation
+retains native language, account, networking, partitioning and GRUB questions. See the
+[operator procedure](../docs/guide/install-nex-core.md) for exact choices and recovery.
+
+A safe GUI seed is embedded in the initrd, avoiding the routine file-preseed loading screen;
+minimal installation keeps the shared media seed. The pinned cdebconf frontend remains for
+installation progress and native backend errors/recovery questions. It is not the primary
+GUI configuration workflow. Hardware preparation failures remain visible and retryable.
+
+Both modes install the same headless host, not a desktop or management UI. A mirror is not
+needed. No ordinary user account is created; Debian service accounts remain. GUI root
+passwords require at least eight characters and matching confirmation; minimal rejects
+blank passwords. Use root at the local console after reboot. Root SSH remains disabled,
+so a fresh installation has no SSH login account. Eject the ISO after installation.
+SSH host keys are generated per installation. No Nex Controller, enrollment agent, pool,
+shared storage, HA or Docker service exists in this alpha.
+
+Nex does not silently enable a management bridge or firewall policy. Use an isolated lab
+network and only disposable disks. If graphics fail, choose minimal installation before
+accepting disk writes. [Wizard QA](../docs/qa/iso/2026-09-08-nex-wizard.md) records actual
+checks and limits; [installer usability QA](../docs/qa/iso/2026-09-08-installer-qol.md)
+tracks the fullscreen and input-control checks separately. Earlier custom-shell evidence
+does not verify the new workflow.
 
 ## Check the installed host
 

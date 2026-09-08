@@ -1,0 +1,13 @@
+{
+  "result": "passed",
+  "mode": "blocked-only",
+  "binary_sha256": "2b73fb2805b56f705fd804893aaead971c569d28d8a76a9cc730de9fe94e3edb",
+  "ui_sha256": {
+    "local.css": "dc94aeab25b9791f09782e32a5272e8a025d062ccaa0a9d29416c89660677b8e",
+    "local.html": "328ec1c90075ef067253ecf34b1993cbd05a23c4d64ee502feec55c9438b2b42",
+    "local.js": "83b8f7accc43e14c2bd5d627b71297df8e1b5a3865e1e7efc72323f853c80371",
+    "local.js.LEGAL.txt": "7dff61d0cd5b7cff2403db6cf5c586b1218c9e663784caeda7fd06916c997d46"
+  },
+  "vm_commands": "simulated virsh/qemu-img/genisoimage; real HTTPS, Debian13 root PAM in disposable container, storage journals and browser",
+  "unix_time": 1788870359.753577
+}

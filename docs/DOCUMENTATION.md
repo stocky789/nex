@@ -123,7 +123,8 @@ and evidence references, requires applicable guide/API pages to change, and chec
 local links, and navigation. External URLs are not fetched; reference-style Markdown links are outside
 the supported guide format. It deliberately does not infer whether arbitrary code changes need an
 API or judge prose correctness. Reviewers must challenge an incorrect `none`. API schema/operation
-coverage tests are required with the first implemented API; no runtime Nex API exists today.
+coverage checks accompany the implemented Phase 1 API; use the [development checks](development.md)
+and [API reference](API.md) alongside the documentation gate.
 
 Hosted enforcement needs Actions enabled, a compatible runner, and the documentation job configured
 as a required branch-protection check. Inspect a real run on each host, including its executed steps,

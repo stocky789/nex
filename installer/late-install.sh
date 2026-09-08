@@ -5,7 +5,7 @@ set -eu
 [ -d /target/etc ] && [ -f /cdrom/nex/repo/Packages ]
 mkdir -p /target/usr/share/doc/nex-core
 cp /cdrom/nex/docs/* /target/usr/share/doc/nex-core/
-cp /cdrom/nex/nex-source.tar.gz* /target/usr/share/doc/nex-core/
+cp /cdrom/nex/nex-source.tar.gz* /cdrom/nex/nex-gui-source.tar.gz* /target/usr/share/doc/nex-core/
 mkdir -p /target/var/cache/nex-install
 cp -a /cdrom/nex/repo /target/var/cache/nex-install/
 cp /cdrom/nex/packages.txt /target/var/cache/nex-install/
@@ -42,13 +42,17 @@ printf '%s\n' 'GRUB_DISTRIBUTOR="Nex Core"' > /etc/default/grub.d/nex-core.cfg
 update-grub
 mkdir -p /usr/share/nex-core /etc/ssh/sshd_config.d
 cp /var/cache/nex-install/package-manifest.tsv /usr/share/nex-core/
-printf '%s\n' 'Nex Core 0.1.0-alpha1 — Debian 13 virtualization host' \
-    'Local alpha: no Nex Controller or enrollment service is installed.' > /etc/motd
-printf 'Nex Core 0.1.0-alpha1 (Debian 13) \\n \\l\n\n' > /etc/issue
+printf '%s\n' 'Nex Core 0.1.0-alpha1 — Debian 13 virtualization host' > /etc/motd
+# Static identity only; nex-core-local publishes the live web UI URL under /run/issue.d.
+# agetty expands \n (hostname) and \l (tty); keep single backslashes in this data string.
+printf '%s\n' \
+    'Nex Core 0.1.0-alpha1 (Debian 13)' \
+    'Host: \n  Console: \l' \
+    '' > /etc/issue
 printf '%s\n' 'PermitRootLogin no' > /etc/ssh/sshd_config.d/00-nex-core.conf
-systemctl enable libvirtd.service ssh.service chrony.service
-# Keep management networking as configured by Debian Installer. Do not invent
-# bridges or format VM data disks. libvirt NAT is explicitly enabled by operator.
+systemctl enable libvirtd.service ssh.service chrony.service nex-core-local.service
+# Minimal installation retains Debian networking; GUI settings are copied below.
+# libvirt NAT is explicitly enabled by the operator.
 cat > /etc/apt/sources.list.d/debian.sources <<'SOURCES'
 Types: deb
 URIs: https://deb.debian.org/debian
@@ -70,4 +74,13 @@ TARGET
 # Debian's wrapper clears inherited installer debconf descriptors and supplies
 # target mounts/service-start suppression required by package maintainer scripts.
 in-target /bin/sh /var/cache/nex-install/configure.sh
+if [ -f /run/nex-installer/active ]; then
+    # Only staged files are changed; these settings take effect on the first boot.
+    test -f /run/nex-installer/target/etc/network/interfaces
+    # Secondary DHCP route/DNS policy is implemented by the selected provider.
+    in-target /bin/sh -c 'command -v dhcpcd >/dev/null && ! command -v dhclient >/dev/null && ! command -v udhcpc >/dev/null'
+    cp -a /run/nex-installer/target/etc/. /target/etc/
+    # Include MAC-bound interface names in the initial boot environment.
+    in-target update-initramfs -u
+fi
 rm -rf /target/var/cache/nex-install

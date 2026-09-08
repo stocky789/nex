@@ -1,0 +1,35 @@
+{
+  "summary": "Replace timezone typing with selection-only dropdowns and remove the unwanted keyboard-test field. API impact: none.",
+  "paths": [
+    "installer/gui/nex-wizard.c",
+    "tests/integration/installer-qol.py",
+    "tests/integration/wizard-review.py",
+    "docs/guide/install-nex-core.md",
+    "installer/README.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/qa/iso/2026-09-08-timezone-dropdown.md",
+    "docs/qa/iso/timezone/timezone-dropdown.png",
+    "docs/qa/iso/timezone/timezone-selected.png",
+    "docs/qa/iso/timezone/review.png"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators now select an area and timezone without typing; keyboard-test field removed.",
+    "pages": [
+      "docs/guide/install-nex-core.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Native widgets emit the existing canonical timezone in protected local installer configuration; no API contract changes.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Compiled checks and native VM walkthrough; results and limits in QA report.",
+    "evidence": [
+      "docs/qa/iso/2026-09-08-timezone-dropdown.md",
+      "tests/integration/installer-qol.py",
+      "tests/integration/wizard-review.py"
+    ]
+  }
+}

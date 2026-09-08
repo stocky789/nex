@@ -56,8 +56,9 @@ Nex identity is present, libvirt/SSH/Chrony are running, `/dev/kvm` is available
 responds. These are host readiness checks. Active SSH does not prove remote login works;
 active Chrony does not prove clock synchronization, especially offline.
 
-The alpha includes upstream virtualization tools, but has no Nex GUI, enrollment agent, or
-pool management. No bridge/NAT network or persistent guest is created by this procedure.
+The alpha includes the host-local web UI (`nex-core-local` on port 9443). Central Controller
+enrollment and pool management remain separate. No bridge/NAT network or persistent guest is
+created by this procedure.
 
 ## Troubleshooting
 

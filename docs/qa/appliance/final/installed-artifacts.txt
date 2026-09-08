@@ -1,0 +1,4 @@
+b4228bcd0aa3e5f8143e55ec9a8d9a5a7e0deed09c23897ca64c28387ef6a67c  /usr/share/nex/core-local/nex-source.tar.gz
+19989230104d4239ce2f7e4c6a4367ab6566d08cb292980e065fb53df275c0a2  /usr/lib/nex/nex-core-local
+1238b82eb905c40c11b474b8bae7837f52c631296dfcc52d1d70bd57088b7a55  /usr/share/nex/appliance/controller.qcow2
+UMask=0077

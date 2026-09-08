@@ -6,8 +6,20 @@ cd "$(dirname "$0")/.."
 if [[ ${1:-} != --inside ]]; then
     mkdir -p .cache/nex-iso dist
     docker build -t nex-iso-builder -f installer/Dockerfile installer
+    env_args=()
+    if [[ -n ${CORE_LOCAL_DEB:-} ]]; then
+        abs=$(readlink -f -- "$CORE_LOCAL_DEB")
+        case $abs in
+            "$PWD"/*) env_args+=(-e "CORE_LOCAL_DEB=/work/${abs#"$PWD"/}") ;;
+            *)
+                echo 'CORE_LOCAL_DEB must be a path inside this repository' >&2
+                exit 1
+                ;;
+        esac
+    fi
     exec docker run --rm --platform linux/amd64 \
         -v "$PWD:/work" -e BUILD_UID="$(id -u)" -e BUILD_GID="$(id -g)" \
+        "${env_args[@]}" \
         nex-iso-builder
 fi
 [[ $(dpkg --print-architecture) == amd64 ]]
@@ -45,6 +57,10 @@ rm -rf "$stage"
 mkdir -p "$stage/nex/repo"
 xorriso -osirrox on -indev "$cache/$iso" -extract / "$stage"
 chmod -R u+w "$stage"
+# Both frontends must exist on the pinned media before advertising the choice.
+for image in install.amd/vmlinuz install.amd/initrd.gz install.amd/gtk/initrd.gz; do
+    test -s "$stage/$image"
+done
 printf '%s\n' 'Nex Core 0.1.0-alpha1 amd64 development installer — derived from Debian 13' > "$stage/.disk/info"
 cat > "$stage/README-NEX.txt" <<'MEDIA'
 Nex Core 0.1.0-alpha1 — development installation media
@@ -56,8 +72,9 @@ provide virtualization. Nex supplies host configuration and its own identity.
 
 Read /nex/docs/LICENSING.md, LICENSE and NOTICE for licensing and release limits.
 Original Debian README/notice files are retained as upstream documentation.
-This local alpha contains no Nex Controller or Nex agent. Install only onto an
-explicitly selected disposable lab disk and retain recovery access.
+This local alpha installs Nex Core with its host-local web UI. Central Nex Controller
+is deployed from that UI or separately. Install only onto an explicitly selected
+disposable lab disk and retain recovery access.
 MEDIA
 cp installer/preseed.cfg "$stage/preseed.cfg"
 cp installer/late-install.sh installer/root-account.sh installer/packages.txt "$stage/nex/"
@@ -71,6 +88,21 @@ apt-get -y --download-only --no-install-recommends \
     -o Dir::State::status="$cache/empty-status" \
     -o Dir::Cache::archives="$cache/debs" install "${packages[@]}"
 cp "$cache/debs/"*.deb "$stage/nex/repo/"
+# Host-local UI is a Nex package, not from Debian APT. Prefer CORE_LOCAL_DEB.
+core_local_deb=${CORE_LOCAL_DEB:-}
+if [[ -z $core_local_deb ]]; then
+    shopt -s nullglob
+    core_local_candidates=(/work/dist/core-local/nex-core-local_*_amd64.deb)
+    shopt -u nullglob
+    if [[ ${#core_local_candidates[@]} -eq 0 ]]; then
+        echo 'nex-core-local .deb required: set CORE_LOCAL_DEB or place a package under dist/core-local/' >&2
+        exit 1
+    fi
+    core_local_deb=$(ls -1t "${core_local_candidates[@]}" | head -n1)
+fi
+[[ -f $core_local_deb ]] || { echo "missing nex-core-local package: $core_local_deb" >&2; exit 1; }
+cp -f "$core_local_deb" "$stage/nex/repo/"
+printf 'nex-core-local\n' >> "$stage/nex/packages.txt"
 (cd "$stage/nex/repo" && dpkg-scanpackages --multiversion . /dev/null > Packages)
 printf 'package\tversion\tarchitecture\tsource\n' > "$stage/nex/package-manifest.tsv"
 for deb in "$stage/nex/repo/"*.deb; do
@@ -90,6 +122,7 @@ Build recipe: installer/build.sh; installed packages: nex/package-manifest.tsv
 Packages authenticated by Debian APT signed repository metadata during build.
 Package versions reflect build-time trixie repositories; not bit-reproducible yet.
 BUILD
+./installer/build-gui.sh
 mkdir -p "$stage/nex/docs"
 cp LICENSE NOTICE docs/LICENSING.md "$stage/nex/docs/"
 tar --sort=name --owner=0 --group=0 --numeric-owner -czf "$stage/nex/nex-source.tar.gz" \
@@ -115,9 +148,13 @@ menu color unsel 0 #ff17233b #00f6f7fc none
 menu color sel 0 #ffffffff #ff2456d9 none
 menu color border 0 #0017233b #00f6f7fc none
 menu color tabmsg 0 #ff17233b #00f6f7fc none
-label nex
-  menu label Install Nex Core (interactive disks and root password)
+label graphical
+  menu label GUI install - Nex Core
   menu default
+  kernel /install.amd/vmlinuz
+  append vga=788 initrd=/install.amd/gtk/initrd.gz --- quiet
+label nex
+  menu label Minimal install - Nex Core (text)
   kernel /install.amd/vmlinuz
   append initrd=/install.amd/initrd.gz preseed/file=/cdrom/preseed.cfg --- quiet
 label serial
@@ -156,7 +193,11 @@ if loadfont /boot/grub/font.pf2; then
 fi
 set menu_color_normal=black/light-gray
 set menu_color_highlight=white/blue
-menuentry 'Install Nex Core (interactive disks and root password)' {
+menuentry 'GUI install - Nex Core' {
+  linux /install.amd/vmlinuz vga=788 --- quiet
+  initrd /install.amd/gtk/initrd.gz
+}
+menuentry 'Minimal install - Nex Core (text)' {
   linux /install.amd/vmlinuz preseed/file=/cdrom/preseed.cfg --- quiet
   initrd /install.amd/initrd.gz
 }

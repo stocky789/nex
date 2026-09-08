@@ -10,3 +10,7 @@ chrony
 nfs-common
 sudo
 ca-certificates
+ifupdown
+bridge-utils
+dhcpcd-base
+genisoimage

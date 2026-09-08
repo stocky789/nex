@@ -1,7 +1,7 @@
 # Nex Controller and Nex Core implementation plan
 
 Date: 2026-09-08  
-Status: First standalone Nex Core installer alpha built and lab-verified; controller and host agent remain planned.
+Status: Standalone installer alpha and Phase 1 Controller/agent development foundation have lab evidence; remaining delivery gates are tracked below.
 
 Project planning files live in `docs/plans/`.
 
@@ -13,14 +13,31 @@ Each milestone must work end to end before the next one expands the scope. The c
 |---|---|---|
 | 1. Local foundation | Stock Debian runs a persistent guest through libvirt | 0 |
 | 2. First managed VM | One controller, site, pool, host, local disk, VM, and browser console | 1–2 |
-| 3. Installable host | Nex Core ISO installs and enrolls that same working setup | 3 |
+| 3. Installable host and Controller bootstrap | Nex Core installs; its local UI deploys a Controller VM or connects to an existing Controller | 3 |
 | 4. Shared pool | Two hosts use pool-level NFS storage with explicit VM placement | 4 |
 | 5. Recovery | Snapshot rollback, independent backups, scheduling, and proven restores | 5–6 |
 | 6. Mobility | Shared-storage live migration and host evacuation | 7 |
 | 7. Supported release | Upgrade/recovery checks, access controls, and operator documentation | 8 |
 | Later | Per-pool HA, managed Docker applications, and additional workflow features; Ceph when ready | 9–10 and follow-on backlog |
 
-**Current slice, authorized 2026-09-08:** build and verify the first branded Nex Core ISO before starting the controller. Combine the host foundation in Phase 0 with the standalone installer portion of Phase 3; controller enrollment and Nex agent packaging remain deferred until those components exist. This changes delivery order, not the later acceptance requirements. The first controller demo uses existing host networking and local storage; a network editor, templates, advanced backup formats, HA, and Ceph do not block it. Security checks and data-loss prevention remain part of the feature they protect.
+**Initial ISO slice, authorized 2026-09-08:** build and verify the first branded Nex Core ISO before starting the controller. Combine the host foundation in Phase 0 with the standalone installer portion of Phase 3; controller enrollment and Nex agent packaging remain deferred until those components exist. This changes delivery order, not the later acceptance requirements. The first controller demo uses existing host networking and local storage; a network editor, templates, advanced backup formats, HA, and Ceph do not block it. Security checks and data-loss prevention remain part of the feature they protect.
+
+**Subsequent development decisions, 2026-09-08:** Matt authorized Phase 1 alongside
+installer work; see its [implemented scope and development acceptance](2026-09-08-controller-foundation.md).
+Matt then agreed to a host-local web UI on every Nex Core host, inspired by XO Lite,
+with Controller appliance deployment and local recovery. Deliver this in
+[Phase 3 after Phase 2 VM operations](#host-local-ui-and-controller-appliance-bootstrap),
+before Phase 4 multi-host expansion. It is planned work, not an expansion of the
+active standalone installer changes or a claim that local web control exists today.
+
+**Appliance implementation priority, 2026-09-08:** Matt subsequently requested
+building that host-local UI and a seamless Debian Controller virtual appliance now,
+with parallel workers. The [appliance implementation slice](2026-09-08-controller-appliance.md)
+brings forward its required local VM foundation and bootstrap from Phase 3;
+general Phase 2 VM/console work and full phase acceptance remain separate gates.
+Controller is a prepared cloud image with per-instance initialization, not an ISO.
+API impact: **new contract** for local deployment/control and central bootstrap/adoption;
+guide impact: **updated** with implementation and actual verification evidence.
 
 Matt selected AGPL for original Nex code on 2026-09-08; apply AGPL-3.0-only to Nex code/build scripts while preserving upstream component licenses and handling artwork separately. See `LICENSE` and `docs/LICENSING.md` for the implementation of that decision.
 
@@ -29,6 +46,86 @@ Matt selected AGPL for original Nex code on 2026-09-08; apply AGPL-3.0-only to N
 **API impact of the standalone ISO slice: none** — installer packaging, release identity, and repository configuration introduce no Controller/Core or client-facing API; enrollment remains deferred.
 
 **Installer account decision, 2026-09-08:** ask only for a root password and its confirmation; skip ordinary user creation using Debian Installer’s native account policy. An installer hook rejects blank root passwords instead of Debian’s ordinary-user fallback; mismatched confirmation retains Debian’s retry. Keep system/service accounts and local root recovery access; root SSH remains disabled. **API impact: none** — boot menu → preseed → Debian account setup affects local OS credentials only; there is no Controller operation, Core agent command/result, or client-facing API in this flow. See the [root-only installer verification](../qa/iso/2026-09-08-root-account.md) for the exact rebuilt image, password-dialog checks, and installation results.
+
+**Installer interface correction, 2026-09-08:** Matt clarified that the GUI must be a
+custom Nex interface, not Debian's stock GUI. Retain the pre-install GUI/minimal choice,
+but replace the graphical presentation with an original Nex shell: brand header,
+section navigation, task heading, purpose text, question pane and action/footer layout.
+Rebuild the pinned cdebconf 0.280 GTK frontend with this shell, preserving its question
+handlers, password validation, disk selection/confirmation, progress and error paths.
+Sections indicate the current question category, not completed acceptance checkpoints.
+Minimal text and serial installation remain available; neither choice installs a desktop.
+The earlier native-GUI choice did not satisfy the requested custom interface.
+**API impact: none** — local boot menu → cdebconf GTK presentation → existing Debian
+question/answer and installer operations → installed host; no Controller operation,
+Core agent command/result or client-facing Nex API. The existing upstream frontend ABI
+is pinned and checked during the build, rather than introducing a new local service.
+**Guide impact: updated** — custom interface, navigation, limits and matching QA evidence.
+See [custom GUI verification](../qa/iso/2026-09-08-custom-installer.md).
+
+**Installer logo correction, 2026-09-08:** replace the placeholder typed n tile and
+system-font product heading with the approved Nex Core lockup from the existing brand board.
+Render the raster through native GTK image support and retain it with the frontend source.
+No new logo design or dependency is needed; production vector masters remain outstanding.
+**API impact: none** — local header rendering only; Controller/Core and client APIs are absent.
+**Guide impact: none** — installation choices, controls and recovery steps are unchanged.
+See [logo verification](../qa/iso/2026-09-08-installer-logo.md).
+
+**Installer workflow correction, 2026-09-08:** Matt rejected the earlier custom shell as
+still following Debian's question-by-question workflow. Replace the primary GUI flow with
+original Nex GTK pages for welcome, host identity/access, detected NICs, explicit disk choice,
+and a single review with an explicit erase checkbox naming the selected target. The earlier shell/logo QA remains valid
+only for those historical artifacts. A safe embedded GUI seed avoids the routine debconf-file
+loading page; preserve meaningful backend progress, errors and recovery prompts.
+
+This slice now includes local installer network configuration: disabled/DHCP/static IPv4
+per physical NIC, one tagged VLAN or untagged interface per NIC, an explicit management
+adapter owning the default route/DNS, and MAC-bound installed names displayed before commit.
+Apply these settings only to the installed system for first boot; discovery enables NICs only for carrier detection, without assigning addresses or
+routes or starting DHCP during discovery. Selecting DHCP subsequently performs a bounded
+lease preview, without applying addresses/routes/DNS; the installed host still negotiates
+its own lease. Suppress automatic IPv6 addressing before enabling a NIC. The selected management NIC now creates a native `br0` on first boot. No bonds, custom
+bridge editor, trunks, multiple VLANs per NIC or IPv6 editor are claimed.
+This is not the later Controller network editor and does not change that phase's safety gates.
+The GUI initially uses English, five keyboard layouts and supplied timezone identifiers.
+Its disk path supports one nonremovable sd/vd/xvd/nvme whole disk of at least 16 GiB, ext4 and
+explicit checkbox erasure consent; preserve the minimal text path for manual installation.
+
+**API impact: none** — GUI → local validation/staged network files and Debian seed → native
+installer → installed OS files; no Controller operation, Core agent command/observed result,
+or client-facing Nex API exists in this flow. Local handoff validation is implemented in the
+same slice; no service endpoint is introduced.
+**Guide impact: updated** — replace obsolete GUI question-flow instructions with the actual
+pages, NIC/VLAN constraints, disk confirmation and local recovery. Acceptance remains subject
+to actual evidence in [Nex wizard QA](../qa/iso/2026-09-08-nex-wizard.md), including independent
+review; earlier installer checks cannot establish the new workflow's completion.
+
+**Installer usability correction, 2026-09-08:** Matt reported unused screen space and
+hard-to-use timezone selection, and requested practical quality-of-life improvements.
+Matt subsequently authorized a full modern, flat, professional visual overhaul. Replace
+the old horizontal step strip with a compact vertical step list, a white form panel on a
+neutral background, and persistent Back/primary-action navigation. Keep completed and active
+steps distinct using text and symbols as well as color. Match the existing backend progress
+shell's typography and palette while preserving its native error/recovery behavior.
+Make the native wizard occupy the available X screen without relying on a window manager,
+including resolution changes. Following Matt’s correction, use selection-only area/timezone dropdowns with UTC as
+the default; remove the unwanted keyboard-test field and timezone text entry. Show
+descriptive keyboard names and offer a password visibility toggle
+that resets when leaving the host page. Matt also requested hostname editing on Network:
+share the Host entry's value rather than introduce a second setting, retain the same
+validation, and show the current name in review. Add contextual field help while retaining explicit
+disk selection, checkbox erasure confirmation, credential validation and the existing network
+limits. Use existing GTK controls and bundled timezone data; no new dependency or external
+location service is required.
+
+**API impact: none** — local GTK controls continue through the same private configuration,
+validation and Debian installer handoff; no Controller operation, agent command/result or
+client-facing API changes.
+**Guide impact: updated** — document timezone dropdowns, keyboard selection, password visibility
+and the revised screen/navigation structure in the installation guide. Actual artifact,
+visual checks, regression
+results and outstanding limits belong in [installer usability QA](../qa/iso/2026-09-08-installer-qol.md);
+this scope decision does not establish those checks passed.
 
 **Standalone alpha result, 2026-09-08:** branded BIOS/UEFI menus, offline BIOS installation, installed services, a nested libvirt KVM guest boot, host reboot persistence, and Nex identity preservation across a `base-files` reinstall passed on the final image. See the [exact artifact and QA evidence](../qa/iso/2026-09-08-alpha1.md). This completes the first ISO lab slice, not the full Phase 0/3 gates: full guest networking/data persistence, physical hardware, UEFI installation/Secure Boot, and controller enrollment remain outstanding.
 
@@ -128,7 +225,12 @@ The controller owns desired configuration, membership, permissions, and operatio
 
 Agents initiate outbound authenticated HTTPS connections to the controller for inventory, commands, and console forwarding. VM disks, migrations, and backup data travel directly between authorized hosts/storage endpoints rather than through the controller database or API.
 
-Start the controller on a separate Debian machine or VM outside the hosts being installed. Self-hosting later requires a documented local boot/recovery path that does not depend on the controller already running.
+During Phases 1–2, start the controller on a separate Debian machine or VM outside
+the hosts being installed. Phase 3 adds a host-local bootstrap/recovery UI that
+can deploy the Controller appliance on the first Core host without an existing
+Controller. External deployment remains supported. Local libvirt, storage,
+networking and recovery access must boot independently of Controller availability;
+see the [bootstrap and ownership gates](#host-local-ui-and-controller-appliance-bootstrap).
 
 ## Health monitoring, heartbeats, and cluster safety
 
@@ -254,10 +356,128 @@ tests apply. The generated API website remains a Phase 1 deliverable, not a clai
 5. Provide first-boot hostname, management network, controller address, and enrollment setup through a minimal local interface. Generate identity and SSH keys per installation.
 6. Preserve the Debian signed boot chain, support UEFI/Secure Boot, and publish image checksums plus package/build manifests. Add legacy BIOS only if required by the initial hardware targets.
 7. Use a signed APT repository for updates; the ISO and package install must produce the same host configuration.
+8. Deliver the host-local web UI and Controller appliance bootstrap below, reusing the VM lifecycle and console operations proven in Phase 2.
 
 **Gate:** install without internet, eject media, reboot, enroll, and create a VM. Test multiple disks, absent network, representative Intel/AMD hardware, and recovery access. No credentials or private host keys are cloned into the image.
 
 Preseed supports package/repository and installation configuration. Offline operation still requires all necessary content on the media. [Debian preseed](https://www.debian.org/releases/trixie/amd64/apbs04.en.html), [Debian Live installer options](https://live-team.pages.debian.net/live-manual/html/live-manual/customizing-installer.en.html)
+
+#### Host-local UI and Controller appliance bootstrap
+
+**Agreed 2026-09-08; planned Phase 3 work.** Every installed Nex Core host serves
+a small local web interface for setup, host/VM status, basic local control and
+recovery. A first-time operator needs one physical server and a browser, without
+an existing VM or external Controller. XO Lite's host-served deployment workflow
+is inspiration, not copied branding or inspected Nex behavior; see the
+[documented XOA deployment options](https://docs.xen-orchestra.com/installation).
+
+Deliver after Phase 2 proves local VM provisioning, power operations and console
+authorization, and alongside Phase 3 packages/first-boot integration. Reuse those
+operations rather than building another VM-management implementation. Central
+Sites/Pools, placement, storage policies and normal administration remain in Nex
+Controller; the local UI acts only on its own host and eligible resident VMs.
+
+**First-server workflow:** install Core → reboot → open the host address shown
+on its local console → authenticate → choose one of:
+
+| Choice | Planned behavior |
+| --- | --- |
+| Create a new environment | Select existing usable storage, Controller CPU/RAM, a supported management network/address and a new administrator credential; review, deploy and boot a verified Controller appliance. |
+| Connect to an existing Controller | Verify Controller identity and use a short-lived pool-bound enrollment token; works with a Controller on another host, an external supported Debian machine/VM or a remote reachable network. |
+| Recover this host's Controller | Inspect the existing appliance, open its console and perform explicitly confirmed local power recovery without needing the Controller API. |
+
+Bundle a versioned appliance with the installation media for offline bootstrap;
+also allow a signed compatible download or local upload. Verify its signature,
+integrity, format and resource requirements before import. Existing storage
+selection does not format disks. The Phase 3 installation network profile must
+provide a supported guest-capable management bridge at first boot, configured as
+part of the reviewed installation choices before that network becomes live.
+The appliance selects that existing bridge so its address is reachable from the
+operator's browser. On an existing host without a suitable bridge, give an
+actionable preflight blocker instead of silently reconfiguring its live management
+interface. General network editing keeps its Phase 4 staged-apply/recovery gate.
+
+Generate instance-specific keys and credentials on first boot. Use protected,
+single-use bootstrap material to initialize the administrator, first Site/Pool
+and host enrollment, then remove that material. Show durable progress and the
+verified Controller URL. Adopt the already-created appliance into Controller
+inventory with its stable VM UUID and host assignment; never recreate it during
+handoff. Preserve local bootstrap operation IDs so browser refresh, lost replies,
+host restart or retry cannot create duplicate appliances or memberships.
+
+**Local control and authority:** expose current host health, resident VM state,
+authorized consoles, and supported start/graceful-shutdown/explicit force-stop
+actions through the same agent-side validation, operation journal and locks as
+central requests. Record the local actor and reconcile local results and observed
+state with Controller after reconnect; retain Controller ownership of desired
+configuration. Local credentials and console recovery must work during an outage.
+Verify TLS identity from the local console, use per-installation authentication
+without a shared default password, and scope the local HTTPS API to the management
+interface with authorization, CSRF protection and short-lived console sessions.
+Do not expose libvirt sockets or require public inbound host access for remote
+Controller management; agents retain their outbound authenticated HTTPS flow.
+
+An unreachable Controller is not permission to override VM placement, migration,
+disk ownership or future HA fencing. Allow local starts only when this host's
+exclusive execution/storage ownership is established; otherwise block with a
+recovery reason. Serialize central and local operations, reconcile before central
+automation resumes, and never let local controls force takeover of uncertain
+shared disks. Later HA-managed resources must keep their separate authority gate.
+Keep arbitrary VM creation/deletion, pool policies, migration and advanced storage
+management in Controller; the bootstrap action creates only its appliance.
+
+**Boot and recovery:** start the appliance through local libvirt autostart after
+its local disk and network are ready. Its boot dependencies must not require a
+Controller-managed service to be running first. Retain the local UI and console
+when the appliance is stopped or broken. Protect the appliance from accidental
+deletion and explain management interruption before its shutdown or host maintenance.
+One Controller may manage multiple Pools; one per Pool is not required.
+
+Store a complete, consistent Controller database/identity recovery export outside
+the hosting server and test its recovery before claiming self-hosting recoverable.
+Use SQLite's supported backup mechanism or a quiesced backup, with matching
+configuration and identity material; copying a live database file without its
+transaction/WAL state is not a valid export. Provide a
+documented manual replacement-appliance import of that export in this slice;
+include CA/identity keys and required configuration with secret protection, and
+ensure the original instance cannot resume before activating its replacement.
+A same-host snapshot is insufficient. This minimal manual Controller recovery
+path is intentionally required in Phase 3; VM snapshots remain Phase 5 and
+independent VM backups/policies remain Phase 6. Automatic failover and concurrent
+active Controllers remain outside this slice. A single-server failure takes its
+local Controller down; external deployment offers a separate failure boundary,
+not automatic HA.
+
+**API impact: new contract (planned implementation); none for runtime in this
+documentation change.** Browser → authenticated host-local setup/control API →
+agent/libvirt operation and durable result → local UI, followed by Controller
+bootstrap/enrollment, appliance adoption and reconciliation. Reuse the Phase 1
+enrollment/report/operation and Phase 2 VM/console contracts where sufficient;
+extend both sides for bootstrap handoff and local-operation provenance as needed.
+Specify validation/errors, scope, idempotency, pending/unknown results, outages,
+reconnect ordering and Controller/Core/appliance version compatibility. Add local
+HTTP and console contracts, machine-readable schemas and generated reference to
+the [API reference](../API.md) with implementation; no endpoints are invented now.
+**Guide impact: none now** — this is a future delivery decision. Implementation
+must update installation, first-server setup, local control, external enrollment
+and recovery guidance with actual walkthroughs in the same slice.
+
+**Acceptance gate:** from an empty disposable server, install offline, deploy the
+Controller through the local browser UI, create/enroll the first Site/Pool/Host
+and reach central VM management without manually creating a VM elsewhere. Repeat
+with an external Controller. Reboot the host with the Controller initially down;
+verify independent appliance autostart, local UI/console access and stable IDs.
+Interrupt download/import/first boot/enrollment and retry without duplication;
+test invalid signatures, insufficient capacity, missing bridge, unauthorized
+access, expired bootstrap material and incompatible versions. Stop Controller
+and exercise permitted local controls; race them against central commands and
+reject starts with uncertain/shared-disk ownership. Recover the exported database
+and identity onto a replacement appliance with the original excluded, and verify
+existing-host reconnection without duplicate control. Review desktop/360px and
+keyboard flows, empty/loading/error/stale states and disruptive confirmations.
+Include runnable API/failure checks, updated guide/reference, retained matching
+appliance source/notices under the existing licensing gate, and independent review.
+All these gates remain outstanding until implemented and executed.
 
 ### 4. Multi-host pools and shared storage
 
@@ -456,3 +676,97 @@ All destructive tests require explicitly selected disposable disks/VMs and must 
 - Before production protection: agree backup destination/failure domain, encryption/key custody, retention, downtime tolerance, and RPO/RTO targets. Before HA: agree fencing hardware, node count, and availability requirements.
 
 Implementation should proceed phase by phase, with each gate demonstrated before dependent features are treated as supported.
+
+### Installer welcome copy clarification — 2026-09-08
+
+Explain Nex Core’s Debian/KVM/libvirt host role and remind operators to deploy at least
+one Nex Controller separately for central management of their environment. This is a
+welcome-copy update, not Controller deployment or enrollment functionality.
+API impact: none; no callers, operations, agent commands or handoff contracts change.
+Guide impact: updated; the installation guide describes the welcome reminder.
+
+### Installer hostname standards correction — 2026-09-08
+
+Accept RFC 1123 ASCII hostnames and dot-separated qualified names, including digit-leading
+labels, uppercase, internal hyphens, ASCII/Punycode spelling and one optional root dot.
+Apply DNS limits of 63 bytes per label and 253 text bytes excluding that optional dot.
+Keep private suffixes usable without DNS/public-TLD checks. Unicode text conversion is
+not part of this ASCII hostname profile; use the ASCII IDNA representation.
+Use shared validation in the GUI and protected backend. Store the first label as the
+Debian short hostname, the remaining suffix as domain, and retain full/short aliases.
+API impact: none; local installer settings remain private, with no Controller/Core or
+client API operation changes. Guide impact: updated. Research and executed verification
+belong in [hostname QA](../qa/iso/2026-09-08-installer-hostname.md).
+
+### Installer live link indication — 2026-09-08
+
+Replace raw operational state with observed carrier status. Probe detected device NICs,
+read administrative/carrier state, and refresh the selected NIC while Network is open.
+A failed or unavailable probe must not be reported as a disconnected cable. Preserve
+in-progress form edits and distinguish link from IP/VLAN/gateway connectivity.
+API impact: none; local observation only, no Controller/Core or client API changes.
+Guide impact: updated; record results in [link-status QA](../qa/iso/2026-09-08-installer-link.md).
+
+### Installer erase-confirmation clarification — 2026-09-08
+
+Replace the confusing device-name typing field with an initially unchecked erase checkbox
+naming the selected disk, followed by the existing explicit Erase disk and install action.
+Returning to Review resets consent. Keep target selection, identity rechecks and all backend
+validation. API impact: none; confirmation remains local to the installer. Guide impact:
+updated, including the changed review step and safety behavior.
+
+### Xen disk eligibility and compact network feedback
+
+GUI discovery and the backend now share disk-name eligibility, including Xen `xvd` devices.
+The previous GUI offered `/dev/xvda` but the backend rejected its prefix. Existing whole-disk,
+read-only, removable, installation-media, capacity and identity checks remain required.
+A green light accompanies detected carrier; other states retain neutral lights and text.
+Verbose hostname hover explanations are removed; validation and errors remain.
+API impact: none; local installer discovery/validation and display use no Controller operation,
+agent command/result or client-facing API. Guide impact: updated.
+See [Xen disk QA](../qa/iso/2026-09-08-installer-xen-disk.md) for evidence and Xen runtime limits.
+
+Keyboard startup feedback correction: successful layout application is silent; genuine
+errors still block credentials and layout changes still clear both password fields.
+API impact: none; local GTK setup only, no Controller/Core or client contracts. Guide impact: updated.
+
+### Backend progress transitions
+
+Keep a waiting panel visible when cdebconf stops a progress task or clears an answered
+prompt before the next step arrives. Real progress, questions and errors replace it;
+no artificial overall percentage or stale completed task is presented.
+API impact: none — cdebconf presentation changes no Controller operation, agent command/result
+or client-facing API. Debian installation commands and validation are unchanged.
+Guide impact: updated; native transition evidence belongs in the installer QA report.
+
+Completion behavior: the GUI leaves Debian's final successful-installation note unseen
+so it waits for acknowledgement, with Nex completion copy and a **Restart now** button.
+This uses the existing finish-install completion gate; final cleanup/unmount/reboot follow
+acknowledgement. It is not a separate certification of installed-host functionality.
+Native failure/recovery prompts remain. API impact: none; local preseed/frontend only.
+Guide impact: updated alongside the transition fix.
+
+Failure feedback: retain the backend reason and recovery controls under Nex failure
+branding, with an explicitly opened read-only installer log viewer. Missing logs must be
+reported honestly. This does not claim display recovery after a kernel crash or power loss.
+API impact: none; local diagnostics display. Guide impact: updated in the same slice.
+
+### Continuous Nex progress presentation correction
+
+The separate waiting fallback did not solve the operator complaint: it visibly swapped
+with the stock progress layout at every component boundary. Replace both presentations
+with one persistent Nex panel, fixed geometry and heading, and real per-step status.
+Only interactive questions/errors and completion replace the progress panel. Keep native
+backend cancellation and question handling; do not invent an overall percentage.
+API impact: none — internal cdebconf GTK rendering only; no Controller operation, agent
+command/result or client-facing API changes. Guide impact: updated.
+
+## Installer DHCP feedback — 2026-09-09
+
+Matt requested immediate DHCP feedback for the selected installer NIC/VLAN: searching,
+server-returned IPv4 or retryable failure. Use the existing BusyBox DHCP client with a
+custom display-only hook; no route, address or DNS configuration effects. Cancel previews
+on selection/mode/VLAN/page changes and remove only owned temporary VLAN links.
+API impact: none — GTK invokes a local installer helper; no Controller/Core agent or
+client-facing API contract changes. Guide impact: updated. Validation and remaining
+limits: [DHCP preview QA](../qa/iso/2026-09-09-installer-dhcp.md).

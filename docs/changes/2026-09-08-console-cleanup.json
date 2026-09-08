@@ -1,0 +1,27 @@
+{
+  "summary": "Show only the local web URL in the console notice. API impact: none \u2014 no service/API behavior changes.",
+  "paths": [
+    "packaging/core-local/core-local-setup",
+    "tests/test_core_local_package.py",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/qa/appliance/console-cleanup.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Console now omits fingerprint/login instructions; guide describes URL-only banner and retains manual certificate inspection.",
+    "pages": [
+      "docs/guide/deploy-controller-appliance.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Existing URL presentation only, no Controller/agent or client-facing contract change.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Nine package unit checks passed with exact generated notice/MOTD assertion and real certificate checks; console refresh mocked.",
+    "evidence": [
+      "docs/qa/appliance/console-cleanup.md"
+    ]
+  }
+}

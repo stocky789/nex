@@ -1,0 +1,48 @@
+{
+  "summary": "Replace the stock graphical installer shell with custom Nex UI. API impact: none; local cdebconf presentation using its existing pinned ABI.",
+  "paths": [
+    "PRODUCT.md",
+    "docs/LICENSING.md",
+    "docs/guide/install-nex-core.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/qa/iso/2026-09-08-custom-installer.md",
+    "docs/qa/iso/custom/blank.png",
+    "docs/qa/iso/custom/cancel.png",
+    "docs/qa/iso/custom/complete.png",
+    "docs/qa/iso/custom/confirm.png",
+    "docs/qa/iso/custom/disk.png",
+    "docs/qa/iso/custom/installed.png",
+    "docs/qa/iso/custom/keyboard-800.png",
+    "docs/qa/iso/custom/mismatch.png",
+    "docs/qa/iso/custom/root.png",
+    "docs/qa/iso/custom/uefi-gui.png",
+    "installer/Dockerfile",
+    "installer/README.md",
+    "installer/build-gui.sh",
+    "installer/build.sh",
+    "installer/check.sh",
+    "installer/gui/nex-shell.c",
+    "installer/late-install.sh",
+    "tests/integration/installer-shell.py"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The graphical installer now has Nex layout and section indicators; document actual navigation and verification limits.",
+    "pages": [
+      "docs/guide/install-nex-core.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The boot menu selects a local frontend using unchanged Debian question/answer behavior. No Controller operation, Core command/result, or client-facing API is introduced.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Build ISO and actual GTK module; compile classifier checks; interact with BIOS/UEFI modes, 800x600 keyboard, password errors and disk-confirmation workflow in disposable QEMU. Inspect screenshots and source archive; limits in QA.",
+    "evidence": [
+      "docs/qa/iso/2026-09-08-custom-installer.md",
+      "tests/integration/installer-shell.py",
+      "installer/build-gui.sh"
+    ]
+  }
+}

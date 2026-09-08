@@ -1,0 +1,1614 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nex Core host-local API — 0.1.0</title>
+<link rel="stylesheet" href="reference.css">
+<main><h1>Nex Core host-local API — 0.1.0</h1><p>Development host-local HTTPS API v1, independent of Controller sessions and outages. Narrow appliance deployment and owned local power recovery; no generic VM creation, network editor or console stream. Core outbound protocol and signed appliance format/protocol version 1 only. Deploy matching development components; no mixed-version upgrade window is promised.</p>
+<p><a href="local-openapi.json">Download OpenAPI JSON</a>. This reference works offline; examples do not execute requests.</p>
+<nav aria-label="API operations"><ul>
+<li><a href="#localLogin">POST /api/local/v1/session</a></li>
+<li><a href="#localSession">GET /api/local/v1/session</a></li>
+<li><a href="#localLogout">DELETE /api/local/v1/session</a></li>
+<li><a href="#localHost">GET /api/local/v1/host</a></li>
+<li><a href="#localVMs">GET /api/local/v1/vms</a></li>
+<li><a href="#localPower">POST /api/local/v1/vms/{id}/actions</a></li>
+<li><a href="#localDeploy">POST /api/local/v1/deployments</a></li>
+<li><a href="#localDeployments">GET /api/local/v1/deployments</a></li>
+<li><a href="#localDeployment">GET /api/local/v1/deployments/{id}</a></li>
+<li><a href="#localHealth">GET /healthz</a></li>
+<li><a href="#localSource">GET /source</a></li>
+<li><a href="#localGUI">GET /</a></li>
+<li><a href="#localRetryDeployment">POST /api/local/v1/deployments/{id}/retry</a></li>
+<li><a href="#localAPIDocs">GET /api/docs/</a></li>
+</ul></nav>
+<section><h2>nex-core-local -prepare-recovery-file</h2><pre>{
+  &quot;description&quot;: &quot;Root-only manual replacement preparation, not an HTTP operation or running listener. Requires stopped local service and a clean replacement host without outbound agent identity or normal deployments. Uses the selected signed appliance and existing local storage/bridge. Does not bootstrap Site/Pool, enroll a host or adopt the VM. Repeated identical normalized file contents reconcile the persisted request and original VM UUID; changed contents fail. TLS-verified readiness and seed removal precede recovery_prepared.&quot;,
+  &quot;inputFile&quot;: {
+    &quot;schema&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/RecoveryPreparationRequest&quot;
+    },
+    &quot;mode&quot;: &quot;0600&quot;,
+    &quot;maximumBytes&quot;: 32768,
+    &quot;validation&quot;: &quot;One JSON object in a regular file; unknown fields rejected.&quot;
+  },
+  &quot;output&quot;: {
+    &quot;schema&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+    },
+    &quot;format&quot;: &quot;One JSON object on stdout after successful completion.&quot;
+  },
+  &quot;failure&quot;: &quot;Nonzero exit and error on stderr. Retain original request and journal; inspect uncertain VM effects before retry. No automatic restore, takeover or enrollment.&quot;,
+  &quot;compatibility&quot;: &quot;Same signed appliance format/protocol v1 and architecture amd64 as ordinary deployment. Restore requires matching source SHA-256 via the separate manual recovery command.&quot;
+}</pre></section>
+<section id="localLogin"><h2>POST <code>/api/local/v1/session</code></h2>
+<p>Sign in to this host</p><p>Authenticates only username root against the host operating-system password using PAM authentication and account checks, and validates browser origin. Use the root password set during Nex Core installation, or its current value after an OS password change. Locked or expired accounts/passwords and authentication-service failures fail closed, including the five-second helper timeout. Sets __Host-nex_local_session with Secure, HttpOnly, SameSite=Strict, Path=/ and no Domain. Each login creates a new session; at most 64 active sessions per service. Sessions expire after 30 minutes without an authenticated mutation and eight hours absolutely; GET/HEAD polling does not renew them. Legacy unprefixed cookies are not accepted; sign in again after upgrade. The former separate local admin account and saved credential files are not accepted; there is no fallback. Upgrades require matching local service, PAM helper/configuration and web assets. Root password changes affect subsequent logins; existing sessions remain valid until logout, expiry or service restart. Controller admin credentials and Core protocol v1 are unchanged. Local process restart invalidates its in-memory sessions. Login admission permits at most five valid-length attempts per one-minute actual peer-IP window, two concurrent password checks per service, and 4096 tracked peers. Forwarded client-IP headers are ignored. Login returns 429 when rate/concurrency/table or 64-session capacity is exhausted; bounded retries must not create an unbounded loop.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localLogin&quot;,
+  &quot;summary&quot;: &quot;Sign in to this host&quot;,
+  &quot;description&quot;: &quot;Authenticates only username root against the host operating-system password using PAM authentication and account checks, and validates browser origin. Use the root password set during Nex Core installation, or its current value after an OS password change. Locked or expired accounts/passwords and authentication-service failures fail closed, including the five-second helper timeout. Sets __Host-nex_local_session with Secure, HttpOnly, SameSite=Strict, Path=/ and no Domain. Each login creates a new session; at most 64 active sessions per service. Sessions expire after 30 minutes without an authenticated mutation and eight hours absolutely; GET/HEAD polling does not renew them. Legacy unprefixed cookies are not accepted; sign in again after upgrade. The former separate local admin account and saved credential files are not accepted; there is no fallback. Upgrades require matching local service, PAM helper/configuration and web assets. Root password changes affect subsequent logins; existing sessions remain valid until logout, expiry or service restart. Controller admin credentials and Core protocol v1 are unchanged. Local process restart invalidates its in-memory sessions. Login admission permits at most five valid-length attempts per one-minute actual peer-IP window, two concurrent password checks per service, and 4096 tracked peers. Forwarded client-IP headers are ignored. Login returns 429 when rate/concurrency/table or 64-session capacity is exhausted; bounded retries must not create an unbounded loop.&quot;,
+  &quot;security&quot;: [],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Session&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;HTTPS required, invalid JSON/input, password outside 1\u20131024 UTF-8 bytes or containing NUL; invalid password input is rejected before invoking the helper.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin must equal the request HTTPS origin; authenticated mutations also require the session CSRF token.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;415&quot;: {
+      &quot;description&quot;: &quot;application/json required; request body limited to 32 KiB. Unknown fields and multiple JSON values are rejected with 400.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Authentication denied: wrong password, username other than root, locked or expired root account/password, or unavailable authentication helper. No local admin fallback.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;429&quot;: {
+      &quot;description&quot;: &quot;Login admission permits at most five valid-length attempts per one-minute actual peer-IP window, two concurrent password checks per service, and 4096 tracked peers. Forwarded client-IP headers are ignored. Login returns 429 when rate/concurrency/table or 64-session capacity is exhausted; bounded retries must not create an unbounded loop. No Retry-After header is emitted because concurrency saturation has no fixed expiry.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;name&quot;: &quot;Origin&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Exactly https:// plus the request Host header.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/LoginRequest&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localSession"><h2>GET <code>/api/local/v1/session</code></h2>
+<p>Get local session</p><p>Read-only; returns root identity and CSRF token for local mutations. Safe to retry. Does not extend the idle deadline. A 401 requires sign-in again; session JSON fields are unchanged and contain no expiry timestamps.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localSession&quot;,
+  &quot;summary&quot;: &quot;Get local session&quot;,
+  &quot;description&quot;: &quot;Read-only; returns root identity and CSRF token for local mutations. Safe to retry. Does not extend the idle deadline. A 401 requires sign-in again; session JSON fields are unchanged and contain no expiry timestamps.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Session&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired local administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;HTTPS required or invalid JSON/input.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localLogout"><h2>DELETE <code>/api/local/v1/session</code></h2>
+<p>Sign out of this host</p><p>Revokes this process-local session and clears its cookie. A later retry with the removed session returns 401.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localLogout&quot;,
+  &quot;summary&quot;: &quot;Sign out of this host&quot;,
+  &quot;description&quot;: &quot;Revokes this process-local session and clears its cookie. A later retry with the removed session returns 401.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/OK&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired local administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;HTTPS required or invalid JSON/input.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin must equal the request HTTPS origin; authenticated mutations also require the session CSRF token.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;name&quot;: &quot;Origin&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Exactly https:// plus the request Host header.&quot;
+    },
+    {
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ]
+}</pre></details></section>
+<section id="localHost"><h2>GET <code>/api/local/v1/host</code></h2>
+<p>Inspect host deployment readiness</p><p>Returns selected storage/bridge, sensible resource defaults and current preflight blockers. No network or disk configuration changes. Check ready and blockers, not HTTP success alone. Preflight verifies the signed manifest and compatibility metadata without hashing the full image. Full image integrity and qcow2 safety checks run during deployment; inspect image_verification and blockers.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localHost&quot;,
+  &quot;summary&quot;: &quot;Inspect host deployment readiness&quot;,
+  &quot;description&quot;: &quot;Returns selected storage/bridge, sensible resource defaults and current preflight blockers. No network or disk configuration changes. Check ready and blockers, not HTTP success alone. Preflight verifies the signed manifest and compatibility metadata without hashing the full image. Full image integrity and qcow2 safety checks run during deployment; inspect image_verification and blockers.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Host&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired local administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;HTTPS required or invalid JSON/input.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Host preflight could not be observed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localVMs"><h2>GET <code>/api/local/v1/vms</code></h2>
+<p>Inspect resident VMs</p><p>Read-only libvirt inventory with ownership-based local power eligibility and refusal reason. Controller reachability does not grant ownership. An unavailable observation is an error, not an empty inventory or proof guests stopped.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localVMs&quot;,
+  &quot;summary&quot;: &quot;Inspect resident VMs&quot;,
+  &quot;description&quot;: &quot;Read-only libvirt inventory with ownership-based local power eligibility and refusal reason. Controller reachability does not grant ownership. An unavailable observation is an error, not an empty inventory or proof guests stopped.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;items&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/VM&quot;
+            }
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired local administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;HTTPS required or invalid JSON/input.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;VM inventory unavailable; retain uncertainty.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localPower"><h2>POST <code>/api/local/v1/vms/{id}/actions</code></h2>
+<p>Request local appliance power action</p><p>Explicitly select the resident VM UUID. Only locally owned eligible appliances can be controlled; arbitrary guests and ambiguous ownership are refused. start, graceful shutdown and force-stop are supported. The client confirms the selected VM/action; no typed hostname is required and the legacy confirmation field is ignored. Persist a request_id before submission. Reusing the same ID/input observes the existing journal; interrupted or ambiguous effects are not automatically repeated. A 202 response is not proof of final power state: inspect the operation and fresh VM inventory. Controller outage neither stops guests nor permits takeover. Graceful shutdown returns stage shutdown_requested when the command is accepted; refresh VM inventory to establish actual shutdown. Power request journals are reconciled by resubmitting the same request; deployment polling routes do not expose power operations.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localPower&quot;,
+  &quot;summary&quot;: &quot;Request local appliance power action&quot;,
+  &quot;description&quot;: &quot;Explicitly select the resident VM UUID. Only locally owned eligible appliances can be controlled; arbitrary guests and ambiguous ownership are refused. start, graceful shutdown and force-stop are supported. The client confirms the selected VM/action; no typed hostname is required and the legacy confirmation field is ignored. Persist a request_id before submission. Reusing the same ID/input observes the existing journal; interrupted or ambiguous effects are not automatically repeated. A 202 response is not proof of final power state: inspect the operation and fresh VM inventory. Controller outage neither stops guests nor permits takeover. Graceful shutdown returns stage shutdown_requested when the command is accepted; refresh VM inventory to establish actual shutdown. Power request journals are reconciled by resubmitting the same request; deployment polling routes do not expose power operations.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired local administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;HTTPS required or invalid JSON/input.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin must equal the request HTTPS origin; authenticated mutations also require the session CSRF token.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;415&quot;: {
+      &quot;description&quot;: &quot;application/json required; request body limited to 32 KiB. Unknown fields and multiple JSON values are rejected with 400.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Ownership, current state, request identity or safety prerequisite refused the operation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;name&quot;: &quot;Origin&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Exactly https:// plus the request Host header.&quot;
+    },
+    {
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    },
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PowerRequest&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localDeploy"><h2>POST <code>/api/local/v1/deployments</code></h2>
+<p>Deploy this host&#x27;s Controller appliance</p><p>Persists one deployment intent before asynchronous work. Set a stable request_id, explicit configured local storage/bridge, resources, network_mode (static or dhcp), first Site/Pool and Controller password. Zero or omitted resource fields use 2 vCPUs, 4096 MiB and 32 GiB. Repeating identical normalized input returns the same operation; different input or a second deployment conflicts. The worker verifies the signed appliance, creates an independent disk and cloud-init seed, starts the original VM, verifies Controller TLS and completes enrollment/adoption. Poll the operation; guest boot is not completed handoff. Interrupted VM effects require observation and never recreate the appliance. DHCP waits up to five minutes at waiting_for_network for one usable IPv4 address from the guest agent on the exact owned VM/MAC; missing or ambiguous addresses produce needs_attention and can be retried. controller_url is absent until an address is found. The discovered IP is verified using the per-instance Controller certificate and hostname before handoff. DHCP requires matching rebuilt host and appliance components; omitted network_mode preserves static clients.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localDeploy&quot;,
+  &quot;summary&quot;: &quot;Deploy this host&#x27;s Controller appliance&quot;,
+  &quot;description&quot;: &quot;Persists one deployment intent before asynchronous work. Set a stable request_id, explicit configured local storage/bridge, resources, network_mode (static or dhcp), first Site/Pool and Controller password. Zero or omitted resource fields use 2 vCPUs, 4096 MiB and 32 GiB. Repeating identical normalized input returns the same operation; different input or a second deployment conflicts. The worker verifies the signed appliance, creates an independent disk and cloud-init seed, starts the original VM, verifies Controller TLS and completes enrollment/adoption. Poll the operation; guest boot is not completed handoff. Interrupted VM effects require observation and never recreate the appliance. DHCP waits up to five minutes at waiting_for_network for one usable IPv4 address from the guest agent on the exact owned VM/MAC; missing or ambiguous addresses produce needs_attention and can be retried. controller_url is absent until an address is found. The discovered IP is verified using the per-instance Controller certificate and hostname before handoff. DHCP requires matching rebuilt host and appliance components; omitted network_mode preserves static clients.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired local administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;HTTPS required or invalid JSON/input.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin must equal the request HTTPS origin; authenticated mutations also require the session CSRF token.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;415&quot;: {
+      &quot;description&quot;: &quot;application/json required; request body limited to 32 KiB. Unknown fields and multiple JSON values are rejected with 400.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Different settings for this request ID or this host already owns a deployment.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;TLS or durable intent storage failed; retain request ID and reconcile.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;name&quot;: &quot;Origin&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Exactly https:// plus the request Host header.&quot;
+    },
+    {
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/DeployRequest&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localDeployments"><h2>GET <code>/api/local/v1/deployments</code></h2>
+<p>List deployment operations</p><p>Read-only durable deployment status without bootstrap secrets. Safe to retry after browser refresh or service restart. Includes no unrelated central tasks.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localDeployments&quot;,
+  &quot;summary&quot;: &quot;List deployment operations&quot;,
+  &quot;description&quot;: &quot;Read-only durable deployment status without bootstrap secrets. Safe to retry after browser refresh or service restart. Includes no unrelated central tasks.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;items&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+            }
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired local administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;HTTPS required or invalid JSON/input.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localDeployment"><h2>GET <code>/api/local/v1/deployments/{id}</code></h2>
+<p>Inspect deployment progress</p><p>Use the original request_id. Read-only; safe to poll. Error/needs_attention preserve the existing disk and VM identity. Completion requires the worker&#x27;s observed Controller and adoption result, not a timeout or boot-only progress.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localDeployment&quot;,
+  &quot;summary&quot;: &quot;Inspect deployment progress&quot;,
+  &quot;description&quot;: &quot;Use the original request_id. Read-only; safe to poll. Error/needs_attention preserve the existing disk and VM identity. Completion requires the worker&#x27;s observed Controller and adoption result, not a timeout or boot-only progress.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired local administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;HTTPS required or invalid JSON/input.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Deployment ID does not exist.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ]
+}</pre></details></section>
+<section id="localHealth"><h2>GET <code>/healthz</code></h2>
+<p>Inspect process health</p><p>Public liveness response only; does not establish libvirt readiness, guest boot, artifact validity or completed handoff.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localHealth&quot;,
+  &quot;summary&quot;: &quot;Inspect process health&quot;,
+  &quot;description&quot;: &quot;Public liveness response only; does not establish libvirt readiness, guest boot, artifact validity or completed handoff.&quot;,
+  &quot;security&quot;: [],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Health&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;HTTPS required or invalid JSON/input.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localSource"><h2>GET <code>/source</code></h2>
+<p>Download matching Nex source</p><p>Public static content. Requires HTTPS. No control operation or session is created.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localSource&quot;,
+  &quot;summary&quot;: &quot;Download matching Nex source&quot;,
+  &quot;description&quot;: &quot;Public static content. Requires HTTPS. No control operation or session is created.&quot;,
+  &quot;security&quot;: [],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Static content&quot;,
+      &quot;content&quot;: {
+        &quot;application/octet-stream&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;HTTPS required or invalid JSON/input.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;File not available.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="localGUI"><h2>GET <code>/</code></h2>
+<p>Open host-local GUI</p><p>Public static content. Requires HTTPS. No control operation or session is created.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localGUI&quot;,
+  &quot;summary&quot;: &quot;Open host-local GUI&quot;,
+  &quot;description&quot;: &quot;Public static content. Requires HTTPS. No control operation or session is created.&quot;,
+  &quot;security&quot;: [],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Static content&quot;,
+      &quot;content&quot;: {
+        &quot;text/html&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;HTTPS required or invalid JSON/input.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;File not available.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="localRetryDeployment"><h2>POST <code>/api/local/v1/deployments/{id}/retry</code></h2>
+<p>Reconcile the existing deployment</p><p>Explicitly retry the original persisted intent by its request ID without reposting the administrator password. Concurrent retries share the existing worker; a ready static operation remains unchanged, while DHCP rediscovery can refresh its address. VM effects reconcile the original journal and UUID instead of recreating or repeating an uncertain start. Handoff can resume after Controller connectivity returns. DHCP retry and service startup rediscover the original VM address and verify its saved certificate/hostname; ready DHCP startup does this before resuming the existing enrolled agent. A changed lease with an active agent returns needs_attention requiring a local-service restart. This retains VM/host identities and does not require the original administrator password. Leases are not monitored periodically. A 202 response only accepts the retry; poll the original operation until ready or needs_attention.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localRetryDeployment&quot;,
+  &quot;summary&quot;: &quot;Reconcile the existing deployment&quot;,
+  &quot;description&quot;: &quot;Explicitly retry the original persisted intent by its request ID without reposting the administrator password. Concurrent retries share the existing worker; a ready static operation remains unchanged, while DHCP rediscovery can refresh its address. VM effects reconcile the original journal and UUID instead of recreating or repeating an uncertain start. Handoff can resume after Controller connectivity returns. DHCP retry and service startup rediscover the original VM address and verify its saved certificate/hostname; ready DHCP startup does this before resuming the existing enrolled agent. A changed lease with an active agent returns needs_attention requiring a local-service restart. This retains VM/host identities and does not require the original administrator password. Leases are not monitored periodically. A 202 response only accepts the retry; poll the original operation until ready or needs_attention.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired local administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;HTTPS required or invalid JSON/input.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin must equal the request HTTPS origin; authenticated mutations also require the session CSRF token.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;415&quot;: {
+      &quot;description&quot;: &quot;application/json required; request body limited to 32 KiB. Unknown fields and multiple JSON values are rejected with 400.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Deployment not found.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;name&quot;: &quot;Origin&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Exactly https:// plus the request Host header.&quot;
+    },
+    {
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    },
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/EmptyRequest&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localAPIDocs"><h2>GET <code>/api/docs/</code></h2>
+<p>Open offline API reference files</p><p>Public static generated API documentation. Open local.html for this host-local contract, local-openapi.json for its machine-readable document. The directory index also includes the separate Controller reference.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localAPIDocs&quot;,
+  &quot;summary&quot;: &quot;Open offline API reference files&quot;,
+  &quot;description&quot;: &quot;Public static generated API documentation. Open local.html for this host-local contract, local-openapi.json for its machine-readable document. The directory index also includes the separate Controller reference.&quot;,
+  &quot;security&quot;: [],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Static content&quot;,
+      &quot;content&quot;: {
+        &quot;text/html&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;HTTPS required or invalid JSON/input.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;File not available.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="schemas"><h2>Schemas and authentication</h2>
+<h3>securitySchemes</h3>
+<details id="LocalSession"><summary>LocalSession</summary><pre>{
+  &quot;type&quot;: &quot;apiKey&quot;,
+  &quot;in&quot;: &quot;cookie&quot;,
+  &quot;name&quot;: &quot;__Host-nex_local_session&quot;,
+  &quot;description&quot;: &quot;Administrator session cookie __Host-nex_local_session, Secure/HttpOnly/SameSite=Strict, Path=/ with no Domain. Expires after 30 minutes without an authenticated mutation or eight hours absolutely. GET/HEAD polling does not extend idle lifetime; mutations also require matching Origin and X-CSRF-Token. At most 64 active sessions per service. Legacy unprefixed cookies are refused; sign in again after upgrading.&quot;,
+  &quot;x-session-policy&quot;: {
+    &quot;idle_timeout_seconds&quot;: 1800,
+    &quot;absolute_timeout_seconds&quot;: 28800,
+    &quot;maximum_sessions&quot;: 64,
+    &quot;idle_refresh&quot;: &quot;authenticated mutations after Origin/CSRF validation; GET and HEAD never extend it&quot;,
+    &quot;legacy_cookies_accepted&quot;: false
+  }
+}</pre></details>
+<h3>schemas</h3>
+<details id="Operation"><summary>Operation</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Inspect status and error independently of progress. A running guest alone does not prove Controller handoff. needs_attention retains original identity and requires reconciliation. recovery_prepared is a manual CLI result only; it confirms an empty replacement awaiting explicit archive restore, not recovered Controller identity.&quot;,
+      &quot;enum&quot;: [
+        &quot;running&quot;,
+        &quot;booted&quot;,
+        &quot;needs_attention&quot;,
+        &quot;ready&quot;,
+        &quot;completed&quot;,
+        &quot;recovery_prepared&quot;
+      ]
+    },
+    &quot;stage&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;progress&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;maximum&quot;: 100,
+      &quot;description&quot;: &quot;Coarse workflow stage percentage, not measured bytes or estimated remaining time. ready at 100 indicates completed deployment handoff and seed cleanup. completed power operations acknowledge command completion; shutdown_requested does not prove the guest stopped.&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;controller_url&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Controller HTTPS address when known. DHCP discovers an owned guest IPv4 address before publishing it; absence while waiting_for_network is expected. ready still requires verified handoff.&quot;
+    },
+    &quot;controller_cert_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Lowercase hex SHA-256 fingerprint of the Controller leaf certificate DER. Verify this identity before trusting the new Controller browser certificate.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;vm_id&quot;,
+    &quot;kind&quot;,
+    &quot;status&quot;,
+    &quot;stage&quot;,
+    &quot;progress&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="VM"><summary>VM</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;state&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;managed&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;power_allowed&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Local ownership eligibility; operations revalidate ownership and current observation before execution.&quot;
+    },
+    &quot;blocked_reason&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;name&quot;,
+    &quot;state&quot;,
+    &quot;managed&quot;,
+    &quot;power_allowed&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="Preflight"><summary>Preflight</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;ready&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Current host capacity, signed manifest and compatibility checks passed. This does not establish full image integrity or format safety; deployment verifies those before effects.&quot;
+    },
+    &quot;blockers&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    },
+    &quot;cpus&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;memory_mib&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;disk_gib&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;bridge&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;storage_dir&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;image_verification&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Explains the verification boundary: preflight checks the signed manifest and compatibility metadata; full image SHA-256 and qcow2 safety checks run during deployment. Read blockers to determine whether manifest validation succeeded.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;ready&quot;,
+    &quot;blockers&quot;,
+    &quot;cpus&quot;,
+    &quot;memory_mib&quot;,
+    &quot;disk_gib&quot;,
+    &quot;bridge&quot;,
+    &quot;storage_dir&quot;,
+    &quot;image_verification&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="DeployRequest"><summary>DeployRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Persist before submitting. Stable identifier; replay must use identical normalized settings including original password.&quot;,
+      &quot;pattern&quot;: &quot;^[a-zA-Z0-9][a-zA-Z0-9_-]{7,63}$&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$&quot;
+    },
+    &quot;hostname&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$&quot;
+    },
+    &quot;cpus&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;default&quot;: 2,
+      &quot;minimum&quot;: 0,
+      &quot;maximum&quot;: 64,
+      &quot;description&quot;: &quot;Omitted or zero selects default; otherwise minimum 2.&quot;
+    },
+    &quot;memory_mib&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;default&quot;: 4096,
+      &quot;minimum&quot;: 0,
+      &quot;maximum&quot;: 262144,
+      &quot;description&quot;: &quot;Omitted or zero selects default; otherwise minimum 4096.&quot;
+    },
+    &quot;disk_gib&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;default&quot;: 32,
+      &quot;minimum&quot;: 0,
+      &quot;maximum&quot;: 2048,
+      &quot;description&quot;: &quot;Omitted or zero selects default; otherwise minimum 32.&quot;
+    },
+    &quot;address_cidr&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Static usable unicast IPv4 address with /8\u2013/30 prefix; subnet and broadcast addresses are refused. Required for static mode; omitted in DHCP mode.&quot;
+    },
+    &quot;gateway&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Another usable IPv4 address in the selected subnet, excluding subnet and broadcast addresses. Required for static mode; omitted in DHCP mode.&quot;
+    },
+    &quot;dns&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;One to three unicast IPv4 DNS server addresses. Required for static mode; omitted in DHCP mode.&quot;,
+      &quot;minItems&quot;: 0,
+      &quot;maxItems&quot;: 3
+    },
+    &quot;admin_password&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true,
+      &quot;description&quot;: &quot;Initial Controller administrator secret: nonempty valid UTF-8, at most 1024 UTF-8 bytes, no CR, LF or NUL. No minimum length or complexity rule. Never included in operation responses. Retained privately only until handoff and seed cleanup complete.&quot;,
+      &quot;minLength&quot;: 1,
+      &quot;x-max-utf8-bytes&quot;: 1024
+    },
+    &quot;site_name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Required nonblank name, maximum 200 UTF-8 bytes.&quot;
+    },
+    &quot;pool_name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Required nonblank name, maximum 200 UTF-8 bytes.&quot;
+    },
+    &quot;bridge&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Explicitly select the configured existing management bridge. Deployment does not create or edit host networks.&quot;
+    },
+    &quot;storage_dir&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Explicitly select the configured local storage directory returned by host preflight; this is not a pool/shared storage registration.&quot;
+    },
+    &quot;network_mode&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;&quot;,
+        &quot;static&quot;,
+        &quot;dhcp&quot;
+      ],
+      &quot;default&quot;: &quot;static&quot;,
+      &quot;description&quot;: &quot;Omitted or empty uses static for compatibility. The deployment UI defaults to DHCP. DHCP obtains IPv4 addressing, gateway and DNS from the selected bridge network. DHCP refuses nonempty static address, gateway or DNS fields.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;name&quot;,
+    &quot;hostname&quot;,
+    &quot;admin_password&quot;,
+    &quot;site_name&quot;,
+    &quot;pool_name&quot;,
+    &quot;bridge&quot;,
+    &quot;storage_dir&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-emitted-fields&quot;: [
+    &quot;request_id&quot;,
+    &quot;name&quot;,
+    &quot;hostname&quot;,
+    &quot;cpus&quot;,
+    &quot;memory_mib&quot;,
+    &quot;disk_gib&quot;,
+    &quot;address_cidr&quot;,
+    &quot;gateway&quot;,
+    &quot;dns&quot;,
+    &quot;admin_password&quot;,
+    &quot;site_name&quot;,
+    &quot;pool_name&quot;,
+    &quot;bridge&quot;,
+    &quot;storage_dir&quot;
+  ],
+  &quot;allOf&quot;: [
+    {
+      &quot;if&quot;: {
+        &quot;properties&quot;: {
+          &quot;network_mode&quot;: {
+            &quot;const&quot;: &quot;dhcp&quot;
+          }
+        },
+        &quot;required&quot;: [
+          &quot;network_mode&quot;
+        ]
+      },
+      &quot;then&quot;: {
+        &quot;description&quot;: &quot;DHCP accepts absent or empty static settings only.&quot;,
+        &quot;properties&quot;: {
+          &quot;address_cidr&quot;: {
+            &quot;const&quot;: &quot;&quot;
+          },
+          &quot;gateway&quot;: {
+            &quot;const&quot;: &quot;&quot;
+          },
+          &quot;dns&quot;: {
+            &quot;type&quot;: [
+              &quot;array&quot;,
+              &quot;null&quot;
+            ],
+            &quot;maxItems&quot;: 0
+          }
+        }
+      },
+      &quot;else&quot;: {
+        &quot;required&quot;: [
+          &quot;address_cidr&quot;,
+          &quot;gateway&quot;,
+          &quot;dns&quot;
+        ],
+        &quot;properties&quot;: {
+          &quot;dns&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;minItems&quot;: 1
+          }
+        }
+      }
+    }
+  ]
+}</pre></details>
+<details id="Error"><summary>Error</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;error&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="Session"><summary>Session</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;username&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;const&quot;: &quot;root&quot;
+    },
+    &quot;csrf_token&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;username&quot;,
+    &quot;csrf_token&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="LoginRequest"><summary>LoginRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;username&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;const&quot;: &quot;root&quot;
+    },
+    &quot;password&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1,
+      &quot;writeOnly&quot;: true,
+      &quot;description&quot;: &quot;Current host root password, set initially during OS installation, 1\u20131024 UTF-8 bytes without NUL. Local web access does not set or reset the OS password.&quot;,
+      &quot;x-max-utf8-bytes&quot;: 1024
+    }
+  },
+  &quot;required&quot;: [
+    &quot;username&quot;,
+    &quot;password&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="OK"><summary>OK</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;ok&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;const&quot;: true
+    }
+  },
+  &quot;required&quot;: [
+    &quot;ok&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="Health"><summary>Health</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;const&quot;: &quot;ok&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;status&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="PowerRequest"><summary>PowerRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Persist before submitting. Stable identifier; replay must use identical normalized settings including original password.&quot;,
+      &quot;pattern&quot;: &quot;^[a-zA-Z0-9][a-zA-Z0-9_-]{7,63}$&quot;
+    },
+    &quot;action&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;start&quot;,
+        &quot;shutdown&quot;,
+        &quot;force-stop&quot;
+      ]
+    },
+    &quot;confirmation&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Deprecated optional legacy field; ignored. Confirm the selected VM and action in the client before submission.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;action&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="Host"><summary>Host</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;hostname&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;bridge&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;storage_dir&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;defaults&quot;: {
+      &quot;type&quot;: &quot;object&quot;,
+      &quot;properties&quot;: {
+        &quot;cpus&quot;: {
+          &quot;type&quot;: &quot;integer&quot;,
+          &quot;const&quot;: 2
+        },
+        &quot;memory_mib&quot;: {
+          &quot;type&quot;: &quot;integer&quot;,
+          &quot;const&quot;: 4096
+        },
+        &quot;disk_gib&quot;: {
+          &quot;type&quot;: &quot;integer&quot;,
+          &quot;const&quot;: 32
+        }
+      },
+      &quot;required&quot;: [
+        &quot;cpus&quot;,
+        &quot;memory_mib&quot;,
+        &quot;disk_gib&quot;
+      ],
+      &quot;additionalProperties&quot;: false
+    },
+    &quot;preflight&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/Preflight&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;hostname&quot;,
+    &quot;bridge&quot;,
+    &quot;storage_dir&quot;,
+    &quot;defaults&quot;,
+    &quot;preflight&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="EmptyRequest"><summary>EmptyRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {},
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="RecoveryPreparationRequest"><summary>RecoveryPreparationRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Persist before submitting. Stable identifier; replay must use identical normalized settings including original password.&quot;,
+      &quot;pattern&quot;: &quot;^[a-zA-Z0-9][a-zA-Z0-9_-]{7,63}$&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$&quot;
+    },
+    &quot;hostname&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$&quot;
+    },
+    &quot;cpus&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;default&quot;: 2,
+      &quot;minimum&quot;: 0,
+      &quot;maximum&quot;: 64,
+      &quot;description&quot;: &quot;Omitted or zero selects default; otherwise minimum 2.&quot;
+    },
+    &quot;memory_mib&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;default&quot;: 4096,
+      &quot;minimum&quot;: 0,
+      &quot;maximum&quot;: 262144,
+      &quot;description&quot;: &quot;Omitted or zero selects default; otherwise minimum 4096.&quot;
+    },
+    &quot;disk_gib&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;default&quot;: 32,
+      &quot;minimum&quot;: 0,
+      &quot;maximum&quot;: 2048,
+      &quot;description&quot;: &quot;Omitted or zero selects default; otherwise minimum 32.&quot;
+    },
+    &quot;address_cidr&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Static usable unicast IPv4 address with /8\u2013/30 prefix; subnet and broadcast addresses are refused. Required for static mode; omitted in DHCP mode.&quot;
+    },
+    &quot;gateway&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Another usable IPv4 address in the selected subnet, excluding subnet and broadcast addresses. Required for static mode; omitted in DHCP mode.&quot;
+    },
+    &quot;dns&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;One to three unicast IPv4 DNS server addresses. Required for static mode; omitted in DHCP mode.&quot;,
+      &quot;minItems&quot;: 0,
+      &quot;maxItems&quot;: 3
+    },
+    &quot;admin_password&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true,
+      &quot;description&quot;: &quot;Initial Controller administrator secret: nonempty valid UTF-8, at most 1024 UTF-8 bytes, no CR, LF or NUL. No minimum length or complexity rule. Never included in operation responses. Retained privately only until handoff and seed cleanup complete.&quot;,
+      &quot;minLength&quot;: 1,
+      &quot;x-max-utf8-bytes&quot;: 1024
+    },
+    &quot;site_name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;const&quot;: &quot;&quot;,
+      &quot;description&quot;: &quot;Must be absent or empty for replacement preparation.&quot;
+    },
+    &quot;pool_name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;const&quot;: &quot;&quot;,
+      &quot;description&quot;: &quot;Must be absent or empty for replacement preparation.&quot;
+    },
+    &quot;bridge&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Explicitly select the configured existing management bridge. Deployment does not create or edit host networks.&quot;
+    },
+    &quot;storage_dir&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Explicitly select the configured local storage directory returned by host preflight; this is not a pool/shared storage registration.&quot;
+    },
+    &quot;network_mode&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;&quot;,
+        &quot;static&quot;,
+        &quot;dhcp&quot;
+      ],
+      &quot;default&quot;: &quot;static&quot;,
+      &quot;description&quot;: &quot;Omitted or empty uses static for compatibility. The deployment UI defaults to DHCP. DHCP obtains IPv4 addressing, gateway and DNS from the selected bridge network. DHCP refuses nonempty static address, gateway or DNS fields.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;name&quot;,
+    &quot;hostname&quot;,
+    &quot;admin_password&quot;,
+    &quot;bridge&quot;,
+    &quot;storage_dir&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-emitted-fields&quot;: [
+    &quot;request_id&quot;,
+    &quot;name&quot;,
+    &quot;hostname&quot;,
+    &quot;cpus&quot;,
+    &quot;memory_mib&quot;,
+    &quot;disk_gib&quot;,
+    &quot;address_cidr&quot;,
+    &quot;gateway&quot;,
+    &quot;dns&quot;,
+    &quot;admin_password&quot;,
+    &quot;site_name&quot;,
+    &quot;pool_name&quot;,
+    &quot;bridge&quot;,
+    &quot;storage_dir&quot;
+  ],
+  &quot;description&quot;: &quot;Private 0600 JSON file consumed only by nex-core-local -prepare-recovery-file. Reuses deployment resource, network mode and password validation, but Site/Pool names must be absent or empty: no handoff or enrollment is performed.&quot;,
+  &quot;allOf&quot;: [
+    {
+      &quot;if&quot;: {
+        &quot;properties&quot;: {
+          &quot;network_mode&quot;: {
+            &quot;const&quot;: &quot;dhcp&quot;
+          }
+        },
+        &quot;required&quot;: [
+          &quot;network_mode&quot;
+        ]
+      },
+      &quot;then&quot;: {
+        &quot;description&quot;: &quot;DHCP accepts absent or empty static settings only.&quot;,
+        &quot;properties&quot;: {
+          &quot;address_cidr&quot;: {
+            &quot;const&quot;: &quot;&quot;
+          },
+          &quot;gateway&quot;: {
+            &quot;const&quot;: &quot;&quot;
+          },
+          &quot;dns&quot;: {
+            &quot;type&quot;: [
+              &quot;array&quot;,
+              &quot;null&quot;
+            ],
+            &quot;maxItems&quot;: 0
+          }
+        }
+      },
+      &quot;else&quot;: {
+        &quot;required&quot;: [
+          &quot;address_cidr&quot;,
+          &quot;gateway&quot;,
+          &quot;dns&quot;
+        ],
+        &quot;properties&quot;: {
+          &quot;dns&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;minItems&quot;: 1
+          }
+        }
+      }
+    }
+  ]
+}</pre></details>
+</section></main></html>

@@ -1,0 +1,47 @@
+Sep 08 07:47:04 nex-lab systemd[1]: libvirtd.service: Deactivated successfully.
+-- Boot 9a6091f55eff45f09083228d48c15fbe --
+Sep 08 09:08:06 nex-lab systemd[1]: Starting libvirtd.service - libvirt legacy monolithic daemon...
+Sep 08 09:08:06 nex-lab systemd[1]: Started libvirtd.service - libvirt legacy monolithic daemon.
+Sep 08 09:08:16 nex-lab dnsmasq[948]: started, version 2.91 cachesize 150
+Sep 08 09:08:16 nex-lab dnsmasq[948]: compile time options: IPv6 GNU-getopt DBus no-UBus i18n IDN2 DHCP DHCPv6 no-Lua TFTP conntrack ipset nftset auth DNSSEC loop-detect inotify dumpfile
+Sep 08 09:08:16 nex-lab dnsmasq-dhcp[948]: DHCP, IP range 192.168.122.2 -- 192.168.122.254, lease time 1h
+Sep 08 09:08:16 nex-lab dnsmasq-dhcp[948]: DHCP, sockets bound exclusively to interface virbr0
+Sep 08 09:08:16 nex-lab dnsmasq[948]: reading /etc/resolv.conf
+Sep 08 09:08:16 nex-lab dnsmasq[948]: using nameserver 10.0.2.3#53
+Sep 08 09:08:16 nex-lab dnsmasq[948]: read /etc/hosts - 5 names
+Sep 08 09:08:16 nex-lab dnsmasq[948]: read /var/lib/libvirt/dnsmasq/default.addnhosts - 0 names
+Sep 08 09:08:16 nex-lab dnsmasq-dhcp[948]: read /var/lib/libvirt/dnsmasq/default.hostsfile
+Sep 08 09:11:52 nex-lab libvirtd[793]: libvirt version: 11.3.0, package: 11.3.0-3+deb13u2 (Debian)
+Sep 08 09:11:52 nex-lab libvirtd[793]: hostname: nex-lab
+Sep 08 09:11:52 nex-lab libvirtd[793]: Cannot access storage file '/var/lib/nex/appliances/81d015b6-fa29-48ea-89b8-7ca02960c8ca/controller.qcow2' (as uid:64055, gid:64055): Permission denied
+2026-09-08 09:11:52.483+0000: shutting down, reason=failed
+    <controller type='virtio-serial' index='0'>
+      <address type='pci' domain='0x0000' bus='0x03' slot='0x00' function='0x0'/>
+    </controller>
+    <interface type='bridge'>
+      <mac address='52:54:00:81:d0:15'/>
+      <source bridge='virbr0'/>
+      <model type='virtio'/>
+      <address type='pci' domain='0x0000' bus='0x01' slot='0x00' function='0x0'/>
+    </interface>
+    <channel type='unix'>
+      <target type='virtio' name='org.qemu.guest_agent.0'/>
+      <address type='virtio-serial' controller='0' bus='0' port='1'/>
+    </channel>
+    <input type='mouse' bus='ps2'/>
+    <input type='keyboard' bus='ps2'/>
+    <graphics type='vnc'>
+      <listen type='socket'/>
+    </graphics>
+    <audio id='1' type='none'/>
+    <video>
+      <model type='cirrus' vram='16384' heads='1' primary='yes'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x01' function='0x0'/>
+    </video>
+    <watchdog model='itco' action='reset'/>
+    <memballoon model='virtio'>
+      <address type='pci' domain='0x0000' bus='0x05' slot='0x00' function='0x0'/>
+    </memballoon>
+  </devices>
+</domain>
+

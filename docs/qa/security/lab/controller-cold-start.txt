@@ -1,0 +1,6 @@
+active
+Filesystem       1B-blocks       Used   Available Use% Mounted on
+/dev/vda1      33603391488 1024229376 31162580992   4% /
+2
+MemTotal:        4016552 kB
+2: nex0    inet 192.168.122.10/24 brd 192.168.122.255 scope global nex0\       valid_lft forever preferred_lft forever

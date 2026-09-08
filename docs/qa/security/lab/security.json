@@ -1,0 +1,52 @@
+{
+  "local": {
+    "headers": {
+      "content-security-policy": "default-src 'self'; object-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; img-src 'self' data:",
+      "x-frame-options": "DENY",
+      "x-content-type-options": "nosniff",
+      "referrer-policy": "no-referrer",
+      "cache-control": "no-store"
+    },
+    "cookie": {
+      "name": "__Host-nex_local_session",
+      "secure": true,
+      "httpOnly": true,
+      "sameSite": "Strict",
+      "path": "/",
+      "domain": "127.0.0.1"
+    },
+    "login_attempt_statuses": [
+      401,
+      401,
+      401,
+      401,
+      429,
+      429
+    ]
+  },
+  "controller": {
+    "headers": {
+      "content-security-policy": "default-src 'self'; object-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; img-src 'self' data:",
+      "x-frame-options": "DENY",
+      "x-content-type-options": "nosniff",
+      "referrer-policy": "no-referrer",
+      "cache-control": "no-store"
+    },
+    "cookie": {
+      "name": "__Host-nex_session",
+      "secure": true,
+      "httpOnly": true,
+      "sameSite": "Strict",
+      "path": "/",
+      "domain": "127.0.0.1"
+    },
+    "login_attempt_statuses": [
+      401,
+      401,
+      401,
+      401,
+      401,
+      429
+    ]
+  }
+}

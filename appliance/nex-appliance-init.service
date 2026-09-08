@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[Unit]
+Description=Initialize Nex Controller appliance identity
+After=cloud-final.service network-online.target
+Wants=cloud-final.service network-online.target
+ConditionPathExists=!/var/lib/nex-controller/appliance-initialized
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/nex/appliance-firstboot
+TimeoutStartSec=240
+UMask=0077
+[Install]
+WantedBy=cloud-init.target

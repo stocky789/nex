@@ -1,0 +1,24 @@
+{
+  "results": [
+    "administrator bootstrap, login, unauthorized/CSRF/invalid input rejection, site and pool creation",
+    "trusted TLS enrollment, pool-scoped identity, private state and single-use token",
+    "real CPU/RAM/OS/NIC inventory and fresh independent heartbeat (libvirt simulated)",
+    "simulated libvirt failure remains fresh with failed service check",
+    "simulated stalled probe times out independently; native inventory and heartbeat continue",
+    "stale/unknown outage state, controller+agent restart identity, durable deduplicated refresh",
+    "agent survives controller outage and reconciles fresh inventory on reconnect",
+    "certificate rotation retains host identity and authenticated reporting",
+    "browser keyboard sign-in, invalid credentials, site/pool creation, empty state and ephemeral enrollment token",
+    "browser pool aggregate healthy enum, failed libvirt and timed-out probe distinct from fresh heartbeat; recovered checks",
+    "browser desktop/360px host and task views, refresh operation, exact-host confirmation and keyboard skip link",
+    "browser __Host cookie attributes, legacy rejection, restrictive CSP, real inline-script blocking, idle GET/mutation semantics and expired-session login recovery; logout and actual-peer throttle",
+    "browser interrupted request/retry, genuine stopped-agent stale state, revoke and re-enroll entry, sign-out; no page errors",
+    "browser delayed-token pool scope and older inventory response cannot overwrite newer revocation",
+    "revocation rejects credential use and operations; explicit re-enrollment preserves identity; audit attribution"
+  ],
+  "binaries": {
+    "controller": "30c7e07e2a52653afa555a9ed667ba44a7be3677cb824896a47b77eea86fcc5b",
+    "agent": "ceb40b6a1259e92e6bd5c05efb0270b9f96159074f1ae5efbc89d8ef1f313ec5"
+  },
+  "simulation": "virsh only; no real libvirt or guest lifecycle verified"
+}

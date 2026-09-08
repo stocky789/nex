@@ -1,0 +1,2744 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Nex Controller and Core API",
+    "version": "0.1.0",
+    "description": "Development HTTPS JSON API v1; Controller/Core protocol version 1 only. Administrator sessions and host-scoped outbound mutual-TLS reports are separate trust surfaces. Includes idempotent appliance environment bootstrap, adoption and read-only managed appliance inventory; host-local operations have a separate contract in local-openapi.json. No central VM mutations or console streams."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "This Nex Controller"
+    }
+  ],
+  "paths": {
+    "/api/v1/session": {
+      "get": {
+        "operationId": "getSession",
+        "summary": "Get administrator session",
+        "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Returns CSRF token for same-origin mutations. All authenticated administrator operations have controller-wide scope. Does not extend the idle deadline. A 401 requires sign-in again; session JSON fields are unchanged and contain no expiry timestamps.",
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          }
+        },
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client"
+      },
+      "post": {
+        "operationId": "login",
+        "summary": "Sign in as administrator",
+        "description": "Validates existing administrator credentials and browser origin. Sets __Host-nex_session with Secure, HttpOnly, SameSite=Strict, Path=/ and no Domain. Each login creates a new session; at most 64 active sessions per service. Sessions expire after 30 minutes without an authenticated mutation and eight hours absolutely; GET/HEAD polling does not renew them. Legacy unprefixed cookies are not accepted; sign in again after upgrade. Existing password hashes remain valid; new administrator bootstrap passwords must be nonempty valid UTF-8, at most 1024 UTF-8 bytes, without CR, LF or NUL; there is no minimum length or complexity rule. Login admission permits at most five valid-length attempts per one-minute actual peer-IP window, two concurrent password checks per service, and 4096 tracked peers. Forwarded client-IP headers are ignored. Login returns 429 when rate/concurrency/table or 64-session capacity is exhausted; bounded retries must not create an unbounded loop.",
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON, unknown field, body over 1 MiB, or invalid input; see the operation schema and description.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "invalid JSON request"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authorization, origin, or CSRF validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller persistence or internal failure; reconcile before retrying a mutation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Login admission permits at most five valid-length attempts per one-minute actual peer-IP window, two concurrent password checks per service, and 4096 tracked peers. Forwarded client-IP headers are ignored. Login returns 429 when rate/concurrency/table or 64-session capacity is exhausted; bounded retries must not create an unbounded loop. No Retry-After header is emitted because concurrency saturation has no fixed expiry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "logout",
+        "summary": "End administrator session",
+        "description": "Implemented in development product 0.1.0, protocol v1. Invalidates the current session and clears its cookie. Repeated calls after logout require reauthentication.",
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authorization, origin, or CSRF validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OK"
+                }
+              }
+            }
+          }
+        },
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client",
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Token returned by login or current session."
+          }
+        ]
+      }
+    },
+    "/api/v1/sites": {
+      "get": {
+        "operationId": "listSite",
+        "summary": "List sites",
+        "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped.",
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Site"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller persistence or internal failure; reconcile before retrying a mutation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          }
+        },
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client"
+      },
+      "post": {
+        "operationId": "createSite",
+        "summary": "Create a site",
+        "description": "Implemented in development product 0.1.0, protocol v1. Creates desired configuration immediately. No agent command. Not idempotent: inspect sites after an ambiguous response before creating again.",
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Site"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON, unknown field, body over 1 MiB, or invalid input; see the operation schema and description.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "invalid JSON request"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authorization, origin, or CSRF validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller persistence or internal failure; reconcile before retrying a mutation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          }
+        },
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client",
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Token returned by login or current session."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSiteRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pools": {
+      "get": {
+        "operationId": "listPool",
+        "summary": "List pools",
+        "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped.",
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Pool"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller persistence or internal failure; reconcile before retrying a mutation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          }
+        },
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client"
+      },
+      "post": {
+        "operationId": "createPool",
+        "summary": "Create a pool",
+        "description": "Implemented in development product 0.1.0, protocol v1. Creates desired configuration under an existing site immediately. No agent command. Not idempotent: inspect pools after an ambiguous response before creating again.",
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pool"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON, unknown field, body over 1 MiB, or invalid input; see the operation schema and description.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "invalid JSON request"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authorization, origin, or CSRF validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller persistence or internal failure; reconcile before retrying a mutation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          }
+        },
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client",
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Token returned by login or current session."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePoolRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hosts": {
+      "get": {
+        "operationId": "listHost",
+        "summary": "List hosts",
+        "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped.",
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Host"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller persistence or internal failure; reconcile before retrying a mutation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          }
+        },
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client"
+      }
+    },
+    "/api/v1/operations": {
+      "get": {
+        "operationId": "listOperation",
+        "summary": "List operations",
+        "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped. Returns at most 1000 records, newest first; no pagination in this development version.",
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Operation"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller persistence or internal failure; reconcile before retrying a mutation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          }
+        },
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client"
+      }
+    },
+    "/api/v1/audit": {
+      "get": {
+        "operationId": "listAudit",
+        "summary": "List audit",
+        "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped. Returns at most 1000 records, newest first; no pagination in this development version.",
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Audit"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller persistence or internal failure; reconcile before retrying a mutation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          }
+        },
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client"
+      }
+    },
+    "/api/v1/enrollment-tokens": {
+      "post": {
+        "operationId": "createEnrollmentToken",
+        "summary": "Issue a pool-bound enrollment token",
+        "description": "Implemented in development product 0.1.0, protocol v1. Creates a short-lived single-use secret. Optional host_id binds re-enrollment to an existing host in this pool. Keep the returned token out of logs. Token issuance is immediate; never retry enrollment blindly after an ambiguous outcome. Token expires after ten minutes. Re-enrollment requires the selected host to be revoked.",
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON, unknown field, body over 1 MiB, or invalid input; see the operation schema and description.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "invalid JSON request"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authorization, origin, or CSRF validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting state, request ID, consumed token, undelivered operation result, or unsupported protocol version as applicable to this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller persistence or internal failure; reconcile before retrying a mutation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          }
+        },
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client",
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Token returned by login or current session."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hosts/{id}/revoke": {
+      "post": {
+        "operationId": "revokeHost",
+        "summary": "Revoke host credentials",
+        "description": "Implemented in development product 0.1.0, protocol v1. Immediately prevents host authentication. Does not stop guests, erase state, or remove local recovery. Re-enrollment requires a new token bound to this host.",
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authorization, origin, or CSRF validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource does not exist.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller persistence or internal failure; reconcile before retrying a mutation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OK"
+                }
+              }
+            }
+          }
+        },
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Opaque controller-assigned host identifier."
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Token returned by login or current session."
+          }
+        ]
+      }
+    },
+    "/api/v1/hosts/{id}/operations": {
+      "post": {
+        "operationId": "createOperation",
+        "summary": "Request fresh host inventory",
+        "description": "Implemented in development product 0.1.0, protocol v1. The only supported command is read-only refresh-inventory. Persist a stable request_id before sending; retry the same host/kind/request_id to recover the same durable operation. Poll operations for completion. Conflicting active work is serialized. Delivery may repeat after disconnect; agent persists completed results and reports them until acknowledged. No cancellation or VM lifecycle operation exists.",
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON, unknown field, body over 1 MiB, or invalid input; see the operation schema and description.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "invalid JSON request"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authorization, origin, or CSRF validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource does not exist.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting state, request ID, consumed token, undelivered operation result, or unsupported protocol version as applicable to this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller persistence or internal failure; reconcile before retrying a mutation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Existing operation for the same stable request ID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            }
+          }
+        },
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Opaque controller-assigned host identifier."
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Token returned by login or current session."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperationRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/enroll": {
+      "post": {
+        "operationId": "enrollHost",
+        "summary": "Enroll a Core host",
+        "description": "Implemented in development product 0.1.0, protocol v1. Outbound HTTPS; agent must verify Controller identity before transmitting its pool-bound token. Provide a signed PEM ECDSA P-256 CSR and nonblank hostname (maximum 200 UTF-8 bytes, no CR/LF/NUL). Issues a 90-day host-specific client certificate and CA. The token binds to its first CSR; an identical token/CSR retry before token expiry returns the same identity without duplicate enrollment. A different CSR returns 409. After expiry or revocation obtain a new pool-bound token; replacement requires explicit revoked host selection. Enrollment has no VM side effects.",
+        "tags": [
+          "Core agent \u2192 Controller"
+        ],
+        "security": [],
+        "responses": {
+          "400": {
+            "description": "Malformed JSON, unknown field, body over 1 MiB, or invalid input; see the operation schema and description.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "invalid JSON request"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting state, request ID, consumed token, undelivered operation result, or unsupported protocol version as applicable to this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller persistence or internal failure; reconcile before retrying a mutation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-introduced-version": "0.1.0",
+        "x-audience": "agent",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/report": {
+      "post": {
+        "operationId": "reportHost",
+        "summary": "Report observations and reconcile commands",
+        "description": "Implemented in development product 0.1.0, protocol v1. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Version must be 1. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409, foreign/unknown operation IDs return 400. Terminal results are acknowledged without rewriting the original outcome. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable).",
+        "tags": [
+          "Core agent \u2192 Controller"
+        ],
+        "security": [
+          {
+            "HostCertificate": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON, unknown field, body over 1 MiB, or invalid input; see the operation schema and description.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "invalid JSON request"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting state, request ID, consumed token, undelivered operation result, or unsupported protocol version as applicable to this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller persistence or internal failure; reconcile before retrying a mutation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          }
+        },
+        "x-introduced-version": "0.1.0",
+        "x-audience": "agent",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/rotate": {
+      "post": {
+        "operationId": "rotateCertificate",
+        "summary": "Rotate a host certificate",
+        "description": "Implemented in development product 0.1.0, protocol v1. Outbound mutual TLS requires the current valid, unrevoked host certificate. CSR binds the next certificate to the same host. Persist identity atomically; retain recovery access on an ambiguous response. No VM side effects. Requires signed PEM ECDSA P-256 CSR. The new certificate lasts 90 days; previous certificates overlap for at most ten minutes. Repeating the same CSR while authenticated returns the existing unexpired certificate. After the overlap expires, use persisted new identity or explicitly revoke and re-enroll.",
+        "tags": [
+          "Core agent \u2192 Controller"
+        ],
+        "security": [
+          {
+            "HostCertificate": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON, unknown field, body over 1 MiB, or invalid input; see the operation schema and description.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "invalid JSON request"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting state, request ID, consumed token, undelivered operation result, or unsupported protocol version as applicable to this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller persistence or internal failure; reconcile before retrying a mutation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "request rejected"
+                }
+              }
+            }
+          }
+        },
+        "x-introduced-version": "0.1.0",
+        "x-audience": "agent",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/source": {
+      "get": {
+        "operationId": "downloadSource",
+        "summary": "downloadSource",
+        "description": "Download configured matching Nex source archive. Public, read-only and safe to retry. Returns 503 when no archive is configured; this is Nex source, not a complete Debian ISO corresponding-source bundle.",
+        "security": [],
+        "tags": [
+          "Reference and source delivery"
+        ],
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client",
+        "responses": {
+          "200": {
+            "description": "File contents",
+            "content": {
+              "application/gzip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Configured file is missing."
+          },
+          "503": {
+            "description": "Matching source archive is not configured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/openapi.json": {
+      "get": {
+        "operationId": "downloadOpenAPI",
+        "summary": "downloadOpenAPI",
+        "description": "Read the versioned OpenAPI contract. Public, read-only and safe to retry.",
+        "security": [],
+        "tags": [
+          "Reference and source delivery"
+        ],
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client",
+        "responses": {
+          "200": {
+            "description": "File contents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "OpenAPI 3.1 document for this development API version."
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Configured file is missing."
+          }
+        }
+      }
+    },
+    "/api/docs/": {
+      "get": {
+        "operationId": "readAPIReference",
+        "summary": "readAPIReference",
+        "description": "Read the generated offline API reference. Public, read-only and safe to retry. The static directory also serves openapi.json and reference.css.",
+        "security": [],
+        "tags": [
+          "Reference and source delivery"
+        ],
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client",
+        "responses": {
+          "200": {
+            "description": "File contents",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Configured file is missing."
+          }
+        }
+      }
+    },
+    "/api/v1/appliances/bootstrap": {
+      "post": {
+        "operationId": "bootstrapApplianceEnvironment",
+        "summary": "Create initial appliance site, pool and enrollment intent",
+        "description": "Administrator-only appliance bootstrap. Persist a stable request_id and random 64-character lowercase hexadecimal enrollment_token before submission. The same request, names and token return the original site/pool without duplicates. Payload changes conflict. An authenticated replay refreshes token expiry to ten minutes without clearing a consumed token's CSR binding; consumed tokens support replay only of the already-enrolled agent CSR through the existing enrollment endpoint. This does not create or start a VM. Core enrollment remains outbound verified HTTPS protocol v1. Revoked enrollment tokens are not recreated; use explicit recovery.",
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplianceBootstrapResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or expired administrator session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Storage unavailable. Reconcile stable request before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplianceBootstrapResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or unknown fields, body too large or malformed JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Invalid CSRF token or mismatching HTTPS origin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request, ownership or prerequisites.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplianceBootstrapRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/appliances/adopt": {
+      "post": {
+        "operationId": "adoptControllerAppliance",
+        "summary": "Adopt the existing Controller VM",
+        "description": "Register the existing libvirt UUID in its pool with a separate host assignment and protected Controller role. Requires an active host in the selected pool and fresh successful libvirt inventory observing this VM. A UUID reported by another host is rejected, including revoked hosts and old observations: reconcile ownership first. Stable request_id and identical payload replay the original registration; altered payload or owner conflicts. Registration grants no fencing, power, deletion or migration permission.",
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplianceAdoptionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or expired administrator session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Storage unavailable. Reconcile stable request before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplianceAdoptionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or unknown fields, body too large or malformed JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Invalid CSRF token or mismatching HTTPS origin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request, ownership or prerequisites.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Host does not exist.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplianceAdoptionRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vms": {
+      "get": {
+        "operationId": "listManagedAppliances",
+        "summary": "List adopted Controller appliances",
+        "description": "Read-only administrator inventory of adopted appliances, safe to retry. Includes pool membership, assigned host and preserved UUID. State comes only from fresh successful host libvirt observations; stale, failed, absent or revoked observations produce unknown. No generic VM mutation API is introduced.",
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ManagedAppliance"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or expired administrator session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Storage unavailable. Reconcile stable request before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "AdminSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-nex_session",
+        "description": "Administrator session cookie __Host-nex_session, Secure/HttpOnly/SameSite=Strict, Path=/ with no Domain. Expires after 30 minutes without an authenticated mutation or eight hours absolutely. GET/HEAD polling does not extend idle lifetime; mutations also require matching Origin and X-CSRF-Token. At most 64 active sessions per service. Legacy unprefixed cookies are refused; sign in again after upgrading.",
+        "x-session-policy": {
+          "idle_timeout_seconds": 1800,
+          "absolute_timeout_seconds": 28800,
+          "maximum_sessions": 64,
+          "idle_refresh": "authenticated mutations after Origin/CSRF validation; GET and HEAD never extend it",
+          "legacy_cookies_accepted": false
+        }
+      },
+      "HostCertificate": {
+        "type": "mutualTLS",
+        "description": "Unique signed host certificate; current enrollment and revocation are checked on each request."
+      }
+    },
+    "schemas": {
+      "Site": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "x-go-type": "protocol.Site",
+        "example": {
+          "id": "<site-id>",
+          "name": "Home"
+        }
+      },
+      "Pool": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "site_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "site_id",
+          "name"
+        ],
+        "x-go-type": "protocol.Pool",
+        "example": {
+          "id": "<pool-id>",
+          "site_id": "<site-id>",
+          "name": "Lab"
+        }
+      },
+      "Check": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Nonblank after trimming; maximum 200 UTF-8 bytes; no CR/LF/NUL."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "degraded",
+              "failed",
+              "unknown",
+              "unsupported"
+            ]
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_success": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "type": "string",
+            "description": "Maximum 4096 UTF-8 bytes; absence means no error detail supplied."
+          },
+          "freshness": {
+            "type": "string",
+            "enum": [
+              "fresh",
+              "stale",
+              "unknown"
+            ],
+            "readOnly": true,
+            "description": "Controller-derived elapsed receipt freshness; agent input is ignored. Never infer a current healthy check solely from fresh host connection."
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "observed_at"
+        ],
+        "x-go-type": "protocol.Check",
+        "description": "Per-probe health distinct from management connection freshness. observed_at marks the check result; last_success is absent until success is observed; error carries actionable failure details."
+      },
+      "NIC": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Nonblank after trimming; maximum 200 UTF-8 bytes; no CR/LF/NUL."
+          },
+          "mac": {
+            "type": "string"
+          },
+          "addresses": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 128
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "mac",
+          "addresses",
+          "state"
+        ],
+        "x-go-type": "protocol.NIC"
+      },
+      "Disk": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Nonblank after trimming; maximum 200 UTF-8 bytes; no CR/LF/NUL."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "available_bytes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Available filesystem bytes when known; absent for raw block devices or unsupported capacity observations."
+          }
+        },
+        "required": [
+          "name",
+          "size_bytes"
+        ],
+        "x-go-type": "protocol.Disk"
+      },
+      "VM": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Nonblank after trimming; maximum 200 UTF-8 bytes; no CR/LF/NUL."
+          },
+          "name": {
+            "type": "string",
+            "description": "Nonblank after trimming; maximum 200 UTF-8 bytes; no CR/LF/NUL."
+          },
+          "state": {
+            "type": "string",
+            "description": "Observed libvirt state; maximum 100 UTF-8 bytes."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "state"
+        ],
+        "x-go-type": "protocol.VM"
+      },
+      "Inventory": {
+        "type": "object",
+        "properties": {
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "hostname": {
+            "type": "string",
+            "description": "Maximum 200 UTF-8 bytes."
+          },
+          "cpu_model": {
+            "type": "string",
+            "description": "Maximum 4096 UTF-8 bytes."
+          },
+          "cpu_count": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65536
+          },
+          "memory_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "virtualization": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 128
+          },
+          "os_version": {
+            "type": "string",
+            "description": "Maximum 4096 UTF-8 bytes."
+          },
+          "agent_version": {
+            "type": "string",
+            "description": "Maximum 200 UTF-8 bytes."
+          },
+          "nics": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/NIC"
+            },
+            "maxItems": 1024
+          },
+          "disks": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Disk"
+            },
+            "maxItems": 4096
+          },
+          "vms": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/VM"
+            },
+            "maxItems": 10000
+          },
+          "checks": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Check"
+            },
+            "maxItems": 256,
+            "description": "At most 256 checks with unique names within a report."
+          }
+        },
+        "required": [
+          "observed_at",
+          "hostname",
+          "cpu_model",
+          "cpu_count",
+          "memory_bytes",
+          "virtualization",
+          "os_version",
+          "agent_version",
+          "nics",
+          "disks",
+          "vms",
+          "checks"
+        ],
+        "x-go-type": "protocol.Inventory",
+        "description": "Read-only host observations; byte quantities are bytes, CPU count is logical CPUs, timestamps are RFC3339 UTC. NIC state describes a local link, not end-to-end reachability. VM state is observed libvirt state, not guest application health. Null lists mean no observations supplied. Controller retains newer inventory resource timestamps and independently newer per-check timestamps; a newer report sequence does not freshen an unchanged or older sample."
+      },
+      "Host": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "revoked": {
+            "type": "boolean"
+          },
+          "connection": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "fresh",
+              "stale",
+              "revoked"
+            ],
+            "description": "unknown before any report, fresh within configured stale threshold, stale otherwise, revoked after administrator revocation. Restart cannot establish freshness from persisted wall-clock time alone. Controller default stale threshold is 30 seconds and is configurable; this is not a failure or failover deadline."
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Controller wall-clock receipt time of newest accepted report; null until a report arrives. Freshness is tracked using elapsed time in the active process."
+          },
+          "inventory": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Inventory"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "pool_id",
+          "hostname",
+          "revoked",
+          "connection",
+          "last_seen",
+          "inventory"
+        ],
+        "x-go-type": "protocol.Host",
+        "example": {
+          "id": "<host-id>",
+          "pool_id": "<pool-id>",
+          "hostname": "nex-core-1",
+          "revoked": false,
+          "connection": "unknown",
+          "last_seen": null,
+          "inventory": null
+        }
+      },
+      "EnrollRequest": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "const": 1
+          },
+          "token": {
+            "type": "string"
+          },
+          "csr_pem": {
+            "type": "string",
+            "description": "Signed PEM CERTIFICATE REQUEST using an ECDSA P-256 key; no trailing PEM data."
+          },
+          "hostname": {
+            "type": "string",
+            "description": "Nonblank, maximum 200 UTF-8 bytes, no CR/LF/NUL."
+          }
+        },
+        "required": [
+          "version",
+          "token",
+          "csr_pem",
+          "hostname"
+        ],
+        "x-go-type": "protocol.EnrollRequest",
+        "example": {
+          "version": 1,
+          "token": "<single-use-enrollment-token>",
+          "csr_pem": "<signed-P256-CSR-PEM>",
+          "hostname": "nex-core-1"
+        }
+      },
+      "EnrollResponse": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string"
+          },
+          "certificate_pem": {
+            "type": "string"
+          },
+          "ca_pem": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host_id",
+          "certificate_pem",
+          "ca_pem"
+        ],
+        "x-go-type": "protocol.EnrollResponse",
+        "example": {
+          "host_id": "<host-id>",
+          "certificate_pem": "<issued-host-certificate-PEM>",
+          "ca_pem": "<host-CA-certificate-PEM>"
+        }
+      },
+      "RotateRequest": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "const": 1
+          },
+          "csr_pem": {
+            "type": "string",
+            "description": "Signed PEM CERTIFICATE REQUEST using an ECDSA P-256 key; no trailing PEM data."
+          }
+        },
+        "required": [
+          "version",
+          "csr_pem"
+        ],
+        "x-go-type": "protocol.RotateRequest",
+        "example": {
+          "version": 1,
+          "csr_pem": "<signed-P256-CSR-PEM>"
+        }
+      },
+      "Command": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "refresh-inventory"
+            ]
+          }
+        },
+        "required": [
+          "operation_id",
+          "kind"
+        ],
+        "x-go-type": "protocol.Command"
+      },
+      "Result": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "succeeded",
+              "failed"
+            ]
+          },
+          "error": {
+            "type": "string",
+            "description": "At most 4096 UTF-8 bytes; omit for successful checks."
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Agent-reported result time; controller operation updated_at records receipt/commit time. Not proof of guest application health."
+          }
+        },
+        "required": [
+          "operation_id",
+          "status",
+          "observed_at"
+        ],
+        "x-go-type": "protocol.Result"
+      },
+      "ReportRequest": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "const": 1
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9223372036854775807
+          },
+          "inventory": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Inventory"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Omit or null for heartbeat only; prior inventory remains unchanged and is not made healthy."
+          },
+          "results": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Result"
+            },
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "version",
+          "sequence"
+        ],
+        "x-go-type": "protocol.ReportRequest",
+        "example": {
+          "version": 1,
+          "sequence": 1,
+          "results": []
+        },
+        "description": "version and sequence are required by runtime validation. results may be omitted or null and defaults to no results. inventory may be omitted or null for heartbeat only.",
+        "x-go-emitted-fields": [
+          "version",
+          "sequence",
+          "results"
+        ]
+      },
+      "ReportResponse": {
+        "type": "object",
+        "properties": {
+          "commands": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Command"
+            },
+            "maxItems": 100
+          },
+          "acknowledged_results": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "commands",
+          "acknowledged_results"
+        ],
+        "x-go-type": "protocol.ReportResponse",
+        "example": {
+          "commands": [
+            {
+              "operation_id": "<operation-id>",
+              "kind": "refresh-inventory"
+            }
+          ],
+          "acknowledged_results": []
+        }
+      },
+      "Operation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "host_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "refresh-inventory"
+            ]
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "dispatched",
+              "succeeded",
+              "failed"
+            ]
+          },
+          "error": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "host_id",
+          "kind",
+          "request_id",
+          "status",
+          "created_at",
+          "updated_at",
+          "actor"
+        ],
+        "x-go-type": "protocol.Operation",
+        "example": {
+          "id": "<operation-id>",
+          "host_id": "<host-id>",
+          "kind": "refresh-inventory",
+          "request_id": "<persisted-client-request-id>",
+          "status": "queued",
+          "created_at": "2026-09-08T10:00:00Z",
+          "updated_at": "2026-09-08T10:00:00Z",
+          "actor": "admin"
+        }
+      },
+      "Audit": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "detail": {
+            "type": "string",
+            "description": "Actionable detail for debounced health transitions when present."
+          }
+        },
+        "required": [
+          "id",
+          "actor",
+          "action",
+          "resource_id",
+          "created_at"
+        ],
+        "x-go-type": "protocol.Audit",
+        "example": {
+          "id": 1,
+          "actor": "admin",
+          "action": "site.create",
+          "resource_id": "<site-id>",
+          "created_at": "2026-09-08T10:00:00Z"
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": false
+      },
+      "Session": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string"
+          },
+          "csrf_token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "csrf_token"
+        ],
+        "additionalProperties": false,
+        "example": {
+          "username": "admin",
+          "csrf_token": "<session-csrf-token>"
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "minLength": 1,
+            "writeOnly": true,
+            "description": "Existing administrator password, at most 1024 UTF-8 bytes. Existing password hashes remain valid.",
+            "x-max-utf8-bytes": 1024
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "additionalProperties": false,
+        "example": {
+          "username": "admin",
+          "password": "<your-administrator-password>"
+        }
+      },
+      "CreateSiteRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Nonblank after trimming whitespace; at most 200 UTF-8 bytes; no CR, LF, or NUL."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false,
+        "example": {
+          "name": "Home"
+        }
+      },
+      "CreatePoolRequest": {
+        "type": "object",
+        "properties": {
+          "site_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "Nonblank after trimming whitespace; at most 200 UTF-8 bytes; no CR, LF, or NUL."
+          }
+        },
+        "required": [
+          "site_id",
+          "name"
+        ],
+        "additionalProperties": false,
+        "example": {
+          "site_id": "<site-id>",
+          "name": "Lab"
+        }
+      },
+      "TokenRequest": {
+        "type": "object",
+        "properties": {
+          "pool_id": {
+            "type": "string"
+          },
+          "host_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pool_id"
+        ],
+        "additionalProperties": false,
+        "example": {
+          "pool_id": "<pool-id>"
+        }
+      },
+      "TokenResponse": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "token",
+          "expires_at"
+        ],
+        "additionalProperties": false,
+        "example": {
+          "token": "<single-use-enrollment-token>",
+          "expires_at": "2026-09-08T10:10:00Z"
+        }
+      },
+      "OperationRequest": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "refresh-inventory"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "description": "Nonblank after trimming whitespace; at most 200 UTF-8 bytes; no CR, LF, or NUL."
+          }
+        },
+        "required": [
+          "kind",
+          "request_id"
+        ],
+        "additionalProperties": false,
+        "example": {
+          "kind": "refresh-inventory",
+          "request_id": "<persisted-client-request-id>"
+        }
+      },
+      "OK": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "example": {
+          "ok": true
+        }
+      },
+      "ApplianceBootstrapRequest": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "type": "string"
+          },
+          "site_name": {
+            "type": "string"
+          },
+          "pool_name": {
+            "type": "string"
+          },
+          "enrollment_token": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Caller-generated secret persisted before sending; never log or expose in operation results."
+          }
+        },
+        "required": [
+          "request_id",
+          "site_name",
+          "pool_name",
+          "enrollment_token"
+        ],
+        "additionalProperties": false
+      },
+      "ApplianceBootstrapResponse": {
+        "type": "object",
+        "properties": {
+          "site_id": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "site_id",
+          "pool_id",
+          "expires_at"
+        ],
+        "additionalProperties": false
+      },
+      "ApplianceAdoptionRequest": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "host_id": {
+            "type": "string"
+          },
+          "vm_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Stable lowercase nonzero libvirt UUID; adoption preserves identity."
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "pool_id",
+          "host_id",
+          "vm_id",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "ApplianceAdoptionResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "host_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "pool_id",
+          "host_id"
+        ],
+        "additionalProperties": false
+      },
+      "ManagedAppliance": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "host_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "freshness": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "const": "controller"
+          },
+          "protected": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "id",
+          "pool_id",
+          "host_id",
+          "name",
+          "state",
+          "freshness",
+          "role",
+          "protected"
+        ],
+        "additionalProperties": false
+      },
+      "ApplianceReadiness": {
+        "type": "object",
+        "properties": {
+          "bootstrap_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "status": {
+            "type": "string",
+            "const": "ready"
+          }
+        },
+        "required": [
+          "bootstrap_version",
+          "status"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "x-static-resources": {
+    "GET /appliance-ready.json": {
+      "description": "Appliance-only public JSON file served by the existing Controller UI file handler, not a separately registered API route. First boot atomically publishes it after initialization, verified local HTTPS UI HTTP 200, and guest bootstrap-secret cleanup. It must be absent from a pristine appliance image and may return 404 before preparation or on non-appliance deployments. A persisted marker records first-boot completion; it is not continuous health or successful host enrollment/adoption.",
+      "security": [],
+      "schema": {
+        "$ref": "#/components/schemas/ApplianceReadiness"
+      },
+      "compatibility": "Host handoff requires bootstrap_version 1, status ready and a successful UI root response over the pinned Controller TLS identity. An older API-only Controller cannot satisfy appliance readiness."
+    }
+  }
+}

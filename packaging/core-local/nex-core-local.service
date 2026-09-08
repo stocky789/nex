@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[Unit]
+Description=Nex Core local management and Controller appliance deployment
+Wants=network-online.target
+After=network-online.target libvirtd.service
+Conflicts=nex-core-agent.service
+
+[Service]
+Type=simple
+User=root
+UMask=0077
+StateDirectory=nex/core-local
+StateDirectoryMode=0700
+ExecStartPre=/usr/lib/nex/core-local-setup init
+ExecStart=/usr/lib/nex/core-local-setup run
+ExecStopPost=/usr/lib/nex/core-local-setup offline
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

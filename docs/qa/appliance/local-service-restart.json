@@ -1,0 +1,25 @@
+{
+  "result": "Local systemd service restart preserved running VM UUID and one ready deployment",
+  "vm_id": "a77227bc-0f96-485e-9880-da9261ecb4f7",
+  "vms": [
+    {
+      "id": "a77227bc-0f96-485e-9880-da9261ecb4f7",
+      "name": "nex-controller",
+      "state": "running",
+      "managed": true,
+      "power_allowed": true
+    }
+  ],
+  "operations": [
+    {
+      "id": "09bac4f9-9353-4e3d-a835-924562e60f10",
+      "vm_id": "a77227bc-0f96-485e-9880-da9261ecb4f7",
+      "kind": "deploy",
+      "status": "ready",
+      "stage": "ready",
+      "progress": 100,
+      "controller_url": "https://192.168.122.10:8443",
+      "controller_cert_sha256": "b814939b2f5dda1c93598cf9f05cf9600876dd876736710502818cda1598765c"
+    }
+  ]
+}

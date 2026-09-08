@@ -1,0 +1,61 @@
+{
+  "summary": "Use installer-set host root password for local web login. API impact: changed contract for local session authentication/identity; no Controller/agent command changes.",
+  "paths": [
+    "cmd/nex-core-local/main.go",
+    "docs/API.md",
+    "docs/LICENSING.md",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/guide/secure-web-access.md",
+    "docs/plans/2026-09-08-controller-appliance.md",
+    "docs/qa/appliance/browser.md",
+    "docs/qa/appliance/root-auth.md",
+    "docs/qa/appliance/root-auth/invalid-login.png",
+    "docs/qa/appliance/root-auth/results.json",
+    "docs/qa/appliance/root-auth/root-login.png",
+    "docs/qa/appliance/root-auth/session-lost-login.png",
+    "docs/qa/security/browser.md",
+    "internal/localcore/auth.go",
+    "internal/localcore/auth_test.go",
+    "internal/localcore/recover_test.go",
+    "internal/localcore/service.go",
+    "internal/localcore/service_test.go",
+    "internal/localcore/web_security_test.go",
+    "packaging/core-local/Dockerfile",
+    "packaging/core-local/build-inside.sh",
+    "packaging/core-local/core-local-setup",
+    "packaging/core-local/nex-core-local.pam",
+    "packaging/core-local/nex-root-auth.c",
+    "scripts/build-source.py",
+    "tests/integration/core-local-package.sh",
+    "tests/integration/localcore_browser.py",
+    "tests/integration/web_security.py",
+    "tests/test_build_source.py",
+    "tests/test_core_local_package.py",
+    "web/src/local.tsx"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Root login replaces generated local credentials; document password changes, upgrade and failure recovery.",
+    "pages": [
+      "docs/guide/deploy-controller-appliance.md",
+      "docs/guide/secure-web-access.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Local session POST/GET uses native root PAM and reports root; existing wire shapes and protections remain.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/local-openapi.json",
+      "docs/api/local.html"
+    ]
+  },
+  "verification": {
+    "method": "Backend/unit/API checks, real Debian PAM browser interaction with inspected captures, disposable package smoke and independent review; ISO and hardware limits recorded.",
+    "evidence": [
+      "docs/qa/appliance/root-auth.md"
+    ]
+  }
+}

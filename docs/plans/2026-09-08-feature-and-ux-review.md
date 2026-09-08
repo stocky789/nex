@@ -1,6 +1,9 @@
 # Nex platform: feature and interface review
 
-Reviewed: 2026-09-08. Planning/research only; no Nex application UI has been implemented or visually tested.
+Reviewed: 2026-09-08. This document records research and phased requirements;
+the [Phase 1 development UI and its browser evidence](2026-09-08-controller-foundation.md)
+are now available. Remaining planned surfaces, including the host-local UI, are
+not implemented or visually verified by this research.
 
 This supplements the [implementation plan](2026-09-08-nex-platform.md). It separates useful operator features from the minimum needed to get Nex working. Product comparisons inform our choices; they are not promises of feature or licensing parity.
 
@@ -44,14 +47,16 @@ candidate remain follow-on proposals, not new first-release commitments.
 
 ### Planned API flow assessment
 
-No Nex APIs exist yet. “Reuse” here means extend the owning phase's eventual contract where sufficient,
-not a claim that an endpoint is available. Exact routes and schemas belong in the implementation slice
-and the [API reference](../API.md); presentation changes alone need no extra endpoint.
+Phase 1 APIs now exist; the [API reference](../API.md) identifies implemented routes
+and schemas. Reuse those contracts where sufficient; references below to later
+phases describe planned additions, not available endpoints. Presentation changes
+alone need no extra endpoint.
 
 | UX caller | Controller operation → Core command/observation → result | Planned contract treatment |
 |---|---|---|
 | Overview, tasks, responsive layout, themes | Read authorized inventory/health/operations → authenticated host observations and command results → timestamped status/task records | Phase 1 new contracts underpin these views; layout/themes reuse them without host commands. |
 | Add host | Enroll into selected pool → establish scoped host identity and report inventory → membership/connection status | Phase 1 enrollment contract, integrated in 3/4; preserve token expiry, revocation, and duplicate/retry checks. |
+| Host-local setup and recovery | Browser → local Core authorization/operation → agent/libvirt result; then Controller bootstrap/enrollment/adoption and reconnect reconciliation | Phase 3 new host-local API boundary; reuse Phase 1 enrollment and Phase 2 VM/console operations, extend handoff and local audit provenance without competing ownership. |
 | VM wizard, ISO upload, defaults | Validate placement and media; create VM → validated host-side media handling and libvirt creation → durable result and observed VM state | Phase 2 new contracts; drag/drop reuses upload. Validate inputs at API boundaries; interrupted media must not become available. Template cloning extends this only in its follow-on slice. |
 | Storage explanations and network view/editor | Read/register storage and networks; preflight/apply changes → per-host access/topology checks and staged network configuration → observed access and apply/recovery result | Phases 2/4 new contracts; include observed links needed for the view. Phase 4 owns network rollback, including controller loss during apply. |
 | Backup policy shortcut | Validate/save policy and schedule jobs → existing backup/restore commands of Phase 6 → job, manifest, and verification records | Phase 6 new contracts; presets reuse policy operations, with missed-run and conflict behavior intact. |
@@ -156,12 +161,38 @@ Initially search the current list/tree. Introduce permission-scoped global searc
 | 1–2 | Pool | Overview, Hosts, VMs, Storage, Networks, Tasks; only expose functional tabs/actions |
 | 2 | Host | Summary, capacity/freshness, VMs, existing network/storage access, tasks |
 | 2 | VM | Summary, Console, Hardware, Tasks; current/pending settings and clear power state |
+| 3, after Phase 2 | Host-local Core UI | First-server Controller deployment, existing-Controller enrollment, host/resident-VM status, basic local power/console controls and Controller recovery, available independently of central management |
 | 4 | Storage details | Local/shared type, real capacity, accessible hosts, volumes, attachments, health |
 | 5 | VM Snapshots | Time, consistency, disk coverage, restore/delete actions, consolidation status |
 | 6 | Pool Backups and VM Backups | Repositories/policies, recovery points, last success/verification, restore and job details |
 | 7 | Migration and maintenance | Destination suitability, blocking reasons, affected VMs, progress and outcome |
 | 8 | Operations and access | Alerts, task/event filters, scoped roles, update/recovery status |
 | 10, later | Pool Applications and container Infrastructure | Enable Container Services, deploy/manage applications, persistent volumes, recovery health, and protected worker VMs |
+
+### Host-local setup, control and Controller deployment
+
+**Agreed 2026-09-08; planned for Phase 3 after Phase 2 VM/console foundations.**
+Opening an installed Core host's management address should show a small local
+interface inspired by XO Lite: authenticate, inspect this host, and choose
+**Create a new environment**, **Connect to an existing Controller**, or
+**Recover this host's Controller**. A single new server must be enough to deploy
+the Controller appliance without an existing VM or central management service.
+
+Use the approved Nex styling and shared working controls. Guide storage/network
+selection, show preflight blockers and durable deployment progress, then link to
+the verified Controller URL. Resident VM state, permitted power operations and
+authorized consoles remain accessible locally during Controller outages; show
+local observation freshness separately from central connection status. Confirm
+disruptive actions with the exact target and explain blocked ownership or recovery
+conditions. Central configuration and pool workflows remain in Controller.
+
+The [Phase 3 bootstrap section](2026-09-08-nex-platform.md#host-local-ui-and-controller-appliance-bootstrap)
+owns deployment, authentication, API handoff, authority, offline boot and recovery
+requirements. Review actual desktop/360px and keyboard first-server, external
+enrollment and outage/recovery flows when implemented. No host-local Nex UI was
+operated for this planning decision. **API impact: none for this documentation;
+new local API and reused/extended Controller/Core contracts are planned in Phase 3.**
+**Guide impact: none now**; instructions and verified captures ship with implementation.
 
 ### Managed container services: seamless and colorful
 
