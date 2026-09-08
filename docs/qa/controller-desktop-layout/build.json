@@ -1,0 +1,32 @@
+{
+  "base_commit": "0bc7d14f708b3f6aea57e820def340d58f42e1c2",
+  "environment": {
+    "go": "go version go1.27.1 linux/amd64",
+    "node": "v24.20.0",
+    "playwright": "1.62.0",
+    "browser": "Playwright bundled Chromium, headless",
+    "viewport_sizes": [
+      [
+        1440,
+        1000
+      ],
+      [
+        360,
+        800
+      ]
+    ]
+  },
+  "sha256": {
+    "web/src/main.tsx": "0b2f1abc8fd0e7a6905a0e46ae5646022177ea281a2e103c615d85aefea91f24",
+    "web/src/style.css": "4b1056429f0e9697992ea8c1750099f396930a56c2b3edb34d98252755560267",
+    "web/dist/app.js": "ca28c3ce1ddf182259ef0486fa554f502cb35e9775b0e9d63f4a02cd26a10f16",
+    "web/dist/app.css": "71d260ebcd23b871ff137c85130f8bf938fddb09b3d0ded2d8d843e03f845f72",
+    "tests/integration/phase1_browser.py": "5a9dbb7def6b1f2031b1dc5ea7ba6db44926ef7090a8e6817751fe6e734038fa"
+  },
+  "checks": {
+    "ui_typecheck": "passed",
+    "ui_build": "passed",
+    "phase1_browser": "passed, 16 result groups, exit 0",
+    "independent_review": "no blocking findings; mobile Help menu correction checked against capture and bounds regression"
+  }
+}

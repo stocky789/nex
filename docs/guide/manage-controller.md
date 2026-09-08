@@ -55,8 +55,17 @@ is separate from the historical Phase 1 evidence below.
    certificate authority is separate from the HTTPS server CA; never copy its private key
    to an enrolling host.
 2. Open the Controller HTTPS address in a browser that trusts its server certificate.
-   Choose **Sign in** with the administrator account. Select **Create site**, enter its
-   name, then select **Create pool** within that site and name the pool.
+   Choose **Sign in** with the administrator account. The desktop layout has a command
+   toolbar across the top, a **Resources** pane on the left, and details for the selected
+   resource on the right. Select **Create site**, enter its name, then select
+   **Create pool** within that site and name the pool.
+   Expand or collapse sites and pools using their disclosure arrows; select their names
+   to open them. **Search resources** filters the tree by site, pool or host name and
+   keeps matching hosts under their site and pool. Clear the search to see everything.
+   The **File** menu also provides creation/enrollment actions for the selected scope;
+   **View** opens the overview or task history and refreshes the displayed inventory.
+   Use Tab to reach menus and controls, Enter to open a menu, and Escape to close it.
+   On narrow screens the resource pane is above the details area.
 3. Select the intended pool, **Add host**, then **Generate enrollment token**. Treat the token as a secret:
    keep it out of shell history, logs, screenshots, and shared notes. It expires after ten minutes
    and is usable for one host identity; it does not grant access to another pool.
@@ -77,10 +86,17 @@ is separate from the historical Phase 1 evidence below.
    `enroll` verifies Controller's HTTPS certificate and creates the host identity locally.
    Keep `agent-state` across restarts. Remove the secret token file after successful
    enrollment. The agent connects outbound; it does not require an inbound management API.
-5. Return to the pool and select the enrolled hostname to open **Host overview**. Check identity, last contact and
-   observation times, CPU/RAM, OS/agent version, network interfaces, disks, and health.
+5. Return to the pool and select the enrolled hostname. **General** shows **Host overview**
+   and health checks: identity, last contact and observation times, CPU/RAM and OS/agent
+   version. Select **Networking** for observed interfaces or **Storage** for observed
+   disks; these are read-only observations. **Activity** shows recorded changes for the
+   selected resource. Selecting another resource returns to **General**.
+   Connection warnings remain visible on the host's General, Networking and Storage views.
    Select **Refresh inventory** and follow its durable task in **Task history** to its
-   reported outcome.
+   reported outcome. **Recent tasks** at the bottom also shows up to five tasks for the
+   selected scope; select its heading to collapse or expand it. **Refresh view** reloads
+   Controller's records; **Refresh inventory** sends the existing read-only request to
+   the selected host. Neither control changes VM power.
    A fresh heartbeat alone does not prove every capability is healthy. By default the agent
    reports every ten seconds, and Controller marks a connection stale after thirty seconds.
    Read **Last observed health** together with the connection and observation timestamps.
@@ -171,6 +187,10 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
   Do not run two Controllers from copied state or copy an agent identity to another host.
 
 ## Verification
+
+The [Controller desktop layout walkthrough](../qa/controller-desktop-layout/checks.md)
+records verification of the current resource tree, menus, detail views, forms and
+responsive layout. Historical captures below show the previous layout.
 
 [Deployment usability checks](../qa/appliance/deployment-usability.md) record the current
 DHCP/password/power UI changes, simulated browser checks and artifact availability limits.

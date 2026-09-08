@@ -1,0 +1,60 @@
+{
+  "summary": "Rebuild Nex Controller with a Windows XenCenter-inspired desktop layout. API impact: existing contract; current client calls and Core refresh/report flows are unchanged.",
+  "paths": [
+    "docs/BUG_LEDGER.md",
+    "docs/guide/manage-controller.md",
+    "docs/plans/2026-09-08-feature-and-ux-review.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-09-controller-desktop-layout.md",
+    "docs/qa/controller-desktop-layout/build.json",
+    "docs/qa/controller-desktop-layout/captures/activity-360.png",
+    "docs/qa/controller-desktop-layout/captures/activity-desktop.png",
+    "docs/qa/controller-desktop-layout/captures/desktop-shell.png",
+    "docs/qa/controller-desktop-layout/captures/empty-pool-desktop.png",
+    "docs/qa/controller-desktop-layout/captures/help-menu-360.png",
+    "docs/qa/controller-desktop-layout/captures/host-360.png",
+    "docs/qa/controller-desktop-layout/captures/host-desktop.png",
+    "docs/qa/controller-desktop-layout/captures/idle-expired-login.png",
+    "docs/qa/controller-desktop-layout/captures/invalid-object-desktop.png",
+    "docs/qa/controller-desktop-layout/captures/libvirt-failed-desktop.png",
+    "docs/qa/controller-desktop-layout/captures/loading.png",
+    "docs/qa/controller-desktop-layout/captures/network-error-360.png",
+    "docs/qa/controller-desktop-layout/captures/networking-360.png",
+    "docs/qa/controller-desktop-layout/captures/networking-desktop.png",
+    "docs/qa/controller-desktop-layout/captures/probe-timeout-desktop.png",
+    "docs/qa/controller-desktop-layout/captures/revoke-confirmation.png",
+    "docs/qa/controller-desktop-layout/captures/revoked-host-360.png",
+    "docs/qa/controller-desktop-layout/captures/stale-host-360.png",
+    "docs/qa/controller-desktop-layout/captures/storage-360.png",
+    "docs/qa/controller-desktop-layout/captures/storage-desktop.png",
+    "docs/qa/controller-desktop-layout/captures/tasks-collapsed-desktop.png",
+    "docs/qa/controller-desktop-layout/captures/tasks-desktop.png",
+    "docs/qa/controller-desktop-layout/captures/unauthorized.png",
+    "docs/qa/controller-desktop-layout/checks.md",
+    "docs/qa/controller-desktop-layout/results.json",
+    "tests/integration/phase1_browser.py",
+    "web/src/main.tsx",
+    "web/src/style.css"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Resource search, collapsible tree, menus, resource views and the bottom task drawer change operator navigation.",
+    "pages": [
+      "docs/guide/manage-controller.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Existing session/sites/pools/hosts/enrollment/revocation/operations/audit API calls retain request shapes, authorization, retry and observation semantics. No Core command or contract change.",
+    "pages": []
+  },
+  "verification": {
+    "method": "UI typecheck/build and complete disposable HTTPS Phase 1 browser/process walkthrough passed all 16 groups. Inspected desktop/mobile captures, reproduced and corrected Help menu clipping, and obtained independent implementation/evidence review. Libvirt is simulated; no hosted CI or image deployment claimed.",
+    "evidence": [
+      "docs/qa/controller-desktop-layout/checks.md",
+      "docs/qa/controller-desktop-layout/results.json",
+      "docs/qa/controller-desktop-layout/build.json",
+      "tests/integration/phase1_browser.py"
+    ]
+  }
+}

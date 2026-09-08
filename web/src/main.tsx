@@ -99,6 +99,28 @@ function Brand() {
 function Badge({ value }: { value: string }) {
   return <span className={`badge ${value}`}>{value.replaceAll("-", " ")}</span>;
 }
+type ResourceKind = "site" | "pool" | "host" | "home" | "refresh" | "tasks" | "add";
+function Icon({ kind }: { kind: ResourceKind }) {
+  const paths: Record<ResourceKind, ReactNode> = {
+    home: <><path d="m2 10 8-7 8 7" /><path d="M4 9v9h12V9M8 18v-6h4v6" /></>,
+    site: <><path d="M3 18V5h9v13M12 9h5v9M1 18h18" /><path d="M6 8h3M6 11h3M6 14h3M14 12h1M14 15h1" /></>,
+    pool: <><rect x="2" y="3" width="7" height="10" rx="1" /><rect x="11" y="3" width="7" height="10" rx="1" /><path d="M5 6h1M14 6h1M5 13v4h10v-4M10 17v2" /></>,
+    host: <><rect x="4" y="2" width="12" height="16" rx="1" /><path d="M7 6h6M7 9h6M7 14h1M11 14h2" /></>,
+    refresh: <><path d="M17 8a7 7 0 1 0 0 5M17 3v5h-5" /></>,
+    tasks: <><rect x="4" y="3" width="13" height="15" rx="1" /><path d="m6 8 1 1 2-3M11 7h3M6 12h8M6 15h8" /></>,
+    add: <><path d="M10 3v14M3 10h14" /></>,
+  };
+  return <svg className={`resource-icon icon-${kind}`} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">{paths[kind]}</svg>;
+}
+function Menu({ label, children }: { label: string; children: ReactNode }) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  return <details className="menu" ref={ref}
+    onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) e.currentTarget.open = false; }}
+    onKeyDown={(e) => { if (e.key === "Escape") { e.currentTarget.open = false; e.currentTarget.querySelector("summary")?.focus(); } }}>
+    <summary>{label}</summary>
+    <div className="menu-items" onClick={() => { if (ref.current) ref.current.open = false; }}>{children}</div>
+  </details>;
+}
 function App() {
   const [session, setSession] = useState<Session | null>();
   const [data, setData] = useState<Data>(empty);
@@ -108,6 +130,8 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [search, setSearch] = useState("");
+  const [resourceSearch, setResourceSearch] = useState("");
+  const [tab, setTab] = useState("General");
   const [form, setForm] = useState<
     "site" | "pool" | "enroll" | "revoke" | null
   >(null);
@@ -221,6 +245,7 @@ function App() {
     const change = () => {
       setRoute(location.hash.slice(1) || "/");
       setSearch("");
+      setTab("General");
       setForm(null);
       setToken(null);
       setNotice("");
@@ -280,8 +305,8 @@ function App() {
       <main className="login">
         <Brand />
         <div className="login-card">
-          <p className="eyebrow">YOUR INFRASTRUCTURE, CONNECTED</p>
-          <h1>Welcome back.</h1>
+          <p className="eyebrow">NEX CONTROLLER</p>
+          <h1>Connect to Nex Controller</h1>
           <p>Sign in to manage your sites, pools and hosts.</p>
           {error && (
             <p className="alert" role="alert">
@@ -343,7 +368,7 @@ function App() {
       (kind === "hosts" && !host)),
   );
   return (
-    <>
+    <div className="desktop-app">
       <a
         className="skip"
         href="#main"
@@ -356,7 +381,7 @@ function App() {
       </a>
       <header className="topbar">
         <a href="#/" aria-label="Nex Controller home">
-          <Brand />
+          <Icon kind="home" /><span>Nex Controller</span>
         </a>
         <div className="account">
           <span>{session.username}</span>
@@ -376,62 +401,110 @@ function App() {
           </button>
         </div>
       </header>
+      <div className="menubar" aria-label="Application menus">
+        <Menu label="File"><button disabled={busy} onClick={() => open("site")}>Create site</button><button disabled={busy || !site} onClick={() => open("pool")}>Create pool</button><button disabled={busy || !pool || Boolean(host && !host.revoked)} onClick={() => open("enroll")}>{host ? "Re-enroll host" : "Add host"}</button></Menu>
+        <Menu label="View"><a href="#/">Overview</a><a href="#/tasks">Task history</a><button onClick={() => void reload()} disabled={busy}>Refresh view</button></Menu>
+        <Menu label="Help"><a href="/api/docs/" target="_blank" rel="noreferrer">API reference</a><a href="/source">Source code</a></Menu>
+      </div>
+      <div className="toolbar" aria-label="Controller actions">
+            <div className="actions">
+              {(
+                <button
+                  className="primary"
+                  disabled={busy}
+                  onClick={() => open("site")}
+                >
+                  <Icon kind="site" /> Create site
+                </button>
+              )}
+              {site && (
+                <button
+                  className="primary"
+                  disabled={busy}
+                  onClick={() => open("pool")}
+                >
+                  <Icon kind="pool" /> Create pool
+                </button>
+              )}
+              {pool && !host && (
+                <button
+                  className="primary"
+                  disabled={busy}
+                  onClick={() => open("enroll")}
+                >
+                  <Icon kind="host" /> Add host
+                </button>
+              )}
+              {host && !host.revoked && (
+                <>
+                  <button
+                    className="primary"
+                    disabled={busy}
+                    onClick={() =>
+                      void action(async () => {
+                        requestID.current ??= crypto.randomUUID();
+                        const op = await api<Operation>(
+                          `hosts/${host.id}/operations`,
+                          "POST",
+                          {
+                            kind: "refresh-inventory",
+                            request_id: requestID.current,
+                          },
+                        );
+                        requestID.current = null;
+                        setNotice(
+                          `Inventory refresh ${op.status}. Follow its progress in Task history.`,
+                        );
+                        await reload();
+                      })
+                    }
+                  >
+                    <Icon kind="refresh" /> Refresh inventory
+                  </button>
+                  <button
+                    className="danger"
+                    disabled={busy}
+                    onClick={() => open("revoke")}
+                  >
+                    Revoke access
+                  </button>
+                </>
+              )}
+              {host?.revoked && (
+                <button
+                  className="primary"
+                  disabled={busy}
+                  onClick={() => open("enroll")}
+                >
+                  Re-enroll host
+                </button>
+              )}
+            </div>
+        <button disabled={busy} onClick={() => void reload()}><Icon kind="refresh" /> Refresh view</button>
+      </div>
       <div className="shell">
         <aside>
-          <div className="nav-title">WORKSPACE</div>
+          <div className="nav-title">Resources</div>
+          <label className="resource-search"><span className="sr-only">Search resources</span><input type="search" placeholder="Search resources…" value={resourceSearch} onChange={(e) => setResourceSearch(e.target.value)} /></label>
           <nav aria-label="Infrastructure">
-            <a className={!kind ? "selected" : ""} href="#/">
-              Overview <span>{data.hosts.length}</span>
-            </a>
-            {data.sites.map((s) => (
-              <div key={s.id}>
-                <a
-                  className={kind === "sites" && id === s.id ? "selected" : ""}
-                  href={`#/sites/${s.id}`}
-                >
-                  <span aria-hidden="true">◈</span> {s.name}
-                </a>
-                {data.pools
-                  .filter((p) => p.site_id === s.id)
-                  .map((p) => (
-                    <div key={p.id} className="tree">
-                      <a
-                        className={
-                          kind === "pools" && id === p.id ? "selected" : ""
-                        }
-                        href={`#/pools/${p.id}`}
-                      >
-                        {p.name}
-                      </a>
-                      {data.hosts
-                        .filter((h) => h.pool_id === p.id)
-                        .map((h) => (
-                          <a
-                            className={`host-link ${host?.id === h.id ? "selected" : ""}`}
-                            key={h.id}
-                            href={`#/hosts/${h.id}`}
-                          >
-                            <span aria-hidden="true">▤</span> {h.hostname}
-                          </a>
-                        ))}
-                    </div>
-                  ))}
-              </div>
-            ))}
-            <a className={kind === "tasks" ? "selected" : ""} href="#/tasks">
-              Task history
-            </a>
+            <a className={`tree-root ${!kind ? "selected" : ""}`} aria-current={!kind ? "page" : undefined} href="#/"><Icon kind="home" /> Nex Controller</a>
+            {data.sites.map((s) => {
+              const match = (name: string) => name.toLowerCase().includes(resourceSearch.toLowerCase());
+              const pools = data.pools.filter((p) => p.site_id === s.id && (match(s.name) || match(p.name) || data.hosts.some((h) => h.pool_id === p.id && match(h.hostname))));
+              if (!match(s.name) && !pools.length) return null;
+              return <details key={`${s.id}/${resourceSearch}`} className="tree-branch" open>
+                <summary aria-label={`Expand or collapse ${s.name}`}><a className={`tree-node ${kind === "sites" && id === s.id ? "selected" : ""}`} aria-current={kind === "sites" && id === s.id ? "page" : undefined} href={`#/sites/${s.id}`}><Icon kind="site" />{s.name}</a></summary>
+                <div className="tree">{pools.map((p) => <details key={p.id} className="tree-branch" open>
+                  <summary aria-label={`Expand or collapse ${p.name}`}><a className={`tree-node ${kind === "pools" && id === p.id ? "selected" : ""}`} aria-current={kind === "pools" && id === p.id ? "page" : undefined} href={`#/pools/${p.id}`}><Icon kind="pool" />{p.name}</a></summary>
+                  <div className="tree">{data.hosts.filter((h) => h.pool_id === p.id && (match(s.name) || match(p.name) || match(h.hostname))).map((h) =>
+                    <a className={`host-link ${host?.id === h.id ? "selected" : ""}`} key={h.id} aria-current={host?.id === h.id ? "page" : undefined} href={`#/hosts/${h.id}`}><Icon kind="host" />{h.hostname}<span className={`connection-dot ${h.connection}`} title={h.connection} aria-label={`Connection ${h.connection}`} /></a>
+                  )}</div>
+                </details>)}</div>
+              </details>;
+            })}
+            {resourceSearch && !data.sites.some((s) => s.name.toLowerCase().includes(resourceSearch.toLowerCase())) && !data.pools.some((p) => p.name.toLowerCase().includes(resourceSearch.toLowerCase())) && !data.hosts.some((h) => h.hostname.toLowerCase().includes(resourceSearch.toLowerCase())) && <p className="empty">No matching resources.</p>}
           </nav>
-          <div className="sidebar-foot">
-            <span className="tiny-label">NEX CONTROLLER</span>
-            <p>
-              One workspace.
-              <br />
-              Every host in view.
-            </p>
-            <a href="/api/docs/">API reference ↗</a>
-            <a href="/source">Source code ↗</a>
-          </div>
+          <div className="sidebar-foot"><a href="#/"><Icon kind="home" /> Infrastructure</a><a className={kind === "tasks" ? "selected" : ""} href="#/tasks"><Icon kind="tasks" /> Task history</a></div>
         </aside>
         <main id="main" tabIndex={-1}>
           <div className="breadcrumbs">
@@ -463,7 +536,7 @@ function App() {
                         ? "OPERATIONS"
                         : "INFRASTRUCTURE"}
               </p>
-              <h1>
+              <h1><Icon kind={host ? "host" : pool ? "pool" : site ? "site" : kind === "tasks" ? "tasks" : "home"} />
                 {host?.hostname ||
                   pool?.name ||
                   site?.name ||
@@ -478,83 +551,17 @@ function App() {
                       ? "Pools and hosts at this site."
                       : kind === "tasks"
                         ? "Durable requests, progress and outcomes."
-                        : "Bring your infrastructure together, one pool at a time."}
+                        : "Sites, pools and connected hosts."}
               </p>
             </div>
-            <div className="actions">
-              {!kind && (
-                <button
-                  className="primary"
-                  disabled={busy}
-                  onClick={() => open("site")}
-                >
-                  Create site
-                </button>
-              )}
-              {site && !pool && (
-                <button
-                  className="primary"
-                  disabled={busy}
-                  onClick={() => open("pool")}
-                >
-                  Create pool
-                </button>
-              )}
-              {pool && !host && (
-                <button
-                  className="primary"
-                  disabled={busy}
-                  onClick={() => open("enroll")}
-                >
-                  Add host
-                </button>
-              )}
-              {host && !host.revoked && (
-                <>
-                  <button
-                    className="primary"
-                    disabled={busy}
-                    onClick={() =>
-                      void action(async () => {
-                        requestID.current ??= crypto.randomUUID();
-                        const op = await api<Operation>(
-                          `hosts/${host.id}/operations`,
-                          "POST",
-                          {
-                            kind: "refresh-inventory",
-                            request_id: requestID.current,
-                          },
-                        );
-                        requestID.current = null;
-                        setNotice(
-                          `Inventory refresh ${op.status}. Follow its progress in Task history.`,
-                        );
-                        await reload();
-                      })
-                    }
-                  >
-                    Refresh inventory
-                  </button>
-                  <button
-                    className="danger"
-                    disabled={busy}
-                    onClick={() => open("revoke")}
-                  >
-                    Revoke access
-                  </button>
-                </>
-              )}
-              {host?.revoked && (
-                <button
-                  className="primary"
-                  disabled={busy}
-                  onClick={() => open("enroll")}
-                >
-                  Re-enroll host
-                </button>
-              )}
-            </div>
           </div>
+          {kind !== "tasks" && !invalid && <nav className="detail-tabs" aria-label="Resource views">
+            {(host ? ["General", "Networking", "Storage", "Activity"] : ["General", "Activity"]).map((name) =>
+              <button key={name} aria-current={tab === name ? "page" : undefined} onClick={() => setTab(name)}>{name}</button>
+            )}
+          </nav>}
+          <div className="workspace-content">
+
           {error && (
             <div className="alert" role="alert">
               {error}
@@ -741,6 +748,7 @@ function App() {
             </>
           ) : (
             <>
+              <div hidden={tab === "Activity"}>
               {!host && (
                 <div className="metrics">
                   <Metric label="Hosts" value={scopedHosts.length} />
@@ -820,7 +828,7 @@ function App() {
                 </section>
               )}
               {host ? (
-                <HostDetails host={host} />
+                <HostDetails host={host} tab={tab} />
               ) : (
                 <section className="panel">
                   <div className="section-heading">
@@ -907,6 +915,8 @@ function App() {
                   </p>
                 </section>
               )}
+              </div>
+              {tab === "Activity" && <>
               <Activity
                 entries={data.audit
                   .filter(
@@ -920,28 +930,24 @@ function App() {
                           a.resource_id.startsWith(h.id + "/"),
                       ),
                   )
-                  .slice(0, 5)}
+                  }
                 data={data}
-                recent
               />
-              <Tasks
-                operations={data.operations
-                  .filter((o) => scopedHosts.some((h) => h.id === o.host_id))
-                  .slice(0, 5)}
-                hosts={data.hosts}
-                recent
-              />
+              </>}
             </>
           )}
-          <footer>
-            <span>Observed state · refreshes every 10 seconds</span>
-            <a href="/source">Nex source code</a>
-          </footer>
+          </div>
+          {!loading && kind !== "tasks" && <details className="activity-dock" open>
+            <summary>Recent tasks <span>{data.operations.filter((o) => scopedHosts.some((h) => h.id === o.host_id)).length}</span></summary>
+            <Tasks operations={data.operations.filter((o) => scopedHosts.some((h) => h.id === o.host_id)).slice(0, 5)} hosts={data.hosts} recent />
+          </details>}
         </main>
       </div>
-    </>
+      <footer className="statusbar"><span>{loading ? "Loading inventory…" : error ? "Controller request failed · inventory may be out of date" : "Observed state · refreshes every 10 seconds"}</span><span>{data.hosts.length} hosts · {data.hosts.filter((h) => h.connection === "fresh").length} fresh connections</span><a href="/source">Nex source code</a></footer>
+    </div>
   );
 }
+
 function Metric({ label, value }: { label: string; value: number }) {
   return (
     <div className="metric">
@@ -953,11 +959,11 @@ function Metric({ label, value }: { label: string; value: number }) {
 function Details({ children }: { children: ReactNode }) {
   return <dl className="details">{children}</dl>;
 }
-function HostDetails({ host }: { host: Host }) {
+function HostDetails({ host, tab }: { host: Host; tab: string }) {
   const inv = host.inventory;
   return (
-    <>
-      <section className="panel">
+    <div className="host-details" data-tab={tab}>
+      <section className="panel host-overview">
         <div className="section-heading">
           <h2>Host overview</h2>
           <Badge value={host.connection} />
@@ -969,6 +975,7 @@ function HostDetails({ host }: { host: Host }) {
               : "The host is not reporting fresh data. Last known observations are shown below; workload execution is unknown."}
           </p>
         )}
+        <div hidden={tab !== "General"}>
         <Details>
           <dt>Host identity</dt>
           <dd className="mono">{host.id}</dd>
@@ -996,10 +1003,11 @@ function HostDetails({ host }: { host: Host }) {
         {!inv && (
           <p className="empty">Waiting for the first inventory report.</p>
         )}
+        </div>
       </section>
       {inv && (
         <>
-          <section className="panel">
+          <section className="panel host-health" hidden={tab !== "General"}>
             <div className="section-heading">
               <h2>Health checks</h2>
               <span className="muted">Last observed results</span>
@@ -1025,7 +1033,7 @@ function HostDetails({ host }: { host: Host }) {
             )}
           </section>
           <div className="two-column">
-            <section className="panel">
+            <section className="panel host-network" hidden={tab !== "Networking"}>
               <div className="section-heading">
                 <h2>Network interfaces</h2>
               </div>
@@ -1042,7 +1050,7 @@ function HostDetails({ host }: { host: Host }) {
                 <p className="empty">No interfaces reported.</p>
               )}
             </section>
-            <section className="panel">
+            <section className="panel host-disks" hidden={tab !== "Storage"}>
               <div className="section-heading">
                 <h2>Disks</h2>
               </div>
@@ -1064,7 +1072,8 @@ function HostDetails({ host }: { host: Host }) {
           </div>
         </>
       )}
-    </>
+      {!inv && tab !== "General" && <p className="empty">Waiting for the first inventory report.</p>}
+    </div>
   );
 }
 function Tasks({

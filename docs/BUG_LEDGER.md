@@ -409,3 +409,18 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
   executed commands/captures; no failing-before runtime run is claimed.
 - Avoid: storing status text in configuration or treating readonly feedback as disabled
   low-contrast text.
+
+## BUG-0026 — Desktop Help menu clipped on narrow screens during development
+
+- Date: 2026-09-09.
+- Symptom: the Controller's new Help dropdown extended beyond the left edge at 360px.
+- Root cause: a mobile last-menu rule right-aligned a popup wider than the menu's
+  distance from the left viewport edge.
+- Fix: retain the shared left alignment used by the other menus.
+- Regression evidence: the new bounds assertion in `tests/integration/phase1_browser.py`
+  failed with `Help menu outside narrow viewport` before the CSS correction. The same
+  complete browser command and final result are recorded in
+  [desktop layout QA](qa/controller-desktop-layout/checks.md). Both
+  `.github/workflows/phase1.yml` and `.gitea/workflows/phase1.yml` already run
+  `tests/integration/phase1.py --browser` on pushes and pull requests.
+- Avoid: aligning menus by first/last position without checking the actual popup bounds.

@@ -5,6 +5,19 @@ Status: Standalone installer alpha and Phase 1 Controller/agent development foun
 
 Project planning files live in `docs/plans/`.
 
+**Controller layout direction, 2026-09-09:** Matt redirected the next work to a
+Windows XenCenter-style overhaul of the Controller web GUI: compact menu/toolbar,
+left inventory tree, selected-resource header and tabs, dense properties/tables,
+and bottom activity/status. This supersedes the earlier vCenter/XO 6 shell choice;
+retain Nex identity and Sites → Pools → Hosts → VMs. Implement the
+[desktop layout slice](2026-09-09-controller-desktop-layout.md) using existing
+Controller capabilities. Core-local UI, installer work and phase acceptance gates
+remain unchanged; this is not authorization to add Phase 2 features.
+**API impact: existing contract** — preserve session, inventory, enrollment,
+host-action, operation and audit APIs and existing Core commands/results.
+**Guide impact: updated** — align navigation instructions with the delivered UI
+and record actual browser walkthrough evidence before accepting the redesign.
+
 ## Build order: basics first
 
 Each milestone must work end to end before the next one expands the scope. The competitor review is a source of follow-on features, not a requirement to build three enterprise products before Nex can run a VM.

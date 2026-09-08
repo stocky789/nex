@@ -132,21 +132,34 @@ No authenticated vCenter or XO environment was operated. Vendor documentation an
 
 ## Proposed Nex Controller UX
 
+**Superseding layout decision, 2026-09-09:** Matt requested a Controller GUI
+overhaul closely matching Windows XenCenter. The
+[desktop layout slice](2026-09-09-controller-desktop-layout.md) now owns the shell:
+compact Windows-like menu/toolbar, left inventory tree, selected-resource header
+and tabs, dense properties/tables, and bottom activity/status. The vCenter/XO 6
+research remains useful workflow context, but its shell proposal below is no
+longer the visual target. Preserve Nex branding, Sites → Pools → Hosts → VMs,
+existing capabilities and the Core-local UI. **API impact: existing contract** —
+presentation/navigation reuse current session, inventory, enrollment, host actions,
+operations and audit without new agent commands. **Guide impact: updated** with
+the implemented navigation and actual browser evidence; this direction does not
+advance phase acceptance or establish QA.
+
 ### Audience and direction
 
-Design for an infrastructure operator installing a host, finding a VM, investigating a failure, or recovering data. Desktop operation comes first, with usable narrow-screen status and recovery access. Favor legible tables, predictable controls, persistent context, and clear consequences. Borrow interaction patterns, not product branding or a pixel-for-pixel copy.
+Design for an infrastructure operator installing a host, finding a VM, investigating a failure, or recovering data. Desktop operation comes first, with usable narrow-screen status and recovery access. Favor legible tables, predictable controls, persistent context, and clear consequences. Closely follow Windows XenCenter's layout and density while retaining Nex branding and capability boundaries.
 
 The primary brand direction retains blue accents, white/platinum/grey surfaces, the graphite Nex wordmark, and white n on a blue icon. The [brand guide](../brand/README.md) adds supporting reference colors and an optional dark gradient without replacing that original identity. Keep a readable system sans and text/icons alongside status colors; use solid surfaces for dense operational content. UI token mapping, theme, and density still need review in the first design slice; brand approval is not a finished design system or implemented UI.
 
 ### Application layout
 
 ```text
-Top bar: Nex Controller | search | alerts | account
+Top: Nex Controller | compact menu row | icon action toolbar
 Left: Sites → Pools → Hosts → VMs
 Main: breadcrumb / object name / status / contextual actions
       scoped tabs
       table, details, console, or active workflow
-Bottom: collapsible recent tasks → complete task history
+Bottom: recent tasks / activity → complete history | connection/status bar
 ```
 
 Use one canonical URL per object and preserve selected scope on refresh/back navigation. A VM URL uses its stable UUID, so migration does not break links. Pool storage is prominent in the pool page, including each resource's accessible hosts; do not bury it under a host-only settings page.

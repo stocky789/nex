@@ -59,7 +59,19 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         session_idle(idle_deadline)
         assert page.request.get(lab.url + '/api/v1/session').status == 200
         assert session_idle() == idle_deadline, 'GET polling extended idle session'
-        page.get_by_role('button', name='Create site', exact=True).first.click()
+        for label, item in [('File', 'Create site'), ('View', 'Overview'), ('Help', 'API reference')]:
+            menu = page.locator('details.menu').filter(has=page.locator('summary', has_text=label))
+            summary = menu.locator('summary')
+            summary.focus()
+            page.keyboard.press('Enter')
+            expect(menu.get_by_text(item, exact=True)).to_be_visible()
+            page.keyboard.press('Escape')
+            expect(menu.get_by_text(item, exact=True)).not_to_be_visible()
+            expect(summary).to_be_focused()
+        file_menu = page.locator('details.menu').filter(has=page.locator('summary', has_text='File'))
+        file_menu.locator('summary').click()
+        file_menu.get_by_role('button', name='Create site', exact=True).click()
+        expect(file_menu).not_to_have_attribute('open', '')
         page.get_by_label('Site name').fill('Browser walkthrough')
         page.get_by_label('Site name').press('Enter')
         expect(page.get_by_role('heading', name='Browser walkthrough', exact=True)).to_be_visible()
@@ -94,10 +106,87 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.get_by_role('button', name='Close', exact=True).click()
         lab.passed('browser keyboard sign-in, invalid credentials, site/pool creation, empty state and ephemeral enrollment token')
 
+        refresh_route('hosts/missing-browser-resource')
+        expect(page.get_by_role('heading', name='Object not found', exact=True)).to_be_visible()
+        expect(page.get_by_role('button', name='Refresh inventory', exact=True)).to_have_count(0)
+        capture('invalid-object-desktop')
+        page.get_by_role('link', name='Return to overview', exact=True).click()
+        expect(page.get_by_role('heading', name='Your workspace', exact=True)).to_be_visible()
         refresh_route('hosts/' + host_id)
         expect(page.get_by_role('heading', name='Health checks', exact=True)).to_be_visible()
         expect(page.locator('.badge.fresh')).to_be_visible()
         capture('host-desktop')
+        host = next(h for h in lab.api('/api/v1/hosts') if h['id'] == host_id)
+        pool = next(p for p in lab.api('/api/v1/pools') if p['id'] == pool_id)
+        site = next(s for s in lab.api('/api/v1/sites') if s['id'] == pool['site_id'])
+        tree = page.get_by_role('navigation', name='Infrastructure', exact=True)
+        selected_host = tree.locator(f'a[href="#/hosts/{host_id}"]')
+        expect(selected_host).to_have_attribute('aria-current', 'page')
+        resource_search = page.get_by_label('Search resources', exact=True)
+        resource_search.fill(host['hostname'].upper())
+        expect(selected_host).to_be_visible()
+        expect(tree.get_by_role('link', name=pool['name'], exact=True)).to_be_visible()
+        expect(tree.get_by_role('link', name=site['name'], exact=True)).to_be_visible()
+        expect(tree.get_by_role('link', name='Browser walkthrough', exact=True)).to_have_count(0)
+        resource_search.fill(pool['name'])
+        expect(selected_host).to_be_visible()
+        resource_search.fill(site['name'])
+        expect(selected_host).to_be_visible()
+        resource_search.fill('no-such-resource-acceptance')
+        expect(tree.get_by_text('No matching resources.', exact=True)).to_be_visible()
+        expect(selected_host).to_have_count(0)
+        expect(page.get_by_role('heading', name=host['hostname'], exact=True)).to_be_visible()
+        resource_search.fill('')
+        pool_summary = tree.locator('summary').filter(has=page.locator(f'a[href="#/pools/{pool_id}"]'))
+        pool_summary.focus()
+        page.keyboard.press('Enter')
+        expect(selected_host).not_to_be_visible()
+        page.keyboard.press('Enter')
+        expect(selected_host).to_be_visible()
+        tree.get_by_role('link', name=pool['name'], exact=True).click()
+        expect(tree.get_by_role('link', name=pool['name'], exact=True)).to_have_attribute('aria-current', 'page')
+        expect(selected_host).to_be_visible()
+        selected_host.click()
+        expect(selected_host).to_have_attribute('aria-current', 'page')
+
+        tabs = page.get_by_role('navigation', name='Resource views', exact=True)
+        tabs.get_by_role('button', name='Networking', exact=True).click()
+        expect(tabs.get_by_role('button', name='Networking', exact=True)).to_have_attribute('aria-current', 'page')
+        expect(page.get_by_role('heading', name='Network interfaces', exact=True)).to_be_visible()
+        expect(page.get_by_role('heading', name='Health checks', exact=True)).not_to_be_visible()
+        expect(page.get_by_role('heading', name='Disks', exact=True)).not_to_be_visible()
+        capture('networking-desktop')
+        tabs.get_by_role('button', name='Storage', exact=True).focus()
+        page.keyboard.press('Enter')
+        expect(page.get_by_role('heading', name='Disks', exact=True)).to_be_visible()
+        expect(page.get_by_text('Observed device capacity.', exact=False)).to_be_visible()
+        expect(page.get_by_role('heading', name='Network interfaces', exact=True)).not_to_be_visible()
+        capture('storage-desktop')
+        tabs.get_by_role('button', name='Activity', exact=True).click()
+        expect(page.get_by_role('heading', name='Activity and health history', exact=True)).to_be_visible()
+        expect(page.get_by_role('heading', name='Host overview', exact=True)).not_to_be_visible()
+        expect(page.locator('.workspace-content')).not_to_contain_text('Browser walkthrough')
+        capture('activity-desktop')
+        tabs.get_by_role('button', name='General', exact=True).click()
+        expect(page.get_by_role('heading', name='Health checks', exact=True)).to_be_visible()
+        dock = page.locator('details.activity-dock')
+        dock.locator('summary').focus()
+        page.keyboard.press('Enter')
+        expect(dock.get_by_role('heading', name='Recent tasks', exact=True)).not_to_be_visible()
+        capture('tasks-collapsed-desktop')
+        page.keyboard.press('Enter')
+        expect(dock.get_by_role('heading', name='Recent tasks', exact=True)).to_be_visible()
+        chrome = {name: page.locator(selector).bounding_box() for name, selector in {
+            'menus': '.menubar', 'toolbar': '.toolbar', 'tree': 'aside',
+            'main': '#main', 'tabs': '.detail-tabs', 'dock': '.activity-dock', 'status': '.statusbar',
+        }.items()}
+        assert all(chrome.values()), 'desktop shell elements must be visible'
+        assert chrome['menus']['y'] < chrome['toolbar']['y'] < chrome['tabs']['y'], 'menu/toolbar/tab order'
+        assert chrome['tree']['x'] + chrome['tree']['width'] <= chrome['main']['x'] + 1, 'resource tree must sit left of detail pane'
+        assert chrome['tabs']['y'] < chrome['dock']['y'] < chrome['status']['y'], 'tasks and status must sit below resource tabs'
+        assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), 'desktop page overflow'
+        capture('desktop-shell')
+        lab.passed('browser keyboard File/View/Help menus and Escape, menu creation, resource search with ancestors, collapsible tree and current selection, scoped General/Networking/Storage/Activity views, task dock and desktop shell')
         refresh_route('pools/' + pool_id)
         checks = next(h for h in lab.api('/api/v1/hosts') if h['id'] == host_id)['inventory']['checks']
         expected_health = 'healthy' if all(c['status'] == 'healthy' and c['freshness'] == 'fresh' for c in checks) else 'degraded'
@@ -137,6 +226,20 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
 
         page.set_viewport_size({'width': 360, 'height': 800})
         capture('host-360')
+        for label in ['File', 'View', 'Help']:
+            menu = page.locator('details.menu').filter(has=page.locator('summary', has_text=label))
+            menu.locator('summary').click()
+            bounds = menu.locator('.menu-items').bounding_box()
+            assert bounds and bounds['x'] >= 0 and bounds['x'] + bounds['width'] <= 360, f'{label} menu outside narrow viewport'
+            if label == 'Help':
+                capture('help-menu-360')
+            page.keyboard.press('Escape')
+        for tab_name, heading in [('Networking', 'Network interfaces'), ('Storage', 'Disks'), ('Activity', 'Activity and health history')]:
+            tabs.get_by_role('button', name=tab_name, exact=True).click()
+            expect(page.get_by_role('heading', name=heading, exact=True)).to_be_visible()
+            assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), f'360px {tab_name} overflow'
+            capture(tab_name.lower() + '-360')
+        tabs.get_by_role('button', name='General', exact=True).click()
         assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), '360px page overflow'
         page.keyboard.press('Control+Home')
         page.get_by_role('link', name='Skip to content').focus()
