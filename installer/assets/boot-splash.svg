@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: AGPL-3.0-only
+     Installer-specific vector treatment of the approved blue n reference.
+     This is not the production logo master. Render with rsvg-convert. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">
+  <title>Nex Core installer background</title>
+  <desc>Porcelain background with a blue n tile, graphite Nex Core heading, and a clear central boot-menu area.</desc>
+  <rect width="640" height="480" fill="#F6F7FC"/>
+  <rect x="36" y="10" width="48" height="48" rx="10" fill="#3478FF"/>
+  <path d="M48 43V30C48 24 52 20 58 20H62C68 20 72 24 72 30V43"
+        fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round"/>
+  <text x="100" y="34" font-family="DejaVu Sans, sans-serif" font-size="26" fill="#17233B">Nex Core</text>
+  <text x="102" y="53" font-family="DejaVu Sans, sans-serif" font-size="12" fill="#17233B">Debian-based virtualization host</text>
+  <path d="M36 70H604" stroke="#C6CEE4"/>
+  <!-- Keep x36–604 / y80–410 clear for the bootloader's own accessible menu. -->
+  <rect y="430" width="640" height="50" fill="#E5E8F3"/>
+  <text x="36" y="459" font-family="DejaVu Sans, sans-serif" font-size="12" fill="#17233B">Nex Core installation</text>
+  <text x="604" y="459" text-anchor="end" font-family="DejaVu Sans, sans-serif" font-size="12" fill="#17233B">Debian 13 · amd64</text>
+</svg>

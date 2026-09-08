@@ -1,0 +1,14 @@
+Nex Core and Nex Controller
+
+Original Nex source code, build scripts, and configuration are licensed under
+the GNU Affero General Public License version 3 only (AGPL-3.0-only).
+See LICENSE for the complete terms and docs/LICENSING.md for scope and delivery.
+
+Debian, Linux, QEMU, libvirt, firmware, fonts, and other third-party components
+remain under their respective licenses and copyrights. Nex does not relicense
+them or claim endorsement by their authors. Preserve their supplied notices.
+
+Nex names, logos, and standalone brand artwork are separate from the code
+license; redistribution and trademark terms remain to be specified. This does
+not restrict rights granted by the AGPL for covered software. See
+docs/LICENSING.md before distributing a branded release.

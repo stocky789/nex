@@ -1,0 +1,10 @@
+---
+description: Shared Nex Controller and Nex Core project instructions
+alwaysApply: true
+---
+
+Read and follow the repository-root AGENTS.md before working. It is the canonical project contract.
+
+@AGENTS.md
+
+Apply AGENTS.md's required API impact check to every change; maintain repository-root docs/API.md.
