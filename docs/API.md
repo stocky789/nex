@@ -47,6 +47,11 @@ Starting with the first API in Phase 1:
 
 No empty OpenAPI files or invented routes are needed before implementation starts.
 
+Every change records API documentation applicability under the
+[documentation gate](DOCUMENTATION.md). The current gate checks change assessments and linked
+documentation updates; operation/schema coverage checks arrive with the first implemented API.
+Operator workflows belong in the [user guide](guide/README.md), linked to this reference where useful.
+
 ## Required information for each operation
 
 Each implemented call, function/command, event, or stream must document:

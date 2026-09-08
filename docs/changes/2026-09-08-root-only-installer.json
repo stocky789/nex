@@ -1,0 +1,43 @@
+{
+  "summary": "Require only a root password during Nex Core installation; API impact: none, local Debian account setup only.",
+  "paths": [
+    "README.md",
+    "installer/README.md",
+    "installer/build.sh",
+    "installer/check.sh",
+    "installer/preseed.cfg",
+    "installer/root-account.sh",
+    "tests/integration/iso-smoke.py",
+    "tests/integration/root-account.py",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/iso/2026-09-08-root-account.md",
+    "docs/qa/iso/root-password.png",
+    "docs/qa/iso/root-password-empty.png",
+    "docs/qa/iso/root-password-mismatch.png",
+    "docs/qa/iso/root-password-next.png",
+    "docs/guide/install-nex-core.md",
+    "docs/qa/iso/root-login-authenticated.png"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Installer asks only for the root password and confirmation; initial administration uses the local root console.",
+    "pages": [
+      "docs/guide/install-nex-core.md",
+      "docs/guide/verify-nex-core.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The boot media invokes Debian account setup locally; there is no Controller operation, Core agent command/result, or client-facing API in this standalone slice.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Run installer source checks and the bundled Debian account-dialog regression check; rebuild and verify the ISO checksum, then exercise interactive prompts and an offline disposable QEMU installation. Exact completed results and limitations are recorded in the QA report.",
+    "evidence": [
+      "docs/qa/iso/2026-09-08-root-account.md",
+      "tests/integration/root-account.py",
+      "tests/integration/iso-smoke.py"
+    ]
+  }
+}

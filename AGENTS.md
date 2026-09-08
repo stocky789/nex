@@ -118,6 +118,29 @@ when blocked; do not repeatedly ask permission for already authorized work.
 - Independent review and every phase acceptance gate must verify the API impact decision, required
   implementation, reference updates, and check evidence. Missing required API work leaves the slice open.
 
+## Living user guide and documentation gate
+
+- Apply [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md) to every change. Assess guide impact as
+  `updated` or `none` with a reason, alongside the required API impact decision. Internal refactors
+  do not need invented user instructions; changed user behavior does need guide updates.
+- Maintain the [user guide](docs/guide/README.md) in the same change as each implemented feature,
+  including GUI workflows, CLI/installer behavior, configuration, permissions, errors, and recovery.
+  Update or remove obsolete instructions when behavior changes or features are removed.
+- Walk through the documented steps against the actual implementation in a disposable environment.
+  Exercise applicable success, failure, and recovery paths; for GUI features use browser interaction
+  and inspect captures. Record version/environment, method, actual results, evidence, and untested
+  limits. Simulation must be labeled; it cannot establish real hardware or storage correctness.
+  Never mark an unexecuted workflow verified. Missing applicable verification leaves acceptance open.
+- Use portable Markdown under `docs/guide/`, stable descriptive filenames, relative links, and the
+  required page sections/navigation. This is the future website's source, not a second manual to
+  rewrite later. Do not expose contributor implementation details in operator workflows.
+- Add a scoped `docs/changes/*.json` assessment covering changed paths. Applicable guide/API changes
+  must name updated documentation and verification evidence; `none` requires a reviewable reason.
+  Run the documentation checker and relevant behavior checks. Follow the documented CI procedure.
+- Independent review and every phase gate check guide/API applicability, documentation accuracy,
+  and actual walkthrough evidence. Automated structural checks cannot judge semantic completeness
+  or prove that a walkthrough ran. No applicable documentation work is deferred to project end.
+
 ## Verification and bug memory
 
 - Nontrivial logic ships with a focused runnable check. Use the repository's existing test tools when

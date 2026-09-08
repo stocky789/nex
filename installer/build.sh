@@ -60,7 +60,7 @@ This local alpha contains no Nex Controller or Nex agent. Install only onto an
 explicitly selected disposable lab disk and retain recovery access.
 MEDIA
 cp installer/preseed.cfg "$stage/preseed.cfg"
-cp installer/late-install.sh installer/packages.txt "$stage/nex/"
+cp installer/late-install.sh installer/root-account.sh installer/packages.txt "$stage/nex/"
 # Empty dpkg status is intentional: resolve the whole closure, including packages
 # already installed in this build container. Real installer base may differ.
 apt-get update
@@ -116,7 +116,7 @@ menu color sel 0 #ffffffff #ff2456d9 none
 menu color border 0 #0017233b #00f6f7fc none
 menu color tabmsg 0 #ff17233b #00f6f7fc none
 label nex
-  menu label Install Nex Core (interactive disks and accounts)
+  menu label Install Nex Core (interactive disks and root password)
   menu default
   kernel /install.amd/vmlinuz
   append initrd=/install.amd/initrd.gz preseed/file=/cdrom/preseed.cfg --- quiet
@@ -156,7 +156,7 @@ if loadfont /boot/grub/font.pf2; then
 fi
 set menu_color_normal=black/light-gray
 set menu_color_highlight=white/blue
-menuentry 'Install Nex Core (interactive disks and accounts)' {
+menuentry 'Install Nex Core (interactive disks and root password)' {
   linux /install.amd/vmlinuz preseed/file=/cdrom/preseed.cfg --- quiet
   initrd /install.amd/initrd.gz
 }

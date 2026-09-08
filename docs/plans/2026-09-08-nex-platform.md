@@ -28,6 +28,8 @@ Matt selected AGPL for original Nex code on 2026-09-08; apply AGPL-3.0-only to N
 
 **API impact of the standalone ISO slice: none** — installer packaging, release identity, and repository configuration introduce no Controller/Core or client-facing API; enrollment remains deferred.
 
+**Installer account decision, 2026-09-08:** ask only for a root password and its confirmation; skip ordinary user creation using Debian Installer’s native account policy. An installer hook rejects blank root passwords instead of Debian’s ordinary-user fallback; mismatched confirmation retains Debian’s retry. Keep system/service accounts and local root recovery access; root SSH remains disabled. **API impact: none** — boot menu → preseed → Debian account setup affects local OS credentials only; there is no Controller operation, Core agent command/result, or client-facing API in this flow. See the [root-only installer verification](../qa/iso/2026-09-08-root-account.md) for the exact rebuilt image, password-dialog checks, and installation results.
+
 **Standalone alpha result, 2026-09-08:** branded BIOS/UEFI menus, offline BIOS installation, installed services, a nested libvirt KVM guest boot, host reboot persistence, and Nex identity preservation across a `base-files` reinstall passed on the final image. See the [exact artifact and QA evidence](../qa/iso/2026-09-08-alpha1.md). This completes the first ISO lab slice, not the full Phase 0/3 gates: full guest networking/data persistence, physical hardware, UEFI installation/Secure Boot, and controller enrollment remain outstanding.
 
 **Debian licensing review, 2026-09-08:** retain AGPL-3.0-only for original Nex code. The current installer aggregates separate Debian components under their own licenses; this does not make the whole ISO AGPL. Copying upstream code, linking libraries, or adding plugins requires a separate compatibility review, especially for GPL-2.0-only code. See the [licensing review and release evidence](../LICENSING.md).
@@ -162,6 +164,28 @@ Controller outage leaves running guests and established pool-local HA operating.
 Define and test no-quorum and fence-failure behavior before enabling HA, including any required stopping/self-fencing of existing resources; do not promise every guest keeps running through a pool partition. Failed or unconfirmed fencing must prevent recovery elsewhere. Routine monitoring does not introduce a competing restart path.
 
 ## Delivery phases and acceptance gates
+
+### User guide requirement for every change and phase
+
+**Agreed 2026-09-08:** maintain a [living user guide](../guide/README.md) from the first ISO onward.
+Every change assesses guide and API documentation impact; applicable instructions ship alongside
+the behavior. Follow the [documentation contract and CI checks](../DOCUMENTATION.md). Each feature
+gate includes a walkthrough of its documented workflow against the actual implementation, relevant
+failure/recovery cases, and inspected evidence. Label simulations and untested limits honestly.
+Changed and removed features update existing instructions; internal changes may record no impact
+with a reason. Documentation and walkthrough work cannot be deferred to the final development phase.
+
+The source is portable Markdown with consistent page sections and navigation so a future website
+can render the same guide. Begin with current installer/host workflows; add Controller GUI, pools,
+VMs, protection, migrations, HA, and Docker pages only as those features become available.
+
+GitHub and Gitea workflow files run structural/link checks and diff-based guide/API assessments on
+pushes and PRs. Required branch checks and actual hosted execution must be verified after repository
+and runner setup; local checks do not establish hosted enforcement. CI detects missing records and
+documentation updates, while independent review checks whether applicability and evidence are honest.
+
+**API impact of the guide/CI slice: none** — contributor tooling and user instructions add no runtime
+Controller/Core contract. The existing API reference remains the API source of truth.
 
 ### API requirement for every change and phase
 

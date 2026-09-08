@@ -17,9 +17,11 @@ On an amd64 Linux machine with Docker:
 
 The image is written to `dist/nex-core-0.1.0-alpha1-amd64.iso` with its checksum
 and build inventory. Test in a disposable VM before using physical hardware.
-Disk selection and account creation remain interactive.
+Disk selection and the root password remain interactive; no ordinary user account is created.
 
 - [Installer build, install, and verification instructions](installer/README.md)
+- [User guide](docs/guide/README.md)
+- [Documentation contribution and CI checks](docs/DOCUMENTATION.md)
 - [Alpha ISO lab results and coverage limits](docs/qa/iso/2026-09-08-alpha1.md)
 - [Implementation plan](docs/plans/2026-09-08-nex-platform.md)
 - [Feature and interface plan](docs/plans/2026-09-08-feature-and-ux-review.md)

@@ -41,10 +41,12 @@ Boot the ISO with at least 2 virtual CPUs, 4 GB RAM and a blank 24 GB virtual di
 Use hardware acceleration/nested virtualization when testing KVM guests. Select
 **Install Nex Core**; serial installation uses `ttyS0` at 115200 baud.
 
-Debian asks for language, networking, hostname, accounts, target disk, partitioning
-and erase confirmation. Select only the disposable disk. A mirror is not needed.
-Choose an ordinary administrator account; root SSH is disabled. Eject the ISO and
-reboot after installation. SSH host keys and accounts are created per installation.
+Debian asks for language, networking, hostname, the root password (with confirmation),
+target disk, partitioning and erase confirmation. Select only the disposable disk.
+A mirror is not needed. No ordinary user account is created; Debian service accounts
+remain. Blank passwords and mismatched confirmation prompt again. Use root at the local console after reboot.
+Root SSH remains disabled, so a fresh installation has no SSH login account.
+Eject the ISO and reboot after installation. SSH host keys are generated per installation.
 No Nex Controller, enrollment agent, pool, shared storage, HA or Docker service exists
 in this alpha. Debian's normal text installer follows the branded boot menu.
 
@@ -55,19 +57,21 @@ on an isolated lab network until host access policy has been validated.
 
 ## Check the installed host
 
+Run these commands as root at the local console:
+
 ```sh
-sudo virt-host-validate qemu
-sudo virsh -c qemu:///system list --all
-sudo systemctl --no-pager status libvirtd ssh chrony
-sudo sshd -T | rg permitrootlogin  # use grep if rg is unavailable
+virt-host-validate qemu
+virsh -c qemu:///system list --all
+systemctl --no-pager status libvirtd ssh chrony
+sshd -T | rg permitrootlogin  # use grep if rg is unavailable
 ```
 
 For a first NAT guest, explicitly inspect and start libvirt's default network:
 
 ```sh
-sudo virsh net-list --all
-sudo virsh net-start default
-sudo virsh net-autostart default
+virsh net-list --all
+virsh net-start default
+virsh net-autostart default
 ```
 
 Create a disposable Linux guest with `virt-install` using a separately supplied

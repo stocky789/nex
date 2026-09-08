@@ -1,0 +1,48 @@
+{
+  "summary": "Establish the living operator guide, same-change documentation and walkthrough rules, and push/PR documentation checks. Runtime API impact: none; no Nex service contracts change.",
+  "paths": [
+    ".cursor/rules/project.mdc",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "CURSOR.md",
+    "README.md",
+    "docs/API.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/DOCUMENTATION.md",
+    "docs/guide/README.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/verify-nex-core.md",
+    "scripts/check_docs.py",
+    "tests/test_check_docs.py",
+    ".github/workflows/documentation.yml",
+    ".gitea/workflows/documentation.yml",
+    ".github/pull_request_template.md",
+    ".gitea/pull_request_template.md",
+    "docs/qa/documentation.md",
+    "docs/qa/guide-host-checks.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Document the current installation and host-verification workflow with explicit evidence limits; establish navigation for future implemented features.",
+    "pages": [
+      "docs/guide/README.md",
+      "docs/guide/install-nex-core.md",
+      "docs/guide/verify-nex-core.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Link the existing API reference to the documentation assessment gate; no API implementation or runtime contract is introduced.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "verification": {
+    "method": "Run the stdlib checker tests, validate current guide structure/links, and check this documentation slice in an isolated Git range. Independently review applicability and actual evidence. See reports for precise walkthrough and hosted-CI limits.",
+    "evidence": [
+      "docs/qa/documentation.md",
+      "docs/qa/guide-host-checks.md",
+      "tests/test_check_docs.py"
+    ]
+  }
+}

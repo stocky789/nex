@@ -42,3 +42,21 @@ not claim physical-hardware or Secure Boot verification.
 - Fix: use Debian Installer's `in-target /bin/sh` for the shared target configuration script (`installer/late-install.sh`).
 - Regression evidence: run 1 reproduced the failure; `installer/check.sh` guards use of `in-target`. Fresh unattended run 3 passed offline installation, installed services, nested KVM and both installed boots against SHA256 `b02044bcac4205af247d52a30ff158ad4d73e7580382f666b37baf394538015f`; see [QA evidence](qa/iso/2026-09-08-alpha1.md).
 - Avoid: substituting a raw chroot for the installer's environment-aware target helper, or treating successful ISO creation as proof of successful installation.
+
+## BUG-0005 — Root-account hook ran before installer component initialization
+
+- Date: 2026-09-08
+- Symptom: the root-only installer draft failed its early command because `/usr/bin/user-setup-ask` was missing.
+- Root cause: before component loading, `anna-install` queues packages instead of installing them. Setting its retriever alone still leaves the package index missing.
+- Fix: initialize through the native `anna cdrom-retriever default` command before installing the account component when its dialog is absent.
+- Regression evidence: disposable VM runs reproduced both failures; `tests/integration/root-account.py` checks initialization order as well as root-only password handling. See the [root-only installer QA report](qa/iso/2026-09-08-root-account.md) for the exact rebuilt artifact and runtime results.
+- Avoid: mocking package installation as an unconditional success, or assuming a preseed early command runs after installer components are loaded.
+
+## BUG-0006 — Root-only smoke check counted a Debian service account
+
+- Date: 2026-09-08
+- Symptom: offline installation succeeded, but the new ordinary-user assertion failed on first boot.
+- Root cause: its UID range included Debian's `libvirt-qemu` service account (64055).
+- Fix: check Debian's ordinary-user range (1000–60000), preserving its higher reserved service UIDs.
+- Regression evidence: inspection showed root password status `P` and only `libvirt-qemu` in the old range. The corrected installed-host check runs on the same disposable installation; results are recorded in the [root-only QA report](qa/iso/2026-09-08-root-account.md).
+- Avoid: interpreting every UID above 1000 as an installer-created login account; Debian service accounts remain necessary on a root-only host.

@@ -5,17 +5,26 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 bash -n installer/build.sh
 sh -n installer/late-install.sh
+sh -n installer/root-account.sh
 python3 - <<'PY'
 from pathlib import Path
 
 entries = [line.split(None, 3) for line in Path('installer/preseed.cfg').read_text().splitlines()
            if line.strip() and not line.lstrip().startswith('#')]
+account_policy = {'passwd/root-login': 'true', 'passwd/make-user': 'false'}
+for key, value in account_policy.items():
+    assert entries.count(['d-i', key, 'boolean', value]) == 1, f'Required account policy: {key}={value}'
 for entry in entries:
     assert len(entry) >= 3, f'Malformed preseed entry: {entry}'
     key = entry[1]
-    # The shipped image must not answer identity, networking or disk questions.
-    assert not key.startswith(('partman', 'passwd/', 'netcfg/', 'grub-installer/')), key
-    assert key not in ('preseed/early_command', 'preseed/run', 'auto-install/enable'), key
+    # Only the root-only policy is preseeded; passwords must remain interactive.
+    if key.startswith('passwd/'):
+        assert key in account_policy and entry == ['d-i', key, 'boolean', account_policy[key]], entry
+    assert not key.startswith(('partman', 'netcfg/', 'grub-installer/')), key
+    if key == 'preseed/early_command':
+        assert entry == ['d-i', key, 'string', '/bin/sh /cdrom/nex/root-account.sh'], entry
+    assert key not in ('preseed/run', 'auto-install/enable'), key
+assert entries.count(['d-i', 'preseed/early_command', 'string', '/bin/sh /cdrom/nex/root-account.sh']) == 1
 
 packages = Path('installer/packages.txt').read_text().split()
 assert len(packages) == len(set(packages)), 'Duplicate package'

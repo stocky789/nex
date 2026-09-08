@@ -1,0 +1,51 @@
+{
+  "summary": "Adopt documentation assessment for the previously committed baseline 92c9bb3937d0231f556b2c6b08f7af982254fda9; this is an inventory of pre-gate history, not approval of later changes.",
+  "paths": [
+    ".cursor/rules/project.mdc",
+    ".gitignore",
+    "AGENTS.md",
+    "CHANGELOG.md",
+    "CLAUDE.md",
+    "CURSOR.md",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/LICENSING.md",
+    "docs/brand/README.md",
+    "docs/brand/nex-brand.png",
+    "docs/plans/2026-09-08-feature-and-ux-review.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/qa/iso/2026-09-08-alpha1.md",
+    "docs/qa/iso/bios-menu.png",
+    "docs/qa/iso/uefi-menu.png",
+    "installer/Dockerfile",
+    "installer/README.md",
+    "installer/assets/boot-splash.png",
+    "installer/assets/boot-splash.svg",
+    "installer/build.sh",
+    "installer/check.sh",
+    "installer/late-install.sh",
+    "installer/packages.txt",
+    "installer/preseed.cfg",
+    "tests/integration/iso-smoke.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Historical baseline inventory only. Initial operator guide pages and their coverage limits are supplied by the separate living-guide change.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The baseline implements the standalone installer and no Nex runtime API. Existing docs/API.md explicitly records that status.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Inspect committed baseline inventory and existing alpha QA report. This assessment does not verify uncommitted installer changes, manual installer prompts, or the full future platform.",
+    "evidence": [
+      "docs/qa/iso/2026-09-08-alpha1.md",
+      "docs/API.md"
+    ]
+  }
+}

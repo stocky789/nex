@@ -8,3 +8,5 @@ Read and follow the repository-root AGENTS.md before working. It is the canonica
 @AGENTS.md
 
 Apply AGENTS.md's required API impact check to every change; maintain repository-root docs/API.md.
+Apply its living user guide gate; maintain docs/guide/README.md, verify applicable workflows,
+and follow docs/DOCUMENTATION.md for change assessments and documentation checks.

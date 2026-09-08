@@ -87,6 +87,10 @@ for p in qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients virtin
     test "$(dpkg-query -W -f='${Status}' "$p")" = 'install ok installed'
 done
 systemctl is-active libvirtd ssh chrony
+test "$(passwd -S root | awk '{print $2}')" = P
+# Debian reserves higher UIDs for service accounts such as libvirt-qemu (64055).
+test -z "$(awk -F: '$3 >= 1000 && $3 <= 60000 {print $1}' /etc/passwd)"
+echo NEX_SMOKE_ROOT_ONLY_PASS
 virsh -c qemu:///system list --all
 test -c /dev/kvm
 check_identity() {
@@ -156,7 +160,6 @@ d-i netcfg/get_domain string test.invalid
 d-i hw-detect/load_firmware boolean false
 d-i passwd/root-password password nex-disposable-test-only
 d-i passwd/root-password-again password nex-disposable-test-only
-d-i passwd/make-user boolean false
 d-i clock-setup/utc boolean true
 d-i clock-setup/ntp boolean false
 d-i time/zone string UTC
@@ -207,11 +210,15 @@ def main():
         with disk.open('xb') as handle:
             handle.truncate(24 * 1024**3)
         drives = ['-drive', f'file={disk},format=raw,if=virtio']
-        shipping = Path('installer/preseed.cfg').read_text()
-        shipping = '\n'.join(line for line in shipping.splitlines() if not line.startswith('d-i preseed/late_command'))
         initrd = args.output / 'test-only-initrd.gz'
         service = '[Unit]\nAfter=libvirtd.service ssh.service chrony.service\nWants=libvirtd.service ssh.service chrony.service\n[Service]\nType=oneshot\nExecStart=/bin/sh /root/nex-smoke.sh\n[Install]\nWantedBy=multi-user.target\n'
-        initrd.write_bytes(args.initrd.read_bytes() + archive({'preseed.cfg': (shipping + '\n' + PRESEED).encode(), 'nex-smoke.sh': CHECK.encode(), 'nex-smoke.service': service.encode()}))
+        # Load shipping policy from the actual ISO after CD detection: its early
+        # hook needs the media and anna, which are unavailable at initrd startup.
+        initrd.write_bytes(args.initrd.read_bytes() + archive({
+            'preseed.cfg': (PRESEED + 'd-i preseed/file string /nex-smoke-media.cfg\n').encode(),
+            'nex-smoke-media.cfg': b'd-i preseed/include string /cdrom/preseed.cfg /nex-smoke.cfg\n',
+            'nex-smoke.cfg': PRESEED.encode(),
+            'nex-smoke.sh': CHECK.encode(), 'nex-smoke.service': service.encode()}))
         run_vm(args, 'offline-install', [*drives, *iso, '-kernel', str(args.kernel.resolve()), '-initrd', str(initrd), '-append', 'auto=true priority=critical console=ttyS0,115200n8'], seconds=1800, completion=True)
         if 'NEX_SMOKE_INSTALL_PASS' not in (args.output / 'offline-install.serial.log').read_text(errors='replace'):
             raise RuntimeError('Installer did not report success')
