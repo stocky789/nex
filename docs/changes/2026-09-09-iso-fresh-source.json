@@ -1,0 +1,26 @@
+{
+  "summary": "ISO builds always regenerate corresponding source and inject it into the onboard nex-core-local package and media archive.",
+  "paths": [
+    "installer/build.sh",
+    "installer/check.sh",
+    "installer/README.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Installer build recipe only; operator install steps unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core API contract change.",
+    "pages": []
+  },
+  "verification": {
+    "method": "./installer/check.sh; ./installer/build.sh with CORE_LOCAL_DEB=dist/core-local/nex-core-local_0.1.4_amd64.deb; verify ISO and package source digests",
+    "evidence": [
+      "installer/check.sh",
+      "dist/nex-core-0.1.0-alpha1-amd64.iso"
+    ]
+  }
+}

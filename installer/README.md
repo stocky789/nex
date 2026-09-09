@@ -20,6 +20,11 @@ A built `nex-core-local_*.deb` must exist under `dist/core-local/` (or set
 ./installer/build.sh
 ```
 
+Every ISO build regenerates `dist/nex-source.tar.gz`, injects that archive into the
+`nex-core-local` package on the media, and ships the same corresponding source (plus
+the installer recipe) as `/nex/nex-source.tar.gz` on the ISO. Do not reuse a stale
+hand-built source tarball.
+
 The builder is pinned to a Debian container digest. It verifies the base ISO
 against a pinned SHA256 and Debian's signed checksum list using the documented
 CD-signing fingerprint. APT authenticates additional packages. Complete package

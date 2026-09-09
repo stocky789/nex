@@ -64,6 +64,12 @@ assert 'Local alpha: no Nex Controller' not in late
 assert r"Host: \n  Console: \l" in late
 assert 'CORE_LOCAL_DEB' in build and 'nex-core-local_*_amd64.deb' in build
 assert "printf 'nex-core-local\\n' >>" in build
+assert 'scripts/build-source.py' in build, 'ISO builds must regenerate corresponding source'
+assert 'prepare_iso_core_local' in build, 'ISO builds must inject fresh source into nex-core-local'
+assert 'dist/nex-source.tar.gz required' in build
+assert 'cp -a installer "$source_stage/nex-source/"' in build
+assert re.search(r'tar .* -czf "\$stage/nex/nex-source\.tar\.gz" \\\s*LICENSE NOTICE docs/LICENSING\.md installer', build) is None, \
+    'Do not ship installer-only source as the sole ISO archive'
 # BUG-0004: raw chroot inherits the installer's stale debconf descriptors.
 assert '\nin-target /bin/sh /var/cache/nex-install/configure.sh\n' in late, 'Use Debian in-target for package configuration'
 assert '\nchroot /target ' not in late, 'Raw chroot bypasses installer setup'

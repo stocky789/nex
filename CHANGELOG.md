@@ -39,6 +39,7 @@ below describe implemented work, not completion of the full platform roadmap.
 - Software updates default to the public package repo at `https://nexvirtualization.com/apt`.
 - Fixed Controller package updates that could stop the service and report success when restart failed; updates now verify the service is running.
 - Fixed Core updates that could leave progress stuck on Installing after a successful package upgrade.
+- ISO builds always regenerate corresponding source and install it with Core, so media never ships a stale source snapshot.
 - Controller appliances include the update helper so Check/Update work without a manual package install; old lab repo URLs are ignored automatically.
 - New Controller deploys from Core also inject the update helper at first boot.
 - Cleaned up the Core local sidebar navigation so Overview and Updates read as quiet nav items instead of mismatched form buttons.

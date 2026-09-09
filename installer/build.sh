@@ -3,20 +3,56 @@
 # Build only: never mounts/writes physical disks or changes host networking.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+# Every ISO build regenerates corresponding source and injects it into the
+# nex-core-local package copied onto the media, so installs never ship stale
+# AGPL source from an older package rebuild.
+prepare_iso_core_local() {
+    local src_deb=$1
+    local out_deb=$2
+    local extract work
+    [[ -f $src_deb ]] || { echo "missing nex-core-local package: $src_deb" >&2; exit 1; }
+    [[ -f dist/nex-source.tar.gz ]] || { echo 'dist/nex-source.tar.gz missing after build-source' >&2; exit 1; }
+    work=$(mktemp -d)
+    extract=$work/pkg
+    mkdir -p "$extract"
+    dpkg-deb -x "$src_deb" "$extract"
+    dpkg-deb -e "$src_deb" "$extract/DEBIAN"
+    install -d "$extract/usr/share/nex/core-local"
+    install -m644 dist/nex-source.tar.gz "$extract/usr/share/nex/core-local/nex-source.tar.gz"
+    mkdir -p "$(dirname "$out_deb")"
+    fakeroot dpkg-deb -Zxz -b "$extract" "$out_deb"
+    rm -rf "$work"
+}
+
 if [[ ${1:-} != --inside ]]; then
     mkdir -p .cache/nex-iso dist
+    python3 scripts/build-source.py
     docker build -t nex-iso-builder -f installer/Dockerfile installer
     env_args=()
-    if [[ -n ${CORE_LOCAL_DEB:-} ]]; then
-        abs=$(readlink -f -- "$CORE_LOCAL_DEB")
-        case $abs in
-            "$PWD"/*) env_args+=(-e "CORE_LOCAL_DEB=/work/${abs#"$PWD"/}") ;;
-            *)
-                echo 'CORE_LOCAL_DEB must be a path inside this repository' >&2
-                exit 1
-                ;;
-        esac
+    core_local_deb=${CORE_LOCAL_DEB:-}
+    if [[ -z $core_local_deb ]]; then
+        shopt -s nullglob
+        core_local_candidates=(dist/core-local/nex-core-local_*_amd64.deb)
+        shopt -u nullglob
+        if [[ ${#core_local_candidates[@]} -eq 0 ]]; then
+            echo 'nex-core-local .deb required: set CORE_LOCAL_DEB or place a package under dist/core-local/' >&2
+            exit 1
+        fi
+        core_local_deb=$(ls -1t "${core_local_candidates[@]}" | head -n1)
     fi
+    abs=$(readlink -f -- "$core_local_deb")
+    case $abs in
+        "$PWD"/*) ;;
+        *)
+            echo 'CORE_LOCAL_DEB must be a path inside this repository' >&2
+            exit 1
+            ;;
+    esac
+    version=$(dpkg-deb -f "$abs" Version)
+    iso_core_local=.cache/nex-iso/nex-core-local_${version}_amd64.deb
+    prepare_iso_core_local "$abs" "$iso_core_local"
+    env_args+=(-e "CORE_LOCAL_DEB=/work/${iso_core_local}")
     exec docker run --rm --platform linux/amd64 \
         -v "$PWD:/work" -e BUILD_UID="$(id -u)" -e BUILD_GID="$(id -g)" \
         "${env_args[@]}" \
@@ -125,9 +161,20 @@ BUILD
 ./installer/build-gui.sh
 mkdir -p "$stage/nex/docs"
 cp LICENSE NOTICE docs/LICENSING.md "$stage/nex/docs/"
-tar --sort=name --owner=0 --group=0 --numeric-owner -czf "$stage/nex/nex-source.tar.gz" \
-    LICENSE NOTICE docs/LICENSING.md installer
+# Full corresponding source from this build (host always regenerates dist/nex-source.tar.gz),
+# plus the installer recipe used to produce this ISO.
+[[ -f /work/dist/nex-source.tar.gz ]] || { echo 'dist/nex-source.tar.gz required; host build must run scripts/build-source.py' >&2; exit 1; }
+source_stage=$(mktemp -d)
+tar -xzf /work/dist/nex-source.tar.gz -C "$source_stage"
+[[ -d $source_stage/nex-source ]] || { echo 'dist/nex-source.tar.gz missing nex-source/ prefix' >&2; exit 1; }
+rm -rf "$source_stage/nex-source/installer"
+cp -a installer "$source_stage/nex-source/"
+cp -f LICENSE NOTICE docs/LICENSING.md "$source_stage/nex-source/"
+tar --sort=name --owner=0 --group=0 --numeric-owner -C "$source_stage" -czf "$stage/nex/nex-source.tar.gz" nex-source
+rm -rf "$source_stage"
 (cd "$stage/nex" && sha256sum nex-source.tar.gz > nex-source.tar.gz.sha256)
+# Record that media source matches the regenerated archive inputs.
+cp /work/dist/nex-source.tar.gz.sha256 "$stage/nex/nex-source.product.sha256"
 cp installer/assets/boot-splash.png "$stage/isolinux/splash.png"
 cat > "$stage/isolinux/isolinux.cfg" <<'BIOS'
 path
