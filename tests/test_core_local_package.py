@@ -220,12 +220,57 @@ class CoreLocalPackageTests(unittest.TestCase):
             self.assertTrue((root / 'etc/os-release.debian').is_symlink())
             self.assertEqual((root / 'etc/motd').read_text(), 'Nex Core 1.2.4 — Debian 13 virtualization host\n')
             self.assertEqual((root / 'etc/nex/updates.conf').read_text(), 'repo_url=https://nexvirtualization.com/apt\n')
+            # The Nex APT source is configured out of the box, signed by the packaged key.
+            sources = (root / 'etc/apt/sources.list.d/nex.sources').read_text()
+            for line in ('Types: deb', 'URIs: https://nexvirtualization.com/apt', 'Suites: nex',
+                         'Components: main', 'Signed-By: /usr/share/keyrings/nex-archive-keyring.gpg'):
+                self.assertIn(line + '\n', sources)
+
+    def test_apt_source_uri_follows_configured_repo_url(self):
+        for tool in ('dpkg-divert', 'dpkg-query'):
+            if not shutil.which(tool):
+                self.skipTest(f'{tool} missing: Debian dpkg tools are required for this check')
+        with tempfile.TemporaryDirectory(prefix='nex-aptsrc-') as directory:
+            root = Path(directory)
+            for sub in ('usr/lib', 'etc/nex', 'var/lib/dpkg', 'bin'):
+                (root / sub).mkdir(parents=True)
+            (root / 'usr/lib/os-release').write_text('ID=debian\nVERSION_CODENAME=trixie\n')
+            (root / 'etc/os-release').symlink_to('../usr/lib/os-release')
+            (root / 'etc/nex/updates.conf').write_text('repo_url=https://apt.example.test/nex\n')
+            helper = root / 'bin/deb-systemd-helper'
+            helper.write_text('#!/bin/sh\nexit 0\n')
+            helper.chmod(0o755)
+            (root / 'var/lib/dpkg/status').write_text(
+                'Package: nex-core-local\nStatus: install ok half-configured\nArchitecture: amd64\nVersion: 0.1.5~alpha1\n\n')
+            env = dict(os.environ, DPKG_ROOT=str(root), DPKG_ADMINDIR=str(root / 'var/lib/dpkg'),
+                       PATH=f"{root / 'bin'}:{os.environ['PATH']}")
+            subprocess.run(['sh', str(ROOT / 'packaging/core-local/postinst'), 'configure'],
+                           env=env, check=True, capture_output=True, text=True)
+            # A non-default (public) repo_url is honored; a private/lab URL would be reset earlier.
+            self.assertIn('URIs: https://apt.example.test/nex\n',
+                          (root / 'etc/apt/sources.list.d/nex.sources').read_text())
+
+    def test_package_ships_archive_keyring_and_builds_the_apt_source(self):
+        keyring = ROOT / 'packaging/core-local/nex-archive-keyring.gpg'
+        self.assertTrue(keyring.is_file(), 'the Nex APT archive keyring must be committed')
+        head = keyring.read_bytes()[:1]
+        self.assertIn(head, (b'\x98', b'\x99'), 'keyring must be a dearmored (binary) GPG public key packet, not ASCII armor')
+        build = (ROOT / 'packaging/core-local/build-inside.sh').read_text()
+        self.assertIn('/usr/share/keyrings/nex-archive-keyring.gpg', build)
+        # The prerm removes the generated source so removal leaves no source with a missing key.
+        self.assertIn('/etc/apt/sources.list.d/nex.sources', (ROOT / 'packaging/core-local/prerm').read_text())
 
     def test_removal_never_erases_guest_or_state(self):
+        import re
         script = (ROOT / 'packaging/core-local/prerm').read_text()
         self.assertIn('deb-systemd-invoke stop nex-core-local.service', script)
         self.assertNotIn('virsh ', script)
-        self.assertNotIn('rm ', script)
+        # Removal may clean up the generated apt source, but never guest disks, VM
+        # definitions, configuration, credentials or any recursive delete.
+        for forbidden in ('/var/lib/libvirt', '/var/lib/nex', '/etc/nex', 'images', 'rm -rf', 'rm -r '):
+            self.assertNotIn(forbidden, script)
+        for removal in re.findall(r'\brm\b[^\n]*', script):
+            self.assertIn('/etc/apt/sources.list.d/nex.sources', removal)
         service = (ROOT / 'packaging/core-local/nex-core-local.service').read_text()
         self.assertIn('UMask=0077', service)
 

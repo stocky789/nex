@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
 """Consume host-provided NoCloud credentials exactly once, without logging them."""
+import grp
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,8 @@ import urllib.request
 
 CONFIG = Path('/etc/nex-controller')
 STATE = Path('/var/lib/nex-controller')
+# Matches the Controller web UI bootstrap username (cmd/nex-controller -admin-username).
+CONSOLE_USER = 'admin'
 
 
 def validate(config):
@@ -26,6 +29,39 @@ def validate(config):
         raise ValueError('invalid TLS certificate')
     if 'PRIVATE KEY-----' not in config['tls_private_key']:
         raise ValueError('invalid TLS private key')
+
+
+def provision_console_login(password, username=CONSOLE_USER):
+    """Give the Controller admin password to the matching guest console account.
+
+    Root stays locked and SSH password auth stays off; this is for the VM console only.
+    """
+    sudo = False
+    try:
+        grp.getgrnam('sudo')
+        sudo = True
+    except KeyError:
+        pass
+    try:
+        pwd.getpwnam(username)
+    except KeyError:
+        command = ['useradd', '--create-home', '--shell', '/bin/bash']
+        if sudo:
+            command.extend(['-G', 'sudo'])
+        command.append(username)
+        subprocess.run(command, check=True)
+    else:
+        if sudo:
+            subprocess.run(['usermod', '-aG', 'sudo', username], check=True)
+    # Hash first so passwords may contain ':' without breaking chpasswd's delimiter.
+    hashed = subprocess.check_output(
+        ['openssl', 'passwd', '-6', '-stdin'],
+        input=password.encode('utf-8'),
+    ).decode().strip()
+    if not hashed.startswith('$6$'):
+        raise RuntimeError('failed to hash console password')
+    subprocess.run(['chpasswd', '-e'], input=f'{username}:{hashed}\n'.encode(), check=True)
+    subprocess.run(['passwd', '-u', username], check=True)
 
 
 def main():
@@ -43,6 +79,7 @@ def main():
             target.write_text(config[field])
             target.chmod(0o600)
             os.chown(target, user.pw_uid, user.pw_gid)
+        provision_console_login(config['admin_password'])
     elif not all(path.is_file() for path in (CONFIG / 'tls.crt', CONFIG / 'tls.key', STATE / 'controller.db')):
         raise RuntimeError('bootstrap is missing before controller initialization')
     subprocess.run(['systemctl', 'start', 'nex-controller'], check=True)

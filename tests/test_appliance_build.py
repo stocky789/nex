@@ -100,6 +100,67 @@ class ApplianceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             firstboot.validate({})
 
+    def test_provision_console_login_hashes_password_with_colons(self):
+        firstboot = module('firstboot')
+        password = 'part:with:colons'
+        calls = []
+
+        def run(command, check=False, input=None, **kwargs):
+            calls.append((list(command), input))
+            return MagicMock(returncode=0)
+
+        def check_output(command, input=None, **kwargs):
+            calls.append((list(command), input))
+            self.assertEqual(command[:3], ['openssl', 'passwd', '-6'])
+            self.assertEqual(input, password.encode())
+            return b'$6$salt$hashed\n'
+
+        with patch.object(firstboot.pwd, 'getpwnam', side_effect=KeyError), \
+                patch.object(firstboot.grp, 'getgrnam', return_value=MagicMock()), \
+                patch.object(firstboot.subprocess, 'run', side_effect=run), \
+                patch.object(firstboot.subprocess, 'check_output', side_effect=check_output):
+            firstboot.provision_console_login(password)
+        self.assertEqual(calls[0][0], ['useradd', '--create-home', '--shell', '/bin/bash', '-G', 'sudo', 'admin'])
+        self.assertEqual(calls[1][0], ['openssl', 'passwd', '-6', '-stdin'])
+        self.assertEqual(calls[2][0], ['chpasswd', '-e'])
+        self.assertEqual(calls[2][1], b'admin:$6$salt$hashed\n')
+        self.assertEqual(calls[3][0], ['passwd', '-u', 'admin'])
+
+    def test_firstboot_applies_console_login_from_bootstrap_password(self):
+        firstboot = module('firstboot')
+        self.addCleanup(os.umask, os.umask(0o022))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config, state = root / 'etc/nex-controller', root / 'var/lib/nex-controller'
+            config.mkdir(parents=True)
+            state.mkdir(parents=True)
+            (root / 'etc/cloud').mkdir()
+            (root / 'usr/local/share/nex/dist').mkdir(parents=True)
+            (root / 'run/cloud-init').mkdir(parents=True)
+            bootstrap = {
+                'admin_password': 'console-and-ui-secret',
+                'tls_certificate': '-----BEGIN CERTIFICATE-----\nA\n-----END CERTIFICATE-----',
+                'tls_private_key': '-----BEGIN PRIVATE KEY-----\nB\n-----END PRIVATE KEY-----',
+            }
+            (config / 'bootstrap.json').write_text(json.dumps(bootstrap))
+            response = MagicMock()
+            response.__enter__.return_value.status = 200
+            service = MagicMock(pw_uid=42, pw_gid=42)
+            with patch.object(firstboot, 'CONFIG', config), patch.object(firstboot, 'STATE', state), \
+                    patch.object(firstboot, 'Path', side_effect=lambda name: root / str(name).lstrip('/')), \
+                    patch.object(firstboot.pwd, 'getpwnam', return_value=service), \
+                    patch.object(firstboot, 'provision_console_login') as console, \
+                    patch.object(firstboot.subprocess, 'run'), \
+                    patch.object(firstboot.shutil, 'rmtree'), \
+                    patch.object(firstboot.ssl, 'create_default_context'), \
+                    patch.object(firstboot.urllib.request, 'urlopen', return_value=response), \
+                    patch.object(firstboot.os, 'chown'):
+                firstboot.main()
+            console.assert_called_once_with('console-and-ui-secret')
+            self.assertFalse((config / 'bootstrap.json').exists())
+            self.assertFalse((config / 'admin-password').exists())
+            self.assertTrue((state / 'appliance-initialized').exists())
+
     def test_firstboot_resumes_after_bootstrap_cleanup_interruption(self):
         firstboot = module('firstboot')
         self.addCleanup(os.umask, os.umask(0o022))  # firstboot.main() sets a process-wide 077 umask

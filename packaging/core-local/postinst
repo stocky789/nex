@@ -8,6 +8,19 @@ if [ "$1" = configure ]; then
     if [ ! -f "$root/etc/nex/updates.conf" ] || grep -Eq 'repo_url=http://(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)' "$root/etc/nex/updates.conf"; then
         printf 'repo_url=https://nexvirtualization.com/apt\n' > "$root/etc/nex/updates.conf"
     fi
+    # Configure the Nex APT source so the repo is present out of the box, signed by the
+    # packaged archive key. The base URL follows repo_url; the suite/component are the repo's.
+    repo=$(sed -n 's/^repo_url=//p' "$root/etc/nex/updates.conf" | head -1)
+    [ -n "$repo" ] || repo=https://nexvirtualization.com/apt
+    install -d -m755 "$root/etc/apt/sources.list.d"
+    cat > "$root/etc/apt/sources.list.d/nex.sources" <<APT
+Types: deb
+URIs: $repo
+Suites: nex
+Components: main
+Architectures: amd64
+Signed-By: /usr/share/keyrings/nex-archive-keyring.gpg
+APT
     # Nex Core's release identity is this package's version: the distribution and
     # the software Nex ships on it are one thing. Divert Debian's package-owned
     # symlink once so the local /etc file wins without touching /usr/lib/os-release.

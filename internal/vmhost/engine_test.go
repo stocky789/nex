@@ -244,6 +244,7 @@ func TestSeedInjectsUpdateHelperWhenPresent(t *testing.T) {
 	}
 	for name, body := range map[string]string{
 		"apply-update":                  "#!/usr/bin/python3\nprint('ok')\n",
+		"appliance-firstboot":           "#!/usr/bin/python3\nprint('firstboot')\n",
 		"nex-controller-update.path":    "[Path]\n",
 		"nex-controller-update.service": "[Service]\n",
 		"updates.conf":                  "repo_url=https://nexvirtualization.com/apt\n",
@@ -267,7 +268,7 @@ func TestSeedInjectsUpdateHelperWhenPresent(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(b)
-	for _, want := range []string{"/usr/local/lib/nex/apply-update", "/etc/nex/updates.conf", "nex-controller-update.path", "systemctl, enable, --now, nex-controller-update.path"} {
+	for _, want := range []string{"/usr/local/lib/nex/apply-update", "/usr/local/lib/nex/appliance-firstboot", "/etc/nex/updates.conf", "nex-controller-update.path", "systemctl, enable, --now, nex-controller-update.path"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("seed missing %q in %s", want, text)
 		}

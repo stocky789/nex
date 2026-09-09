@@ -198,8 +198,14 @@ def main():
                               'adopted VM observed shut off by libvirt on Controller B', timeout=30)
             adopted['vm'] = item
         time.sleep(4)  # several more reports: nothing may be duplicated
-        counts = {p: len(lab.api(p)) for p in ('/api/v1/storage', '/api/v1/networks', '/api/v1/media', '/api/v1/vms')}
-        assert counts == {'/api/v1/storage': 1, '/api/v1/networks': 1, '/api/v1/media': 1, '/api/v1/vms': 1 if vm else 0}, counts
+        eventually(lambda: not [op for op in lab.api('/api/v1/operations') if op['status'] in ('queued', 'dispatched')],
+                   'auto registrations settled', timeout=60)
+        counts = {p: len(lab.api(p)) for p in ('/api/v1/networks', '/api/v1/media', '/api/v1/vms')}
+        assert counts == {'/api/v1/networks': 1, '/api/v1/media': 1, '/api/v1/vms': 1 if vm else 0}, counts
+        storages = lab.api('/api/v1/storage')
+        assert any(s['id'] == storage['id'] and s['status'] == 'succeeded' for s in storages), storages
+        # Default ISO at /var/lib/libvirt/images is auto-registered when not already held.
+        assert sum(1 for s in storages if s['path'] == '/var/lib/libvirt/images') <= 1, storages
         assert not [op for op in lab.api('/api/v1/operations') if op['status'] in ('queued', 'dispatched')], 'unexpected commands dispatched'
         # New work on Controller B must resolve the adopted storage on the host by ID.
         second = upload(lab, b_cert, storage['id'], 'after-replacement.iso', str(uuid.uuid4()), synthetic_iso())

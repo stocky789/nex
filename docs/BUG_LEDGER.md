@@ -713,3 +713,25 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 - Regression evidence: the harness itself; it failed at `HEAD` and passes with the fix
   ([evidence](qa/single-nex-core-version/controller-captures.json)).
 - Avoid: fixtures with private addresses in any capture that is screened for publication.
+
+## BUG-0042 — Fresh Nex Core install had no Nex package repository
+
+- Date: 2026-09-10.
+- Symptom: after installing from the ISO, `apt update` on a Nex Core host listed only the Debian
+  repositories; the Nex repo (`https://nexvirtualization.com/apt`) never appeared, so `apt` could
+  not see or install Nex packages out of the box.
+- Root cause: the `nex-core-local` package shipped `nex.list.example` only to
+  `/usr/share/nex/core-local/` and never installed an apt source or the archive signing key, so the
+  host had no configured Nex source.
+- Fix: the package now ships the dearmored Nex archive key at
+  `/usr/share/keyrings/nex-archive-keyring.gpg` and the postinst writes
+  `/etc/apt/sources.list.d/nex.sources` (deb822, `Signed-By` the key, `URIs` from `repo_url` in
+  `/etc/nex/updates.conf`); the prerm removes that source on package removal so no source is left
+  without its key. The committed key was verified against the live repo's `InRelease`.
+- Regression evidence: `tests/test_core_local_package.py`
+  (`test_postinst_owns_release_identity_from_package_version`,
+  `test_apt_source_uri_follows_configured_repo_url`,
+  `test_package_ships_archive_keyring_and_builds_the_apt_source`), run by
+  `python3 -m unittest discover -s tests -p 'test_*.py'` in both the GitHub and Gitea `phase1`
+  workflows.
+- Avoid: shipping required out-of-box configuration as an `.example` that must be copied by hand.

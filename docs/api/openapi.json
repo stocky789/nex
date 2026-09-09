@@ -1979,7 +1979,7 @@
    "get": {
     "operationId": "listStorageRegistration",
     "summary": "List local storage registrations",
-    "description": "Administrator inventory of pool registrations with explicit host access and durable operation statuses; read-only and safe to retry.",
+    "description": "Administrator inventory of pool registrations with explicit host access and durable operation statuses; read-only and safe to retry. Includes the automatically created default ISO storage (/var/lib/libvirt/images) and storage adopted from Inventory.managed, distinguishable by actor system on their operation.",
     "security": [
      {
       "AdminSession": []
@@ -4984,7 +4984,7 @@
      "status"
     ],
     "x-go-type": "protocol.StorageRegistration",
-    "description": "Pool registration with explicit access only on host_id; never implies shared storage. status/error reflect its durable operation, not a continuously refreshed filesystem probe."
+    "description": "Pool registration with explicit access only on host_id; never implies shared storage. status/error reflect its durable operation, not a continuously refreshed filesystem probe. Controller also creates a registration itself (actor system): the default local directory /var/lib/libvirt/images named ISO (request_id auto-storage:<host>), and any storage the host reports in Inventory.managed.storage that Controller does not hold (request_id adopt-storage-register:<host>:<id>, ID and name preserved)."
    },
    "NetworkRegistration": {
     "type": "object",
@@ -5711,7 +5711,7 @@
    "result": {
     "$ref": "#/components/schemas/Result"
    },
-   "semantics": "Verify existing local directory access; no formatting. Succeeded registrations are reported back in Inventory.managed.storage and adopted by a Controller that does not hold them (request_id adopt-storage-register:<host>:<id>) without redelivery."
+   "semantics": "Verify existing local directory access; no formatting. Controller also creates the default ISO registration for /var/lib/libvirt/images (request_id auto-storage:<host>) when absent. Succeeded registrations are reported back in Inventory.managed.storage and adopted by a Controller that does not hold them (request_id adopt-storage-register:<host>:<id>) without redelivery."
   },
   "network-register": {
    "transport": "POST /api/v1/agent/report response.commands",

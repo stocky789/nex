@@ -43,6 +43,8 @@ printf '%s\n' \
     '' > /etc/issue
 printf '%s\n' 'PermitRootLogin no' > /etc/ssh/sshd_config.d/00-nex-core.conf
 systemctl enable libvirtd.service ssh.service chrony.service nex-core-local.service
+# Default local storage for Controller ISO library and guest disks (registered as "ISO").
+install -d -m 0711 /var/lib/libvirt/images
 # Minimal installation retains Debian networking; GUI settings are copied below.
 # libvirt NAT is explicitly enabled by the operator.
 cat > /etc/apt/sources.list.d/debian.sources <<'SOURCES'

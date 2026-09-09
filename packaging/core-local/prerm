@@ -6,5 +6,7 @@ if [ "$1" = remove ]; then
         deb-systemd-invoke stop nex-core-local.service
     fi
     deb-systemd-helper disable nex-core-local.service
+    # Remove the generated apt source so removal never leaves a source whose key is gone.
+    rm -f "${DPKG_ROOT:-}/etc/apt/sources.list.d/nex.sources"
 fi
 # Guest disks, VM definitions, configuration and credentials intentionally survive removal.

@@ -20,14 +20,15 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
   an older agent cannot execute these operations.
 - A freshly connected, active host with working KVM/QEMU and system libvirt, enough CPU
   and memory for the guest, and local recovery access.
-- An existing writable local ext4, XFS or Btrfs directory, such as
-  `/var/lib/libvirt/images`, with space for the ISO, guest disk and reserve. The path must
-  not contain symlinks. The directory and every ancestor must be root-owned directories
-  without group or other write permission, and permit directory traversal by other users
-  so QEMU can access the guest files. ACL-only access is not supported in this build.
-  The standalone agent service permits writes under
+- An existing writable local ext4, XFS or Btrfs directory for additional storage, or the
+  host's default **ISO** registration at `/var/lib/libvirt/images` (created on install and
+  registered automatically when the host reports). That default path holds both uploaded
+  ISOs and guest disks. Extra paths must not contain symlinks. The directory and every
+  ancestor must be root-owned directories without group or other write permission, and permit
+  directory traversal by other users so QEMU can access the guest files. ACL-only access is
+  not supported in this build. The standalone agent service permits writes under
   `/var/lib/libvirt/images`; another location also needs an explicit service write allowance.
-  Registration does not create the selected directory or format a disk.
+  Manual registration does not create the selected directory or format a disk.
 - For a VLAN network: the name of the host NIC that carries the VLAN (the installer names
   NICs `nex0`, `nex1`, …; the host's **Networking** panel lists them with their kind) and a
   switch port that trunks that VLAN. Nex creates the guest bridge itself and never changes
@@ -45,10 +46,12 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
 
 1. Sign in to Controller and, in **Resources**, select the pool that was created for the
    host (it is named after the host, which its **General** panel shows as **Pool master**).
-2. Open **Storage**, then **Register local storage**. Enter a **Name**, select the
-   **Host**, and enter its **Existing directory**. Select **Register and check access**.
-   Wait for the access check to show `succeeded`; follow its link to **Task history**
-   if it remains queued or reports an error.
+2. Open **Storage**. The host's default **ISO** storage (`/var/lib/libvirt/images`) is
+   registered automatically once the host reports; wait for it to show `succeeded` and use
+   it for ISO upload and VM disks. To add another directory, select **Register local storage**,
+   enter a **Name**, select the **Host**, and enter its **Existing directory**, then
+   **Register and check access**. Wait for the access check to show `succeeded`; follow its
+   link to **Task history** if it remains queued or reports an error.
 3. Open **Networking**. The host's untagged network (for example **nex0 untagged** on the
    installer-created `br0`) is registered automatically once the host reports; use it for
    VMs on the management LAN. For a tagged VLAN, select **Register network**. Enter a name and select the same
@@ -59,7 +62,7 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
    bridge or libvirt network by name. Select **Register and check access**, then wait for
    `succeeded`. The table shows each network's connection, bridge and VM count.
 4. Open **ISO library**, then **Upload ISO**. Choose the validated **Destination storage**
-   and select or drop one **ISO file**. Select **Upload and transfer ISO**. The progress
+   (the default **ISO** registration is fine) and select or drop one **ISO file**. Select **Upload and transfer ISO**. The progress
    bar measures the upload to Controller; wait for the separate host transfer task to
    show `succeeded` before using the image.
    To check one host, select it in **Resources**, open **Storage**, and look under
@@ -167,7 +170,9 @@ the browser. Desktop, 360-pixel and keyboard workflows were exercised without
 mocking the APIs. Consult that report for subsequent boot/recovery results and limits.
 
 The [development verification report](../qa/managed-vm/checks.md) records build identities,
-checks and limits. The [native browser walkthrough](../qa/managed-vm/browser-native-results.json)
+checks and limits. Default **ISO** auto-registration is covered by Controller unit tests;
+a live enroll walkthrough that skips manual Register local storage is not yet recorded.
+The [native browser walkthrough](../qa/managed-vm/browser-native-results.json)
 used Chromium, a real HTTPS Controller and a disposable Debian host with nested KVM/libvirt.
 It exercised sign-in, resource registration/reuse, ISO upload, all four creation pages, stopped-VM
 details, lost-response/reload recovery, keyboard use and desktop/360px layouts. The final

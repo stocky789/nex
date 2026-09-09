@@ -29,7 +29,7 @@ FILES = ('go.mod', 'go.sum', 'LICENSE', 'NOTICE', 'Makefile',
 TREES = {'cmd': {'.go'}, 'internal': {'.go', '.sql'}, 'web/src': {'.tsx', '.ts', '.css'},
          'web/public': {'.html'}, 'packaging/systemd': {'.service'},
          'appliance': {'.py', '.sh', '.service', '.md'},
-         'packaging/core-local': {'.py', '.sh', '.service', '.md', '.c', '.pam', '.example'},
+         'packaging/core-local': {'.py', '.sh', '.service', '.md', '.c', '.pam', '.example', '.gpg'},
          'packaging/controller': {'.py', '.sh', '.service', '.path', '.md'},
          'docs/api': {'.json', '.html', '.css'}}
 SCRIPTS = ('scripts/build-source.py', 'tests/test_build_source.py',

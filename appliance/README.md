@@ -54,10 +54,12 @@ The firstboot service waits for cloud-final, installs private identity files, st
 Controller on HTTPS 8443, verifies its UI using the provisioned certificate, then removes
 the administrator plaintext password, bootstrap JSON and cloud-init cache/logs. It disables
 cloud-init to prevent reseeding on reboot. Controller stores the administrator password
-hash. The host must detach and remove its seed after readiness; guest cache deletion
-cannot erase the host's seed CDROM. Failed initialization retains root-only bootstrap
-material for diagnosis. Machine ID and SSH host keys are reset in the image, root login
-is locked and no shared administrator credential is embedded.
+hash. Firstboot also creates the guest console account `admin` with that same password
+(sudo enabled; root stays locked; SSH password auth stays off). The host must detach and
+remove its seed after readiness; guest cache deletion cannot erase the host's seed CDROM.
+Failed initialization retains root-only bootstrap material for diagnosis. Machine ID and
+SSH host keys are reset in the image; no default administrator credential is embedded in
+the pristine image.
 
 ## Manual recovery
 

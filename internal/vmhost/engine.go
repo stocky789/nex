@@ -841,8 +841,8 @@ func (e *Engine) seed(ctx context.Context, j journal, s DeploySpec) error {
 	return err
 }
 
-// appendUpdateBootstrap writes the Controller update helper into cloud-init so
-// Check/Update work on newly deployed appliances even when the qcow image predates it.
+// appendUpdateBootstrap writes guest helpers into cloud-init so newly deployed
+// appliances get current update tooling and firstboot even when the qcow predates them.
 func (e *Engine) appendUpdateBootstrap(b *strings.Builder) error {
 	dir := filepath.Join(filepath.Dir(e.config.ImagePath), "update")
 	files := []struct {
@@ -851,6 +851,7 @@ func (e *Engine) appendUpdateBootstrap(b *strings.Builder) error {
 		mode string
 	}{
 		{"apply-update", "/usr/local/lib/nex/apply-update", "0755"},
+		{"appliance-firstboot", "/usr/local/lib/nex/appliance-firstboot", "0755"},
 		{"nex-controller-update.path", "/etc/systemd/system/nex-controller-update.path", "0644"},
 		{"nex-controller-update.service", "/etc/systemd/system/nex-controller-update.service", "0644"},
 		{"updates.conf", "/etc/nex/updates.conf", "0644"},

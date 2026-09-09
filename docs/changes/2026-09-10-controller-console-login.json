@@ -1,0 +1,37 @@
+{
+  "summary": "Appliance firstboot provisions guest console user admin with the same password used for the Controller web UI administrator. Root stays locked and SSH password auth stays off. API impact: existing contract — deploy still sends admin_password; guest-side use expands to console login.",
+  "paths": [
+    "appliance/firstboot.py",
+    "appliance/README.md",
+    "internal/vmhost/engine.go",
+    "internal/vmhost/engine_test.go",
+    "packaging/core-local/build-inside.sh",
+    "web/src/local.tsx",
+    "tests/test_appliance_build.py",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/API.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-10-controller-console-login.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Deploy prerequisites and steps now state that the Controller admin password is also the appliance console login as admin.",
+    "pages": [
+      "docs/guide/deploy-controller-appliance.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No new endpoint or field; DeployRequest.admin_password and bootstrap.json already carry the password. Firstboot now also applies it to the guest console account. Documented in docs/API.md bootstrap password section.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "verification": {
+    "method": "python3 -m unittest tests.test_appliance_build — covers password hashing with colons and firstboot calling provision_console_login from bootstrap. go test ./internal/vmhost -run TestSeedInjectsUpdateHelperWhenPresent — seed injects appliance-firstboot for older qcow images. Live appliance console login after deploy remains a lab walkthrough (not run in this change).",
+    "evidence": [
+      "tests/test_appliance_build.py",
+      "internal/vmhost/engine_test.go"
+    ]
+  }
+}

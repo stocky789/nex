@@ -305,6 +305,13 @@ func (c *Controller) registerResource(w http.ResponseWriter, r *http.Request, us
 	write(w, 201, resourceResponse(cmd, op))
 }
 
+// Default local storage for every managed host: guest disks and ISO media under
+// /var/lib/libvirt/images, registered as "ISO" without operator action (like autoNetworks).
+const (
+	defaultLocalStorageName = "ISO"
+	defaultLocalStoragePath = "/var/lib/libvirt/images"
+)
+
 // adoptManaged mirrors the pool-scoped configuration the host reports as applied from its
 // journal, so a replaced Controller recovers a pool by connecting its master. Entries keep
 // their IDs and names, get the current pool/host, and are recorded as succeeded without a
@@ -466,6 +473,39 @@ func (c *Controller) autoNetworks(tx *sql.Tx, host string, inv *protocol.Invento
 		}
 	}
 	return nil
+}
+
+// autoStorage registers the host's default local directory once as "ISO", so ISO upload
+// and VM disks work without a manual Register local storage step. A registration for that
+// path in any state, including failed, suppresses re-creation.
+func (c *Controller) autoStorage(tx *sql.Tx, host string) error {
+	var pool string
+	if err := tx.QueryRow("SELECT pool_id FROM hosts WHERE id=?", host).Scan(&pool); err != nil {
+		return err
+	}
+	rows, err := tx.Query("SELECT payload FROM managed_resources WHERE kind='storage-register' AND host_id=?", host)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var raw string
+		if err = rows.Scan(&raw); err != nil {
+			rows.Close()
+			return err
+		}
+		var old registrationRequest
+		json.Unmarshal([]byte(raw), &old)
+		if old.Path == defaultLocalStoragePath {
+			rows.Close()
+			return nil
+		}
+	}
+	rows.Close()
+	v := registrationRequest{RequestID: "auto-storage:" + host, PoolID: pool, HostID: host, Name: defaultLocalStorageName, Path: defaultLocalStoragePath}
+	id, opID := random(), random()
+	cmd := protocol.Command{OperationID: opID, Kind: "storage-register", Storage: &protocol.StorageRegistration{ID: id, PoolID: pool, HostID: host, Name: v.Name, Path: v.Path, OperationID: opID, Status: "queued"}}
+	_, err = c.saveResource(tx, "system", v.RequestID, pool, host, v.Name, id, cmd, v)
+	return err
 }
 
 // hostInventory returns the last observed inventory; an absent report decodes as empty.

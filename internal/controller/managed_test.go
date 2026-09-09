@@ -31,7 +31,11 @@ func TestManagedWorkflowScopeRetryAndMedia(t *testing.T) {
 	}
 	req := registrationRequest{RequestID: "storage1", PoolID: pool, HostID: host.HostID, Name: "Local", Path: "/var/lib/nex/vms"}
 	a.call("POST", "/api/v1/storage", req, nil, 409)
-	report(true)
+	auto := report(true)
+	if len(auto.Commands) != 1 || auto.Commands[0].Storage == nil || auto.Commands[0].Storage.Path != defaultLocalStoragePath || auto.Commands[0].Storage.Name != defaultLocalStorageName {
+		t.Fatalf("auto ISO storage %#v", auto.Commands)
+	}
+	report(true, protocol.Result{OperationID: auto.Commands[0].OperationID, Status: "succeeded"})
 	a.call("POST", "/api/v1/hosts/"+host.HostID+"/operations", map[string]string{"request_id": "reserved-request", "kind": "refresh-inventory"}, nil, 202)
 	reserved := req
 	reserved.RequestID = "reserved-request"
@@ -172,7 +176,12 @@ func TestVLANNetworkRegistration(t *testing.T) {
 	pool := a.poolOf(host.HostID)
 	cert := certificate(t, host.CertificatePEM)
 	nics := []protocol.NIC{{Name: "nex0", Kind: "physical"}, {Name: "br0", Kind: "bridge"}, {Name: "nex1", Kind: "physical"}, {Name: "legacy"}}
-	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Hostname: "core", NICs: nics}})
+	first := a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Hostname: "core", NICs: nics}})
+	for _, cmd := range first.Commands {
+		if cmd.Storage != nil {
+			a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 2, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Hostname: "core", NICs: nics}, Results: []protocol.Result{{OperationID: cmd.OperationID, Status: "succeeded"}}})
+		}
+	}
 	base := registrationRequest{RequestID: "vlan1", PoolID: pool, HostID: host.HostID, Name: "Servers", Kind: "vlan", Uplink: "nex1", VLAN: 100}
 	for name, bad := range map[string]func(r *registrationRequest){
 		"tag too high":      func(r *registrationRequest) { r.VLAN = 4095 },
@@ -198,8 +207,8 @@ func TestVLANNetworkRegistration(t *testing.T) {
 		t.Fatalf("derived registration %+v", network)
 	}
 	read(t, a.call("POST", "/api/v1/networks", base, nil, 200), &network)
-	commands := a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 2, Capabilities: []string{protocol.ManagedVMCapability}}).Commands
-	if len(commands) != 1 || commands[0].Network.Source != "nex1v100" || commands[0].Network.VLAN != 100 {
+	commands := a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 3, Capabilities: []string{protocol.ManagedVMCapability}}).Commands
+	if len(commands) != 1 || commands[0].Network == nil || commands[0].Network.Source != "nex1v100" || commands[0].Network.VLAN != 100 {
 		t.Fatalf("VLAN command %#v", commands)
 	}
 	// The same uplink/VLAN, or a plain registration of the derived bridge, is one host resource.
@@ -242,13 +251,31 @@ func TestDefaultUntaggedNetworkAutoRegistration(t *testing.T) {
 		t.Fatal("old agent must not receive auto networks")
 	}
 	// A bridge on a physical port is registered once; the VLAN bridge (port is a VLAN device) is not.
+	// Default ISO local storage is also queued on the first managed report.
 	response := report(2, true)
 	read(t, a.call("GET", "/api/v1/networks", nil, nil, 200), &list)
 	if len(list) != 1 || list[0].Kind != "bridge" || list[0].Source != "br0" || list[0].Uplink != "nex0" || list[0].Name != "nex0 untagged" || list[0].PoolID != pool {
 		t.Fatalf("auto network %+v", list)
 	}
-	if len(response.Commands) != 1 || response.Commands[0].Network == nil || response.Commands[0].Network.Source != "br0" {
-		t.Fatalf("auto network command %+v", response.Commands)
+	var storage []protocol.StorageRegistration
+	read(t, a.call("GET", "/api/v1/storage", nil, nil, 200), &storage)
+	if len(storage) != 1 || storage[0].Name != defaultLocalStorageName || storage[0].Path != defaultLocalStoragePath || storage[0].PoolID != pool {
+		t.Fatalf("auto ISO storage %+v", storage)
+	}
+	if len(response.Commands) != 2 {
+		t.Fatalf("auto network+storage commands %+v", response.Commands)
+	}
+	var networkCmd, storageCmd *protocol.Command
+	for i := range response.Commands {
+		switch {
+		case response.Commands[i].Network != nil:
+			networkCmd = &response.Commands[i]
+		case response.Commands[i].Storage != nil:
+			storageCmd = &response.Commands[i]
+		}
+	}
+	if networkCmd == nil || networkCmd.Network.Source != "br0" || storageCmd == nil || storageCmd.Storage.Path != defaultLocalStoragePath {
+		t.Fatalf("auto network/storage command %+v", response.Commands)
 	}
 	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 3, Capabilities: []string{protocol.ManagedVMCapability}, Results: []protocol.Result{{OperationID: list[0].OperationID, Status: "failed", Error: "bridge missing"}}})
 	report(4, true)
@@ -256,8 +283,49 @@ func TestDefaultUntaggedNetworkAutoRegistration(t *testing.T) {
 	if len(list) != 1 || list[0].Status != "failed" {
 		t.Fatalf("failed auto registration must not be recreated: %+v", list)
 	}
+	read(t, a.call("GET", "/api/v1/storage", nil, nil, 200), &storage)
+	if len(storage) != 1 {
+		t.Fatalf("auto ISO storage recreated: %+v", storage)
+	}
 	// A manual VLAN on the same uplink still works alongside the default network.
 	read(t, a.call("POST", "/api/v1/networks", registrationRequest{RequestID: "vlan15", PoolID: pool, HostID: host.HostID, Name: "vlan15", Kind: "vlan", Uplink: "nex0", VLAN: 15}, nil, 201), &list[0])
+}
+func TestDefaultISOStorageAutoRegistration(t *testing.T) {
+	a := newClient(t)
+	host := a.enroll(a.token(a.site(), ""), csr(t))
+	cert := certificate(t, host.CertificatePEM)
+	pool := a.poolOf(host.HostID)
+	report := func(seq uint64, caps bool, results ...protocol.Result) protocol.ReportResponse {
+		v := protocol.ReportRequest{Version: 1, Sequence: seq, Results: results, Inventory: &protocol.Inventory{Hostname: "core"}}
+		if caps {
+			v.Capabilities = []string{protocol.ManagedVMCapability}
+		}
+		return a.report(cert, v)
+	}
+	var list []protocol.StorageRegistration
+	report(1, false)
+	read(t, a.call("GET", "/api/v1/storage", nil, nil, 200), &list)
+	if len(list) != 0 {
+		t.Fatal("old agent must not receive auto storage")
+	}
+	response := report(2, true)
+	read(t, a.call("GET", "/api/v1/storage", nil, nil, 200), &list)
+	if len(list) != 1 || list[0].Name != defaultLocalStorageName || list[0].Path != defaultLocalStoragePath || list[0].PoolID != pool || list[0].HostID != host.HostID {
+		t.Fatalf("auto ISO %+v", list)
+	}
+	if len(response.Commands) != 1 || response.Commands[0].Storage == nil || response.Commands[0].Storage.Path != defaultLocalStoragePath {
+		t.Fatalf("auto ISO command %+v", response.Commands)
+	}
+	report(3, true, protocol.Result{OperationID: list[0].OperationID, Status: "failed", Error: "path missing"})
+	report(4, true)
+	read(t, a.call("GET", "/api/v1/storage", nil, nil, 200), &list)
+	if len(list) != 1 || list[0].Status != "failed" {
+		t.Fatalf("failed auto ISO must not be recreated: %+v", list)
+	}
+	// Failed definite registrations can be revalidated with a new request_id; the path stays free.
+	var other protocol.StorageRegistration
+	read(t, a.call("POST", "/api/v1/storage", registrationRequest{RequestID: "retry-iso", PoolID: pool, HostID: host.HostID, Name: "ISO", Path: defaultLocalStoragePath}, nil, 201), &other)
+	read(t, a.call("POST", "/api/v1/storage", registrationRequest{RequestID: "extra", PoolID: pool, HostID: host.HostID, Name: "Extra", Path: "/var/lib/nex/vms"}, nil, 201), &other)
 }
 func TestHostReportedManagedStateIsAdopted(t *testing.T) {
 	// A rebuilt Controller mirrors the master's journal: IDs and names survive, pool/host are rewritten.
@@ -281,9 +349,11 @@ func TestHostReportedManagedStateIsAdopted(t *testing.T) {
 	report := func(seq uint64) protocol.ReportResponse {
 		return a.report(cert, protocol.ReportRequest{Version: 1, Sequence: seq, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: inv})
 	}
-	if response := report(1); len(response.Commands) != 0 {
-		t.Fatalf("adopted entries must not be dispatched: %+v", response.Commands)
+	response := report(1)
+	if len(response.Commands) != 1 || response.Commands[0].Storage == nil || response.Commands[0].Storage.Path != defaultLocalStoragePath {
+		t.Fatalf("adopted entries must not be dispatched; only auto ISO: %+v", response.Commands)
 	}
+	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 2, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: inv, Results: []protocol.Result{{OperationID: response.Commands[0].OperationID, Status: "succeeded"}}})
 	var storage []protocol.StorageRegistration
 	var networks []protocol.NetworkRegistration
 	var media []protocol.Media
@@ -295,8 +365,24 @@ func TestHostReportedManagedStateIsAdopted(t *testing.T) {
 		read(t, a.call("GET", "/api/v1/vms", nil, nil, 200), &vms)
 	}
 	load()
-	if len(storage) != 1 || storage[0].ID != "stor-1" || storage[0].Name != "Local" || storage[0].PoolID != pool || storage[0].HostID != host.HostID || storage[0].Status != "succeeded" {
+	if len(storage) != 2 {
 		t.Fatalf("storage %+v", storage)
+	}
+	byID := map[string]protocol.StorageRegistration{}
+	for _, s := range storage {
+		byID[s.ID] = s
+	}
+	if s := byID["stor-1"]; s.Name != "Local" || s.PoolID != pool || s.HostID != host.HostID || s.Status != "succeeded" {
+		t.Fatalf("adopted storage %+v", storage)
+	}
+	foundISO := false
+	for _, s := range storage {
+		if s.Path == defaultLocalStoragePath && s.Name == defaultLocalStorageName && s.Status == "succeeded" {
+			foundISO = true
+		}
+	}
+	if !foundISO {
+		t.Fatalf("auto ISO missing: %+v", storage)
 	}
 	if len(networks) != 2 || networks[0].ID != "net-default" || networks[0].Name != "nex0 untagged" || networks[0].Uplink != "nex0" || networks[0].Status != "succeeded" ||
 		networks[1].ID != "net-vlan15" || networks[1].VLAN != 15 || networks[1].PoolID != pool || networks[1].HostID != host.HostID || networks[1].Status != "succeeded" {
@@ -310,17 +396,26 @@ func TestHostReportedManagedStateIsAdopted(t *testing.T) {
 	}
 	// Re-reporting creates nothing; an ID already held by another resource is skipped.
 	managed.Storage = append(managed.Storage, protocol.StorageRegistration{ID: "net-default", Name: "Clash", Path: "/other"})
-	if response := report(2); len(response.Commands) != 0 {
+	if response := report(3); len(response.Commands) != 0 {
 		t.Fatalf("re-report dispatched %+v", response.Commands)
 	}
 	load()
-	if len(storage) != 1 || len(networks) != 2 || len(media) != 1 || len(vms) != 1 || storage[0].ID != "stor-1" {
+	if len(storage) != 2 || len(networks) != 2 || len(media) != 1 || len(vms) != 1 {
 		t.Fatalf("re-report changed resources: %d %d %d %d", len(storage), len(networks), len(media), len(vms))
+	}
+	stillLocal := false
+	for _, s := range storage {
+		if s.ID == "stor-1" {
+			stillLocal = true
+		}
+	}
+	if !stillLocal {
+		t.Fatalf("adopted storage lost: %+v", storage)
 	}
 	// Adopted references resolve for new work on the same host.
 	v := createVMRequest{RequestID: "vm2", VMCreateSpec: protocol.VMCreateSpec{PoolID: pool, HostID: host.HostID, Name: "guest2", StorageID: "stor-1", NetworkID: "net-vlan15", MediaID: "iso-1", CPUs: 2, MemoryMiB: 1024, DiskGiB: 10, Firmware: "bios"}}
 	a.call("POST", "/api/v1/vms", v, nil, 202)
-	if commands := report(3).Commands; len(commands) != 1 || commands[0].VM == nil || commands[0].VM.Name != "guest2" {
+	if commands := report(4).Commands; len(commands) != 1 || commands[0].VM == nil || commands[0].VM.Name != "guest2" {
 		t.Fatalf("new VM command %+v", commands)
 	}
 }

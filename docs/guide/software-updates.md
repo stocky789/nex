@@ -11,7 +11,10 @@ rollout for APT sources remains separate. GUI walkthrough evidence is not yet re
 - Administrator session on Controller, or root on the host-local UI.
 - Reachable package repo serving `updates.json` and `.deb` files (default
   `https://nexvirtualization.com/apt`, overridable with `/etc/nex/updates.conf` or
-  `NEX_UPDATE_REPO`).
+  `NEX_UPDATE_REPO`). A fresh Nex Core host also configures this repo as an APT source
+  (`/etc/apt/sources.list.d/nex.sources`, signed by `/usr/share/keyrings/nex-archive-keyring.gpg`),
+  so `apt update` lists it and `apt` can install Nex packages directly. The URL follows `repo_url`
+  in `/etc/nex/updates.conf`; the in-product **Check**/**Update** flow is separate from `apt`.
 - Packaged `nex-controller` or `nex-core-local` installs for apply to succeed.
 
 ## Steps

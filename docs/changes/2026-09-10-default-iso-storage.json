@@ -1,0 +1,36 @@
+{
+  "summary": "Nex Core installs /var/lib/libvirt/images by default; Controller auto-registers it as storage named ISO on the first managed host report (request_id auto-storage:<host>), matching auto-network behavior. API impact: existing contract — reuses storage-register; documents auto-storage.",
+  "paths": [
+    "internal/controller/managed.go",
+    "internal/controller/identity.go",
+    "internal/controller/managed_test.go",
+    "installer/late-install.sh",
+    "packaging/systemd/nex-core-agent.service",
+    "tests/integration/controller_replacement.py",
+    "docs/guide/create-virtual-machine.md",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "VM creation prerequisites and steps now use the automatic ISO storage registration instead of requiring manual Register local storage first.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No new endpoint or schema field. Controller queues the existing storage-register command for /var/lib/libvirt/images named ISO, same as auto-network for bridges. Documented in API.md and OpenAPI StorageRegistration semantics.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json"
+    ]
+  },
+  "verification": {
+    "method": "go test ./internal/controller -run 'TestManaged|TestDefault|TestHostReported|TestVLAN'; python3 scripts/generate_api.py (and --check). Live host enrollment + Storage UI showing ISO succeeded remains a lab walkthrough.",
+    "evidence": [
+      "internal/controller/managed_test.go"
+    ]
+  }
+}

@@ -52,7 +52,7 @@
   &quot;result&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
-  &quot;semantics&quot;: &quot;Verify existing local directory access; no formatting. Succeeded registrations are reported back in Inventory.managed.storage and adopted by a Controller that does not hold them (request_id adopt-storage-register:&lt;host&gt;:&lt;id&gt;) without redelivery.&quot;
+  &quot;semantics&quot;: &quot;Verify existing local directory access; no formatting. Controller also creates the default ISO registration for /var/lib/libvirt/images (request_id auto-storage:&lt;host&gt;) when absent. Succeeded registrations are reported back in Inventory.managed.storage and adopted by a Controller that does not hold them (request_id adopt-storage-register:&lt;host&gt;:&lt;id&gt;) without redelivery.&quot;
 }</pre></section>
 <section><h2>network-register</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -2102,12 +2102,12 @@
   }
 }</pre></details></section>
 <section id="listStorageRegistration"><h2>GET <code>/api/v1/storage</code></h2>
-<p>List local storage registrations</p><p>Administrator inventory of pool registrations with explicit host access and durable operation statuses; read-only and safe to retry.</p>
+<p>List local storage registrations</p><p>Administrator inventory of pool registrations with explicit host access and durable operation statuses; read-only and safe to retry. Includes the automatically created default ISO storage (/var/lib/libvirt/images) and storage adopted from Inventory.managed, distinguishable by actor system on their operation.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;listStorageRegistration&quot;,
   &quot;summary&quot;: &quot;List local storage registrations&quot;,
-  &quot;description&quot;: &quot;Administrator inventory of pool registrations with explicit host access and durable operation statuses; read-only and safe to retry.&quot;,
+  &quot;description&quot;: &quot;Administrator inventory of pool registrations with explicit host access and durable operation statuses; read-only and safe to retry. Includes the automatically created default ISO storage (/var/lib/libvirt/images) and storage adopted from Inventory.managed, distinguishable by actor system on their operation.&quot;,
   &quot;security&quot;: [
     {
       &quot;AdminSession&quot;: []
@@ -5127,7 +5127,7 @@
     &quot;status&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.StorageRegistration&quot;,
-  &quot;description&quot;: &quot;Pool registration with explicit access only on host_id; never implies shared storage. status/error reflect its durable operation, not a continuously refreshed filesystem probe.&quot;
+  &quot;description&quot;: &quot;Pool registration with explicit access only on host_id; never implies shared storage. status/error reflect its durable operation, not a continuously refreshed filesystem probe. Controller also creates a registration itself (actor system): the default local directory /var/lib/libvirt/images named ISO (request_id auto-storage:&lt;host&gt;), and any storage the host reports in Inventory.managed.storage that Controller does not hold (request_id adopt-storage-register:&lt;host&gt;:&lt;id&gt;, ID and name preserved).&quot;
 }</pre></details>
 <details id="NetworkRegistration"><summary>NetworkRegistration</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,

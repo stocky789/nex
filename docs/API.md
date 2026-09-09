@@ -346,8 +346,10 @@ New Controller administrator bootstrap passwords accept any nonempty valid UTF-8
 up to 1024 UTF-8 bytes, without CR, LF or NUL. No minimum length or complexity rule applies.
 Existing Controller password hashes remain usable. Host-local login uses the current OS
 root password and does not provision a separate credential. Appliance deployment uses the
-same Controller password validation. This changes browser authentication and bootstrap validation,
-not outbound host certificate identity, agent commands or Core protocol version 1.
+same Controller password validation; firstboot also applies that password to the guest
+console account `admin` (root remains locked; SSH password auth remains off). This changes
+browser authentication and bootstrap validation, not outbound host certificate identity,
+agent commands or Core protocol version 1.
 
 Both services send `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
 `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, restrictive camera/microphone/location
@@ -438,10 +440,12 @@ actor `system` with `request_id adopt-<kind>:<host>:<id>` (`storage-register`,
 `network-register`, `iso-import`, `vm-create`), every entry it does not hold, reusing the ID
 and recording the operation as already succeeded without dispatching a command. Entries that
 duplicate an existing ID, storage path, network (kind, source) or VM name, and invalid entries,
-are skipped. The untagged default network `<port> untagged` for each host bridge whose port is
-a physical NIC or bond (`request_id auto-network:<host>:<bridge>`, kind `bridge` with `uplink`
-set) is unchanged; a registration for that bridge in any state, including failed, suppresses
-re-creation. On the host, `vm-create` resolves storage, network and media references by
+are skipped. The default local storage **ISO** for `/var/lib/libvirt/images`
+(`request_id auto-storage:<host>`) and the untagged default network `<port> untagged` for each
+host bridge whose port is a physical NIC or bond (`request_id auto-network:<host>:<bridge>`,
+kind `bridge` with `uplink` set) are created by Controller under actor `system` when absent; a
+registration for that path or bridge in any state, including failed, suppresses re-creation.
+On the host, `vm-create` resolves storage, network and media references by
 resource ID rather than by pool/host ID, so creation works after re-enrollment under a new
 Controller. Result: replacing a Controller means installing a new one and connecting each
 pool master (token, or address plus root password); storage, networks, ISO records and VM

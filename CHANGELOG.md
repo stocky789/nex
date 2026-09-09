@@ -20,6 +20,8 @@ Core version. This is the version the packages currently build as (`0.1.5~alpha1
 
 ### Minor Feature
 
+- Controller deploy password now also signs in to the appliance VM console as **admin** (same credentials as the web UI).
+- Every enrolled host gets a default local storage registration named **ISO** at `/var/lib/libvirt/images` (created on install), so ISO upload and VM disks work without manually registering storage.
 - Extended the VM console: send key combinations, fit/actual/resize-to-window display modes, quality presets, view-only mode, screenshots, reconnect, full screen with the toolbar and a console-only browser window.
 - Added console clipboard in both directions for guests running the guest tools, plus **Type into VM** for installers and text consoles; new VMs are defined with the clipboard channel, an absolute pointer and a resizable VirtIO display.
 - Added a **Guest tools** panel showing the guest agent state, operating system, hostname, IP addresses and clipboard readiness reported by the host. When a running VM has no responding agent it shows an install advisory with the exact commands for Linux and Windows guests.
@@ -27,6 +29,7 @@ Core version. This is the version the packages currently build as (`0.1.5~alpha1
 
 ### Bug Fixes
 
+- Fixed a fresh Nex Core install having no Nex package repository: the host now ships the Nex archive signing key and configures `/etc/apt/sources.list.d/nex.sources`, so `apt update` lists the Nex repo out of the box (BUG-0042).
 - Fixed the continuous-integration update tests so they reach the public APT repo, an OpenSSL 3.0 TLS-match check, and a private-IP fixture in the Controller capture harness (BUG-0040, BUG-0041).
 
 ### Miscellaneous
@@ -183,7 +186,8 @@ Verification and remaining limits (current alpha): see the
 [pool master lab checks](docs/qa/pool-master/lab/checks.md),
 [add host lab checks](docs/qa/simple-host-enrollment/lab/checks.md) and the
 [console features checks](docs/qa/console-features/checks.md).
-The last ISO actually built and tested is `nex-core-0.1.0-alpha1-amd64.iso`; the `0.1.5~alpha1`
-build default has not yet been built into media. Physical hardware, external redistribution
+The `0.1.5~alpha1` media has now been built from the current source
+(`dist/nex-core-0.1.5~alpha1-amd64.iso`, SHA-256 `5b4a4367…`) but not yet install-tested; the
+prior tested media was `nex-core-0.1.0-alpha1-amd64.iso`. Physical hardware, external redistribution
 requirements and full phase acceptance remain open. Shared storage, backups, migration, HA and
 Container Services remain roadmap work.

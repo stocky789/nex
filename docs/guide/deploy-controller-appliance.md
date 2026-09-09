@@ -46,7 +46,8 @@ Controller failover remain outside this slice. This page does not establish Phas
   plus capacity for the host and existing workloads. Preflight can reject insufficient capacity.
 - A new Controller administrator password, separate from the host root password.
   Any nonempty password is accepted, up to 1024 UTF-8 bytes without line breaks or NUL.
-  Keep both credentials in a password manager.
+  The same password signs in to Nex Controller as **admin** and to the appliance VM
+  console as **admin**. Keep both credentials in a password manager.
 
 ## Steps
 
@@ -98,15 +99,17 @@ Controller failover remain outside this slice. This page does not establish Phas
    static addressing, enter **IPv4 address / prefix**, **IPv4 gateway** and **DNS servers**;
    separate DNS addresses with commas. Enter the first **Site name** and
    **Controller administrator password**. There is no pool name: this host becomes the
-   pool master of a pool created automatically and named after its hostname. The Controller account is **admin**.
+   pool master of a pool created automatically and named after its hostname. The account is
+   **admin** for both the Controller web UI and the appliance console.
 
 5. Select **Review deployment**, check the host, storage, address and resources, then select
    **Create VM & install Controller**. Follow **Deployment progress**. Progress is saved on
    the host; closing or refreshing the browser does not cancel deployment. Wait for readiness,
    including initialization, host enrollment and adoption of the already-created appliance.
 
-6. When the operation is **ready**, select **Open Nex Controller** and sign in with the new
-   Controller password. The host verifies the provisioned Controller TLS identity during
+6. When the operation is **ready**, select **Open Nex Controller** and sign in as **admin**
+   with the password you set. The same credentials work at the appliance VM console.
+   The host verifies the provisioned Controller TLS identity during
    handoff. Compare the browser certificate's SHA-256 fingerprint with the value shown
    beside the ready link before accepting its trust warning. DHCP uses a hostname certificate
    while the link uses its discovered IP, so the browser may also report a name mismatch.
@@ -171,7 +174,8 @@ prevents local starts.
 Controller recovery exports contain database state, identity, TLS private keys and other
 secrets. Store a protected copy outside the hosting server; a same-host VM snapshot is not
 an independent recovery copy. Use the package's host-root recovery helper, which talks to
-this appliance's guest agent; no guest SSH access or shared root password is needed.
+this appliance's guest agent; SSH password login stays disabled and guest root stays locked.
+The deploy **admin** password also unlocks the appliance console as **admin** when you need a guest shell.
 
 1. At the hosting Core server's root console, select the appliance's exact VM UUID from
    `virsh list --all --uuid` and its recorded deployment. Replace `CONTROLLER_UUID` and
@@ -318,6 +322,8 @@ its original artifact version.
 
 [Deployment usability checks](../qa/appliance/deployment-usability.md) record the current
 DHCP/password/power UI changes, simulated browser checks and artifact availability limits.
+Unit tests cover firstboot applying the deploy password to the guest **admin** console
+account; a live appliance console login walkthrough after deploy is not yet recorded.
 
 [Root-login verification](../qa/appliance/root-auth.md) records the current root-authentication
 package and browser checks, including password changes and account failure/recovery.
