@@ -1,0 +1,26 @@
+[
+ [
+  "initializing",
+  "running",
+  92,
+  null
+ ],
+ [
+  "initializing",
+  "needs_attention",
+  92,
+  "Controller setup needs recovery: appliance first boot is not ready (readiness marker HTTP 404 (version 0, status \"\"): controller rejected /appliance-ready.json (HTTP 404)): context deadline exceeded"
+ ],
+ [
+  "initializing",
+  "running",
+  92,
+  null
+ ],
+ [
+  "ready",
+  "ready",
+  100,
+  null
+ ]
+]

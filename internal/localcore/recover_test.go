@@ -84,7 +84,7 @@ func TestNormalDeploymentRejectsAgentOwnershipBeforePersistence(t *testing.T) {
 	cookie, csrf := loginLocal(t, s)
 	os.MkdirAll(s.cfg.AgentStateDir, 0700)
 	savePrivate(filepath.Join(s.cfg.AgentStateDir, "state.json"), map[string]string{"host_id": "existing"})
-	v := DeployRequest{RequestID: "request-001", Name: "nex-controller", Hostname: "controller", CPUs: 2, MemoryMiB: 4096, DiskGiB: 32, AddressCIDR: "192.168.1.10/24", Gateway: "192.168.1.1", DNS: []string{"192.168.1.1"}, AdminPassword: "controller-password", SiteName: "Site", PoolName: "Pool", Bridge: s.cfg.Engine.Bridge, StorageDir: s.cfg.Engine.StorageDir}
+	v := DeployRequest{RequestID: "request-001", Name: "nex-controller", Hostname: "controller", CPUs: 2, MemoryMiB: 4096, DiskGiB: 32, AddressCIDR: "192.168.1.10/24", Gateway: "192.168.1.1", DNS: []string{"192.168.1.1"}, AdminPassword: "controller-password", SiteName: "Site", Bridge: s.cfg.Engine.Bridge, StorageDir: s.cfg.Engine.StorageDir}
 	w := callLocal(s, "POST", "/api/local/v1/deployments", v, cookie, csrf, "https://core.test")
 	if w.Code != 409 || len(s.operations) != 0 {
 		t.Fatal(w.Code, w.Body, s.operations)
@@ -99,7 +99,7 @@ func TestNormalDeploymentRejectsRecoveryPreparationBeforePersistence(t *testing.
 	s, _ := testService(t)
 	cookie, csrf := loginLocal(t, s)
 	savePrivate(filepath.Join(s.cfg.DataDir, "recovery-preparation.json"), deployment{})
-	v := DeployRequest{RequestID: "request-001", SiteName: "Site", PoolName: "Pool", Bridge: s.cfg.Engine.Bridge, StorageDir: s.cfg.Engine.StorageDir}
+	v := DeployRequest{RequestID: "request-001", SiteName: "Site", Bridge: s.cfg.Engine.Bridge, StorageDir: s.cfg.Engine.StorageDir}
 	w := callLocal(s, "POST", "/api/local/v1/deployments", v, cookie, csrf, "https://core.test")
 	if w.Code != 409 || len(s.operations) != 0 {
 		t.Fatal(w.Code, w.Body, s.operations)

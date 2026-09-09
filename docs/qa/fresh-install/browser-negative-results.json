@@ -1,0 +1,34 @@
+{
+  "resource_counts": {
+    "storage": 1,
+    "networks": 1,
+    "media": 1,
+    "vms": 2
+  },
+  "replayed_vm_id": "3035054a-87b0-4adb-a40d-512ce050032b",
+  "stage": "negative",
+  "checks": [
+    "Native packaged API rejects anonymous access401, missing CSRF403, invalid create/ISO400 and nonexistent network409; invalid media publishes nothing; exact create replay preserves UUID and changed replay409"
+  ],
+  "captures": [],
+  "browser": "151.0.7922.34",
+  "environment": "Actual fresh ISO-installed nested KVM/libvirt with bundled systemd services; loopback forwards; no API mocking",
+  "artifacts": {
+    "iso_sha256": "5ca79c902ce39cb11c15f710abbf6629d2785089eb17b641435f8240af5e1dff",
+    "package_version": "0.1.0+managed1",
+    "package_sha256": "68816aa3975357881e0b946683fc37d604bd53022b8eeabcd48116352e2dce6f",
+    "installed_manifest": {
+      "architecture": "amd64",
+      "format": "qcow2",
+      "format_version": 1,
+      "image_sha256": "bce48d51651f17742cf452ae64a8456ac94af00d982c2896cd7a2446f6d29d88",
+      "minimum_disk_gib": 32,
+      "minimum_memory_mib": 4096,
+      "minimum_vcpus": 2,
+      "protocol_version": 1,
+      "version": "0.1.0+managed1"
+    }
+  },
+  "api_impact": "existing contract: browser exercises local deployment/session, Controller inventory, storage/network registration, ISO transfer and VM creation without changing interfaces",
+  "guide_impact": "none: verifies existing documented workflows; parent records updated evidence links"
+}

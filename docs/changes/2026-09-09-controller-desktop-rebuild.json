@@ -1,0 +1,31 @@
+{
+  "summary": "Rebuild Nex Core ISO with desktop1 Controller appliance and matching host package. API impact: none; artifact assembly delivers unchanged contracts.",
+  "paths": [
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/plans/2026-09-09-controller-desktop-layout.md",
+    "docs/qa/controller-desktop-layout/checks.md",
+    "docs/qa/controller-desktop-rebuild/artifacts.json",
+    "docs/qa/controller-desktop-rebuild/checks.md",
+    "docs/qa/controller-desktop-rebuild/guest-boot/results.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Record availability of the desktop1 appliance/package and ISO, matching verification and no automatic update of existing Controller VMs.",
+    "pages": [
+      "docs/guide/deploy-controller-appliance.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Build-only artifact assembly changes no client requests, Controller operations, Core commands/results, authorization or retry contract.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Appliance and package builds plus ISO assembly passed. Native disposable KVM guest boot and Debian package smoke exited zero. Final ISO checksum passed; independent signature/source/guest-assets/package/ISO-content and BIOS/UEFI boot-record inspection passed. No fresh ISO install or hosted CI claimed.",
+    "evidence": [
+      "docs/qa/controller-desktop-rebuild/checks.md",
+      "docs/qa/controller-desktop-rebuild/artifacts.json",
+      "docs/qa/controller-desktop-rebuild/guest-boot/results.json"
+    ]
+  }
+}

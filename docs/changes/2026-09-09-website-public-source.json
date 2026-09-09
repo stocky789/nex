@@ -1,0 +1,24 @@
+{
+  "summary": "Remove private deployment details from website contributor files and add a public-source regression check. API impact: none — no runtime behavior changes.",
+  "paths": [
+    "website/README.md",
+    "website/.gitignore",
+    "tests/test_website_public_files.py",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/website/public-source-review.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor-source privacy cleanup does not change operator workflows or the served website.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Only README, ignore rules and a local regression check change; no client-facing API, Controller operation or Core command/result is affected.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Enumerate Git-visible website files; inspect source/lockfile, screenshots and metadata; reproduce README disclosure with failing regression, then pass both checks after cleanup; inspect ignore behavior and obtain independent review. See report for actual scope and limits.",
+    "evidence": ["docs/qa/website/public-source-review.md", "tests/test_website_public_files.py"]
+  }
+}

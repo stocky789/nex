@@ -1,0 +1,84 @@
+{
+  "summary": "Add browser VM consoles to Nex Controller and the host-local page: ticketed Controller sessions paired with outbound host mTLS tunnels, a direct host-local VNC bridge, stdlib WebSocket framing and bundled noVNC. API impact: new contract (openConsole, consoleStream, agentConsole, report consoles member, console-v1 capability, localConsoleStream). Follow-up in the same batch: central VM power controls (Start, Shut down, Reboot, Force stop) as durable vm-power host tasks; API impact: new contract (powerVM, vm-power command, vm-power-v1 capability).",
+  "paths": [
+    "internal/wsock/wsock.go",
+    "internal/wsock/wsock_test.go",
+    "internal/vmhost/console.go",
+    "internal/vmhost/console_test.go",
+    "internal/protocol/console.go",
+    "internal/protocol/protocol.go",
+    "internal/agent/console.go",
+    "internal/agent/console_test.go",
+    "internal/agent/client.go",
+    "internal/agent/run.go",
+    "internal/agent/managed_test.go",
+    "internal/controller/console.go",
+    "internal/controller/console_test.go",
+    "internal/controller/controller.go",
+    "internal/controller/identity.go",
+    "internal/localcore/console.go",
+    "internal/localcore/console_test.go",
+    "internal/localcore/service.go",
+    "web/package.json",
+    "web/package-lock.json",
+    "web/build.mjs",
+    "web/public/third-party-notices.txt",
+    "web/src/console.tsx",
+    "web/src/console.css",
+    "web/src/novnc.d.ts",
+    "web/src/main.tsx",
+    "web/src/managed.tsx",
+    "web/src/local.tsx",
+    "tests/integration/console_lab.py",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/LICENSING.md",
+    "docs/guide/README.md",
+    "docs/guide/vm-console.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/plans/2026-09-09-vm-console.md",
+    "docs/qa/console/checks.md",
+    "internal/protocol/power.go",
+    "internal/controller/power.go",
+    "internal/controller/power_test.go",
+    "internal/controller/managed.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/power_test.go",
+    "internal/agent/managed.go",
+    "docs/guide/vm-power.md",
+    "docs/plans/2026-09-09-vm-power.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "New operator workflow for opening VM consoles from Controller and the host-local page, with blocked and disconnected states; creation page availability note updated. Power controls workflow added with confirmation, ACPI caveats and recovery.",
+    "pages": [
+      "docs/guide/vm-console.md",
+      "docs/guide/vm-power.md",
+      "docs/guide/README.md",
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Three Controller routes, one host-local route, a report response member and a host capability are new; both OpenAPI contracts and generated references are updated with the contract check.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html",
+      "docs/api/local-openapi.json",
+      "docs/api/local.html"
+    ]
+  },
+  "verification": {
+    "method": "go test -race ./... (wsock framing, VNC socket resolution, Controller ticket authorization/pairing/relay/timeout, agent tunnel, host-local bridge), Python contract/documentation checks, UI typecheck/build, and tests/integration/console_lab.py browser walkthroughs of both consoles against a running guest in a disposable nested-KVM lab; results and limits in the QA report. Power: vmhost/controller Go tests and the same lab run exercising Start, Reboot and Force stop from the browser.",
+    "evidence": [
+      "docs/qa/console/checks.md",
+      "internal/controller/console_test.go",
+      "internal/localcore/console_test.go",
+      "tests/integration/console_lab.py"
+    ]
+  }
+}

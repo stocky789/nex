@@ -1,0 +1,10 @@
+{
+  "completed": true,
+  "method": "Actual shipping GUI target selection and explicit erase checkbox on new blank 128GiB /dev/vda; native Restart now caused QEMU no-reboot exit",
+  "installer_pid_exited_after_restart": true,
+  "logo_inspection": "Welcome and progress native headers inspected: clean transparent background without ripple",
+  "untested": [
+    "Physical hardware",
+    "UEFI host installation"
+  ]
+}

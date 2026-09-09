@@ -1,0 +1,61 @@
+{
+  "completed": true,
+  "lab": "/home/matt/Projects/Nex/.cache/nex-managed-vm-lab.mp_so9_k",
+  "passed": [
+    "Enrolled native agent reports the console-v1 capability",
+    "Stopped guest created through the managed-VM API with the Debian ISO attached",
+    "Console ticket refused for a stopped VM, without CSRF, and for an unknown VM",
+    "Controller Console tab explains a stopped VM and offers no manual connect",
+    "Start from the Controller UI ran as a durable host task, the guest is observed running and the request is audited",
+    "Controller console connected through the host tunnel; guest boot screen rendered and console.open audited",
+    "Keyboard input from the browser changed the guest display",
+    "Leaving and reopening the Console tab ends the session and re-attaches with a new ticket",
+    "Stopping the host agent ends the live console honestly and blocks new tickets until the host reports again",
+    "The open Console tab reconnects by itself once the host reports again",
+    "A ticket the host never attaches times out with 504 after the documented wait",
+    "Reboot request was issued as a host task; the guest without ACPI handling stays running and the UI says so",
+    "Host-local page opened the same running guest console directly on the host, without Controller",
+    "Force stop from the Controller UI stopped the guest; the host-local page reflects it",
+    "Host-local page hides the console for a stopped VM"
+  ],
+  "captures": [
+    "controller-console-blocked-stopped",
+    "controller-power-stopped",
+    "controller-power-started",
+    "controller-console-ready",
+    "controller-console-connected",
+    "controller-console-input",
+    "controller-console-connected-360",
+    "controller-console-disconnected",
+    "controller-console-lost",
+    "controller-console-blocked-stale",
+    "controller-console-reconnected",
+    "controller-power-confirm-reboot",
+    "local-overview-open-console",
+    "local-console-connected",
+    "controller-power-force-stopped",
+    "local-overview-stopped"
+  ],
+  "limits": [
+    "Nested KVM lab, not physical hardware",
+    "One viewer at a time",
+    "Root helper built from this tree on the disposable copy (lab image predates it)",
+    "Hosted CI not exercised"
+  ],
+  "versions": {
+    "host": "NAME=\"Nex Core\"\nPRETTY_NAME=\"Nex Core 0.1.0-alpha1\"\nCompiled against library: libvirt 11.3.0\nUsing library: libvirt 11.3.0\nUsing API: QEMU 11.3.0\n",
+    "novnc": "1.7.0",
+    "chromium": "151.0.7922.34"
+  },
+  "artifacts": {
+    "controller": "edabd7d7b92b8a887cc7473fe92c3f3735e12b6ada6b8ee343bbaa1adf4575dc",
+    "agent": "4bf0024db4b6504035a46642ea7dcfb49ed2a78625a3c91dadf7f51978446d90",
+    "local": "c9877c289594541487745e4cd8172eb9eb1af644340dc9c8c5bb32a2f24fe864",
+    "app.js": "f2cf8665837baf1ae71450a240c12931caae83c018b75027755cc3e87c5b6b84",
+    "local.js": "47ffa83fe9f7ea4d212ef717d98ed9057939314648e011b47d8ca57878392da7",
+    "debian-13.6.0-amd64-netinst.iso": "65273beed27b2df543b68b65630ba525cfbad8df2b12035732b2dff87d6664e7"
+  },
+  "vm_id": "99be6f1e-308a-4459-af08-8751249b6d49",
+  "host_id": "fb9a84d1c34433f652f5ea2d2e72bd73b0ed1d31d8a3bf31b3f4a941173d274c",
+  "pool_id": "ab57f32d955715d6854aa23c32c268c53d96923ede8005f9aafc8d446cfe3213"
+}

@@ -1,36 +1,32 @@
-# Product
+# Product principles
 
-## Register
+Nex is a community-driven project for people building and operating virtualized
+infrastructure. Nex Core provides the Debian-based KVM/QEMU and libvirt host;
+Nex Controller provides centralized management through a web UI and API. It is replaceable:
+each pool master keeps the durable copy of its pool's settings, and a new Controller re-adopts
+them when the master is connected to it.
+The [implementation plan](docs/plans/2026-09-08-nex-platform.md) owns feature scope,
+build order and acceptance gates.
 
-product
+## Product model
 
-## Users
+- Organize infrastructure as Sites → Pools (one master host + members) → Hosts → VMs.
+  Pools are created automatically: each enrolled host becomes the pool master of its
+  own pool. VMs belong to pools with a separate host assignment, preserving identity
+  across migration.
+- Keep running workloads and local recovery independent of Controller availability.
+- Build on Debian and established virtualization tools.
+- Plan Docker application management through Controller, with Docker Swarm inside
+  Nex-managed VMs. This follows the VM foundation.
 
-Virtualization operators installing Nex Core hosts and managing them through Nex Controller.
-See the [platform model](docs/plans/2026-09-08-nex-platform.md).
+## Interface principles
 
-## Product Purpose
+- Use clear, calm language and the approved [Nex identity](docs/brand/README.md).
+- Make choices understandable and reviewable, especially destructive actions.
+- Show failures and stale or unknown state honestly.
+- Provide original Nex graphical installer screens and retain the minimal text path.
+- Support keyboard navigation, visible focus, readable contrast, labeled controls
+  and explicit errors. Never rely on color alone.
 
-Install a recoverable Debian-based KVM/libvirt host, then manage Sites, Pools, Hosts and VMs.
-The installer must make its target and destructive consequences clear before writing disks.
-
-## Brand Personality
-
-Clear, calm and practical. Preserve the approved [Nex identity](docs/brand/README.md).
-
-## Anti-references
-
-The stock Debian graphical installer is not the custom Nex GUI requested by Matt.
-Use Proxmox's guided installation as workflow inspiration without copying branding.
-
-## Design Principles
-
-- Keep installation choices understandable and reviewable.
-- Use Nex's own screens throughout the graphical workflow.
-- Preserve proven platform behavior and honest failure reporting.
-- Keep the minimal text installation path available.
-
-## Accessibility & Inclusion
-
-Keyboard navigation, visible focus, readable contrast, labeled controls and explicit error
-messages are required by the [contributor contract](AGENTS.md). Do not rely on color alone.
+The [contributor contract](AGENTS.md) defines implementation and safety requirements;
+the [user guide](docs/guide/README.md) describes available workflows and their limits.

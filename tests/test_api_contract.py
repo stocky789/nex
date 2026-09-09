@@ -84,7 +84,8 @@ class APIContractTests(unittest.TestCase):
         self.assertFalse(policy['legacy_cookies_accepted'])
 
     def test_protocol_fields_types_and_required_members_match(self):
-        source = (ROOT / 'internal/protocol/protocol.go').read_text()
+        source = '\n'.join(p.read_text() for p in sorted((ROOT / 'internal/protocol').glob('*.go'))
+                           if not p.name.endswith('_test.go'))
         structs = dict(re.findall(r'type (\w+) struct\s*{(.*?)}', source, re.S))
         schemas = self.api['components']['schemas']
         self.assertEqual(set(structs), {name for name, schema in schemas.items() if 'x-go-type' in schema})
@@ -119,7 +120,7 @@ class APIContractTests(unittest.TestCase):
         source = '\n'.join(p.read_text() for p in (ROOT / 'internal/controller').glob('*.go') if not p.name.endswith('_test.go'))
         schemas = self.api['components']['schemas']
         for handler, name in [('login', 'LoginRequest'), ('sites', 'CreateSiteRequest'),
-                              ('pools', 'CreatePoolRequest'), ('token', 'TokenRequest'),
+                              ('token', 'TokenRequest'),
                               ('operation', 'OperationRequest'),
                               ('bootstrapAppliance', 'ApplianceBootstrapRequest')]:
             body = re.search(r'func\s*\(c \*Controller\)\s*' + handler + r'\(.*?(?=\nfunc |\Z)', source, re.S)
@@ -141,6 +142,11 @@ class APIContractTests(unittest.TestCase):
         self.check_dtos('internal/controller/appliance.go', {
             'applianceRequest': 'ApplianceAdoptionRequest', 'managedAppliance': 'ManagedAppliance'})
 
+    def test_addhost_dto_fields_types_and_required_members(self):
+        self.check_dtos('internal/controller/addhost.go', {
+            'probeRequest': 'HostProbeRequest', 'probeResponse': 'HostProbeResponse',
+            'addHostRequest': 'AddSiteHostRequest', 'addHostResponse': 'AddSiteHostResponse'})
+
     def check_dtos(self, path, names):
         source = (ROOT / path).read_text()
         structs = dict(re.findall(r'type (\w+) struct\s*{(.*?)}', source, re.S))
@@ -156,6 +162,13 @@ class APIContractTests(unittest.TestCase):
                 if go_type == '[]string':
                     self.assertEqual(prop['type'], ['array', 'null'])
                     self.assertEqual(prop['items']['type'], 'string')
+                elif go_type == 'time.Time':
+                    self.assertEqual(prop['type'], 'string')
+                    self.assertEqual(prop['format'], 'date-time')
+                elif go_type.startswith('*protocol.'):
+                    self.assertEqual(prop['anyOf'], [
+                        {'$ref': '#/components/schemas/' + go_type.removeprefix('*protocol.')},
+                        {'type': 'null'}])
                 else:
                     self.assertEqual(prop['type'], {'int': 'integer', 'bool': 'boolean',
                                                     'string': 'string'}[go_type])
@@ -181,6 +194,12 @@ class LocalAPIContractTests(APIContractTests):
     def test_controller_request_fields_match(self):
         self.check_dtos('internal/localcore/service.go', {'DeployRequest': 'DeployRequest'})
         self.check_dtos('internal/localcore/service.go', {'DeployRequest': 'RecoveryPreparationRequest'})
+
+    def test_enrollment_dto_fields_types_and_required_members(self):
+        self.check_dtos('internal/localcore/enroll.go', {'enrollmentRequest': 'EnrollmentRequest'})
+
+    def test_addhost_dto_fields_types_and_required_members(self):
+        pass  # Host push (add-host) DTOs are controller-only; no local-API equivalent to check here.
 
     def test_deployment_network_and_password_contract(self):
         for name in ('DeployRequest', 'RecoveryPreparationRequest'):
@@ -219,6 +238,43 @@ class ApplianceReadinessContractTests(unittest.TestCase):
         self.assertIn(resource, source)
         self.assertIn('"' + resource + '"', consumer)
         self.assertIn('GET ' + resource, api['x-static-resources'])
+
+
+class ManagedVMContractTests(unittest.TestCase):
+    def test_managed_request_fields_and_command_payloads_match_runtime(self):
+        api = json.loads((ROOT / 'docs/api/openapi.json').read_text())
+        schemas = api['components']['schemas']
+        source = (ROOT / 'internal/controller/managed.go').read_text()
+        registration = re.search(r'type registrationRequest struct\s*{(.*?)}', source, re.S)[1]
+        fields = set(re.findall(r'`json:"([^",]+)', registration))
+        for name in ('StorageRegistrationRequest', 'NetworkRegistrationRequest'):
+            self.assertEqual(set(schemas[name]['properties']), fields)
+        request = re.search(r'type createVMRequest struct\s*{(.*?)}', source, re.S)[1]
+        self.assertIn('protocol.VMCreateSpec', request)
+        self.assertEqual(set(schemas['CreateVMRequest']['properties']),
+                         set(schemas['VMCreateSpec']['properties']) |
+                         set(re.findall(r'`json:"([^",]+)', request)))
+        worker = (ROOT / 'internal/agent/managed.go').read_text()
+        dispatch = re.search(r'func managedCommand\(.*?(?=\nfunc |\n//)', worker, re.S)[0]
+        kinds = set(re.findall(r'"([a-z-]+)"', dispatch))
+        self.assertEqual(set(api['x-commands']), kinds)
+        self.assertEqual(set(schemas['Command']['properties']['kind']['enum']),
+                         kinds | {'refresh-inventory'})
+        self.assertEqual(schemas['Command']['properties']['kind']['enum'],
+                         schemas['Operation']['properties']['kind']['enum'])
+        vm = schemas['ManagedAppliance']
+        self.assertEqual(set(vm['properties']['role']['enum']), {'controller', 'guest'})
+        self.assertNotIn('const', vm['properties']['protected'])
+        self.assertTrue(vm['allOf'][0]['then']['properties']['protected']['const'])
+        self.assertFalse(vm['allOf'][0]['else']['properties']['protected']['const'])
+        engine = (ROOT / 'internal/vmhost/managed.go').read_text()
+        for field, member in [('cpus', 'CPUs'), ('memory_mib', 'MemoryMiB'), ('disk_gib', 'DiskGiB')]:
+            for body in (source, engine):
+                lower = int(re.search(r'v\.' + member + r' < (\d+)', body)[1])
+                upper = int(re.search(r'v\.' + member + r' > (\d+)', body)[1])
+                for name in ('VMCreateSpec', 'CreateVMRequest'):
+                    self.assertEqual(schemas[name]['properties'][field]['minimum'], lower)
+                    self.assertEqual(schemas[name]['properties'][field]['maximum'], upper)
 
 
 if __name__ == '__main__':

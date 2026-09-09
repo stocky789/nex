@@ -1,0 +1,77 @@
+{
+  "method": "Actual copied packaging unit with RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 on disposable nested KVM host",
+  "observed_inventory": {
+    "observed_at": "0001-01-01T00:00:00Z",
+    "hostname": "",
+    "cpu_model": "",
+    "cpu_count": 0,
+    "memory_bytes": 0,
+    "virtualization": null,
+    "os_version": "",
+    "agent_version": "",
+    "nics": null,
+    "disks": [
+      {
+        "name": "/dev/fd0",
+        "size_bytes": 4096
+      },
+      {
+        "name": "/dev/sr0",
+        "size_bytes": 1073741312
+      },
+      {
+        "name": "/dev/vda",
+        "size_bytes": 25769803776
+      },
+      {
+        "name": "/dev/vdb",
+        "size_bytes": 85899345920
+      },
+      {
+        "name": "/",
+        "size_bytes": 23831412736,
+        "available_bytes": 19047596032
+      }
+    ],
+    "vms": [
+      {
+        "id": "91291c3e-b2c9-454a-8f77-4eaeb8bf392e",
+        "name": "nex-controller",
+        "state": "shut off"
+      }
+    ],
+    "checks": [
+      {
+        "name": "block-disks",
+        "status": "healthy",
+        "observed_at": "2026-09-09T01:56:59.472622543Z",
+        "last_success": "2026-09-09T01:56:59.472622543Z"
+      },
+      {
+        "name": "disk",
+        "status": "healthy",
+        "observed_at": "2026-09-09T01:56:59.472622543Z",
+        "last_success": "2026-09-09T01:56:59.472622543Z"
+      },
+      {
+        "name": "inventory",
+        "status": "failed",
+        "observed_at": "2026-09-09T01:56:59.472622543Z",
+        "error": "route ip+net: netlinkrib: address family not supported by protocol"
+      },
+      {
+        "name": "kvm",
+        "status": "healthy",
+        "observed_at": "2026-09-09T01:56:59.472622543Z",
+        "last_success": "2026-09-09T01:56:59.472622543Z"
+      },
+      {
+        "name": "libvirt",
+        "status": "healthy",
+        "observed_at": "2026-09-09T01:56:59.472622543Z",
+        "last_success": "2026-09-09T01:56:59.472622543Z"
+      }
+    ]
+  },
+  "result": "POST /api/v1/vms rejected valid 2CPU/1024MiB request with 409 requested CPU or RAM exceeds observed host capacity"
+}

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[Unit]
+Description=Apply pending Nex Controller package update
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/lib/nex/apply-update

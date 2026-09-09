@@ -57,8 +57,8 @@ func recoveryRequest(path string) (DeployRequest, error) {
 	if dec.Decode(&struct{}{}) != io.EOF {
 		return v, errors.New("one recovery request required")
 	}
-	if v.SiteName != "" || v.PoolName != "" {
-		return v, errors.New("recovery preparation must not specify Site or Pool names")
+	if v.SiteName != "" {
+		return v, errors.New("recovery preparation must not specify a Site name")
 	}
 	if v.CPUs == 0 {
 		v.CPUs = 2

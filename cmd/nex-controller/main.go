@@ -35,6 +35,11 @@ func main() {
 	if _, err := os.Stat(cfg.SourcePath); err != nil {
 		log.Fatal("matching -source-archive required: ", err)
 	}
+	if b, err := os.ReadFile(cert); err != nil {
+		log.Fatal("cannot read -tls-cert: ", err)
+	} else {
+		cfg.ServerCertPEM = string(b)
+	}
 	if passwordFile != "" {
 		b, err := os.ReadFile(passwordFile)
 		if err != nil {

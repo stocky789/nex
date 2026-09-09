@@ -1,0 +1,4 @@
+PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
+NAME="Debian GNU/Linux"
+libvirt-daemon	11.3.0-3+deb13u2
+qemu-system-x86	1:10.0.11+ds-0+deb13u1

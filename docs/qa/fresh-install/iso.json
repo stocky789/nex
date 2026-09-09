@@ -1,0 +1,5 @@
+{
+  "file": "nex-core-0.1.0-alpha1-amd64.iso",
+  "sha256": "5ca79c902ce39cb11c15f710abbf6629d2785089eb17b641435f8240af5e1dff",
+  "method": "Boot full unmodified local ISO; no initrd, preseed or installed disk injection"
+}

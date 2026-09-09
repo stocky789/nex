@@ -57,7 +57,8 @@ responds. These are host readiness checks. Active SSH does not prove remote logi
 active Chrony does not prove clock synchronization, especially offline.
 
 The alpha includes the host-local web UI (`nex-core-local` on port 9443). Central Controller
-enrollment and pool management remain separate. No bridge/NAT network or persistent guest is
+enrollment, which places the host in its own automatically created pool as pool master,
+remains separate. No bridge/NAT network or persistent guest is
 created by this procedure.
 
 ## Troubleshooting

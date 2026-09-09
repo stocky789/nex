@@ -1,0 +1,48 @@
+{
+  "version": "0.1.0+desktop1",
+  "iso_version": "0.1.0-alpha1",
+  "source_commit": "1fb97824a9acdcfc25e071eb48c18e9645ca2c16",
+  "artifacts": {
+    "dist/nex-core-0.1.0-alpha1-amd64.iso": {
+      "sha256": "9800dc2e67c6d3bd06dce84dd88a3917eac34b053dc5dcb5b1b23d4acfa3f214",
+      "bytes": 1630076928
+    },
+    "dist/core-local/nex-core-local_0.1.0+desktop1_amd64.deb": {
+      "sha256": "948c315241b40efc2d7bdd9fe6aece29b6ffc268ccedc8630c9c6b58f7864099",
+      "bytes": 734620024
+    },
+    "dist/appliance-desktop1/controller.qcow2": {
+      "sha256": "3336c230bf9cb53f71dee2726e3a2b021dcc2151c1c8a24131ee98a7e4c9b58a",
+      "bytes": 745013248
+    },
+    "dist/appliance-desktop1/nex-source.tar.gz": {
+      "sha256": "b249af8f09d878f1d783ecc367d85e978151d67578ebd6ca83797bca3fb604ca",
+      "bytes": 124295526
+    },
+    "dist/appliance-desktop1/manifest.json": {
+      "sha256": "98a970ae0bdd1341c2f6173a95819a8773b24090d515e763539c2d164323dd07",
+      "bytes": 257
+    },
+    "dist/appliance-desktop1/manifest.sig": {
+      "sha256": "b746fd6904f4aadeef53162c613d4a79c1b41c25681949c77f958fbb296ffc20",
+      "bytes": 64
+    },
+    "dist/appliance-desktop1/public-key.raw": {
+      "sha256": "18b92408993fa6949ded87bb9ab9ccc01e383f4a846c5282f449af243877764d",
+      "bytes": 32
+    },
+    "dist/core-local-source-desktop1.tar.gz": {
+      "sha256": "b249af8f09d878f1d783ecc367d85e978151d67578ebd6ca83797bca3fb604ca",
+      "bytes": 124295526
+    }
+  },
+  "build_inputs": {
+    "debian_image": "debian-13-genericcloud-amd64-20260831-2587.qcow2",
+    "debian_sha256": "85a969b7e99d7c817414136033df18c58d5c45ac8d27bb36e8ccb67173d2d4e3",
+    "nex_source_sha256": "b249af8f09d878f1d783ecc367d85e978151d67578ebd6ca83797bca3fb604ca",
+    "go_version": "go1.27.1",
+    "redistribution_ready": false
+  },
+  "trust": "Same public development key as usability1; private key retained outside source/images",
+  "redistribution_ready": false
+}

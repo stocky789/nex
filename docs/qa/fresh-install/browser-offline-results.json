@@ -1,0 +1,67 @@
+{
+  "host": {
+    "bridge": "br0",
+    "defaults": {
+      "cpus": 2,
+      "disk_gib": 32,
+      "memory_mib": 4096
+    },
+    "hostname": "nex-fresh-lab",
+    "preflight": {
+      "image_verification": "Signed manifest checked; full image integrity and format verification runs during deployment",
+      "ready": true,
+      "blockers": [],
+      "cpus": 2,
+      "memory_mib": 4096,
+      "disk_gib": 32,
+      "bridge": "br0",
+      "storage_dir": "/var/lib/libvirt/images"
+    },
+    "storage_dir": "/var/lib/libvirt/images"
+  },
+  "vms": [
+    {
+      "id": "72a34e46-5483-4239-b552-c18ddfa5e2d1",
+      "name": "nex-controller",
+      "state": "running",
+      "managed": true,
+      "power_allowed": true
+    },
+    {
+      "id": "3035054a-87b0-4adb-a40d-512ce050032b",
+      "name": "fresh-install-guest",
+      "state": "running",
+      "managed": false,
+      "power_allowed": false,
+      "blocked_reason": "VM is not owned by the local appliance engine"
+    }
+  ],
+  "stage": "offline",
+  "checks": [
+    "Fresh root login and local running VM inventory remain available during parent-controlled real Controller service outage"
+  ],
+  "captures": [
+    "browser-offline-local-login-desktop.png",
+    "browser-offline-local-login-360.png"
+  ],
+  "browser": "151.0.7922.34",
+  "environment": "Actual fresh ISO-installed nested KVM/libvirt with bundled systemd services; loopback forwards; no API mocking",
+  "artifacts": {
+    "iso_sha256": "5ca79c902ce39cb11c15f710abbf6629d2785089eb17b641435f8240af5e1dff",
+    "package_version": "0.1.0+managed1",
+    "package_sha256": "68816aa3975357881e0b946683fc37d604bd53022b8eeabcd48116352e2dce6f",
+    "installed_manifest": {
+      "architecture": "amd64",
+      "format": "qcow2",
+      "format_version": 1,
+      "image_sha256": "bce48d51651f17742cf452ae64a8456ac94af00d982c2896cd7a2446f6d29d88",
+      "minimum_disk_gib": 32,
+      "minimum_memory_mib": 4096,
+      "minimum_vcpus": 2,
+      "protocol_version": 1,
+      "version": "0.1.0+managed1"
+    }
+  },
+  "api_impact": "existing contract: browser exercises local deployment/session, Controller inventory, storage/network registration, ISO transfer and VM creation without changing interfaces",
+  "guide_impact": "none: verifies existing documented workflows; parent records updated evidence links"
+}

@@ -1,0 +1,11 @@
+{
+  "architecture": "amd64",
+  "format": "qcow2",
+  "format_version": 1,
+  "image_sha256": "bce48d51651f17742cf452ae64a8456ac94af00d982c2896cd7a2446f6d29d88",
+  "minimum_disk_gib": 32,
+  "minimum_memory_mib": 4096,
+  "minimum_vcpus": 2,
+  "protocol_version": 1,
+  "version": "0.1.0+managed1"
+}

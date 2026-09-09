@@ -11,7 +11,7 @@ mkdir -p "$cache"
 rm -rf "$source"
 dpkg-source -x "$cache/cdebconf_0.280.dsc" "$source"
 cp installer/gui/nex-shell.c "$source/src/modules/frontend/gtk/"
-cp docs/brand/nex-brand.png "$source/nex-brand.png"
+cp installer/assets/nex-core-lockup.png "$source/nex-core-lockup.png"
 cp installer/gui/nex-{wizard,network,config}.c installer/gui/nex-network.h "$source/"
 cp installer/gui/dhcp-preview.sh "$source/"
 python3 - "$source" <<'PY'
@@ -150,7 +150,7 @@ install -m 644 installer/gui/start.sh "$overlay/usr/lib/debian-installer.d/S66ne
 # Load safe package/account defaults before the GUI; no file-preseed screen.
 sed '/^d-i preseed\/early_command /d' installer/preseed.cfg > "$overlay/preseed.cfg"
 { echo UTC; awk '!/^#/ {print $3}' /usr/share/zoneinfo/zone.tab; } | sort -u > "$overlay/usr/share/nex-installer/timezones"
-install -m 644 docs/brand/nex-brand.png "$overlay/usr/share/nex-installer/nex-brand.png"
+install -m 644 installer/assets/nex-core-lockup.png "$overlay/usr/share/nex-installer/nex-core-lockup.png"
 install -m 644 "$source/src/modules/frontend/gtk/gtk.so" "$overlay/usr/lib/cdebconf/frontend/gtk.so"
 (cd "$overlay" && find . -print0 | cpio --null -o -H newc --quiet | gzip -n) >> "$stage/install.amd/gtk/initrd.gz"
 # Retain exact upstream and modified build source, not just a Nex-only patch.

@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[Unit]
+Description=Nex website health check
+Wants=nex-website.service
+After=nex-website.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/nex-website/health.env
+ExecStart=/bin/sh /usr/local/lib/nex-website/website-health.sh
+DynamicUser=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

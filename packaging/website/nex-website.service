@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[Unit]
+Description=Nex static website
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nex-website
+Group=nex-website
+UMask=0027
+RuntimeDirectory=nex-website
+RuntimeDirectoryMode=0750
+LogsDirectory=nex-website
+LogsDirectoryMode=0750
+ExecStart=/usr/sbin/nginx -c /etc/nex-website/nginx.conf -g 'daemon off;'
+ExecReload=/usr/sbin/nginx -c /etc/nex-website/nginx.conf -s reload
+ExecStop=/usr/sbin/nginx -c /etc/nex-website/nginx.conf -s quit
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET
+CapabilityBoundingSet=
+ReadWritePaths=/run/nex-website /var/log/nex-website
+
+[Install]
+WantedBy=multi-user.target

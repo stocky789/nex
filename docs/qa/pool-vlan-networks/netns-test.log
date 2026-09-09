@@ -1,0 +1,9 @@
+=== RUN   TestGuestVLANNetns
+    vlan_test.go:154: missing uplink: uplink d9 does not exist on this host
+    vlan_test.go:154: bridge as uplink: uplink other must be a physical NIC or bond, not a bridge, VLAN device or loopback
+    vlan_test.go:154: vlan device as uplink: VLAN networks need an uplink NIC name of at most 10 characters, a VLAN ID 0–4094 and the derived bridge name
+    vlan_test.go:154: VLAN owned by host bridge: VLAN 200 on d0 is already used by other in the host configuration
+    vlan_test.go:154: untagged NIC with address: uplink d1 carries host addresses; an untagged guest bridge would disconnect it, choose a VLAN ID
+    vlan_test.go:154: untagged NIC in ifupdown: uplink d2 carries host addresses; an untagged guest bridge would disconnect it, choose a VLAN ID
+--- PASS: TestGuestVLANNetns (0.04s)
+PASS

@@ -1,0 +1,191 @@
+{
+  "url": "https://nexvirtualization.com",
+  "resolve_rule": "MAP nexvirtualization.com 103.96.7.90",
+  "results": [
+    "1440px homepage keyboard FAQ and gallery images",
+    "360px homepage keyboard FAQ and gallery images",
+    "JavaScript-disabled homepage, FAQ and gallery",
+    "static-only 403 directory/dotfile and 404 paths"
+  ],
+  "requests": [
+    [
+      "GET",
+      "https://nexvirtualization.com/"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/_app/immutable/assets/app.Bt2prGBa.css"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/nex-brand.png"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/gallery/"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/_app/immutable/assets/_page.BP9iV4Rn.css"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/_app/immutable/assets/app.Bt2prGBa.css"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/gallery/desktop-shell.png"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/nex-brand.png"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/gallery/networking-desktop.png"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/gallery/storage-desktop.png"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/gallery/activity-desktop.png"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/_app/immutable/assets/app.Bt2prGBa.css"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/nex-brand.png"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/gallery/"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/_app/immutable/assets/_page.BP9iV4Rn.css"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/_app/immutable/assets/app.Bt2prGBa.css"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/gallery/desktop-shell.png"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/nex-brand.png"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/gallery/networking-desktop.png"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/gallery/storage-desktop.png"
+    ],
+    [
+      "GET",
+      "https://nexvirtualization.com/gallery/activity-desktop.png"
+    ]
+  ],
+  "responses": [
+    {
+      "url": "https://nexvirtualization.com/",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/_app/immutable/assets/app.Bt2prGBa.css",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/nex-brand.png",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/gallery/",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/_app/immutable/assets/app.Bt2prGBa.css",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/gallery/desktop-shell.png",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/_app/immutable/assets/_page.BP9iV4Rn.css",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/nex-brand.png",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/gallery/networking-desktop.png",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/gallery/activity-desktop.png",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/gallery/storage-desktop.png",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/_app/immutable/assets/app.Bt2prGBa.css",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/nex-brand.png",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/gallery/",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/_app/immutable/assets/app.Bt2prGBa.css",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/gallery/desktop-shell.png",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/_app/immutable/assets/_page.BP9iV4Rn.css",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/nex-brand.png",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/gallery/activity-desktop.png",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/gallery/storage-desktop.png",
+      "status": 200
+    },
+    {
+      "url": "https://nexvirtualization.com/gallery/networking-desktop.png",
+      "status": 200
+    }
+  ],
+  "browser_errors": []
+}

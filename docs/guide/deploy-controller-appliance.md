@@ -3,7 +3,7 @@
 ## Status
 
 This is the **2026-09-08 Controller appliance development slice**, with the newer
-`nex-core-local` package `0.1.0+usability1`, for explicitly selected
+`nex-core-local` package `0.1.0+managed1`, for explicitly selected
 disposable lab hosts. The host-local web service deploys a prepared Debian 13 virtual
 appliance and provides restricted local VM power recovery. No Controller installer ISO
 or interactive Debian installation is involved; the guest configures itself on first boot.
@@ -17,8 +17,17 @@ The newer [web-security development changes](secure-web-access.md) alter login/s
 and new-password rules; their actual rebuilt-package walkthrough is separately recorded.
 The `0.1.0+usability1` signed appliance and matching host package include DHCP and
 relaxed Controller password validation. Earlier artifacts do not contain these changes.
+The `0.1.0+desktop1` appliance/package retains those behaviors and adds the
+Controller desktop layout: resource tree, menus, detail views and bottom task drawer.
+See the [desktop artifact rebuild](../qa/controller-desktop-rebuild/checks.md) for
+its historical hashes and checks. The `0.1.0+managed1` appliance/package also includes
+[managed VM creation](create-virtual-machine.md); the
+[fresh local installation report](../qa/fresh-install/checks.md) records its matching
+ISO, installation and deployment evidence. Rebuilding media does not
+update an already deployed Controller VM; its existing UI remains until that guest
+is deliberately updated through a separately verified procedure.
 Use a private management network or VPN, with no direct Internet exposure.
-General VM creation/deletion, browser consoles, shared-storage control and automatic
+General VM deletion, browser consoles, shared-storage control and automatic
 Controller failover remain outside this slice. This page does not establish Phase 3 acceptance.
 
 ## Prerequisites
@@ -51,7 +60,7 @@ Controller failover remain outside this slice. This page does not establish Phas
    bridge or change networking.
 
    ```sh
-   apt install ./nex-core-local_0.1.0+usability1_amd64.deb
+   apt install ./nex-core-local_0.1.0+managed1_amd64.deb
    /usr/lib/nex/core-local-setup configure --address HOST_MANAGEMENT_IP --storage EXISTING_ABSOLUTE_DIRECTORY --bridge EXISTING_BRIDGE
    systemctl restart nex-core-local
    ```
@@ -87,8 +96,9 @@ Controller failover remain outside this slice. This page does not establish Phas
    choose **Automatic (DHCP)** or **Static IPv4** under **IP configuration**.
    DHCP is selected by default and obtains its address, gateway and DNS automatically. For
    static addressing, enter **IPv4 address / prefix**, **IPv4 gateway** and **DNS servers**;
-   separate DNS addresses with commas. Enter the first **Site name**, **Pool name** and
-   **Controller administrator password**. The Controller account is **admin**.
+   separate DNS addresses with commas. Enter the first **Site name** and
+   **Controller administrator password**. There is no pool name: this host becomes the
+   pool master of a pool created automatically and named after its hostname. The Controller account is **admin**.
 
 5. Select **Review deployment**, check the host, storage, address and resources, then select
    **Create VM & install Controller**. Follow **Deployment progress**. Progress is saved on
@@ -100,10 +110,11 @@ Controller failover remain outside this slice. This page does not establish Phas
    handoff. Compare the browser certificate's SHA-256 fingerprint with the value shown
    beside the ready link before accepting its trust warning. DHCP uses a hostname certificate
    while the link uses its discovered IP, so the browser may also report a name mismatch.
-   Check that the chosen Site/Pool and enrolled host appear in Controller. The appliance
-   remains visible in the host-local **Virtual machines** list; this Controller GUI does
-   not yet display VM inventory or UUIDs. Adoption is checked by the service/API, with
-   the actual identity verification recorded in the lab evidence.
+   Check that the chosen Site, the automatically created pool showing this host as
+   **Pool master**, and the enrolled host appear in Controller. The appliance
+   remains visible in the host-local **Virtual machines** list and in Controller's
+   inventory under its host. Select it in Controller to inspect its VM identity;
+   adoption retains the existing appliance UUID instead of creating another VM.
 
 7. For local power recovery, return to **Virtual machines** on the host. Where local control
    is allowed, select **Start**, **Shut down** or **Force stop**, then confirm the selected
@@ -114,7 +125,8 @@ Controller failover remain outside this slice. This page does not establish Phas
 
 One appliance VM boots from its own local disk and autostarts independently of Controller.
 The saved deployment reaches **ready**, exposes the verified Controller URL, and enrolls
-this host into the selected first Site/Pool. The existing appliance UUID is adopted; handoff
+this host into the selected first Site as pool master of its automatic pool. The existing
+appliance UUID is adopted; handoff
 must not create a second VM. Local host access remains available if Controller is stopped.
 
 A running VM alone is not completion. Initialization, TLS verification, enrollment and
@@ -198,7 +210,7 @@ this appliance's guest agent; no guest SSH access or shared root password is nee
    preparing any replacement using its network or management identity. The restored copy
    must be the only Controller able to reach the managed hosts. Exclusion is an operator
    responsibility, not automatic fencing. Do not use a fresh normal deployment: that creates
-   another Site/Pool and host enrollment, making it an unsuitable restore target. If the
+   another Site, pool and host enrollment, making it an unsuitable restore target. If the
    original host is accessible, disable appliance autostart, request shutdown and verify
    observed power-off:
 
@@ -226,7 +238,7 @@ this appliance's guest agent; no guest SSH access or shared root password is nee
    address** on the reachable replacement network, and the storage/bridge with the replacement
    host's configured values. Choose a new temporary administrator password in the private editor;
    it will be overwritten by the restored original account. Do not enter the password in shell
-   arguments or leave the placeholder. Omit Site and Pool names.
+   arguments or leave the placeholder. Omit the Site name.
 
    ```json
    {
@@ -253,7 +265,7 @@ this appliance's guest agent; no guest SSH access or shared root password is nee
 
    Require status `recovery_prepared` and stage `awaiting_manual_restore`; retain the returned
    `vm_id` as `REPLACEMENT_UUID`. This creates and initializes the appliance without enrolling
-   a host or creating a Site/Pool. Interrupted preparation must reuse the same request/file;
+   a host or creating a Site or pool. Interrupted preparation must reuse the same request/file;
    do not edit the request or create another replacement. Keep local management stopped.
    Use this newly created independent disk; do not reassign or modify VM disks outside
    Nex between preparation and restore. The recovery helper checks recorded identity and
@@ -274,7 +286,7 @@ this appliance's guest agent; no guest SSH access or shared root password is nee
 7. Start Controller with the two guest-agent commands from step 2, using `REPLACEMENT_UUID`.
    Require successful command completion, then open the **original Controller URL** and compare
    its original certificate fingerprint. Sign in with the original administrator credential.
-   Confirm the original Site/Pool/host IDs and existing-host reconnection, with no second active
+   Confirm the original Site, pool and host IDs and existing-host reconnection, with no second active
    Controller. Restart local access with `systemctl start nex-core-local`. Remove the private
    preparation request after successful recovery; it contains the temporary password.
 
@@ -284,6 +296,25 @@ original exclusion. The tested manual recovery restored Controller identity and 
 connectivity; it did not relocate the appliance inventory record or enroll the replacement host.
 
 ## Verification
+
+**Pool master change verified in a real lab (2026-09-09):** the
+[pool master lab run](../qa/pool-master/lab/checks.md) deployed a fresh appliance through this
+GUI with the site name only (no **Pool name** field), reached `ready` after the Controller inside
+the appliance was upgraded to the matching build, and recorded the automatic pool and adoption.
+Deploying with a packaged appliance image that still carries the previous Controller stops at
+**Needs attention** with a bootstrap rejection until the image is rebuilt. The recovery request
+format without a pool name is covered by unit tests only; treat it as unverified in a real lab.
+
+The [fresh local installation](../qa/fresh-install/checks.md) records the
+`0.1.0+managed1` package and bundled appliance installed from one matching ISO.
+Stock root browser login, deployment through the local GUI, ready state,
+automatic host enrollment and protected appliance adoption passed on the new
+disposable host. The report separates native results from remaining coverage.
+
+[Desktop-layout rebuild verification](../qa/controller-desktop-rebuild/checks.md)
+identifies the matching appliance, local package and ISO. Runtime and installation
+limits are recorded there; earlier deployment and recovery evidence remains tied to
+its original artifact version.
 
 [Deployment usability checks](../qa/appliance/deployment-usability.md) record the current
 DHCP/password/power UI changes, simulated browser checks and artifact availability limits.
@@ -327,7 +358,7 @@ existing-host reconnection passed while the original VM stayed shut off and excl
 The report records the lab-only bridge-link startup correction and
 [actual host reboot observations](../qa/appliance/final/replacement-host-reboot.txt).
 
-Physical hardware, physical-LAN compatibility, full updated-ISO installation verification, complete
+Physical hardware, physical-LAN compatibility, complete
 redistribution clearance, hosted CI and full Phase 2/3 acceptance remain outside these
 results. Follow the report's remaining gates and independent review findings.
 

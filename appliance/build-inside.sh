@@ -6,7 +6,7 @@ trap 'chown -R "${OUTPUT_UID:?}:${OUTPUT_GID:?}" /output' EXIT
 mkdir /build
 cd /build
 tar -xzf /input/nex-source.tar.gz --strip-components=1
-go build -mod=vendor -trimpath -o /build/nex-controller ./cmd/nex-controller
+go build -mod=vendor -trimpath -ldflags "-X nex.local/nex/internal/version.Version=${NEX_VERSION:-0.1.0-dev}" -o /build/nex-controller ./cmd/nex-controller
 go version /build/nex-controller > /output/go-version.txt
 (cd web && npm ci && npm run typecheck && npm run build)
 cp /input/base.qcow2 /output/controller.qcow2

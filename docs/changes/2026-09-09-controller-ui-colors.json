@@ -1,0 +1,50 @@
+{
+  "summary": "Refresh Nex Controller UI icons and colors: two-tone SVG icons, brand n mark, navy title bar and brighter status tokens with no layout change. API impact: none; presentation only.",
+  "paths": [
+    "docs/qa/controller-ui-colors/captures/activity-360.png",
+    "docs/qa/controller-ui-colors/captures/activity-desktop.png",
+    "docs/qa/controller-ui-colors/captures/desktop-shell.png",
+    "docs/qa/controller-ui-colors/captures/empty-pool-desktop.png",
+    "docs/qa/controller-ui-colors/captures/help-menu-360.png",
+    "docs/qa/controller-ui-colors/captures/host-360.png",
+    "docs/qa/controller-ui-colors/captures/host-desktop.png",
+    "docs/qa/controller-ui-colors/captures/idle-expired-login.png",
+    "docs/qa/controller-ui-colors/captures/invalid-object-desktop.png",
+    "docs/qa/controller-ui-colors/captures/libvirt-failed-desktop.png",
+    "docs/qa/controller-ui-colors/captures/loading.png",
+    "docs/qa/controller-ui-colors/captures/network-error-360.png",
+    "docs/qa/controller-ui-colors/captures/networking-360.png",
+    "docs/qa/controller-ui-colors/captures/networking-desktop.png",
+    "docs/qa/controller-ui-colors/captures/probe-timeout-desktop.png",
+    "docs/qa/controller-ui-colors/captures/revoke-confirmation.png",
+    "docs/qa/controller-ui-colors/captures/revoked-host-360.png",
+    "docs/qa/controller-ui-colors/captures/stale-host-360.png",
+    "docs/qa/controller-ui-colors/captures/storage-360.png",
+    "docs/qa/controller-ui-colors/captures/storage-desktop.png",
+    "docs/qa/controller-ui-colors/captures/tasks-collapsed-desktop.png",
+    "docs/qa/controller-ui-colors/captures/tasks-desktop.png",
+    "docs/qa/controller-ui-colors/captures/unauthorized.png",
+    "docs/qa/controller-desktop-layout/checks.md",
+    "docs/qa/controller-ui-colors/checks.md",
+    "docs/qa/controller-ui-colors/results.json",
+    "web/src/main.tsx",
+    "web/src/style.css"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The guide documents workflows, labels and navigation, not icon artwork or color tokens; every documented step and control name is unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Presentation-only change to SVG icons and CSS tokens; no client request, Controller operation, Core command/result or authorization behavior changes.",
+    "pages": []
+  },
+  "verification": {
+    "method": "UI typecheck and esbuild build passed. Phase1 suite with --browser passed all 16 result groups on the rebuilt bundle in a disposable lab, producing 23 full-page Chromium captures at 1440x1000 and 360x800 covering healthy, stale, failed, timeout, revoked, error, loading and confirmation states; enlarged crop inspected for icon legibility.",
+    "evidence": [
+      "docs/qa/controller-ui-colors/checks.md",
+      "docs/qa/controller-ui-colors/results.json"
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "fresh_host_id": "7c3d357e3aea427c0b4141d34f808c8627a0b8eef46464ca3cb6bfb24734522d",
+  "pool": {
+    "id": "7fb75502cef16823dae3d5ef136592ed9588077cba1bfe57ace4187c3db05210",
+    "site_id": "90080af7fe1fa0ee48c15c191ce5863c96b556123fe1ee172f5e560fb661641e",
+    "name": "nex-fresh-lab",
+    "master_host_id": "7c3d357e3aea427c0b4141d34f808c8627a0b8eef46464ca3cb6bfb24734522d"
+  },
+  "probe_subject": "CN=Nex Core second instance QA",
+  "retry": [
+    409,
+    {
+      "error": "already enrolled",
+      "host_id": "7c3d357e3aea427c0b4141d34f808c8627a0b8eef46464ca3cb6bfb24734522d"
+    }
+  ],
+  "connection": "fresh"
+}

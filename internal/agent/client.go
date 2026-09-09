@@ -23,7 +23,8 @@ import (
 
 var controllerDNSName = regexp.MustCompile(`(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.?$`)
 
-func client(s State, authenticated bool) (*http.Client, error) {
+// tlsConfig builds the Controller trust and optional enrolled client identity.
+func tlsConfig(s State, authenticated bool) (*tls.Config, error) {
 	u, err := url.Parse(s.Controller)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
 		return nil, errors.New("controller must be an HTTPS origin without credentials, path, query or fragment")
@@ -42,6 +43,13 @@ func client(s State, authenticated bool) (*http.Client, error) {
 			return nil, errors.New("agent identity is missing or invalid; enroll first")
 		}
 		config.Certificates = []tls.Certificate{cert}
+	}
+	return config, nil
+}
+func client(s State, authenticated bool) (*http.Client, error) {
+	config, err := tlsConfig(s, authenticated)
+	if err != nil {
+		return nil, err
 	}
 	return &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: config}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("controller redirects are refused") }}, nil
 }
@@ -127,6 +135,11 @@ func acceptIdentity(s *Store, r protocol.EnrollResponse, key, csr string) error 
 	if _, err = cert.Verify(x509.VerifyOptions{Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
 		return fmt.Errorf("invalid host certificate: %w", err)
 	}
+	if s.State.HostID != "" && r.HostID != s.State.HostID {
+		// Pending results belong to the previous Controller; the new one learns applied
+		// state from the managed journal instead.
+		s.State.Journal = map[string]JournalEntry{}
+	}
 	s.State.HostID = r.HostID
 	s.State.KeyPEM = key
 	s.State.CSRPEM = csr
@@ -139,14 +152,17 @@ func Enroll(ctx context.Context, s *Store, controller, ca, token, replaceHost st
 	if strings.TrimSpace(token) == "" {
 		return errors.New("enrollment token is empty")
 	}
-	if s.State.HostID != "" && replaceHost != s.State.HostID {
-		return errors.New("already enrolled; use rotate, or revoke first and explicitly select --replace-host with the current host ID")
+	// A different Controller (URL or trust) is a replacement: the host takes a fresh identity
+	// there while keeping this state directory, so its managed journal is reported and adopted.
+	switching := s.State.Controller != "" && (s.State.Controller != controller || s.State.TrustPEM != ca)
+	if switching && replaceHost != "" {
+		return errors.New("--replace-host applies to the current Controller; enrolling with a different Controller needs no replacement ID")
+	}
+	if s.State.HostID != "" && replaceHost != s.State.HostID && !switching {
+		return errors.New("already enrolled with this Controller; use rotate, or revoke first and explicitly select --replace-host with the current host ID")
 	}
 	if replaceHost != "" && replaceHost != s.State.HostID {
 		return errors.New("replacement host ID does not match local identity")
-	}
-	if s.State.Controller != "" && (s.State.Controller != controller || s.State.TrustPEM != ca) {
-		return errors.New("controller/trust differs from persisted identity; use a separate state directory for a different controller")
 	}
 	s.State.Controller = controller
 	s.State.TrustPEM = ca
@@ -158,6 +174,9 @@ func Enroll(ctx context.Context, s *Store, controller, ca, token, replaceHost st
 	key, csr := s.State.KeyPEM, s.State.CSRPEM
 	if replaceHost != "" {
 		key, csr = s.State.PendingKeyPEM, s.State.PendingCSRPEM
+	}
+	if switching {
+		key, csr = "", ""
 	}
 	if key == "" {
 		key, csr, err = newKey()

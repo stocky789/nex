@@ -1,0 +1,5 @@
+active
+active
+2184272188e7edeb8c2c4c6ddc7addcfe7be97e99f2dfe3055fa49f8dc8bd1a6  /usr/local/lib/nex/nex-controller
+7ee7e8e258915f9bbc316cb32607a97a281bbf3e8700e88c1a59032b0d1b41d4  /usr/local/share/nex/nex-source.tar.gz
+2: nex0    inet 10.0.2.20/24 brd 10.0.2.255 scope global nex0\       valid_lft forever preferred_lft forever

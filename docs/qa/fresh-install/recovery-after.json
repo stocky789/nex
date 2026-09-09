@@ -1,0 +1,9 @@
+{
+  "host_reboot_observed": true,
+  "enrolled_identity_unchanged": true,
+  "persistent_domain_xml_identical": true,
+  "disk_virtual_size_unchanged": true,
+  "ordinary_vm_stopped": true,
+  "controller_appliance_autostart_running": true,
+  "installed_services": "active\nactive\n3: br0    inet 10.0.2.15/24 brd 10.0.2.255 scope global dynamic noprefixroute br0\\       valid_lft 86394sec preferred_lft 75594sec\nPermitRootLogin no\n"
+}

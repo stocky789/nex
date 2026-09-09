@@ -1,0 +1,18 @@
+{
+  "method": "Built final agent; atomically replaced binary only inside disposable copied host, restarted actual packaged systemd unit, submitted existing-path registration with 4096-byte synthetic pathname, awaited failed operation and fresh heartbeat",
+  "checks": [
+    "Agent reconnect preserves enrolled identity",
+    "Native OS path error transmitted within 4096 bytes; full diagnostic retained in private durable journal",
+    "Controller accepts failed result and later heartbeat; operation does not remain dispatched"
+  ],
+  "wire_error_bytes": 4096,
+  "journal_error_bytes": 4122,
+  "status": "failed",
+  "artifacts": {
+    "agent-wire-fixed": "b8a6fb0631d7da4928560c228e9c9190f3f55f318deff08e58e08daaad8e50f3",
+    "source-wire-fixed.tar.gz": "1ee431b27d6da6371e1aa8dbce4a99c4526eff07dfb5d3529bdd5c7db0a43586"
+  },
+  "changed_source": {
+    "internal/agent/run.go": "844bd6593e149996abf430f364e5526d123522e7a05d25e3cfd6dfc766f4ed65"
+  }
+}

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Browser acceptance called by phase1.py against its disposable HTTPS controller."""
 import os
+import re
 import hashlib
 import sqlite3
 import time
@@ -76,35 +77,81 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.get_by_label('Site name').press('Enter')
         expect(page.get_by_role('heading', name='Browser walkthrough', exact=True)).to_be_visible()
         assert session_idle() > idle_deadline, 'authenticated mutation did not renew idle session'
-        page.get_by_role('button', name='Create pool', exact=True).first.click()
-        page.get_by_label('Pool name').fill('Browser empty pool')
-        page.get_by_label('Pool name').press('Enter')
-        expect(page.get_by_role('heading', name='Ready for your first host')).to_be_visible()
-        capture('empty-pool-desktop')
+        # Pools are never created by hand: an empty site invites the first host.
+        expect(page.get_by_role('heading', name='Add your first host', exact=True)).to_be_visible()
+        tree = page.get_by_role('navigation', name='Infrastructure', exact=True)
+        expect(tree.get_by_text('No hosts in this site.', exact=True)).to_be_visible()
+        expect(page.get_by_role('button', name='Create pool')).to_have_count(0)
+        file_menu.locator('summary').click()
+        expect(file_menu.get_by_role('button', name='Add host', exact=True)).to_be_enabled()
+        page.keyboard.press('Escape')
+        capture('empty-site-desktop')
         page.get_by_role('button', name='Add host', exact=True).first.click()
+        expect(page.get_by_role('heading', name='Add host to Browser walkthrough', exact=True)).to_be_visible()
+        expect(page.get_by_text('The new host becomes the master of a new pool in this site.', exact=False)).to_be_visible()
+        capture('add-host-form-desktop')
+        page.get_by_text('Manual enrollment', exact=True).click()
         page.get_by_role('button', name='Generate enrollment token', exact=True).click()
         expect(page.get_by_label('Single-use enrollment token')).not_to_have_value('')
         # Enrollment credentials are never written to capture artifacts.
         page.get_by_role('button', name='Close', exact=True).click()
         expect(page.get_by_label('Single-use enrollment token')).to_have_count(0)
-        # A delayed token belongs only to the pool where it was requested.
+        # Simulated add-host-by-address flow: probe then confirm, both stubbed so no
+        # real host is contacted; the host request must wait for fingerprint confirmation.
+        page.get_by_role('button', name='Add host', exact=True).first.click()
+        expect(page.get_by_role('heading', name='Add host to Browser walkthrough', exact=True)).to_be_visible()
+        fingerprint = 'sha256:' + 'ab' * 32
+        add_host_bodies = []
+
+        def stub_add_host(route):
+            add_host_bodies.append(route.request.post_data_json)
+            route.fulfill(json={'host_id': 'host-sim', 'pool_id': 'pool-sim'})
+
+        page.route('**/api/v1/hosts/probe', lambda route: route.fulfill(json={
+            'address': '10.0.0.5:9443', 'fingerprint': fingerprint,
+            'subject': 'CN=10.0.0.5', 'not_after': '2030-01-01T00:00:00Z',
+        }))
+        page.route('**/api/v1/sites/*/hosts', stub_add_host)
+        page.get_by_label('Host address').fill('10.0.0.5')
+        page.get_by_label('Root password').fill('hunter2')
+        page.get_by_role('button', name='Connect', exact=True).click()
+        expect(page.get_by_text(fingerprint)).to_be_visible()
+        assert not add_host_bodies, 'host add request sent before fingerprint was confirmed'
+        capture('add-host-probe-desktop')
+        page.get_by_role('button', name='Confirm and add host', exact=True).click()
+        expect(page.get_by_text('Host host-sim enrolled as master of a new pool', exact=False)).to_be_visible()
+        assert len(add_host_bodies) == 1, add_host_bodies
+        body = add_host_bodies[0]
+        assert body['address'] and body['fingerprint'] == fingerprint and body['controller_url'] and body['root_password'] == 'hunter2', body
+        expect(page.get_by_label('Root password')).to_have_count(0)
+        page.unroute('**/api/v1/hosts/probe')
+        page.unroute('**/api/v1/sites/*/hosts')
+        page.get_by_role('button', name='Close', exact=True).click()
+        lab.passed('browser add-host-by-address probe/confirm flow: host request withheld until fingerprint confirmed, root password reaches the request and is cleared from the form on success')
+        # A delayed token belongs only to the site where it was requested.
         pending_tokens = []
         page.route('**/api/v1/enrollment-tokens', lambda route: pending_tokens.append((route, route.fetch())))
         page.get_by_role('button', name='Add host', exact=True).first.click()
+        page.get_by_text('Manual enrollment', exact=True).click()
         page.get_by_role('button', name='Generate enrollment token', exact=True).click()
         for _ in range(100):
             if pending_tokens:
                 break
             page.wait_for_timeout(50)
         assert len(pending_tokens) == 1
-        page.get_by_role('link', name='Acceptance pool', exact=True).first.click()
-        expect(page.get_by_role('button', name='Add host', exact=True).first).to_be_disabled()
+        acceptance_pool = next(p for p in lab.api('/api/v1/pools') if p['id'] == pool_id)
+        acceptance_site = next(s for s in lab.api('/api/v1/sites') if s['id'] == acceptance_pool['site_id'])
+        page.get_by_role('button', name=re.compile(r'^Site: ')).click()
+        page.get_by_role('combobox', name='Search sites', exact=True).fill(acceptance_site['name'])
+        page.get_by_role('option', name=acceptance_site['name'], exact=True).click()
+        page.get_by_role('link', name=acceptance_pool['name'], exact=True).first.click()
+        expect(page.get_by_role('heading', name=re.compile(r'^Add host to '))).to_have_count(0)
         pending_tokens[0][0].fulfill(response=pending_tokens[0][1])
         page.unroute('**/api/v1/enrollment-tokens')
         page.get_by_role('button', name='Add host', exact=True).first.click()
         expect(page.get_by_label('Single-use enrollment token')).to_have_count(0)
         page.get_by_role('button', name='Close', exact=True).click()
-        lab.passed('browser keyboard sign-in, invalid credentials, site/pool creation, empty state and ephemeral enrollment token')
+        lab.passed('browser keyboard sign-in, invalid credentials, site creation, add-first-host empty state and ephemeral enrollment token')
 
         refresh_route('hosts/missing-browser-resource')
         expect(page.get_by_role('heading', name='Object not found', exact=True)).to_be_visible()
@@ -115,25 +162,32 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         refresh_route('hosts/' + host_id)
         expect(page.get_by_role('heading', name='Health checks', exact=True)).to_be_visible()
         expect(page.locator('.badge.fresh')).to_be_visible()
-        capture('host-desktop')
         host = next(h for h in lab.api('/api/v1/hosts') if h['id'] == host_id)
         pool = next(p for p in lab.api('/api/v1/pools') if p['id'] == pool_id)
         site = next(s for s in lab.api('/api/v1/sites') if s['id'] == pool['site_id'])
+        assert pool['name'] == host['hostname'] and pool['master_host_id'] == host_id, pool
+        expect(page.locator('.host-overview').get_by_text('Pool master', exact=True)).to_be_visible()
+        expect(page.get_by_text('Member', exact=True)).to_have_count(0)
+        capture('host-desktop')
         tree = page.get_by_role('navigation', name='Infrastructure', exact=True)
         selected_host = tree.locator(f'a[href="#/hosts/{host_id}"]')
         expect(selected_host).to_have_attribute('aria-current', 'page')
+        expect(selected_host).to_contain_text(host['hostname'] + ' · master')
         resource_search = page.get_by_label('Search resources', exact=True)
         resource_search.fill(host['hostname'].upper())
         expect(selected_host).to_be_visible()
         expect(tree.get_by_role('link', name=pool['name'], exact=True)).to_be_visible()
-        expect(tree.get_by_role('link', name=site['name'], exact=True)).to_be_visible()
+        expect(page.get_by_role('button', name=re.compile(r'^Site: '))).to_have_accessible_name('Site: ' + site['name'])
+        expect(tree.get_by_role('link', name=site['name'], exact=True)).to_have_count(0)
         expect(tree.get_by_role('link', name='Browser walkthrough', exact=True)).to_have_count(0)
         resource_search.fill(pool['name'])
         expect(selected_host).to_be_visible()
-        resource_search.fill(site['name'])
+        page.get_by_role('button', name=re.compile(r'^Site: ')).click()
+        page.get_by_role('combobox', name='Search sites', exact=True).fill(site['name'])
         expect(selected_host).to_be_visible()
+        page.keyboard.press('Escape')
         resource_search.fill('no-such-resource-acceptance')
-        expect(tree.get_by_text('No matching resources.', exact=True)).to_be_visible()
+        expect(tree.get_by_text('No matching resources in this site.', exact=True)).to_be_visible()
         expect(selected_host).to_have_count(0)
         expect(page.get_by_role('heading', name=host['hostname'], exact=True)).to_be_visible()
         resource_search.fill('')
@@ -188,6 +242,10 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         capture('desktop-shell')
         lab.passed('browser keyboard File/View/Help menus and Escape, menu creation, resource search with ancestors, collapsible tree and current selection, scoped General/Networking/Storage/Activity views, task dock and desktop shell')
         refresh_route('pools/' + pool_id)
+        expect(page.get_by_role('heading', name=pool['name'], exact=True)).to_be_visible()
+        expect(page.get_by_text('The pool master controls the pool.', exact=False)).to_be_visible()
+        expect(page.locator('.metric').filter(has_text='Pool master')).to_contain_text(host['hostname'])
+        capture('pool-master-desktop')
         checks = next(h for h in lab.api('/api/v1/hosts') if h['id'] == host_id)['inventory']['checks']
         expected_health = 'healthy' if all(c['status'] == 'healthy' and c['freshness'] == 'fresh' for c in checks) else 'degraded'
         expect(page.locator('tbody tr').first.locator('td').nth(2)).to_contain_text(expected_health)
@@ -283,6 +341,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         expect(page.get_by_role('button', name='Re-enroll host', exact=True)).to_be_visible()
         capture('revoked-host-360')
         page.get_by_role('button', name='Re-enroll host', exact=True).click()
+        page.get_by_text('Manual enrollment', exact=True).click()
         expect(page.get_by_role('button', name='Generate enrollment token', exact=True)).to_be_visible()
         page.get_by_role('button', name='Close', exact=True).click()
         # Advance only this disposable browser session's stored deadline, not the host clock.
@@ -302,5 +361,5 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         lab.passed('browser __Host cookie attributes, legacy rejection, restrictive CSP, real inline-script blocking, idle GET/mutation semantics and expired-session login recovery; logout and actual-peer throttle')
         assert not errors, errors
         lab.passed('browser interrupted request/retry, genuine stopped-agent stale state, revoke and re-enroll entry, sign-out; no page errors')
-        lab.passed('browser delayed-token pool scope and older inventory response cannot overwrite newer revocation')
+        lab.passed('browser delayed-token site scope, automatic pool master labels, and older inventory response cannot overwrite newer revocation')
         browser.close()

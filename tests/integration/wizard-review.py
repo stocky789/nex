@@ -140,6 +140,9 @@ with (output / 'qemu.log').open('w') as log:
         assert welcome.size == (width, height), 'Unexpected native display resolution'
         for corner in ((width - 5, 5), (5, height - 5), (width - 5, height - 5)):
             assert welcome.getpixel(corner) == welcome.getpixel((5, 5)), 'Installer leaves desktop exposed; no window manager maximizes it'
+        # A cropped brand board paints its textured background over the header.
+        for point in ((20, 20), (100, 20), (210, 20)):
+            assert welcome.getpixel(point) == welcome.getpixel((5, 5)), 'Logo background must blend into the native header without texture'
         click(width - 60, footer)
         field('h', 'nexcore.matthome')
         field('r', 'disposabletest')

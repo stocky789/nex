@@ -1,0 +1,54 @@
+{
+  "summary": "Deploy private nginx website hosting, browser security policy, health monitoring and retained-release rollback. API impact: none; no Nex Controller/Core or client service contract changes.",
+  "paths": [
+    ".github/workflows/phase1.yml",
+    ".gitea/workflows/phase1.yml",
+    "docs/BUG_LEDGER.md",
+    "docs/guide/README.md",
+    "docs/guide/website-preview.md",
+    "docs/guide/operate-website.md",
+    "docs/plans/2026-09-09-public-website.md",
+    "docs/qa/website-security/review.md",
+    "docs/qa/website-security/hardening.md",
+    "docs/qa/website-security/deployed-hashes.json",
+    "scripts/website-release.py",
+    "scripts/website-health.sh",
+    "tests/test_website_hosting.py",
+    "tests/test_website_release.py",
+    "tests/integration/website_hardening_browser.py",
+    "packaging/website/README.md",
+    "packaging/website/nex-website-health.service",
+    "packaging/website/nex-website-health.timer",
+    "packaging/website/nex-website.logrotate",
+    "packaging/website/nex-website.service",
+    "packaging/website/nex-website.sysusers",
+    "packaging/website/nginx.conf.template",
+    "docs/qa/website-security/browser/gallery-1440.png",
+    "docs/qa/website-security/browser/gallery-360.png",
+    "docs/qa/website-security/browser/home-faq-1440.png",
+    "docs/qa/website-security/browser/home-faq-360.png",
+    "docs/qa/website-security/browser/results.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Private HTTPS hosting, service inspection, publish, monitoring and explicit rollback workflows now have verified operator guidance.",
+    "pages": [
+      "docs/guide/README.md",
+      "docs/guide/website-preview.md",
+      "docs/guide/operate-website.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Static web-server headers, error responses and local deployment commands do not call or change Nex Controller operations, Core commands, observed-state results or client-facing service APIs.",
+    "pages": []
+  },
+  "verification": {
+    "method": "10 real-nginx/release tests in disposable VM directories, 2 public-file checks and 13 documentation tests passed. Real HTTPS browser workflow passed with captures inspected; service restart, health, log rotation, explicit release rollback, all11 HTTPS hashes and isolated backup restore passed. No SSH/firewall/allowlist changes, reboot, push or hosted CI claimed.",
+    "evidence": [
+      "docs/qa/website-security/hardening.md",
+      "docs/qa/website-security/browser/results.json",
+      "docs/qa/website-security/deployed-hashes.json"
+    ]
+  }
+}

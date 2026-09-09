@@ -25,18 +25,23 @@ import (
 
 type Config struct {
 	DataDir, Username, Password, UIPath, DocsPath, SourcePath string
-	StaleAfter                                                time.Duration
-	AlertDebounce                                             time.Duration
+	// ServerCertPEM is the HTTPS certificate this Controller serves; add-host pushes it
+	// to the host as the trust for its Controller connection (not the host-identity CA).
+	ServerCertPEM string
+	StaleAfter    time.Duration
+	AlertDebounce time.Duration
 }
 type Controller struct {
 	db        *sql.DB
 	cfg       Config
+	mediaMu   sync.Mutex
 	mu        sync.Mutex
 	seen      map[string]time.Time
 	ca        *authority
 	lock      *os.File
 	loginGate websecurity.LoginGate
 	observed  map[string]observationReceipt
+	consoles  consoleHub
 	stop      chan struct{}
 	stopped   chan struct{}
 }
@@ -101,17 +106,30 @@ func Open(cfg Config) (*Controller, error) {
 	}
 
 	c := &Controller{db: db, cfg: cfg, seen: map[string]time.Time{}, lock: lock, observed: map[string]observationReceipt{}, stop: make(chan struct{}), stopped: make(chan struct{})}
+	// Pool-bound tokens and bootstrap pool records predate automatic pools. Tokens live ten
+	// minutes and completed handoffs never retry bootstrap, so the old tables are dropped.
+	for _, table := range []string{"tokens", "appliance_bootstraps"} {
+		old, err := columns(db, table)
+		if err != nil {
+			return nil, err
+		}
+		if old["pool_id"] {
+			if _, err = db.Exec("DROP TABLE " + table); err != nil {
+				return nil, err
+			}
+		}
+	}
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS schema_version(version INTEGER NOT NULL); INSERT INTO schema_version SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM schema_version);
  CREATE TABLE IF NOT EXISTS admins(username TEXT PRIMARY KEY,salt TEXT NOT NULL,password TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,username TEXT NOT NULL,csrf TEXT NOT NULL,expires INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS sites(id TEXT PRIMARY KEY,name TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS pools(id TEXT PRIMARY KEY,site_id TEXT NOT NULL REFERENCES sites(id),name TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS pools(id TEXT PRIMARY KEY,site_id TEXT NOT NULL REFERENCES sites(id),name TEXT NOT NULL,master_host_id TEXT NOT NULL DEFAULT '');
  CREATE TABLE IF NOT EXISTS hosts(id TEXT PRIMARY KEY,pool_id TEXT NOT NULL REFERENCES pools(id),hostname TEXT NOT NULL,revoked INTEGER NOT NULL DEFAULT 0,last_seen TEXT,inventory TEXT,sequence INTEGER NOT NULL DEFAULT 0);
- CREATE TABLE IF NOT EXISTS tokens(hash TEXT PRIMARY KEY,pool_id TEXT NOT NULL REFERENCES pools(id),host_id TEXT,expires INTEGER NOT NULL,csr TEXT,response TEXT);
+ CREATE TABLE IF NOT EXISTS tokens(hash TEXT PRIMARY KEY,site_id TEXT NOT NULL REFERENCES sites(id),host_id TEXT,expires INTEGER NOT NULL,csr TEXT,response TEXT);
  CREATE TABLE IF NOT EXISTS certificates(serial TEXT PRIMARY KEY,host_id TEXT NOT NULL REFERENCES hosts(id),csr TEXT NOT NULL,pem TEXT NOT NULL,expires INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY,host_id TEXT NOT NULL REFERENCES hosts(id),kind TEXT NOT NULL,request_id TEXT NOT NULL UNIQUE,status TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,updated_at TEXT NOT NULL,actor TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY AUTOINCREMENT,actor TEXT NOT NULL,action TEXT NOT NULL,resource_id TEXT NOT NULL,created_at TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '');
- CREATE TABLE IF NOT EXISTS appliance_bootstraps(request_id TEXT PRIMARY KEY,site_name TEXT NOT NULL,pool_name TEXT NOT NULL,token_hash TEXT NOT NULL UNIQUE,site_id TEXT NOT NULL REFERENCES sites(id),pool_id TEXT NOT NULL REFERENCES pools(id));
+ CREATE TABLE IF NOT EXISTS appliance_bootstraps(request_id TEXT PRIMARY KEY,site_name TEXT NOT NULL,token_hash TEXT NOT NULL UNIQUE,site_id TEXT NOT NULL REFERENCES sites(id));
  CREATE TABLE IF NOT EXISTS appliances(id TEXT PRIMARY KEY,pool_id TEXT NOT NULL REFERENCES pools(id),host_id TEXT NOT NULL REFERENCES hosts(id),name TEXT NOT NULL,request_id TEXT NOT NULL UNIQUE);
  CREATE TABLE IF NOT EXISTS health_states(resource_id TEXT PRIMARY KEY,status TEXT NOT NULL,detail TEXT NOT NULL);`)
 	if err != nil {
@@ -119,30 +137,23 @@ func Open(cfg Config) (*Controller, error) {
 		return nil, err
 	}
 	// Add an idle deadline to existing databases. Old sessions expire immediately.
-	rows, err := db.Query("PRAGMA table_info(sessions)")
+	sessions, err := columns(db, "sessions")
 	if err != nil {
 		return nil, err
 	}
-	hasIdle := false
-	for rows.Next() {
-		var cid, notnull, pk int
-		var name, kind string
-		var def any
-		if err := rows.Scan(&cid, &name, &kind, &notnull, &def, &pk); err != nil {
-			rows.Close()
+	if !sessions["idle_expires"] {
+		if _, err = db.Exec("ALTER TABLE sessions ADD COLUMN idle_expires INTEGER NOT NULL DEFAULT 0"); err != nil {
 			return nil, err
 		}
-		if name == "idle_expires" {
-			hasIdle = true
-		}
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
+	// Pools created by hand predate pool masters: the earliest enrolled active host
+	// (or any host) becomes master, and pools that never received a host are removed below.
+	pools, err := columns(db, "pools")
+	if err != nil {
 		return nil, err
 	}
-	rows.Close()
-	if !hasIdle {
-		if _, err = db.Exec("ALTER TABLE sessions ADD COLUMN idle_expires INTEGER NOT NULL DEFAULT 0"); err != nil {
+	if !pools["master_host_id"] {
+		if _, err = db.Exec("ALTER TABLE pools ADD COLUMN master_host_id TEXT NOT NULL DEFAULT ''; UPDATE pools SET master_host_id=coalesce((SELECT id FROM hosts WHERE pool_id=pools.id ORDER BY revoked,rowid LIMIT 1),'')"); err != nil {
 			return nil, err
 		}
 	}
@@ -171,6 +182,14 @@ func Open(cfg Config) (*Controller, error) {
 		db.Close()
 		return nil, err
 	}
+	if err = c.initManaged(); err != nil {
+		return nil, err
+	}
+	// Runs on every start so an Open interrupted after the ALTER above still finishes the cleanup;
+	// automatically created pools always carry a master, so only manual leftovers match.
+	if _, err = db.Exec("DELETE FROM pools WHERE master_host_id='' AND NOT EXISTS(SELECT 1 FROM hosts WHERE pool_id=pools.id) AND NOT EXISTS(SELECT 1 FROM managed_resources WHERE pool_id=pools.id) AND NOT EXISTS(SELECT 1 FROM appliances WHERE pool_id=pools.id)"); err != nil {
+		return nil, err
+	}
 	c.cfg.Password = ""
 	success = true
 	go c.monitorHealth()
@@ -182,6 +201,26 @@ func (c *Controller) Close() error {
 	err := c.db.Close()
 	c.lock.Close()
 	return err
+}
+
+// columns lists a table's column names; a missing table yields an empty set.
+func columns(db *sql.DB, table string) (map[string]bool, error) {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, kind string
+		var def any
+		if err := rows.Scan(&cid, &name, &kind, &notnull, &def, &pk); err != nil {
+			return nil, err
+		}
+		out[name] = true
+	}
+	return out, rows.Err()
 }
 func random() string {
 	b := make([]byte, 32)
@@ -200,8 +239,11 @@ func write(w http.ResponseWriter, status int, v any) {
 func fail(w http.ResponseWriter, status int, msg string) {
 	write(w, status, map[string]string{"error": msg})
 }
-func decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+func decode(w http.ResponseWriter, r *http.Request, v any) bool { return decodeLimit(w, r, v, 1<<20) }
+
+// decodeLimit is decode with an explicit body cap; host reports carry the managed journal.
+func decodeLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
 	if err := d.Decode(v); err != nil {
@@ -230,16 +272,31 @@ func (c *Controller) Handler() http.Handler {
 	m.HandleFunc("GET /api/v1/sites", c.admin(c.sites))
 	m.HandleFunc("POST /api/v1/sites", c.admin(c.sites))
 	m.HandleFunc("GET /api/v1/pools", c.admin(c.pools))
-	m.HandleFunc("POST /api/v1/pools", c.admin(c.pools))
 	m.HandleFunc("GET /api/v1/hosts", c.admin(c.hosts))
 	m.HandleFunc("GET /api/v1/vms", c.admin(c.appliances))
+	m.HandleFunc("GET /api/v1/storage", c.admin(c.storage))
+	m.HandleFunc("POST /api/v1/storage", c.admin(c.storage))
+	m.HandleFunc("GET /api/v1/networks", c.admin(c.networks))
+	m.HandleFunc("POST /api/v1/networks", c.admin(c.networks))
+	m.HandleFunc("GET /api/v1/media", c.admin(c.media))
+	m.HandleFunc("POST /api/v1/media", c.admin(c.media))
+	m.HandleFunc("POST /api/v1/vms", c.admin(c.createVM))
+	m.HandleFunc("POST /api/v1/vms/{id}/power", c.admin(c.powerVM))
+	m.HandleFunc("POST /api/v1/vms/{id}/console", c.admin(c.openConsole))
+	m.HandleFunc("GET /api/v1/vms/{id}/console/{ticket}", c.admin(c.browserConsole))
+	m.HandleFunc("POST /api/v1/agent/console/{token}", c.agent(c.agentConsole))
+	m.HandleFunc("GET /api/v1/agent/media/{id}", c.agent(c.agentMedia))
 	m.HandleFunc("POST /api/v1/appliances/adopt", c.admin(c.adoptAppliance))
 	m.HandleFunc("POST /api/v1/appliances/bootstrap", c.admin(c.bootstrapAppliance))
 	m.HandleFunc("POST /api/v1/enrollment-tokens", c.admin(c.token))
+	m.HandleFunc("POST /api/v1/hosts/probe", c.admin(c.probeHost))
+	m.HandleFunc("POST /api/v1/sites/{id}/hosts", c.admin(c.addSiteHost))
 	m.HandleFunc("POST /api/v1/hosts/{id}/revoke", c.admin(c.revoke))
 	m.HandleFunc("POST /api/v1/hosts/{id}/operations", c.admin(c.operation))
 	m.HandleFunc("GET /api/v1/operations", c.admin(c.operations))
 	m.HandleFunc("GET /api/v1/audit", c.admin(c.audits))
+	m.HandleFunc("GET /api/v1/updates", c.admin(c.updates))
+	m.HandleFunc("POST /api/v1/updates/apply", c.admin(c.applyUpdate))
 	m.HandleFunc("POST /api/v1/agent/enroll", c.enroll)
 	m.HandleFunc("POST /api/v1/agent/report", c.agent(c.report))
 	m.HandleFunc("POST /api/v1/agent/rotate", c.agent(c.rotate))
@@ -424,39 +481,10 @@ func (c *Controller) sites(w http.ResponseWriter, r *http.Request, user, csrf st
 	}
 	write(w, 200, out)
 }
+
+// Pools are created only by host enrollment; the enrolling host is the pool master.
 func (c *Controller) pools(w http.ResponseWriter, r *http.Request, user, csrf string) {
-	if r.Method == "POST" {
-		var v struct {
-			Name   string `json:"name"`
-			SiteID string `json:"site_id"`
-		}
-		if !decode(w, r, &v) {
-			return
-		}
-		if !nameValid(v.Name) {
-			fail(w, 400, "name required (maximum 200 characters)")
-			return
-		}
-		id := random()
-		tx, err := c.db.Begin()
-		if err != nil {
-			fail(w, 500, "storage unavailable")
-			return
-		}
-		defer tx.Rollback()
-		_, err = tx.Exec("INSERT INTO pools VALUES(?,?,?)", id, v.SiteID, strings.TrimSpace(v.Name))
-		if err != nil {
-			fail(w, 400, "site does not exist")
-			return
-		}
-		if c.audit(tx, user, "pool.create", id) != nil || tx.Commit() != nil {
-			fail(w, 500, "pool storage failed")
-			return
-		}
-		write(w, 201, protocol.Pool{ID: id, SiteID: v.SiteID, Name: strings.TrimSpace(v.Name)})
-		return
-	}
-	rows, err := c.db.Query("SELECT id,site_id,name FROM pools ORDER BY name,id")
+	rows, err := c.db.Query("SELECT id,site_id,name,master_host_id FROM pools ORDER BY name,id")
 	if err != nil {
 		fail(w, 500, "pool lookup failed")
 		return
@@ -465,7 +493,7 @@ func (c *Controller) pools(w http.ResponseWriter, r *http.Request, user, csrf st
 	out := []protocol.Pool{}
 	for rows.Next() {
 		var v protocol.Pool
-		if err := rows.Scan(&v.ID, &v.SiteID, &v.Name); err != nil {
+		if err := rows.Scan(&v.ID, &v.SiteID, &v.Name, &v.MasterHostID); err != nil {
 			fail(w, 500, "stored data decode failed")
 			return
 		}
@@ -478,7 +506,7 @@ func (c *Controller) pools(w http.ResponseWriter, r *http.Request, user, csrf st
 	write(w, 200, out)
 }
 func (c *Controller) hosts(w http.ResponseWriter, r *http.Request, user, csrf string) {
-	rows, err := c.db.Query("SELECT id,pool_id,hostname,revoked,last_seen,inventory FROM hosts ORDER BY hostname,id")
+	rows, err := c.db.Query("SELECT h.id,h.pool_id,h.hostname,h.revoked,h.last_seen,h.inventory,coalesce(c.capabilities,'[]') FROM hosts h LEFT JOIN host_capabilities c ON c.host_id=h.id ORDER BY h.hostname,h.id")
 	if err != nil {
 		fail(w, 500, "host lookup failed")
 		return
@@ -490,8 +518,13 @@ func (c *Controller) hosts(w http.ResponseWriter, r *http.Request, user, csrf st
 	for rows.Next() {
 		var v protocol.Host
 		var seen, inv sql.NullString
-		if err := rows.Scan(&v.ID, &v.PoolID, &v.Hostname, &v.Revoked, &seen, &inv); err != nil {
+		var capabilities string
+		if err := rows.Scan(&v.ID, &v.PoolID, &v.Hostname, &v.Revoked, &seen, &inv, &capabilities); err != nil {
 			fail(w, 500, "stored data decode failed")
+			return
+		}
+		if json.Unmarshal([]byte(capabilities), &v.Capabilities) != nil {
+			fail(w, 500, "stored capabilities invalid")
 			return
 		}
 		v.Connection = "unknown"
@@ -525,34 +558,15 @@ func (c *Controller) hosts(w http.ResponseWriter, r *http.Request, user, csrf st
 }
 func (c *Controller) token(w http.ResponseWriter, r *http.Request, user, csrf string) {
 	var v struct {
-		PoolID string `json:"pool_id"`
+		SiteID string `json:"site_id"`
 		HostID string `json:"host_id"`
 	}
 	if !decode(w, r, &v) {
 		return
 	}
-	tx, err := c.db.Begin()
-	if err != nil {
-		fail(w, 500, "storage unavailable")
-		return
-	}
-	defer tx.Rollback()
-	var count int
-	if tx.QueryRow("SELECT count(*) FROM pools WHERE id=?", v.PoolID).Scan(&count) != nil || count != 1 {
-		fail(w, 400, "pool does not exist")
-		return
-	}
-	if v.HostID != "" {
-		if tx.QueryRow("SELECT count(*) FROM hosts WHERE id=? AND pool_id=? AND revoked=1", v.HostID, v.PoolID).Scan(&count) != nil || count != 1 {
-			fail(w, 409, "re-enrollment requires a revoked host in the selected pool")
-			return
-		}
-	}
-	token := random()
-	expires := time.Now().Add(10 * time.Minute)
-	_, err = tx.Exec("INSERT INTO tokens(hash,pool_id,host_id,expires) VALUES(?,?,?,?)", digest(token), v.PoolID, v.HostID, expires.Unix())
-	if err != nil || c.audit(tx, user, "enrollment-token.create", v.PoolID) != nil || tx.Commit() != nil {
-		fail(w, 500, "token storage failed")
+	token, expires, status, msg := c.mintEnrollmentToken(user, v.SiteID, v.HostID)
+	if status != 0 {
+		fail(w, status, msg)
 		return
 	}
 	write(w, 201, map[string]any{"token": token, "expires_at": expires.UTC()})

@@ -13,7 +13,7 @@ import (
 
 func TestRevocationBetweenMiddlewareAndTransaction(t *testing.T) {
 	a := newClient(t)
-	pool := a.pool()
+	pool := a.site()
 	original := a.enroll(a.token(pool, ""), csr(t))
 	old := certificate(t, original.CertificatePEM)
 	a.call("POST", "/api/v1/hosts/"+original.HostID+"/revoke", nil, nil, 200)

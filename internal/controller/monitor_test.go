@@ -42,7 +42,7 @@ func TestHealthDebounceAndDurability(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	_, err = c.db.Exec("INSERT INTO sites VALUES('s','Site'); INSERT INTO pools VALUES('p','s','Pool'); INSERT INTO hosts(id,pool_id,hostname) VALUES('h','p','Host')")
+	_, err = c.db.Exec("INSERT INTO sites VALUES('s','Site'); INSERT INTO pools VALUES('p','s','Pool','h'); INSERT INTO hosts(id,pool_id,hostname) VALUES('h','p','Host')")
 	if err != nil {
 		t.Fatal(err)
 	}

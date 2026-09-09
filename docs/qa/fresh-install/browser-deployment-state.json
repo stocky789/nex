@@ -1,0 +1,59 @@
+{
+  "host": {
+    "bridge": "br0",
+    "defaults": {
+      "cpus": 2,
+      "disk_gib": 32,
+      "memory_mib": 4096
+    },
+    "hostname": "nex-fresh-lab",
+    "preflight": {
+      "image_verification": "Signed manifest checked; full image integrity and format verification runs during deployment",
+      "ready": true,
+      "blockers": [],
+      "cpus": 2,
+      "memory_mib": 4096,
+      "disk_gib": 32,
+      "bridge": "br0",
+      "storage_dir": "/var/lib/libvirt/images"
+    },
+    "storage_dir": "/var/lib/libvirt/images"
+  },
+  "operation": {
+    "id": "d004ad61-a810-4deb-871c-faf53a38903a",
+    "vm_id": "72a34e46-5483-4239-b552-c18ddfa5e2d1",
+    "kind": "deploy",
+    "status": "ready",
+    "stage": "ready",
+    "progress": 100,
+    "controller_url": "https://10.0.2.20:8443",
+    "controller_cert_sha256": "aba6e168706791220d26062ae3e413e5ba4d3bdd34501da7ac7025df8b75209f"
+  },
+  "observed_progress": [
+    [
+      "queued",
+      "running",
+      0
+    ],
+    [
+      "copying_disk",
+      "running",
+      10
+    ],
+    [
+      "initializing",
+      "running",
+      92
+    ],
+    [
+      "cleanup",
+      "running",
+      98
+    ],
+    [
+      "ready",
+      "ready",
+      100
+    ]
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "host": {
+    "bridge": "br0",
+    "defaults": {
+      "cpus": 2,
+      "disk_gib": 32,
+      "memory_mib": 4096
+    },
+    "hostname": "nex-fresh-lab",
+    "preflight": {
+      "image_verification": "Signed manifest checked; full image integrity and format verification runs during deployment",
+      "ready": true,
+      "blockers": [],
+      "cpus": 2,
+      "memory_mib": 4096,
+      "disk_gib": 32,
+      "bridge": "br0",
+      "storage_dir": "/var/lib/libvirt/images"
+    },
+    "storage_dir": "/var/lib/libvirt/images"
+  },
+  "operation": {
+    "id": "d004ad61-a810-4deb-871c-faf53a38903a",
+    "vm_id": "72a34e46-5483-4239-b552-c18ddfa5e2d1",
+    "kind": "deploy",
+    "status": "ready",
+    "stage": "ready",
+    "progress": 100,
+    "controller_url": "https://10.0.2.20:8443",
+    "controller_cert_sha256": "aba6e168706791220d26062ae3e413e5ba4d3bdd34501da7ac7025df8b75209f"
+  },
+  "observed_progress": [
+    [
+      "queued",
+      "running",
+      0
+    ],
+    [
+      "copying_disk",
+      "running",
+      10
+    ],
+    [
+      "initializing",
+      "running",
+      92
+    ],
+    [
+      "cleanup",
+      "running",
+      98
+    ],
+    [
+      "ready",
+      "ready",
+      100
+    ]
+  ],
+  "stage": "deploy",
+  "checks": [
+    "Fresh empty installed host deployed bundled Controller through static-network GUI, named site/pool and reached ready"
+  ],
+  "captures": [
+    "browser-deploy-local-login-desktop.png",
+    "browser-deploy-review-desktop.png",
+    "browser-deploy-review-360.png",
+    "browser-deploy-progress-1.png",
+    "browser-deploy-progress-2.png",
+    "browser-deploy-progress-3.png",
+    "browser-deploy-progress-4.png",
+    "browser-deploy-progress-5.png",
+    "browser-deploy-ready.png"
+  ],
+  "browser": "151.0.7922.34",
+  "environment": "Actual fresh ISO-installed nested KVM/libvirt with bundled systemd services; loopback forwards; no API mocking",
+  "artifacts": {
+    "iso_sha256": "5ca79c902ce39cb11c15f710abbf6629d2785089eb17b641435f8240af5e1dff",
+    "package_version": "0.1.0+managed1",
+    "package_sha256": "68816aa3975357881e0b946683fc37d604bd53022b8eeabcd48116352e2dce6f"
+  },
+  "api_impact": "existing contract: browser exercises local deployment/session, Controller inventory, storage/network registration, ISO transfer and VM creation without changing interfaces",
+  "guide_impact": "none: verifies existing documented workflows; parent records updated evidence links"
+}

@@ -1,0 +1,45 @@
+{
+  "summary": "Simplify repository and website presentation while preserving the approved design and development limits. API impact: none \u2014 static copy/styles only.",
+  "paths": [
+    "README.md",
+    "PRODUCT.md",
+    "website/README.md",
+    "website/src/routes/+page.svelte",
+    "website/src/routes/gallery/+page.svelte",
+    "website/src/app.css",
+    "docs/plans/2026-09-09-public-website.md",
+    "docs/qa/website/checks.md",
+    "docs/qa/website/build.json",
+    "docs/qa/website/results.json",
+    "docs/qa/website/faq-1440.png",
+    "docs/qa/website/faq-360.png",
+    "docs/qa/website/faq-768.png",
+    "docs/qa/website/gallery-1440.png",
+    "docs/qa/website/gallery-360.png",
+    "docs/qa/website/gallery-768.png",
+    "docs/qa/website/header-1440.png",
+    "docs/qa/website/header-360.png",
+    "docs/qa/website/header-768.png",
+    "docs/qa/website/page-1440.png",
+    "docs/qa/website/page-360.png",
+    "docs/qa/website/page-768.png"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Editorial cleanup and readability changes preserve all preview routes, labels and documented operator steps. No product behavior changes.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Static files and repository prose have no changed client API, Controller operation, Core command or observed-state/result flow.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Svelte check/build, two public-source tests, eight deployed browser result groups, served-file hash comparison, desktop/mobile visual inspection, scoped links and documentation checks. Independent review recorded in QA report.",
+    "evidence": [
+      "docs/qa/website/checks.md",
+      "docs/qa/website/results.json",
+      "docs/qa/website/build.json"
+    ]
+  }
+}

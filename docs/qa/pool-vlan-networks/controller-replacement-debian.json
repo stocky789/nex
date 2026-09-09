@@ -1,0 +1,215 @@
+{
+  "bridge": "nexqa",
+  "vm_covered": true,
+  "steps": [
+    {
+      "controller": "A",
+      "url": "https://localhost:48381",
+      "pool_id": "b2cd35e120c370d25e738ab326314affd04a879d4308cbfe5d93bf901fc7ca88",
+      "host_id": "0904b8adae9a20d2eefbc941871b9718b197182f87a0664f34ed4d2cbcda0dc7",
+      "storage": {
+        "id": "ccdeeb6b25d60542093bf10f28435567904b1460b204fd44452adaf73c8c5a13",
+        "pool_id": "b2cd35e120c370d25e738ab326314affd04a879d4308cbfe5d93bf901fc7ca88",
+        "host_id": "0904b8adae9a20d2eefbc941871b9718b197182f87a0664f34ed4d2cbcda0dc7",
+        "name": "Replacement test storage",
+        "path": "/var/lib/nexqa-replacement/images",
+        "operation_id": "c60871eeec87675a3469818dcca355f4cb8b3535baef92e447e5d018ffccf594",
+        "status": "succeeded"
+      },
+      "network": {
+        "id": "acd2503a9d2af6abb22252994c14270443bb613bd8ec90da5ca8c1ee422de26a",
+        "pool_id": "b2cd35e120c370d25e738ab326314affd04a879d4308cbfe5d93bf901fc7ca88",
+        "host_id": "0904b8adae9a20d2eefbc941871b9718b197182f87a0664f34ed4d2cbcda0dc7",
+        "name": "Replacement test network",
+        "kind": "bridge",
+        "source": "nexqa",
+        "operation_id": "f9cfc286c36ea1348a14e1589687d90d18a9114f1a67fdf01118ba796980ef54",
+        "status": "succeeded"
+      },
+      "media": {
+        "id": "1e464ee9f3acd4f73741c8149892f30116d53f21c73a4e0a125c10f989517d43",
+        "pool_id": "b2cd35e120c370d25e738ab326314affd04a879d4308cbfe5d93bf901fc7ca88",
+        "host_id": "0904b8adae9a20d2eefbc941871b9718b197182f87a0664f34ed4d2cbcda0dc7",
+        "storage_id": "ccdeeb6b25d60542093bf10f28435567904b1460b204fd44452adaf73c8c5a13",
+        "name": "replacement.iso",
+        "size_bytes": 65536,
+        "sha256": "2f9580e90b5bb1a780d09ed59792d6090a101c456fd04cded791f6829ffde2ca",
+        "operation_id": "d45397169c96e8c7ff34d908c9da8275aa366704ed87a6a044431dee9c0908f6",
+        "status": "succeeded"
+      },
+      "vm": {
+        "id": "4f5cd540-2c74-41e6-aec9-84fd6b92c314",
+        "pool_id": "b2cd35e120c370d25e738ab326314affd04a879d4308cbfe5d93bf901fc7ca88",
+        "host_id": "0904b8adae9a20d2eefbc941871b9718b197182f87a0664f34ed4d2cbcda0dc7",
+        "name": "replacement-guest",
+        "role": "guest",
+        "protected": false,
+        "state": "shut off",
+        "freshness": "fresh",
+        "spec": {
+          "id": "4f5cd540-2c74-41e6-aec9-84fd6b92c314",
+          "pool_id": "b2cd35e120c370d25e738ab326314affd04a879d4308cbfe5d93bf901fc7ca88",
+          "host_id": "0904b8adae9a20d2eefbc941871b9718b197182f87a0664f34ed4d2cbcda0dc7",
+          "name": "replacement-guest",
+          "storage_id": "ccdeeb6b25d60542093bf10f28435567904b1460b204fd44452adaf73c8c5a13",
+          "network_id": "acd2503a9d2af6abb22252994c14270443bb613bd8ec90da5ca8c1ee422de26a",
+          "media_id": "1e464ee9f3acd4f73741c8149892f30116d53f21c73a4e0a125c10f989517d43",
+          "cpus": 1,
+          "memory_mib": 512,
+          "disk_gib": 1,
+          "firmware": "bios"
+        },
+        "operation_id": "5db32eafd7e9e825525b1e288133073b6abd3a43f1838b20a998c407c643bcc7",
+        "status": "succeeded"
+      }
+    },
+    {
+      "controller": "A",
+      "destroyed": true,
+      "data_dir_removed": true
+    },
+    {
+      "controller": "B",
+      "url": "https://localhost:36063",
+      "host_id": "d0c4681e74c9b51b865b4a5e1e17a06e076e16e9f06ea75c9d79d3a763753fd9",
+      "pool_id": "0688aed10dcc4ec031961d34b3511dd9acf8a26deb2b14d388a156a30789eb82",
+      "adopted": {
+        "storage": {
+          "id": "ccdeeb6b25d60542093bf10f28435567904b1460b204fd44452adaf73c8c5a13",
+          "pool_id": "0688aed10dcc4ec031961d34b3511dd9acf8a26deb2b14d388a156a30789eb82",
+          "host_id": "d0c4681e74c9b51b865b4a5e1e17a06e076e16e9f06ea75c9d79d3a763753fd9",
+          "name": "Replacement test storage",
+          "path": "/var/lib/nexqa-replacement/images",
+          "operation_id": "542585bceea994a3b6fdce9cee0edf1e44bb2e223a93e826b1fdb8f7b7ec7846",
+          "status": "succeeded"
+        },
+        "network": {
+          "id": "acd2503a9d2af6abb22252994c14270443bb613bd8ec90da5ca8c1ee422de26a",
+          "pool_id": "0688aed10dcc4ec031961d34b3511dd9acf8a26deb2b14d388a156a30789eb82",
+          "host_id": "d0c4681e74c9b51b865b4a5e1e17a06e076e16e9f06ea75c9d79d3a763753fd9",
+          "name": "Replacement test network",
+          "kind": "bridge",
+          "source": "nexqa",
+          "operation_id": "f09e6f05d1350afa2f2d970b52d0c663a5554b0ef5a5cc17ea6520afe2f6966e",
+          "status": "succeeded"
+        },
+        "media": {
+          "id": "1e464ee9f3acd4f73741c8149892f30116d53f21c73a4e0a125c10f989517d43",
+          "pool_id": "0688aed10dcc4ec031961d34b3511dd9acf8a26deb2b14d388a156a30789eb82",
+          "host_id": "d0c4681e74c9b51b865b4a5e1e17a06e076e16e9f06ea75c9d79d3a763753fd9",
+          "storage_id": "ccdeeb6b25d60542093bf10f28435567904b1460b204fd44452adaf73c8c5a13",
+          "name": "replacement.iso",
+          "size_bytes": 65536,
+          "sha256": "2f9580e90b5bb1a780d09ed59792d6090a101c456fd04cded791f6829ffde2ca",
+          "operation_id": "4700a318ec3a8db2a6084eef9a2a5ae983e36f97cde1ff96154771d233b0e917",
+          "status": "succeeded"
+        },
+        "vm": {
+          "id": "4f5cd540-2c74-41e6-aec9-84fd6b92c314",
+          "pool_id": "0688aed10dcc4ec031961d34b3511dd9acf8a26deb2b14d388a156a30789eb82",
+          "host_id": "d0c4681e74c9b51b865b4a5e1e17a06e076e16e9f06ea75c9d79d3a763753fd9",
+          "name": "replacement-guest",
+          "role": "guest",
+          "protected": false,
+          "state": "shut off",
+          "freshness": "fresh",
+          "spec": {
+            "id": "4f5cd540-2c74-41e6-aec9-84fd6b92c314",
+            "pool_id": "0688aed10dcc4ec031961d34b3511dd9acf8a26deb2b14d388a156a30789eb82",
+            "host_id": "d0c4681e74c9b51b865b4a5e1e17a06e076e16e9f06ea75c9d79d3a763753fd9",
+            "name": "replacement-guest",
+            "storage_id": "ccdeeb6b25d60542093bf10f28435567904b1460b204fd44452adaf73c8c5a13",
+            "network_id": "acd2503a9d2af6abb22252994c14270443bb613bd8ec90da5ca8c1ee422de26a",
+            "media_id": "1e464ee9f3acd4f73741c8149892f30116d53f21c73a4e0a125c10f989517d43",
+            "cpus": 1,
+            "memory_mib": 512,
+            "disk_gib": 1,
+            "firmware": "bios"
+          },
+          "operation_id": "18924bd797cfa75882a41de48d8885e99d50f437f58963040d3e06b47d5c1d6f",
+          "status": "succeeded"
+        },
+        "vm_after_replacement": {
+          "id": "e16c098f-529f-4c32-ad6c-9744d3415d78",
+          "pool_id": "0688aed10dcc4ec031961d34b3511dd9acf8a26deb2b14d388a156a30789eb82",
+          "host_id": "d0c4681e74c9b51b865b4a5e1e17a06e076e16e9f06ea75c9d79d3a763753fd9",
+          "name": "after-replacement-guest",
+          "role": "guest",
+          "protected": false,
+          "state": "shut off",
+          "freshness": "fresh",
+          "spec": {
+            "id": "e16c098f-529f-4c32-ad6c-9744d3415d78",
+            "pool_id": "0688aed10dcc4ec031961d34b3511dd9acf8a26deb2b14d388a156a30789eb82",
+            "host_id": "d0c4681e74c9b51b865b4a5e1e17a06e076e16e9f06ea75c9d79d3a763753fd9",
+            "name": "after-replacement-guest",
+            "storage_id": "ccdeeb6b25d60542093bf10f28435567904b1460b204fd44452adaf73c8c5a13",
+            "network_id": "acd2503a9d2af6abb22252994c14270443bb613bd8ec90da5ca8c1ee422de26a",
+            "media_id": "80206f190c2ec8ad20980b9b30a52cefb370185b2b7e9e056885c409c12c02ab",
+            "cpus": 1,
+            "memory_mib": 512,
+            "disk_gib": 1,
+            "firmware": "bios"
+          },
+          "operation_id": "53901d99269f3acd362dc787023762cc6f3f70d0ec3d8ddb55c671e249a04477",
+          "status": "succeeded"
+        }
+      },
+      "adoption_operations": {
+        "storage": {
+          "id": "542585bceea994a3b6fdce9cee0edf1e44bb2e223a93e826b1fdb8f7b7ec7846",
+          "host_id": "d0c4681e74c9b51b865b4a5e1e17a06e076e16e9f06ea75c9d79d3a763753fd9",
+          "kind": "storage-register",
+          "request_id": "adopt-storage:d0c4681e74c9b51b865b4a5e1e17a06e076e16e9f06ea75c9d79d3a763753fd9:ccdeeb6b25d60542093bf10f28435567904b1460b204fd44452adaf73c8c5a13",
+          "status": "succeeded",
+          "created_at": "2026-09-09T08:27:10.178859831Z",
+          "updated_at": "2026-09-09T08:27:10.178859831Z",
+          "actor": "system"
+        },
+        "network": {
+          "id": "f09e6f05d1350afa2f2d970b52d0c663a5554b0ef5a5cc17ea6520afe2f6966e",
+          "host_id": "d0c4681e74c9b51b865b4a5e1e17a06e076e16e9f06ea75c9d79d3a763753fd9",
+          "kind": "network-register",
+          "request_id": "adopt-network:d0c4681e74c9b51b865b4a5e1e17a06e076e16e9f06ea75c9d79d3a763753fd9:acd2503a9d2af6abb22252994c14270443bb613bd8ec90da5ca8c1ee422de26a",
+          "status": "succeeded",
+          "created_at": "2026-09-09T08:27:10.178972877Z",
+          "updated_at": "2026-09-09T08:27:10.178972877Z",
+          "actor": "system"
+        },
+        "media": {
+          "id": "4700a318ec3a8db2a6084eef9a2a5ae983e36f97cde1ff96154771d233b0e917",
+          "host_id": "d0c4681e74c9b51b865b4a5e1e17a06e076e16e9f06ea75c9d79d3a763753fd9",
+          "kind": "iso-import",
+          "request_id": "adopt-media:d0c4681e74c9b51b865b4a5e1e17a06e076e16e9f06ea75c9d79d3a763753fd9:1e464ee9f3acd4f73741c8149892f30116d53f21c73a4e0a125c10f989517d43",
+          "status": "succeeded",
+          "created_at": "2026-09-09T08:27:10.179097967Z",
+          "updated_at": "2026-09-09T08:27:10.179097967Z",
+          "actor": "system"
+        }
+      },
+      "counts_after_repeat_reports": {
+        "/api/v1/storage": 1,
+        "/api/v1/networks": 1,
+        "/api/v1/media": 1,
+        "/api/v1/vms": 1
+      },
+      "new_media_after_replacement": {
+        "id": "80206f190c2ec8ad20980b9b30a52cefb370185b2b7e9e056885c409c12c02ab",
+        "pool_id": "0688aed10dcc4ec031961d34b3511dd9acf8a26deb2b14d388a156a30789eb82",
+        "host_id": "d0c4681e74c9b51b865b4a5e1e17a06e076e16e9f06ea75c9d79d3a763753fd9",
+        "storage_id": "ccdeeb6b25d60542093bf10f28435567904b1460b204fd44452adaf73c8c5a13",
+        "name": "after-replacement.iso",
+        "size_bytes": 65536,
+        "sha256": "2f9580e90b5bb1a780d09ed59792d6090a101c456fd04cded791f6829ffde2ca",
+        "operation_id": "a39271c0a4aa3403582802e6e9d941e76d77447fb325090cc65b1d281ca080af",
+        "status": "succeeded"
+      }
+    }
+  ],
+  "checks": [
+    "Controller A enrolled the real agent; the agent verified local storage, applied a pool network, transferred an uploaded ISO and defined a stopped VM in libvirt",
+    "Controller B, started empty with a different certificate, adopted storage, network, ISO record, VM definition with the same IDs and names under actor system, with no command and no duplicates; a new ISO transfer and a new VM on the adopted resources succeeded"
+  ],
+  "environment": "Real nex-controller and nex-core-agent processes on loopback inside a disposable network namespace as root; real directory storage and ISO transfer; bridge verified read-only; real system libvirt defines the VMs (KVM device present, VMs never started)",
+  "agent_state_dir_reused": true
+}

@@ -1,0 +1,66 @@
+Linux nex-fresh-lab 6.12.94+deb13-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.94-1 (2026-06-20) x86_64 GNU/Linux
+NAME="Nex Core"
+PRETTY_NAME="Nex Core 0.1.0-alpha1"
+ID=nex-core
+ID_LIKE=debian
+VERSION="0.1.0-alpha1"
+VERSION_ID=0.1.0-alpha1
+DEBIAN_CODENAME=trixie
+libvirt-daemon-system	11.3.0-3+deb13u2
+nex-core-local	0.1.0+managed1
+ovmf	2025.02-8+deb13u1
+qemu-system-x86	1:10.0.11+ds-0+deb13u1
+active
+active
+active
+active
+active
+3: br0    inet 10.0.2.15/24 brd 10.0.2.255 scope global dynamic noprefixroute br0\       valid_lft 86331sec preferred_lft 75531sec
+default via 10.0.2.2 dev br0 proto dhcp src 10.0.2.15 metric 1003 
+10.0.2.0/24 dev br0 proto dhcp scope link src 10.0.2.15 metric 1003 
+/dev/vda1 ext4 rw,relatime,errors=remount-ro
+Filesystem        1B-blocks       Used    Available Use% Mounted on
+/dev/vda1      127776755712 2959798272 118278983680   3% /
+# /usr/lib/systemd/system/nex-core-local.service
+# SPDX-License-Identifier: AGPL-3.0-only
+[Unit]
+Description=Nex Core local management and Controller appliance deployment
+Wants=network-online.target
+After=network-online.target libvirtd.service
+Conflicts=nex-core-agent.service
+
+[Service]
+Type=simple
+User=root
+UMask=0077
+StateDirectory=nex/core-local
+StateDirectoryMode=0700
+ExecStartPre=/usr/lib/nex/core-local-setup init
+ExecStart=/usr/lib/nex/core-local-setup run
+ExecStopPost=/usr/lib/nex/core-local-setup offline
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
+792f8b70b46502cb26b7c0fd358e5fa28e145e6c95ff0a5be87bbc83ff082353  /usr/lib/nex/nex-core-local
+20ec864725eecd744f012359ba92f9157859585cd80a321fedc34df462393afe  /usr/share/nex/appliance/manifest.json
+bce48d51651f17742cf452ae64a8456ac94af00d982c2896cd7a2446f6d29d88  /usr/share/nex/appliance/controller.qcow2
+7ee7e8e258915f9bbc316cb32607a97a281bbf3e8700e88c1a59032b0d1b41d4  /usr/share/nex/core-local/nex-source.tar.gz
+sha256 Fingerprint=6F:92:46:7A:7B:A6:F6:40:A9:3B:EE:31:43:F8:76:B1:2E:77:6B:E8:84:D0:23:FD:5D:8D:87:A4:14:7F:5C:B4
+ Id   Name             State
+--------------------------------
+ 1    nex-controller   running
+
+permitrootlogin no
+permitrootlogin without-password
+PermitRootLogin no
+PermitRootLogin prohibit-password

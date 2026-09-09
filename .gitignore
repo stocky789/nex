@@ -3,3 +3,19 @@ dist/
 __pycache__/
 *.pyc
 node_modules/
+
+# Go vendor tree (regenerated via go mod vendor in scripts/build-source.py)
+vendor/
+
+# Editor / OS junk
+*.orig
+*~
+.DS_Store
+/tmp/
+
+# QA screenshot bulk (keep .md/.json/.txt under docs/qa)
+docs/qa/**/*.png
+docs/qa/**/*.jpg
+docs/qa/**/*.jpeg
+docs/qa/**/*.webp
+docs/qa/**/*.gif

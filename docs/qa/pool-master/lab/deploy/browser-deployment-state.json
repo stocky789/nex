@@ -1,0 +1,56 @@
+{
+  "host": {
+    "bridge": "br0",
+    "controller": "",
+    "defaults": {
+      "cpus": 2,
+      "disk_gib": 32,
+      "memory_mib": 4096
+    },
+    "host_id": "",
+    "hostname": "nex-fresh-lab",
+    "preflight": {
+      "image_verification": "Signed manifest checked; full image integrity and format verification runs during deployment",
+      "ready": true,
+      "blockers": [],
+      "cpus": 2,
+      "memory_mib": 4096,
+      "disk_gib": 32,
+      "bridge": "br0",
+      "storage_dir": "/var/lib/libvirt/images"
+    },
+    "storage_dir": "/var/lib/libvirt/images"
+  },
+  "operation": {
+    "id": "b88a5287-9ca7-4fe4-b4c0-118fe96d7664",
+    "vm_id": "f0cac778-7b67-45c0-9407-716c489d597d",
+    "kind": "deploy",
+    "status": "needs_attention",
+    "stage": "initializing",
+    "progress": 92,
+    "error": "Controller setup needs recovery: controller rejected /api/v1/appliances/bootstrap (HTTP 400)",
+    "controller_url": "https://10.0.2.20:8443"
+  },
+  "observed_progress": [
+    [
+      "queued",
+      "running",
+      0
+    ],
+    [
+      "copying_disk",
+      "running",
+      10
+    ],
+    [
+      "initializing",
+      "running",
+      92
+    ],
+    [
+      "initializing",
+      "needs_attention",
+      92
+    ]
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "results": [
+    "administrator bootstrap, login, unauthorized/CSRF/invalid input rejection, site and pool creation",
+    "trusted TLS enrollment, pool-scoped identity, private state and single-use token",
+    "real CPU/RAM/OS/NIC inventory and fresh independent heartbeat (libvirt simulated)",
+    "simulated libvirt failure remains fresh with failed service check",
+    "simulated stalled probe times out independently; native inventory and heartbeat continue",
+    "stale/unknown outage state, controller+agent restart identity, durable deduplicated refresh",
+    "agent survives controller outage and reconciles fresh inventory on reconnect",
+    "certificate rotation retains host identity and authenticated reporting",
+    "browser keyboard sign-in, invalid credentials, site/pool creation, empty state and ephemeral enrollment token",
+    "browser keyboard File/View/Help menus and Escape, menu creation, resource search with ancestors, collapsible tree and current selection, scoped General/Networking/Storage/Activity views, task dock and desktop shell",
+    "browser pool aggregate healthy enum, failed libvirt and timed-out probe distinct from fresh heartbeat; recovered checks",
+    "browser desktop/360px host and task views, refresh operation, exact-host confirmation and keyboard skip link",
+    "browser __Host cookie attributes, legacy rejection, restrictive CSP, real inline-script blocking, idle GET/mutation semantics and expired-session login recovery; logout and actual-peer throttle",
+    "browser interrupted request/retry, genuine stopped-agent stale state, revoke and re-enroll entry, sign-out; no page errors",
+    "browser delayed-token pool scope and older inventory response cannot overwrite newer revocation",
+    "revocation rejects credential use and operations; explicit re-enrollment preserves identity; audit attribution"
+  ],
+  "binaries": {
+    "controller": "e22b3e886307830fc96d76dedf8e3e0fe01096b67e13e7845040dbd0bc86cce6",
+    "agent": "b8a6fb0631d7da4928560c228e9c9190f3f55f318deff08e58e08daaad8e50f3"
+  },
+  "simulation": "virsh only; no real libvirt or guest lifecycle verified"
+}

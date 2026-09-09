@@ -1,0 +1,12 @@
+{
+  "running_for_user_inspection": true,
+  "only_fresh_disposable_lab_retained": "nex-fresh-install.s_h0lmf6",
+  "controller_running": true,
+  "ordinary_iso_guest_stopped": true,
+  "no_host_iso_attached": true,
+  "both_tls_certificates_unchanged_after_reboot": true,
+  "temporary_qa_ssh_key_removed": true,
+  "temporary_qa_ssh_override_removed": true,
+  "restored_shipping_ssh_setting": "permitrootlogin no",
+  "method": "Both browser logins and native persistence verified after real reboot; compared served TLS fingerprints; removed only injected public key and QA-only sshd snippet and reloaded ssh; verified exact QMP raw target before retaining lab"
+}

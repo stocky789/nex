@@ -14,21 +14,25 @@ import (
 
 type applianceRequest struct {
 	RequestID string `json:"request_id"`
-	PoolID    string `json:"pool_id"`
+	PoolID    string `json:"pool_id,omitempty"`
 	HostID    string `json:"host_id"`
 	VMID      string `json:"vm_id"`
 	Name      string `json:"name"`
 }
 
 type managedAppliance struct {
-	ID        string `json:"id"`
-	PoolID    string `json:"pool_id"`
-	HostID    string `json:"host_id"`
-	Name      string `json:"name"`
-	Role      string `json:"role"`
-	Protected bool   `json:"protected"`
-	State     string `json:"state"`
-	Freshness string `json:"freshness"`
+	ID          string                 `json:"id"`
+	PoolID      string                 `json:"pool_id"`
+	HostID      string                 `json:"host_id"`
+	Name        string                 `json:"name"`
+	Role        string                 `json:"role"`
+	Protected   bool                   `json:"protected"`
+	State       string                 `json:"state"`
+	Freshness   string                 `json:"freshness"`
+	Spec        *protocol.VMCreateSpec `json:"spec,omitempty"`
+	OperationID string                 `json:"operation_id,omitempty"`
+	Status      string                 `json:"status,omitempty"`
+	Error       string                 `json:"error,omitempty"`
 }
 
 func applianceUUID(s string) bool {
@@ -89,8 +93,8 @@ func (c *Controller) adoptAppliance(w http.ResponseWriter, r *http.Request, user
 	if !decode(w, r, &v) {
 		return
 	}
-	if !applianceUUID(v.VMID) || !nameValid(v.RequestID) || !nameValid(v.Name) || !nameValid(v.HostID) || !nameValid(v.PoolID) {
-		fail(w, 400, "valid lowercase VM UUID, name, pool_id, host_id and stable request_id required")
+	if !applianceUUID(v.VMID) || !nameValid(v.RequestID) || !nameValid(v.Name) || !nameValid(v.HostID) || (v.PoolID != "" && !nameValid(v.PoolID)) {
+		fail(w, 400, "valid lowercase VM UUID, name, host_id, optional pool_id and stable request_id required")
 		return
 	}
 	v.Name = strings.TrimSpace(v.Name)
@@ -100,6 +104,31 @@ func (c *Controller) adoptAppliance(w http.ResponseWriter, r *http.Request, user
 		return
 	}
 	defer tx.Rollback()
+	// The pool is the host's own; a supplied pool_id only confirms it.
+	var pool string
+	var revoked bool
+	var inv sql.NullString
+	if err = tx.QueryRow("SELECT pool_id,revoked,inventory FROM hosts WHERE id=?", v.HostID).Scan(&pool, &revoked, &inv); err == sql.ErrNoRows {
+		fail(w, 404, "host not found")
+		return
+	} else if err != nil {
+		fail(w, 500, "host lookup failed")
+		return
+	}
+	if v.PoolID != "" && v.PoolID != pool {
+		fail(w, 409, "pool_id does not match the host's pool")
+		return
+	}
+	v.PoolID = pool
+	var managedCount int
+	if tx.QueryRow("SELECT count(*) FROM managed_resources WHERE id=?", v.VMID).Scan(&managedCount) != nil {
+		fail(w, 500, "VM ownership lookup failed")
+		return
+	}
+	if managedCount > 0 {
+		fail(w, 409, "VM already belongs to a managed creation operation")
+		return
+	}
 	var old applianceRequest
 	err = tx.QueryRow("SELECT id,pool_id,host_id,name,request_id FROM appliances WHERE request_id=? OR id=?", v.RequestID, v.VMID).Scan(&old.VMID, &old.PoolID, &old.HostID, &old.Name, &old.RequestID)
 	if err == nil {
@@ -114,18 +143,8 @@ func (c *Controller) adoptAppliance(w http.ResponseWriter, r *http.Request, user
 		fail(w, 500, "adoption lookup failed")
 		return
 	}
-	var pool string
-	var revoked bool
-	var inv sql.NullString
-	if err = tx.QueryRow("SELECT pool_id,revoked,inventory FROM hosts WHERE id=?", v.HostID).Scan(&pool, &revoked, &inv); err == sql.ErrNoRows {
-		fail(w, 404, "host not found")
-		return
-	} else if err != nil {
-		fail(w, 500, "host lookup failed")
-		return
-	}
-	if pool != v.PoolID || revoked {
-		fail(w, 409, "host must be active in the selected pool")
+	if revoked {
+		fail(w, 409, "host must be active in its pool")
 		return
 	}
 	state, fresh := c.applianceObservation(v.HostID, v.VMID, revoked, inv)
@@ -199,6 +218,41 @@ func (c *Controller) appliances(w http.ResponseWriter, r *http.Request, user, cs
 		fail(w, 500, "VM read failed")
 		return
 	}
+	rows.Close()
+	managed, err := c.db.Query("SELECT r.command,o.status,o.error,h.revoked,h.inventory FROM managed_resources r JOIN operations o ON o.id=r.operation_id JOIN hosts h ON h.id=r.host_id WHERE r.kind='vm-create' ORDER BY r.name,r.id")
+	if err != nil {
+		fail(w, 500, "VM lookup failed")
+		return
+	}
+	defer managed.Close()
+	for managed.Next() {
+		var command string
+		var v managedAppliance
+		var raw sql.NullString
+		var revoked bool
+		if managed.Scan(&command, &v.Status, &v.Error, &revoked, &raw) != nil {
+			fail(w, 500, "VM decode failed")
+			return
+		}
+		var cmd protocol.Command
+		if json.Unmarshal([]byte(command), &cmd) != nil || cmd.VM == nil {
+			fail(w, 500, "VM decode failed")
+			return
+		}
+		v.ID = cmd.VM.ID
+		v.PoolID = cmd.VM.PoolID
+		v.HostID = cmd.VM.HostID
+		v.Name = cmd.VM.Name
+		v.Role = "guest"
+		v.Spec = cmd.VM
+		v.OperationID = cmd.OperationID
+		v.State, v.Freshness = c.applianceObservation(v.HostID, v.ID, revoked, raw)
+		out = append(out, v)
+	}
+	if managed.Err() != nil {
+		fail(w, 500, "VM read failed")
+		return
+	}
 	write(w, 200, out)
 }
 
@@ -208,19 +262,17 @@ func (c *Controller) bootstrapAppliance(w http.ResponseWriter, r *http.Request, 
 	var v struct {
 		RequestID       string `json:"request_id"`
 		SiteName        string `json:"site_name"`
-		PoolName        string `json:"pool_name"`
 		EnrollmentToken string `json:"enrollment_token"`
 	}
 	if !decode(w, r, &v) {
 		return
 	}
 	tokenBytes, tokenErr := hex.DecodeString(v.EnrollmentToken)
-	if !nameValid(v.RequestID) || !nameValid(v.SiteName) || !nameValid(v.PoolName) || tokenErr != nil || len(tokenBytes) != 32 || v.EnrollmentToken != strings.ToLower(v.EnrollmentToken) {
-		fail(w, 400, "names, stable request_id and random 64 lowercase hexadecimal enrollment_token required")
+	if !nameValid(v.RequestID) || !nameValid(v.SiteName) || tokenErr != nil || len(tokenBytes) != 32 || v.EnrollmentToken != strings.ToLower(v.EnrollmentToken) {
+		fail(w, 400, "site_name, stable request_id and random 64 lowercase hexadecimal enrollment_token required")
 		return
 	}
 	v.SiteName = strings.TrimSpace(v.SiteName)
-	v.PoolName = strings.TrimSpace(v.PoolName)
 	tx, err := c.db.Begin()
 	if err != nil {
 		fail(w, 500, "storage unavailable")
@@ -228,11 +280,11 @@ func (c *Controller) bootstrapAppliance(w http.ResponseWriter, r *http.Request, 
 	}
 	defer tx.Rollback()
 	hash := digest(v.EnrollmentToken)
-	var siteName, poolName, oldHash, siteID, poolID string
-	err = tx.QueryRow("SELECT site_name,pool_name,token_hash,site_id,pool_id FROM appliance_bootstraps WHERE request_id=?", v.RequestID).Scan(&siteName, &poolName, &oldHash, &siteID, &poolID)
+	var siteName, oldHash, siteID string
+	err = tx.QueryRow("SELECT site_name,token_hash,site_id FROM appliance_bootstraps WHERE request_id=?", v.RequestID).Scan(&siteName, &oldHash, &siteID)
 	status := 200
 	if err == nil {
-		if siteName != v.SiteName || poolName != v.PoolName || oldHash != hash {
+		if siteName != v.SiteName || oldHash != hash {
 			fail(w, 409, "request_id already used with another bootstrap payload")
 			return
 		}
@@ -246,18 +298,16 @@ func (c *Controller) bootstrapAppliance(w http.ResponseWriter, r *http.Request, 
 			fail(w, 409, "enrollment token already exists")
 			return
 		}
-		siteID, poolID = random(), random()
+		siteID = random()
+		// The appliance host becomes the master of a pool created at enrollment.
 		if _, err = tx.Exec("INSERT INTO sites VALUES(?,?)", siteID, v.SiteName); err == nil {
-			_, err = tx.Exec("INSERT INTO pools VALUES(?,?,?)", poolID, siteID, v.PoolName)
+			_, err = tx.Exec("INSERT INTO tokens(hash,site_id,host_id,expires) VALUES(?,?,?,?)", hash, siteID, "", time.Now().Add(10*time.Minute).Unix())
 		}
 		if err == nil {
-			_, err = tx.Exec("INSERT INTO tokens(hash,pool_id,host_id,expires) VALUES(?,?,?,?)", hash, poolID, "", time.Now().Add(10*time.Minute).Unix())
+			_, err = tx.Exec("INSERT INTO appliance_bootstraps VALUES(?,?,?,?)", v.RequestID, v.SiteName, hash, siteID)
 		}
 		if err == nil {
-			_, err = tx.Exec("INSERT INTO appliance_bootstraps VALUES(?,?,?,?,?,?)", v.RequestID, v.SiteName, v.PoolName, hash, siteID, poolID)
-		}
-		if err == nil {
-			err = c.audit(tx, user, "appliance.bootstrap", poolID)
+			err = c.audit(tx, user, "appliance.bootstrap", siteID)
 		}
 		if err != nil {
 			fail(w, 500, "bootstrap storage failed")
@@ -285,5 +335,5 @@ func (c *Controller) bootstrapAppliance(w http.ResponseWriter, r *http.Request, 
 		fail(w, 500, "bootstrap commit failed")
 		return
 	}
-	write(w, status, map[string]any{"site_id": siteID, "pool_id": poolID, "expires_at": time.Unix(expires, 0).UTC()})
+	write(w, status, map[string]any{"site_id": siteID, "expires_at": time.Unix(expires, 0).UTC()})
 }

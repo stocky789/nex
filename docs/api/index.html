@@ -2,7 +2,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Nex Controller and Core API — 0.1.0</title>
 <link rel="stylesheet" href="reference.css">
-<main><h1>Nex Controller and Core API — 0.1.0</h1><p>Development HTTPS JSON API v1; Controller/Core protocol version 1 only. Administrator sessions and host-scoped outbound mutual-TLS reports are separate trust surfaces. Includes idempotent appliance environment bootstrap, adoption and read-only managed appliance inventory; host-local operations have a separate contract in local-openapi.json. No central VM mutations or console streams.</p>
+<main><h1>Nex Controller and Core API — 0.1.0</h1><p>Implemented development API for administrator inventory, enrollment, durable operations, appliance adoption and managed-VM creation. Capability-gated storage/network registration, bounded ISO transfer and stopped-VM provisioning use outbound authenticated Core reports. Browser VM consoles use single-use tickets, an outbound host tunnel and a same-origin WebSocket. Central VM power requests (start, shutdown, reboot, force-stop) are durable host operations.</p>
 <p><a href="openapi.json">Download OpenAPI JSON</a>. This reference works offline; examples do not execute requests.</p>
 <nav aria-label="API operations"><ul>
 <li><a href="#getSession">GET /api/v1/session</a></li>
@@ -11,11 +11,12 @@
 <li><a href="#listSite">GET /api/v1/sites</a></li>
 <li><a href="#createSite">POST /api/v1/sites</a></li>
 <li><a href="#listPool">GET /api/v1/pools</a></li>
-<li><a href="#createPool">POST /api/v1/pools</a></li>
 <li><a href="#listHost">GET /api/v1/hosts</a></li>
 <li><a href="#listOperation">GET /api/v1/operations</a></li>
 <li><a href="#listAudit">GET /api/v1/audit</a></li>
 <li><a href="#createEnrollmentToken">POST /api/v1/enrollment-tokens</a></li>
+<li><a href="#probeHost">POST /api/v1/hosts/probe</a></li>
+<li><a href="#addSiteHost">POST /api/v1/sites/{id}/hosts</a></li>
 <li><a href="#revokeHost">POST /api/v1/hosts/{id}/revoke</a></li>
 <li><a href="#createOperation">POST /api/v1/hosts/{id}/operations</a></li>
 <li><a href="#enrollHost">POST /api/v1/agent/enroll</a></li>
@@ -27,7 +28,76 @@
 <li><a href="#bootstrapApplianceEnvironment">POST /api/v1/appliances/bootstrap</a></li>
 <li><a href="#adoptControllerAppliance">POST /api/v1/appliances/adopt</a></li>
 <li><a href="#listManagedAppliances">GET /api/v1/vms</a></li>
+<li><a href="#createVM">POST /api/v1/vms</a></li>
+<li><a href="#listStorageRegistration">GET /api/v1/storage</a></li>
+<li><a href="#createStorageRegistration">POST /api/v1/storage</a></li>
+<li><a href="#listNetworkRegistration">GET /api/v1/networks</a></li>
+<li><a href="#createNetworkRegistration">POST /api/v1/networks</a></li>
+<li><a href="#listMedia">GET /api/v1/media</a></li>
+<li><a href="#uploadMedia">POST /api/v1/media</a></li>
+<li><a href="#downloadAgentMedia">GET /api/v1/agent/media/{id}</a></li>
+<li><a href="#openConsole">POST /api/v1/vms/{id}/console</a></li>
+<li><a href="#consoleStream">GET /api/v1/vms/{id}/console/{ticket}</a></li>
+<li><a href="#agentConsole">POST /api/v1/agent/console/{token}</a></li>
+<li><a href="#getUpdates">GET /api/v1/updates</a></li>
+<li><a href="#applyUpdates">POST /api/v1/updates/apply</a></li>
+<li><a href="#powerVM">POST /api/v1/vms/{id}/power</a></li>
 </ul></nav>
+<section><h2>storage-register</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;capability&quot;: &quot;managed-vm-v1&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/StorageRegistration&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Verify existing local directory access; no formatting. Succeeded registrations are reported back in Inventory.managed.storage and adopted by a Controller that does not hold them (request_id adopt-storage-register:&lt;host&gt;:&lt;id&gt;) without redelivery.&quot;
+}</pre></section>
+<section><h2>network-register</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;capability&quot;: &quot;managed-vm-v1&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/NetworkRegistration&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Verify existing bridge or active libvirt network without edits; for kind vlan, idempotently create bridge &lt;uplink&gt;v&lt;vlan&gt; over the 802.1Q sub-interface, persist it under /etc/network/interfaces.d and refuse uplinks or VLAN devices already used by the host configuration. Succeeded registrations are reported back in Inventory.managed.networks and adopted by a Controller that does not hold them (request_id adopt-network-register:&lt;host&gt;:&lt;id&gt;) without redelivery.&quot;
+}</pre></section>
+<section><h2>iso-import</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;capability&quot;: &quot;managed-vm-v1&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Media&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Fetch assigned staged media over host mTLS; verify actual size/hash/ISO before publishing. Succeeded imports are reported back in Inventory.managed.media and adopted by a Controller that does not hold them (request_id adopt-iso-import:&lt;host&gt;:&lt;id&gt;) without redelivery.&quot;
+}</pre></section>
+<section><h2>vm-create</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;capability&quot;: &quot;managed-vm-v1&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/VMCreateSpec&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Create stopped VM with exclusive new disk; reconcile journal and ownership on replay. Never start a guest. Core resolves storage, network and media references by resource ID, not by pool/host ID, so creation works after re-enrollment under a new Controller. Succeeded definitions are reported back in Inventory.managed.vms and adopted by a Controller that does not hold them (request_id adopt-vm-create:&lt;host&gt;:&lt;id&gt;) without redelivery.&quot;
+}</pre></section>
+<section><h2>vm-power</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;capability&quot;: &quot;vm-power-v1&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/VMPowerRequest&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Issue one libvirt start/shutdown/reboot/destroy for the named VM on this host. start and force-stop are idempotent against the observed state; shutdown and reboot are ACPI requests the guest may ignore; paused or transitional states are refused. The stage is journaled before the single request so an interruption is reconciled by observation only: succeeded when the observed state proves the outcome, otherwise needs_attention; never a second request.&quot;
+}</pre></section>
 <section><h2>GET /appliance-ready.json</h2><pre>{
   &quot;description&quot;: &quot;Appliance-only public JSON file served by the existing Controller UI file handler, not a separately registered API route. First boot atomically publishes it after initialization, verified local HTTPS UI HTTP 200, and guest bootstrap-secret cleanup. It must be absent from a pristine appliance image and may return 404 before preparation or on non-appliance deployments. A persisted marker records first-boot completion; it is not continuous health or successful host enrollment/adoption.&quot;,
   &quot;security&quot;: [],
@@ -407,12 +477,12 @@
   }
 }</pre></details></section>
 <section id="listPool"><h2>GET <code>/api/v1/pools</code></h2>
-<p>List pools</p><p>Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped.</p>
+<p>List pools</p><p>Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Pools are never created by administrators: each enrolling Core host becomes the master of a new pool named after its hostname (master_host_id). Joining a member host to an existing pool, changing the master and ejecting a member are planned for Phase 4 and are not available. Results represent persisted controller state.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;listPool&quot;,
   &quot;summary&quot;: &quot;List pools&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped.&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Pools are never created by administrators: each enrolling Core host becomes the master of a new pool named after its hostname (master_host_id). Joining a member host to an existing pool, changing the master and ejecting a member are planned for Phase 4 and are not available. Results represent persisted controller state.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -464,109 +534,6 @@
   },
   &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
   &quot;x-audience&quot;: &quot;client&quot;
-}</pre></details></section>
-<section id="createPool"><h2>POST <code>/api/v1/pools</code></h2>
-<p>Create a pool</p><p>Implemented in development product 0.1.0, protocol v1. Creates desired configuration under an existing site immediately. No agent command. Not idempotent: inspect pools after an ambiguous response before creating again.</p>
-<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
-<pre>{
-  &quot;operationId&quot;: &quot;createPool&quot;,
-  &quot;summary&quot;: &quot;Create a pool&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Creates desired configuration under an existing site immediately. No agent command. Not idempotent: inspect pools after an ambiguous response before creating again.&quot;,
-  &quot;tags&quot;: [
-    &quot;Client \u2192 Controller&quot;
-  ],
-  &quot;security&quot;: [
-    {
-      &quot;AdminSession&quot;: []
-    }
-  ],
-  &quot;responses&quot;: {
-    &quot;201&quot;: {
-      &quot;description&quot;: &quot;Success&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Pool&quot;
-          }
-        }
-      }
-    },
-    &quot;400&quot;: {
-      &quot;description&quot;: &quot;Malformed JSON, unknown field, body over 1 MiB, or invalid input; see the operation schema and description.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          },
-          &quot;example&quot;: {
-            &quot;error&quot;: &quot;invalid JSON request&quot;
-          }
-        }
-      }
-    },
-    &quot;401&quot;: {
-      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          },
-          &quot;example&quot;: {
-            &quot;error&quot;: &quot;request rejected&quot;
-          }
-        }
-      }
-    },
-    &quot;403&quot;: {
-      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          },
-          &quot;example&quot;: {
-            &quot;error&quot;: &quot;request rejected&quot;
-          }
-        }
-      }
-    },
-    &quot;500&quot;: {
-      &quot;description&quot;: &quot;Controller persistence or internal failure; reconcile before retrying a mutation.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          },
-          &quot;example&quot;: {
-            &quot;error&quot;: &quot;request rejected&quot;
-          }
-        }
-      }
-    }
-  },
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
-  &quot;x-audience&quot;: &quot;client&quot;,
-  &quot;parameters&quot;: [
-    {
-      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
-      &quot;in&quot;: &quot;header&quot;,
-      &quot;required&quot;: true,
-      &quot;schema&quot;: {
-        &quot;type&quot;: &quot;string&quot;
-      },
-      &quot;description&quot;: &quot;Token returned by login or current session.&quot;
-    }
-  ],
-  &quot;requestBody&quot;: {
-    &quot;required&quot;: true,
-    &quot;content&quot;: {
-      &quot;application/json&quot;: {
-        &quot;schema&quot;: {
-          &quot;$ref&quot;: &quot;#/components/schemas/CreatePoolRequest&quot;
-        }
-      }
-    }
-  }
 }</pre></details></section>
 <section id="listHost"><h2>GET <code>/api/v1/hosts</code></h2>
 <p>List hosts</p><p>Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped.</p>
@@ -746,12 +713,12 @@
   &quot;x-audience&quot;: &quot;client&quot;
 }</pre></details></section>
 <section id="createEnrollmentToken"><h2>POST <code>/api/v1/enrollment-tokens</code></h2>
-<p>Issue a pool-bound enrollment token</p><p>Implemented in development product 0.1.0, protocol v1. Creates a short-lived single-use secret. Optional host_id binds re-enrollment to an existing host in this pool. Keep the returned token out of logs. Token issuance is immediate; never retry enrollment blindly after an ambiguous outcome. Token expires after ten minutes. Re-enrollment requires the selected host to be revoked.</p>
+<p>Issue a site-bound enrollment token</p><p>Implemented in development product 0.1.0, protocol v1. Creates a short-lived single-use secret bound to a site; the enrolling host becomes the master of a new pool in that site. Unknown site_id returns 400. Optional host_id binds re-enrollment to an existing revoked host whose pool belongs to this site (409 otherwise). Keep the returned token out of logs. Token issuance is immediate; never retry enrollment blindly after an ambiguous outcome. Token expires after ten minutes.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;createEnrollmentToken&quot;,
-  &quot;summary&quot;: &quot;Issue a pool-bound enrollment token&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Creates a short-lived single-use secret. Optional host_id binds re-enrollment to an existing host in this pool. Keep the returned token out of logs. Token issuance is immediate; never retry enrollment blindly after an ambiguous outcome. Token expires after ten minutes. Re-enrollment requires the selected host to be revoked.&quot;,
+  &quot;summary&quot;: &quot;Issue a site-bound enrollment token&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Creates a short-lived single-use secret bound to a site; the enrolling host becomes the master of a new pool in that site. Unknown site_id returns 400. Optional host_id binds re-enrollment to an existing revoked host whose pool belongs to this site (409 otherwise). Keep the returned token out of logs. Token issuance is immediate; never retry enrollment blindly after an ambiguous outcome. Token expires after ten minutes.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -861,6 +828,261 @@
     }
   }
 }</pre></details></section>
+<section id="probeHost"><h2>POST <code>/api/v1/hosts/probe</code></h2>
+<p>Probe a host&#x27;s local API TLS certificate</p><p>Implemented in development product 0.1.0, protocol v1. Performs an insecure TLS 1.3 handshake to the given address (default port 9443) purely to capture the leaf certificate nex-core-local presents; it establishes no trust and stores nothing. The operator compares the returned fingerprint, subject and expiry against the physical host before confirming add-host. This never contacts the Controller-to-Core enrollment contract; it only inspects the host&#x27;s existing local API listener.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;probeHost&quot;,
+  &quot;summary&quot;: &quot;Probe a host&#x27;s local API TLS certificate&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Performs an insecure TLS 1.3 handshake to the given address (default port 9443) purely to capture the leaf certificate nex-core-local presents; it establishes no trust and stores nothing. The operator compares the returned fingerprint, subject and expiry against the physical host before confirming add-host. This never contacts the Controller-to-Core enrollment contract; it only inspects the host&#x27;s existing local API listener.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/HostProbeResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed JSON, unknown field, body over 1 MiB, or an address with a scheme, path, userinfo, or invalid host/port.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;502&quot;: {
+      &quot;description&quot;: &quot;The address was unreachable or did not complete a TLS handshake.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Token returned by login or current session.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/HostProbeRequest&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="addSiteHost"><h2>POST <code>/api/v1/sites/{id}/hosts</code></h2>
+<p>Add a host by address and root password</p><p>Implemented in development product 0.1.0, protocol v1. Replaces manual token enrollment for a reachable host: the operator first confirms the certificate fingerprint returned by probeHost, then submits it here alongside the host&#x27;s root password. The Controller re-verifies that same fingerprint with a constant-time comparison during its own outbound TLS handshake to the host — a mismatch fails the handshake and returns 502 before the password is ever sent. On a verified connection the Controller signs in to the host&#x27;s local API (POST /api/local/v1/session), mints a fresh site-bound enrollment token (the same token contract createEnrollmentToken uses), and pushes it to the host&#x27;s local enrollment endpoint together with the Controller&#x27;s own served HTTPS certificate (the -tls-cert file, not the host-identity CA) as the trust the host pins for its Controller connection; the host then enrolls with this Controller through the existing agent-enrollment contract and becomes the master of a new pool in this site. The root password is used once for that single sign-in and is never stored, logged, or echoed back, including in error messages. Unknown site_id returns 400. Optional host_id re-enrolls a revoked host whose pool belongs to this site (409 otherwise, checked before any network attempt). A wrong password returns 401; a login rate limit returns 429 with the host&#x27;s own message. If the host reports it is already enrolled under a different identity, this returns 409 with that host_id — retrying the same add-host call after a lost response is safe and resolves the same way: fetch inventory to see the enrolled host. Any other host-side failure returns 502 naming the controller_url the host was asked to reach, and any token minted for the attempt is deleted. If the Controller process has no served certificate configured, 503 is returned before any host contact; use manual enrollment.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;addSiteHost&quot;,
+  &quot;summary&quot;: &quot;Add a host by address and root password&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Replaces manual token enrollment for a reachable host: the operator first confirms the certificate fingerprint returned by probeHost, then submits it here alongside the host&#x27;s root password. The Controller re-verifies that same fingerprint with a constant-time comparison during its own outbound TLS handshake to the host \u2014 a mismatch fails the handshake and returns 502 before the password is ever sent. On a verified connection the Controller signs in to the host&#x27;s local API (POST /api/local/v1/session), mints a fresh site-bound enrollment token (the same token contract createEnrollmentToken uses), and pushes it to the host&#x27;s local enrollment endpoint together with the Controller&#x27;s own served HTTPS certificate (the -tls-cert file, not the host-identity CA) as the trust the host pins for its Controller connection; the host then enrolls with this Controller through the existing agent-enrollment contract and becomes the master of a new pool in this site. The root password is used once for that single sign-in and is never stored, logged, or echoed back, including in error messages. Unknown site_id returns 400. Optional host_id re-enrolls a revoked host whose pool belongs to this site (409 otherwise, checked before any network attempt). A wrong password returns 401; a login rate limit returns 429 with the host&#x27;s own message. If the host reports it is already enrolled under a different identity, this returns 409 with that host_id \u2014 retrying the same add-host call after a lost response is safe and resolves the same way: fetch inventory to see the enrolled host. Any other host-side failure returns 502 naming the controller_url the host was asked to reach, and any token minted for the attempt is deleted. If the Controller process has no served certificate configured, 503 is returned before any host contact; use manual enrollment.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/AddSiteHostResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed JSON, unknown field, body over 1 MiB, invalid address/fingerprint/controller_url/root_password, or unknown site.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;site does not exist&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing/expired administrator credentials, or the host rejected the root password.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;host rejected the root password&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;host_id names a host that is not revoked or not in this site, or the host reports it is already enrolled under a different identity (host_id names it).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/AddHostConflict&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;already enrolled&quot;,
+            &quot;host_id&quot;: &quot;&lt;host-id&gt;&quot;
+          }
+        }
+      }
+    },
+    &quot;429&quot;: {
+      &quot;description&quot;: &quot;The host&#x27;s own local-API login is rate limited; its message is passed through.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;login rate limited or busy; retry shortly&quot;
+          }
+        }
+      }
+    },
+    &quot;502&quot;: {
+      &quot;description&quot;: &quot;The address, fingerprint, or host-side enrollment failed; see the message for which and never for the password.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;host certificate fingerprint does not match&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Controller server certificate unavailable; no host contact was made.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;host certificate fingerprint does not match&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Site the new host and its automatic pool belong to.&quot;
+    },
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Token returned by login or current session.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/AddSiteHostRequest&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
 <section id="revokeHost"><h2>POST <code>/api/v1/hosts/{id}/revoke</code></h2>
 <p>Revoke host credentials</p><p>Implemented in development product 0.1.0, protocol v1. Immediately prevents host authentication. Does not stop guests, erase state, or remove local recovery. Re-enrollment requires a new token bound to this host.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
@@ -964,12 +1186,12 @@
   ]
 }</pre></details></section>
 <section id="createOperation"><h2>POST <code>/api/v1/hosts/{id}/operations</code></h2>
-<p>Request fresh host inventory</p><p>Implemented in development product 0.1.0, protocol v1. The only supported command is read-only refresh-inventory. Persist a stable request_id before sending; retry the same host/kind/request_id to recover the same durable operation. Poll operations for completion. Conflicting active work is serialized. Delivery may repeat after disconnect; agent persists completed results and reports them until acknowledged. No cancellation or VM lifecycle operation exists.</p>
+<p>Request fresh host inventory</p><p>Implemented in development product 0.1.0, protocol v1. The only supported command is read-only refresh-inventory. Persist a stable request_id before sending; retry the same host/kind/request_id to recover the same durable operation. Poll operations for completion. Conflicting active work is serialized. Delivery may repeat after disconnect; agent persists completed results and reports them until acknowledged. This route remains inventory-only; managed creation uses its separate resource endpoints. No cancellation or central power operation exists.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;createOperation&quot;,
   &quot;summary&quot;: &quot;Request fresh host inventory&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. The only supported command is read-only refresh-inventory. Persist a stable request_id before sending; retry the same host/kind/request_id to recover the same durable operation. Poll operations for completion. Conflicting active work is serialized. Delivery may repeat after disconnect; agent persists completed results and reports them until acknowledged. No cancellation or VM lifecycle operation exists.&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. The only supported command is read-only refresh-inventory. Persist a stable request_id before sending; retry the same host/kind/request_id to recover the same durable operation. Poll operations for completion. Conflicting active work is serialized. Delivery may repeat after disconnect; agent persists completed results and reports them until acknowledged. This route remains inventory-only; managed creation uses its separate resource endpoints. No cancellation or central power operation exists.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -1112,12 +1334,12 @@
   }
 }</pre></details></section>
 <section id="enrollHost"><h2>POST <code>/api/v1/agent/enroll</code></h2>
-<p>Enroll a Core host</p><p>Implemented in development product 0.1.0, protocol v1. Outbound HTTPS; agent must verify Controller identity before transmitting its pool-bound token. Provide a signed PEM ECDSA P-256 CSR and nonblank hostname (maximum 200 UTF-8 bytes, no CR/LF/NUL). Issues a 90-day host-specific client certificate and CA. The token binds to its first CSR; an identical token/CSR retry before token expiry returns the same identity without duplicate enrollment. A different CSR returns 409. After expiry or revocation obtain a new pool-bound token; replacement requires explicit revoked host selection. Enrollment has no VM side effects.</p>
+<p>Enroll a Core host</p><p>Implemented in development product 0.1.0, protocol v1. Outbound HTTPS; agent must verify Controller identity before transmitting its site-bound token. Provide a signed PEM ECDSA P-256 CSR and nonblank hostname (maximum 200 UTF-8 bytes, no CR/LF/NUL). A fresh enrollment creates a pool in the token site, named after the request hostname, with this host as its master, then records the host in that pool in the same transaction (audit pool.create and host.enroll). Re-enrollment keeps the existing host and pool. Issues a 90-day host-specific client certificate and CA. The token binds to its first CSR; an identical token/CSR retry before token expiry returns the same identity without duplicate enrollment. A different CSR returns 409. After expiry or revocation obtain a new site-bound token; replacement requires explicit revoked host selection. Enrollment has no VM side effects.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;enrollHost&quot;,
   &quot;summary&quot;: &quot;Enroll a Core host&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Outbound HTTPS; agent must verify Controller identity before transmitting its pool-bound token. Provide a signed PEM ECDSA P-256 CSR and nonblank hostname (maximum 200 UTF-8 bytes, no CR/LF/NUL). Issues a 90-day host-specific client certificate and CA. The token binds to its first CSR; an identical token/CSR retry before token expiry returns the same identity without duplicate enrollment. A different CSR returns 409. After expiry or revocation obtain a new pool-bound token; replacement requires explicit revoked host selection. Enrollment has no VM side effects.&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Outbound HTTPS; agent must verify Controller identity before transmitting its site-bound token. Provide a signed PEM ECDSA P-256 CSR and nonblank hostname (maximum 200 UTF-8 bytes, no CR/LF/NUL). A fresh enrollment creates a pool in the token site, named after the request hostname, with this host as its master, then records the host in that pool in the same transaction (audit pool.create and host.enroll). Re-enrollment keeps the existing host and pool. Issues a 90-day host-specific client certificate and CA. The token binds to its first CSR; an identical token/CSR retry before token expiry returns the same identity without duplicate enrollment. A different CSR returns 409. After expiry or revocation obtain a new site-bound token; replacement requires explicit revoked host selection. Enrollment has no VM side effects.&quot;,
   &quot;tags&quot;: [
     &quot;Core agent \u2192 Controller&quot;
   ],
@@ -1200,12 +1422,12 @@
   }
 }</pre></details></section>
 <section id="reportHost"><h2>POST <code>/api/v1/agent/report</code></h2>
-<p>Report observations and reconcile commands</p><p>Implemented in development product 0.1.0, protocol v1. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Version must be 1. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409, foreign/unknown operation IDs return 400. Terminal results are acknowledged without rewriting the original outcome. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable).</p>
+<p>Report observations and reconcile commands</p><p>Implemented in development product 0.1.0, protocol v1. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Version must be 1. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409, foreign/unknown operation IDs return 400. Terminal results are acknowledged without rewriting the original outcome. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects. Upgrade Controller before Core because older Controllers reject the new fields.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;reportHost&quot;,
   &quot;summary&quot;: &quot;Report observations and reconcile commands&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Version must be 1. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409, foreign/unknown operation IDs return 400. Terminal results are acknowledged without rewriting the original outcome. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable).&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Version must be 1. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409, foreign/unknown operation IDs return 400. Terminal results are acknowledged without rewriting the original outcome. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects. Upgrade Controller before Core because older Controllers reject the new fields.&quot;,
   &quot;tags&quot;: [
     &quot;Core agent \u2192 Controller&quot;
   ],
@@ -1483,12 +1705,12 @@
   }
 }</pre></details></section>
 <section id="bootstrapApplianceEnvironment"><h2>POST <code>/api/v1/appliances/bootstrap</code></h2>
-<p>Create initial appliance site, pool and enrollment intent</p><p>Administrator-only appliance bootstrap. Persist a stable request_id and random 64-character lowercase hexadecimal enrollment_token before submission. The same request, names and token return the original site/pool without duplicates. Payload changes conflict. An authenticated replay refreshes token expiry to ten minutes without clearing a consumed token&#x27;s CSR binding; consumed tokens support replay only of the already-enrolled agent CSR through the existing enrollment endpoint. This does not create or start a VM. Core enrollment remains outbound verified HTTPS protocol v1. Revoked enrollment tokens are not recreated; use explicit recovery.</p>
+<p>Create initial appliance site and enrollment intent</p><p>Administrator-only appliance bootstrap. Persist a stable request_id and random 64-character lowercase hexadecimal enrollment_token before submission. The same request, names and token return the original site without duplicates. Payload changes conflict. An authenticated replay refreshes token expiry to ten minutes without clearing a consumed token&#x27;s CSR binding; consumed tokens support replay only of the already-enrolled agent CSR through the existing enrollment endpoint. No pool is created here: the appliance host becomes the master of an automatic pool when it enrolls. This does not create or start a VM. Core enrollment remains outbound verified HTTPS protocol v1. Revoked enrollment tokens are not recreated; use explicit recovery.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;bootstrapApplianceEnvironment&quot;,
-  &quot;summary&quot;: &quot;Create initial appliance site, pool and enrollment intent&quot;,
-  &quot;description&quot;: &quot;Administrator-only appliance bootstrap. Persist a stable request_id and random 64-character lowercase hexadecimal enrollment_token before submission. The same request, names and token return the original site/pool without duplicates. Payload changes conflict. An authenticated replay refreshes token expiry to ten minutes without clearing a consumed token&#x27;s CSR binding; consumed tokens support replay only of the already-enrolled agent CSR through the existing enrollment endpoint. This does not create or start a VM. Core enrollment remains outbound verified HTTPS protocol v1. Revoked enrollment tokens are not recreated; use explicit recovery.&quot;,
+  &quot;summary&quot;: &quot;Create initial appliance site and enrollment intent&quot;,
+  &quot;description&quot;: &quot;Administrator-only appliance bootstrap. Persist a stable request_id and random 64-character lowercase hexadecimal enrollment_token before submission. The same request, names and token return the original site without duplicates. Payload changes conflict. An authenticated replay refreshes token expiry to ten minutes without clearing a consumed token&#x27;s CSR binding; consumed tokens support replay only of the already-enrolled agent CSR through the existing enrollment endpoint. No pool is created here: the appliance host becomes the master of an automatic pool when it enrolls. This does not create or start a VM. Core enrollment remains outbound verified HTTPS protocol v1. Revoked enrollment tokens are not recreated; use explicit recovery.&quot;,
   &quot;security&quot;: [
     {
       &quot;AdminSession&quot;: []
@@ -1590,12 +1812,12 @@
   }
 }</pre></details></section>
 <section id="adoptControllerAppliance"><h2>POST <code>/api/v1/appliances/adopt</code></h2>
-<p>Adopt the existing Controller VM</p><p>Register the existing libvirt UUID in its pool with a separate host assignment and protected Controller role. Requires an active host in the selected pool and fresh successful libvirt inventory observing this VM. A UUID reported by another host is rejected, including revoked hosts and old observations: reconcile ownership first. Stable request_id and identical payload replay the original registration; altered payload or owner conflicts. Registration grants no fencing, power, deletion or migration permission.</p>
+<p>Adopt the existing Controller VM</p><p>Register the existing libvirt UUID with a separate host assignment and protected Controller role. The pool is derived from the host record; an optional pool_id must match it (409 otherwise) and the response always returns pool_id. Requires an active host and fresh successful libvirt inventory observing this VM. A UUID reported by another host is rejected, including revoked hosts and old observations: reconcile ownership first. Stable request_id and identical payload replay the original registration; altered payload or owner conflicts. Registration grants no fencing, power, deletion or migration permission.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;adoptControllerAppliance&quot;,
   &quot;summary&quot;: &quot;Adopt the existing Controller VM&quot;,
-  &quot;description&quot;: &quot;Register the existing libvirt UUID in its pool with a separate host assignment and protected Controller role. Requires an active host in the selected pool and fresh successful libvirt inventory observing this VM. A UUID reported by another host is rejected, including revoked hosts and old observations: reconcile ownership first. Stable request_id and identical payload replay the original registration; altered payload or owner conflicts. Registration grants no fencing, power, deletion or migration permission.&quot;,
+  &quot;description&quot;: &quot;Register the existing libvirt UUID with a separate host assignment and protected Controller role. The pool is derived from the host record; an optional pool_id must match it (409 otherwise) and the response always returns pool_id. Requires an active host and fresh successful libvirt inventory observing this VM. A UUID reported by another host is rejected, including revoked hosts and old observations: reconcile ownership first. Stable request_id and identical payload replay the original registration; altered payload or owner conflicts. Registration grants no fencing, power, deletion or migration permission.&quot;,
   &quot;security&quot;: [
     {
       &quot;AdminSession&quot;: []
@@ -1707,12 +1929,12 @@
   }
 }</pre></details></section>
 <section id="listManagedAppliances"><h2>GET <code>/api/v1/vms</code></h2>
-<p>List adopted Controller appliances</p><p>Read-only administrator inventory of adopted appliances, safe to retry. Includes pool membership, assigned host and preserved UUID. State comes only from fresh successful host libvirt observations; stale, failed, absent or revoked observations produce unknown. No generic VM mutation API is introduced.</p>
+<p>List managed VMs and protected Controller appliances</p><p>Unified VM listing. Existing adopted appliances preserve role=controller and protected=true without creation spec/status. Generic guest entries add spec and operation_id/status/error; state/freshness always come from fresh successful libvirt observations independently of creation status. Read-only administrator access; safe to retry.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;listManagedAppliances&quot;,
-  &quot;summary&quot;: &quot;List adopted Controller appliances&quot;,
-  &quot;description&quot;: &quot;Read-only administrator inventory of adopted appliances, safe to retry. Includes pool membership, assigned host and preserved UUID. State comes only from fresh successful host libvirt observations; stale, failed, absent or revoked observations produce unknown. No generic VM mutation API is introduced.&quot;,
+  &quot;summary&quot;: &quot;List managed VMs and protected Controller appliances&quot;,
+  &quot;description&quot;: &quot;Unified VM listing. Existing adopted appliances preserve role=controller and protected=true without creation spec/status. Generic guest entries add spec and operation_id/status/error; state/freshness always come from fresh successful libvirt observations independently of creation status. Read-only administrator access; safe to retry.&quot;,
   &quot;security&quot;: [
     {
       &quot;AdminSession&quot;: []
@@ -1746,6 +1968,1378 @@
     },
     &quot;500&quot;: {
       &quot;description&quot;: &quot;Storage unavailable. Reconcile stable request before retrying.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="createVM"><h2>POST <code>/api/v1/vms</code></h2>
+<p>Create a stopped guest VM</p><p>Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. CPU 1–64, memory 512–262144 MiB, disk 1–2048 GiB, bios or uefi. Host observed capacity and Core current capacity must suffice. Storage/network/ISO must have succeeded on this host/pool, and ISO must reside on selected storage. Controller assigns UUID and reserves name within pool before dispatch. Core journals effects and reconciles ownership before replay; needs_attention preserves uncertain resources for manual recovery. No boot, console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64/q35 libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;createVM&quot;,
+  &quot;summary&quot;: &quot;Create a stopped guest VM&quot;,
+  &quot;description&quot;: &quot;Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. CPU 1\u201364, memory 512\u2013262144 MiB, disk 1\u20132048 GiB, bios or uefi. Host observed capacity and Core current capacity must suffice. Storage/network/ISO must have succeeded on this host/pool, and ISO must reside on selected storage. Controller assigns UUID and reserves name within pool before dispatch. Core journals effects and reconciles ownership before replay; needs_attention preserves uncertain resources for manual recovery. No boot, console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64/q35 libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/CreateVMResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller persistence or internal failure; reconcile before retrying a mutation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed JSON, unknown field, body over 1 MiB, or invalid input; see the operation schema and description.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;invalid JSON request&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflicting state, request ID, consumed token, undelivered operation result, or unsupported protocol version as applicable to this operation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Existing VM identity and operation for identical retry.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/CreateVMResponse&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Token returned by login or current session.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/CreateVMRequest&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="listStorageRegistration"><h2>GET <code>/api/v1/storage</code></h2>
+<p>List local storage registrations</p><p>Administrator inventory of pool registrations with explicit host access and durable operation statuses; read-only and safe to retry.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;listStorageRegistration&quot;,
+  &quot;summary&quot;: &quot;List local storage registrations&quot;,
+  &quot;description&quot;: &quot;Administrator inventory of pool registrations with explicit host access and durable operation statuses; read-only and safe to retry.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;items&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/StorageRegistration&quot;
+            }
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller persistence or internal failure; reconcile before retrying a mutation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="createStorageRegistration"><h2>POST <code>/api/v1/storage</code></h2>
+<p>Register local storage</p><p>Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. No disk formatting or live network configuration. Definite failed registrations can be revalidated using a new request_id; queued, dispatched and needs_attention reservations must be reconciled first.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;createStorageRegistration&quot;,
+  &quot;summary&quot;: &quot;Register local storage&quot;,
+  &quot;description&quot;: &quot;Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. No disk formatting or live network configuration. Definite failed registrations can be revalidated using a new request_id; queued, dispatched and needs_attention reservations must be reconciled first.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;responses&quot;: {
+    &quot;201&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/StorageRegistration&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller persistence or internal failure; reconcile before retrying a mutation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed JSON, unknown field, body over 1 MiB, or invalid input; see the operation schema and description.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;invalid JSON request&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflicting state, request ID, consumed token, undelivered operation result, or unsupported protocol version as applicable to this operation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Existing registration for identical request_id and payload.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/StorageRegistration&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Token returned by login or current session.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/StorageRegistrationRequest&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="listNetworkRegistration"><h2>GET <code>/api/v1/networks</code></h2>
+<p>List existing guest network registrations</p><p>Administrator inventory of pool registrations with explicit host access and durable operation statuses; read-only and safe to retry. Includes automatically created default networks and networks adopted from Inventory.managed, distinguishable by actor system on their operation.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;listNetworkRegistration&quot;,
+  &quot;summary&quot;: &quot;List existing guest network registrations&quot;,
+  &quot;description&quot;: &quot;Administrator inventory of pool registrations with explicit host access and durable operation statuses; read-only and safe to retry. Includes automatically created default networks and networks adopted from Inventory.managed, distinguishable by actor system on their operation.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;items&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/NetworkRegistration&quot;
+            }
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller persistence or internal failure; reconcile before retrying a mutation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="createNetworkRegistration"><h2>POST <code>/api/v1/networks</code></h2>
+<p>Register pool guest network</p><p>Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. No disk formatting. kind vlan creates an additive guest bridge on the host without touching the management bridge; other kinds perform no network configuration. Unobserved or non-physical uplinks conflict with 409. Definite failed registrations can be revalidated using a new request_id; queued, dispatched and needs_attention reservations must be reconciled first.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;createNetworkRegistration&quot;,
+  &quot;summary&quot;: &quot;Register pool guest network&quot;,
+  &quot;description&quot;: &quot;Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. No disk formatting. kind vlan creates an additive guest bridge on the host without touching the management bridge; other kinds perform no network configuration. Unobserved or non-physical uplinks conflict with 409. Definite failed registrations can be revalidated using a new request_id; queued, dispatched and needs_attention reservations must be reconciled first.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;responses&quot;: {
+    &quot;201&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/NetworkRegistration&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller persistence or internal failure; reconcile before retrying a mutation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed JSON, unknown field, body over 1 MiB, or invalid input; see the operation schema and description.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;invalid JSON request&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflicting state, request ID, consumed token, undelivered operation result, or unsupported protocol version as applicable to this operation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Existing registration for identical request_id and payload.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/NetworkRegistration&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Token returned by login or current session.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/NetworkRegistrationRequest&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="listMedia"><h2>GET <code>/api/v1/media</code></h2>
+<p>List guest ISO media</p><p>Read-only pool/host media inventory with size, SHA-256 and host-transfer operation state; Controller receipt is not host import success. Safe to retry.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;listMedia&quot;,
+  &quot;summary&quot;: &quot;List guest ISO media&quot;,
+  &quot;description&quot;: &quot;Read-only pool/host media inventory with size, SHA-256 and host-transfer operation state; Controller receipt is not host import success. Safe to retry.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;items&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/Media&quot;
+            }
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller persistence or internal failure; reconcile before retrying a mutation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="uploadMedia"><h2>POST <code>/api/v1/media</code></h2>
+<p>Upload and transfer a guest ISO</p><p>Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Send the raw ISO body, not multipart or JSON. Name must be a basename ending .iso. Controller hashes the actual stream, verifies CD001 at offset 32769 and stages privately before committing an iso-import command. Maximum 8 GiB per image, 16 GiB total staging, 256 MiB free-space reserve; one transfer admission at a time, 2-hour read/write budget. Capacity is bounded even with absent/false Content-Length. Identical retries reupload and hash the bytes before comparing the original request. Terminal import results release Controller staging; orphan files are removed at startup. No remote URL fetch or public media download.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;uploadMedia&quot;,
+  &quot;summary&quot;: &quot;Upload and transfer a guest ISO&quot;,
+  &quot;description&quot;: &quot;Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Send the raw ISO body, not multipart or JSON. Name must be a basename ending .iso. Controller hashes the actual stream, verifies CD001 at offset 32769 and stages privately before committing an iso-import command. Maximum 8 GiB per image, 16 GiB total staging, 256 MiB free-space reserve; one transfer admission at a time, 2-hour read/write budget. Capacity is bounded even with absent/false Content-Length. Identical retries reupload and hash the bytes before comparing the original request. Terminal import results release Controller staging; orphan files are removed at startup. No remote URL fetch or public media download.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;responses&quot;: {
+    &quot;201&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Media&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller persistence or internal failure; reconcile before retrying a mutation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed JSON, unknown field, body over 1 MiB, or invalid input; see the operation schema and description.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;invalid JSON request&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflicting state, request ID, consumed token, undelivered operation result, or unsupported protocol version as applicable to this operation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Same request_id, storage, name, actual size and SHA-256.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Media&quot;
+          }
+        }
+      }
+    },
+    &quot;413&quot;: {
+      &quot;description&quot;: &quot;Actual or declared body exceeds 8 GiB or the available staging budget.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;507&quot;: {
+      &quot;description&quot;: &quot;Insufficient Controller staging space; 16 GiB total with 256 MiB reserve.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Token returned by login or current session.&quot;
+    },
+    {
+      &quot;name&quot;: &quot;storage_id&quot;,
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Verified local storage registration; determines pool and host.&quot;
+    },
+    {
+      &quot;name&quot;: &quot;name&quot;,
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;ISO basename ending in .iso.&quot;
+    },
+    {
+      &quot;name&quot;: &quot;request_id&quot;,
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Stable client request identity.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/octet-stream&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;string&quot;,
+          &quot;format&quot;: &quot;binary&quot;,
+          &quot;x-min-bytes&quot;: 32774,
+          &quot;x-max-bytes&quot;: 8589934592
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="downloadAgentMedia"><h2>GET <code>/api/v1/agent/media/{id}</code></h2>
+<p>Fetch the assigned ISO for a dispatched import</p><p>Requires current unrevoked host mTLS identity and a dispatched iso-import operation assigning this media to that exact host. Other hosts see 404. Core fetches only its enrolled, TLS-verified Controller origin and refuses redirects. Streams private staged bytes with a two-hour write budget; Core checks expected size, SHA-256 and ISO descriptor before publishing read-only media. Missing staging returns 410; inspect the original operation before retry. No browser session or CSRF token is used on this agent route.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;downloadAgentMedia&quot;,
+  &quot;summary&quot;: &quot;Fetch the assigned ISO for a dispatched import&quot;,
+  &quot;description&quot;: &quot;Requires current unrevoked host mTLS identity and a dispatched iso-import operation assigning this media to that exact host. Other hosts see 404. Core fetches only its enrolled, TLS-verified Controller origin and refuses redirects. Streams private staged bytes with a two-hour write budget; Core checks expected size, SHA-256 and ISO descriptor before publishing read-only media. Missing staging returns 410; inspect the original operation before retry. No browser session or CSRF token is used on this agent route.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;HostCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;agent&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Assigned ISO bytes.&quot;,
+      &quot;content&quot;: {
+        &quot;application/octet-stream&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;format&quot;: &quot;binary&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller persistence or internal failure; reconcile before retrying a mutation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Media is unknown or not assigned to this host.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Import is not dispatched.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;410&quot;: {
+      &quot;description&quot;: &quot;Staged media unavailable; inspect original import.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;206&quot;: {
+      &quot;description&quot;: &quot;Assigned ISO bytes.&quot;,
+      &quot;content&quot;: {
+        &quot;application/octet-stream&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;format&quot;: &quot;binary&quot;
+          }
+        }
+      }
+    },
+    &quot;416&quot;: {
+      &quot;description&quot;: &quot;Unsatisfiable byte range; native HTTP file-serving response.&quot;
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+      }
+    }
+  ]
+}</pre></details></section>
+<section id="openConsole"><h2>POST <code>/api/v1/vms/{id}/console</code></h2>
+<p>Issue a single-use console ticket for a running VM</p><p>Implemented in development product 0.1.0, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token, and an empty JSON object body. The VM must be an adopted appliance or a successfully created guest, its assigned host must be freshly connected, unrevoked and report capability console-v1, and the VM must be observed running in fresh libvirt inventory. The ticket is bound to the requesting session user and VM, lives 60 seconds in Controller memory only, is delivered once to the host in its next report response and is consumed by the first matching WebSocket. The action is audited as console.open. No power operation is implied; a Controller restart ends open consoles without affecting the guest.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;openConsole&quot;,
+  &quot;summary&quot;: &quot;Issue a single-use console ticket for a running VM&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token, and an empty JSON object body. The VM must be an adopted appliance or a successfully created guest, its assigned host must be freshly connected, unrevoked and report capability console-v1, and the VM must be observed running in fresh libvirt inventory. The ticket is bound to the requesting session user and VM, lives 60 seconds in Controller memory only, is delivered once to the host in its next report response and is consumed by the first matching WebSocket. The action is audited as console.open. No power operation is implied; a Controller restart ends open consoles without affecting the guest.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;VM UUID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;additionalProperties&quot;: false
+        },
+        &quot;example&quot;: {}
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;201&quot;: {
+      &quot;description&quot;: &quot;Console ticket issued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ConsoleTicket&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed JSON, unknown field, or body over 1 MiB.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;VM not found.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Host not freshly connected, host agent without console-v1, or VM not observed running.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;429&quot;: {
+      &quot;description&quot;: &quot;Too many open console sessions (32).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller persistence or internal failure.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="consoleStream"><h2>GET <code>/api/v1/vms/{id}/console/{ticket}</code></h2>
+<p>Open the browser console WebSocket</p><p>Implemented in development product 0.1.0. WebSocket upgrade (RFC 6455, binary frames carrying raw RFB/VNC bytes for noVNC) authenticated by the administrator session cookie; the Origin header must equal the Controller origin and the ticket must be unconsumed, unexpired and issued to this session user for this VM. Controller waits up to 20 seconds for the host&#x27;s outbound tunnel, then relays bytes both ways until either side closes. HTTP/1.1 is negotiated for this route; no other transport is offered. The ticket is consumed on first use.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;consoleStream&quot;,
+  &quot;summary&quot;: &quot;Open the browser console WebSocket&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0. WebSocket upgrade (RFC 6455, binary frames carrying raw RFB/VNC bytes for noVNC) authenticated by the administrator session cookie; the Origin header must equal the Controller origin and the ticket must be unconsumed, unexpired and issued to this session user for this VM. Controller waits up to 20 seconds for the host&#x27;s outbound tunnel, then relays bytes both ways until either side closes. HTTP/1.1 is negotiated for this route; no other transport is offered. The ticket is consumed on first use.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;VM UUID.&quot;
+    },
+    {
+      &quot;name&quot;: &quot;ticket&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Ticket from openConsole.&quot;
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;101&quot;: {
+      &quot;description&quot;: &quot;WebSocket established; binary frames relay the VM display stream.&quot;
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Not returned; listed so tooling that requires a 2xx documents the upgrade. The stream is the 101 response.&quot;
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid WebSocket upgrade headers.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin does not match the Controller origin.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Ticket unknown, expired, for another VM, or issued to another session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Ticket already used.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;504&quot;: {
+      &quot;description&quot;: &quot;The host did not attach the console within 20 seconds.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="agentConsole"><h2>POST <code>/api/v1/agent/console/{token}</code></h2>
+<p>Attach the host&#x27;s outbound console tunnel</p><p>Implemented in development product 0.1.0, protocol v1. Core sends this over its enrolled, hostname-verified mTLS connection with Connection: Upgrade and Upgrade: nex-console after receiving a console request in a report response and dialing the running VM&#x27;s local VNC UNIX socket. The token must name an unexpired session for this exact host that has no tunnel yet. The response is 101 and the connection then carries raw VNC bytes both ways until the browser or VM side closes. Other hosts, unknown or expired tokens and duplicate tunnels receive 404. No browser session or CSRF token is used on this agent route; Core never listens for inbound console connections.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;agentConsole&quot;,
+  &quot;summary&quot;: &quot;Attach the host&#x27;s outbound console tunnel&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Core sends this over its enrolled, hostname-verified mTLS connection with Connection: Upgrade and Upgrade: nex-console after receiving a console request in a report response and dialing the running VM&#x27;s local VNC UNIX socket. The token must name an unexpired session for this exact host that has no tunnel yet. The response is 101 and the connection then carries raw VNC bytes both ways until the browser or VM side closes. Other hosts, unknown or expired tokens and duplicate tunnels receive 404. No browser session or CSRF token is used on this agent route; Core never listens for inbound console connections.&quot;,
+  &quot;tags&quot;: [
+    &quot;Core \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;HostCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;agent&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;token&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Console token from the report response.&quot;
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;101&quot;: {
+      &quot;description&quot;: &quot;Tunnel attached; raw RFB bytes follow.&quot;
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Not returned; the tunnel is the 101 response.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Console session unknown, expired, for another host, or already attached.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Connection cannot be upgraded.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="getUpdates"><h2>GET <code>/api/v1/updates</code></h2>
+<p>Check Controller software updates</p><p>Implemented in development product 0.1.0. Reads the configured package repo (NEX_UPDATE_REPO or /etc/nex/updates.conf, else the lab default) updates.json for package nex-controller, compares versions, and reports whether an update is available. Repo failures are returned in the error field with HTTP 200 so operators can still see the installed version. Administrator session required. Read-only; safe to retry.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;getUpdates&quot;,
+  &quot;summary&quot;: &quot;Check Controller software updates&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0. Reads the configured package repo (NEX_UPDATE_REPO or /etc/nex/updates.conf, else the lab default) updates.json for package nex-controller, compares versions, and reports whether an update is available. Repo failures are returned in the error field with HTTP 200 so operators can still see the installed version. Administrator session required. Read-only; safe to retry.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateStatus&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller persistence or internal failure.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;
+}</pre></details></section>
+<section id="applyUpdates"><h2>POST <code>/api/v1/updates/apply</code></h2>
+<p>Request Controller package update</p><p>Writes pending-update.json under the Controller state directory for the privileged nex-controller-update path unit. Returns 202 scheduled; the helper downloads the deb, runs dpkg -i and restarts nex-controller. Controller cannot run apt itself (ProtectSystem=strict, NoNewPrivileges). Audits update.apply. Empty JSON body. CSRF and same-origin required.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;applyUpdates&quot;,
+  &quot;summary&quot;: &quot;Request Controller package update&quot;,
+  &quot;description&quot;: &quot;Writes pending-update.json under the Controller state directory for the privileged nex-controller-update path unit. Returns 202 scheduled; the helper downloads the deb, runs dpkg -i and restarts nex-controller. Controller cannot run apt itself (ProtectSystem=strict, NoNewPrivileges). Audits update.apply. Empty JSON body. CSRF and same-origin required.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: false,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;additionalProperties&quot;: false
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Update scheduled&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateApplyResult&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Could not schedule update.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;
+}</pre></details></section>
+<section id="powerVM"><h2>POST <code>/api/v1/vms/{id}/power</code></h2>
+<p>Request a VM power action on its assigned host</p><p>Implemented in development product 0.1.0, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different action under the same id is 409. The VM must be an adopted appliance or a successfully created guest; its assigned host must be freshly connected, unrevoked and report managed-vm-v1 and vm-power-v1, and at most one power request per VM may be queued or dispatched. The request is audited as vm-power and delivered to the host in its next report; poll operations for the result. A succeeded shutdown or reboot means the ACPI request was issued, not that the guest honored it: the VM&#x27;s observed state is the truth. Controller outage never stops a guest.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;powerVM&quot;,
+  &quot;summary&quot;: &quot;Request a VM power action on its assigned host&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different action under the same id is 409. The VM must be an adopted appliance or a successfully created guest; its assigned host must be freshly connected, unrevoked and report managed-vm-v1 and vm-power-v1, and at most one power request per VM may be queued or dispatched. The request is audited as vm-power and delivered to the host in its next report; poll operations for the result. A succeeded shutdown or reboot means the ACPI request was issued, not that the guest honored it: the VM&#x27;s observed state is the truth. Controller outage never stops a guest.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;VM UUID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PowerVMRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Power request queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PowerVMResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Replay of an existing request_id with the same VM and action.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PowerVMResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed JSON, unknown field, invalid request_id or unsupported action.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;VM not found.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Host not fresh, revoked, outside the pool or without vm-power-v1; request_id reused with different input; or another power request for this VM is pending.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller persistence or internal failure.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -1807,18 +3401,24 @@
     },
     &quot;name&quot;: {
       &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;master_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Host that controls this pool. Empty only for databases migrated from the removed manual pool creation with no host.&quot;
     }
   },
   &quot;required&quot;: [
     &quot;id&quot;,
     &quot;site_id&quot;,
-    &quot;name&quot;
+    &quot;name&quot;,
+    &quot;master_host_id&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.Pool&quot;,
   &quot;example&quot;: {
     &quot;id&quot;: &quot;&lt;pool-id&gt;&quot;,
     &quot;site_id&quot;: &quot;&lt;site-id&gt;&quot;,
-    &quot;name&quot;: &quot;Lab&quot;
+    &quot;name&quot;: &quot;core-01&quot;,
+    &quot;master_host_id&quot;: &quot;&lt;host-id&gt;&quot;
   }
 }</pre></details>
 <details id="Check"><summary>Check</summary><pre>{
@@ -1898,6 +3498,26 @@
     },
     &quot;state&quot;: {
       &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;physical&quot;,
+        &quot;bond&quot;,
+        &quot;bridge&quot;,
+        &quot;vlan&quot;,
+        &quot;loopback&quot;,
+        &quot;virtual&quot;
+      ],
+      &quot;description&quot;: &quot;Interface classification for uplink selection; absent from older agents.&quot;
+    },
+    &quot;master&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Bridge or bond this device is enslaved to; absent when standalone or from older agents.&quot;
+    },
+    &quot;parent&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;For 802.1Q VLAN devices, the raw device they sit on.&quot;
     }
   },
   &quot;required&quot;: [
@@ -2013,6 +3633,17 @@
       },
       &quot;maxItems&quot;: 1024
     },
+    &quot;managed&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/ManagedState&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Pool-scoped configuration this host has durably applied, read from the Core managed journal; null or omitted when the host holds nothing. On each managed report Controller adopts, under actor system, every entry it does not hold (request_id adopt-&lt;kind&gt;:&lt;host&gt;:&lt;id&gt;, kind storage-register | network-register | iso-import | vm-create), reusing the resource ID and recording the operation as already succeeded without dispatching a command. Entries that duplicate an existing ID, storage path, network (kind, source) or VM name, and invalid entries, are skipped.&quot;
+    },
     &quot;disks&quot;: {
       &quot;type&quot;: [
         &quot;array&quot;,
@@ -2108,6 +3739,16 @@
           &quot;type&quot;: &quot;null&quot;
         }
       ]
+    },
+    &quot;capabilities&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Last accepted sequenced report capabilities; managed-vm-v1 is required for new managed-VM work. Host connectivity freshness is checked separately.&quot;
     }
   },
   &quot;required&quot;: [
@@ -2219,7 +3860,62 @@
     &quot;kind&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;enum&quot;: [
-        &quot;refresh-inventory&quot;
+        &quot;refresh-inventory&quot;,
+        &quot;storage-register&quot;,
+        &quot;network-register&quot;,
+        &quot;iso-import&quot;,
+        &quot;vm-create&quot;,
+        &quot;vm-power&quot;
+      ]
+    },
+    &quot;storage&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/StorageRegistration&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;network&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/NetworkRegistration&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;media&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/Media&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;vm&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/VMCreateSpec&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;power&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/VMPowerRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
       ]
     }
   },
@@ -2227,7 +3923,389 @@
     &quot;operation_id&quot;,
     &quot;kind&quot;
   ],
-  &quot;x-go-type&quot;: &quot;protocol.Command&quot;
+  &quot;x-go-type&quot;: &quot;protocol.Command&quot;,
+  &quot;allOf&quot;: [
+    {
+      &quot;if&quot;: {
+        &quot;properties&quot;: {
+          &quot;kind&quot;: {
+            &quot;const&quot;: &quot;storage-register&quot;
+          }
+        },
+        &quot;required&quot;: [
+          &quot;kind&quot;
+        ]
+      },
+      &quot;then&quot;: {
+        &quot;required&quot;: [
+          &quot;storage&quot;
+        ],
+        &quot;properties&quot;: {
+          &quot;storage&quot;: {
+            &quot;not&quot;: {
+              &quot;type&quot;: &quot;null&quot;
+            }
+          }
+        },
+        &quot;not&quot;: {
+          &quot;anyOf&quot;: [
+            {
+              &quot;required&quot;: [
+                &quot;network&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;network&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;media&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;media&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;vm&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;vm&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;power&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;power&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      &quot;if&quot;: {
+        &quot;properties&quot;: {
+          &quot;kind&quot;: {
+            &quot;const&quot;: &quot;network-register&quot;
+          }
+        },
+        &quot;required&quot;: [
+          &quot;kind&quot;
+        ]
+      },
+      &quot;then&quot;: {
+        &quot;required&quot;: [
+          &quot;network&quot;
+        ],
+        &quot;properties&quot;: {
+          &quot;network&quot;: {
+            &quot;not&quot;: {
+              &quot;type&quot;: &quot;null&quot;
+            }
+          }
+        },
+        &quot;not&quot;: {
+          &quot;anyOf&quot;: [
+            {
+              &quot;required&quot;: [
+                &quot;storage&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;storage&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;media&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;media&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;vm&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;vm&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;power&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;power&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      &quot;if&quot;: {
+        &quot;properties&quot;: {
+          &quot;kind&quot;: {
+            &quot;const&quot;: &quot;iso-import&quot;
+          }
+        },
+        &quot;required&quot;: [
+          &quot;kind&quot;
+        ]
+      },
+      &quot;then&quot;: {
+        &quot;required&quot;: [
+          &quot;media&quot;
+        ],
+        &quot;properties&quot;: {
+          &quot;media&quot;: {
+            &quot;not&quot;: {
+              &quot;type&quot;: &quot;null&quot;
+            }
+          }
+        },
+        &quot;not&quot;: {
+          &quot;anyOf&quot;: [
+            {
+              &quot;required&quot;: [
+                &quot;storage&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;storage&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;network&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;network&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;vm&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;vm&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;power&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;power&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      &quot;if&quot;: {
+        &quot;properties&quot;: {
+          &quot;kind&quot;: {
+            &quot;const&quot;: &quot;vm-create&quot;
+          }
+        },
+        &quot;required&quot;: [
+          &quot;kind&quot;
+        ]
+      },
+      &quot;then&quot;: {
+        &quot;required&quot;: [
+          &quot;vm&quot;
+        ],
+        &quot;properties&quot;: {
+          &quot;vm&quot;: {
+            &quot;not&quot;: {
+              &quot;type&quot;: &quot;null&quot;
+            }
+          }
+        },
+        &quot;not&quot;: {
+          &quot;anyOf&quot;: [
+            {
+              &quot;required&quot;: [
+                &quot;storage&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;storage&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;network&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;network&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;media&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;media&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;power&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;power&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      &quot;if&quot;: {
+        &quot;properties&quot;: {
+          &quot;kind&quot;: {
+            &quot;const&quot;: &quot;vm-power&quot;
+          }
+        },
+        &quot;required&quot;: [
+          &quot;kind&quot;
+        ]
+      },
+      &quot;then&quot;: {
+        &quot;required&quot;: [
+          &quot;power&quot;
+        ],
+        &quot;properties&quot;: {
+          &quot;power&quot;: {
+            &quot;not&quot;: {
+              &quot;type&quot;: &quot;null&quot;
+            }
+          }
+        },
+        &quot;not&quot;: {
+          &quot;anyOf&quot;: [
+            {
+              &quot;required&quot;: [
+                &quot;storage&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;storage&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;network&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;network&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;media&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;media&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;vm&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;vm&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
 }</pre></details>
 <details id="Result"><summary>Result</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -2239,7 +4317,8 @@
       &quot;type&quot;: &quot;string&quot;,
       &quot;enum&quot;: [
         &quot;succeeded&quot;,
-        &quot;failed&quot;
+        &quot;failed&quot;,
+        &quot;needs_attention&quot;
       ]
     },
     &quot;error&quot;: {
@@ -2291,6 +4370,18 @@
         &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
       },
       &quot;maxItems&quot;: 100
+    },
+    &quot;capabilities&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;x-max-utf8-bytes&quot;: 100
+      },
+      &quot;maxItems&quot;: 32,
+      &quot;description&quot;: &quot;Advertised on every report. managed-vm-v1 enables managed command delivery. Omission or null disables managed delivery for this report; a newer sequence also replaces stored capabilities.&quot;
     }
   },
   &quot;required&quot;: [
@@ -2331,6 +4422,16 @@
       &quot;items&quot;: {
         &quot;type&quot;: &quot;string&quot;
       }
+    },
+    &quot;consoles&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ConsoleRequest&quot;
+      },
+      &quot;description&quot;: &quot;Console pairings to attach now; omitted when none. Not durable operations: they are delivered once and never journaled.&quot;
     }
   },
   &quot;required&quot;: [
@@ -2346,7 +4447,11 @@
       }
     ],
     &quot;acknowledged_results&quot;: []
-  }
+  },
+  &quot;x-go-emitted-fields&quot;: [
+    &quot;commands&quot;,
+    &quot;acknowledged_results&quot;
+  ]
 }</pre></details>
 <details id="Operation"><summary>Operation</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -2360,7 +4465,12 @@
     &quot;kind&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;enum&quot;: [
-        &quot;refresh-inventory&quot;
+        &quot;refresh-inventory&quot;,
+        &quot;storage-register&quot;,
+        &quot;network-register&quot;,
+        &quot;iso-import&quot;,
+        &quot;vm-create&quot;,
+        &quot;vm-power&quot;
       ]
     },
     &quot;request_id&quot;: {
@@ -2372,7 +4482,8 @@
         &quot;queued&quot;,
         &quot;dispatched&quot;,
         &quot;succeeded&quot;,
-        &quot;failed&quot;
+        &quot;failed&quot;,
+        &quot;needs_attention&quot;
       ]
     },
     &quot;error&quot;: {
@@ -2525,43 +4636,23 @@
     &quot;name&quot;: &quot;Home&quot;
   }
 }</pre></details>
-<details id="CreatePoolRequest"><summary>CreatePoolRequest</summary><pre>{
+<details id="TokenRequest"><summary>TokenRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;properties&quot;: {
     &quot;site_id&quot;: {
       &quot;type&quot;: &quot;string&quot;
     },
-    &quot;name&quot;: {
-      &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;Nonblank after trimming whitespace; at most 200 UTF-8 bytes; no CR, LF, or NUL.&quot;
-    }
-  },
-  &quot;required&quot;: [
-    &quot;site_id&quot;,
-    &quot;name&quot;
-  ],
-  &quot;additionalProperties&quot;: false,
-  &quot;example&quot;: {
-    &quot;site_id&quot;: &quot;&lt;site-id&gt;&quot;,
-    &quot;name&quot;: &quot;Lab&quot;
-  }
-}</pre></details>
-<details id="TokenRequest"><summary>TokenRequest</summary><pre>{
-  &quot;type&quot;: &quot;object&quot;,
-  &quot;properties&quot;: {
-    &quot;pool_id&quot;: {
-      &quot;type&quot;: &quot;string&quot;
-    },
     &quot;host_id&quot;: {
-      &quot;type&quot;: &quot;string&quot;
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Optional revoked host to re-enroll; its pool must belong to site_id.&quot;
     }
   },
   &quot;required&quot;: [
-    &quot;pool_id&quot;
+    &quot;site_id&quot;
   ],
   &quot;additionalProperties&quot;: false,
   &quot;example&quot;: {
-    &quot;pool_id&quot;: &quot;&lt;pool-id&gt;&quot;
+    &quot;site_id&quot;: &quot;&lt;site-id&gt;&quot;
   }
 }</pre></details>
 <details id="TokenResponse"><summary>TokenResponse</summary><pre>{
@@ -2584,6 +4675,127 @@
     &quot;token&quot;: &quot;&lt;single-use-enrollment-token&gt;&quot;,
     &quot;expires_at&quot;: &quot;2026-09-08T10:10:00Z&quot;
   }
+}</pre></details>
+<details id="HostProbeRequest"><summary>HostProbeRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;address&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Hostname or IP, optionally with :port (default 9443). No scheme, path, or userinfo.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;address&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;example&quot;: {
+    &quot;address&quot;: &quot;10.0.0.5&quot;
+  }
+}</pre></details>
+<details id="HostProbeResponse"><summary>HostProbeResponse</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;address&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Normalized host:port that was probed.&quot;
+    },
+    &quot;fingerprint&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;sha256:&lt;64 lowercase hex characters&gt; over the leaf certificate&#x27;s DER encoding.&quot;
+    },
+    &quot;subject&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Leaf certificate subject, for operator confirmation only.&quot;
+    },
+    &quot;not_after&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;address&quot;,
+    &quot;fingerprint&quot;,
+    &quot;subject&quot;,
+    &quot;not_after&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;example&quot;: {
+    &quot;address&quot;: &quot;10.0.0.5:9443&quot;,
+    &quot;fingerprint&quot;: &quot;sha256:abababababababababababababababababababababababababababababababab&quot;,
+    &quot;subject&quot;: &quot;CN=nex-core-local&quot;,
+    &quot;not_after&quot;: &quot;2027-09-08T10:10:00Z&quot;
+  }
+}</pre></details>
+<details id="AddSiteHostRequest"><summary>AddSiteHostRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;address&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Hostname or IP, optionally with :port (default 9443). No scheme, path, or userinfo.&quot;
+    },
+    &quot;fingerprint&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;sha256:&lt;64 lowercase hex characters&gt;, as returned by probeHost and confirmed by the operator.&quot;
+    },
+    &quot;root_password&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Used once to sign in to the host&#x27;s local API; never stored, logged, or echoed. 1-1024 bytes, no NUL.&quot;
+    },
+    &quot;controller_url&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;This Controller&#x27;s own HTTPS origin, reachable from the host, given to it as its enrollment target.&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Optional revoked host to re-enroll; its pool must belong to this site.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;address&quot;,
+    &quot;fingerprint&quot;,
+    &quot;root_password&quot;,
+    &quot;controller_url&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;example&quot;: {
+    &quot;address&quot;: &quot;10.0.0.5&quot;,
+    &quot;fingerprint&quot;: &quot;sha256:abababababababababababababababababababababababababababababababab&quot;,
+    &quot;root_password&quot;: &quot;&lt;root-password&gt;&quot;,
+    &quot;controller_url&quot;: &quot;https://controller.example:8443&quot;
+  }
+}</pre></details>
+<details id="AddSiteHostResponse"><summary>AddSiteHostResponse</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The automatic pool the enrollment created or, on re-enrollment, kept.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;pool_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="AddHostConflict"><summary>AddHostConflict</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Present when the host reported it is already enrolled.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;error&quot;
+  ],
+  &quot;additionalProperties&quot;: false
 }</pre></details>
 <details id="OperationRequest"><summary>OperationRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -2633,9 +4845,6 @@
     &quot;site_name&quot;: {
       &quot;type&quot;: &quot;string&quot;
     },
-    &quot;pool_name&quot;: {
-      &quot;type&quot;: &quot;string&quot;
-    },
     &quot;enrollment_token&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;,
@@ -2645,7 +4854,6 @@
   &quot;required&quot;: [
     &quot;request_id&quot;,
     &quot;site_name&quot;,
-    &quot;pool_name&quot;,
     &quot;enrollment_token&quot;
   ],
   &quot;additionalProperties&quot;: false
@@ -2656,9 +4864,6 @@
     &quot;site_id&quot;: {
       &quot;type&quot;: &quot;string&quot;
     },
-    &quot;pool_id&quot;: {
-      &quot;type&quot;: &quot;string&quot;
-    },
     &quot;expires_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;format&quot;: &quot;date-time&quot;
@@ -2666,7 +4871,6 @@
   },
   &quot;required&quot;: [
     &quot;site_id&quot;,
-    &quot;pool_id&quot;,
     &quot;expires_at&quot;
   ],
   &quot;additionalProperties&quot;: false
@@ -2678,7 +4882,8 @@
       &quot;type&quot;: &quot;string&quot;
     },
     &quot;pool_id&quot;: {
-      &quot;type&quot;: &quot;string&quot;
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Optional; when supplied it must equal the host&#x27;s pool.&quot;
     },
     &quot;host_id&quot;: {
       &quot;type&quot;: &quot;string&quot;
@@ -2694,7 +4899,6 @@
   },
   &quot;required&quot;: [
     &quot;request_id&quot;,
-    &quot;pool_id&quot;,
     &quot;host_id&quot;,
     &quot;vm_id&quot;,
     &quot;name&quot;
@@ -2744,11 +4948,39 @@
     },
     &quot;role&quot;: {
       &quot;type&quot;: &quot;string&quot;,
-      &quot;const&quot;: &quot;controller&quot;
+      &quot;enum&quot;: [
+        &quot;controller&quot;,
+        &quot;guest&quot;
+      ]
     },
     &quot;protected&quot;: {
-      &quot;type&quot;: &quot;boolean&quot;,
-      &quot;const&quot;: true
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;spec&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/VMCreateSpec&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;queued&quot;,
+        &quot;dispatched&quot;,
+        &quot;succeeded&quot;,
+        &quot;failed&quot;,
+        &quot;needs_attention&quot;
+      ]
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
     }
   },
   &quot;required&quot;: [
@@ -2761,7 +4993,41 @@
     &quot;role&quot;,
     &quot;protected&quot;
   ],
-  &quot;additionalProperties&quot;: false
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;Unified VM listing. Existing adopted appliances preserve role=controller and protected=true without creation spec/status. Generic guest entries add spec and operation_id/status/error; state/freshness always come from fresh successful libvirt observations independently of creation status.&quot;,
+  &quot;allOf&quot;: [
+    {
+      &quot;if&quot;: {
+        &quot;properties&quot;: {
+          &quot;role&quot;: {
+            &quot;const&quot;: &quot;controller&quot;
+          }
+        },
+        &quot;required&quot;: [
+          &quot;role&quot;
+        ]
+      },
+      &quot;then&quot;: {
+        &quot;properties&quot;: {
+          &quot;protected&quot;: {
+            &quot;const&quot;: true
+          }
+        }
+      },
+      &quot;else&quot;: {
+        &quot;properties&quot;: {
+          &quot;protected&quot;: {
+            &quot;const&quot;: false
+          }
+        },
+        &quot;required&quot;: [
+          &quot;spec&quot;,
+          &quot;operation_id&quot;,
+          &quot;status&quot;
+        ]
+      }
+    }
+  ]
 }</pre></details>
 <details id="ApplianceReadiness"><summary>ApplianceReadiness</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -2778,6 +5044,684 @@
   &quot;required&quot;: [
     &quot;bootstrap_version&quot;,
     &quot;status&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="StorageRegistration"><summary>StorageRegistration</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;path&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;queued&quot;,
+        &quot;dispatched&quot;,
+        &quot;succeeded&quot;,
+        &quot;failed&quot;,
+        &quot;needs_attention&quot;
+      ]
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;name&quot;,
+    &quot;path&quot;,
+    &quot;operation_id&quot;,
+    &quot;status&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageRegistration&quot;,
+  &quot;description&quot;: &quot;Pool registration with explicit access only on host_id; never implies shared storage. status/error reflect its durable operation, not a continuously refreshed filesystem probe.&quot;
+}</pre></details>
+<details id="NetworkRegistration"><summary>NetworkRegistration</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;bridge&quot;,
+        &quot;network&quot;,
+        &quot;vlan&quot;
+      ]
+    },
+    &quot;source&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Bridge name used by guest interfaces (derived &lt;uplink&gt;v&lt;vlan&gt; for kind vlan) or libvirt network name.&quot;
+    },
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;queued&quot;,
+        &quot;dispatched&quot;,
+        &quot;succeeded&quot;,
+        &quot;failed&quot;,
+        &quot;needs_attention&quot;
+      ]
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;uplink&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Uplink NIC name: required for kind vlan; set on kind bridge when the registration was created automatically for the untagged network of a bridge on a physical port.&quot;
+    },
+    &quot;vlan&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;maximum&quot;: 4094,
+      &quot;description&quot;: &quot;kind vlan only: 802.1Q tag, 0 untagged.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;name&quot;,
+    &quot;kind&quot;,
+    &quot;source&quot;,
+    &quot;operation_id&quot;,
+    &quot;status&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.NetworkRegistration&quot;,
+  &quot;description&quot;: &quot;Pool guest network on one host: an existing bridge, an active libvirt network, or a Core-created VLAN bridge (kind vlan) on an uplink NIC. VLAN bridges are additive; the management bridge, addresses and routes are never changed. Controller also creates registrations itself (actor system): the untagged default network of every host bridge on a physical NIC or bond (request_id auto-network:&lt;host&gt;:&lt;bridge&gt;), and any network the host reports in Inventory.managed.networks that Controller does not hold (request_id adopt-network-register:&lt;host&gt;:&lt;id&gt;, ID and name preserved).&quot;
+}</pre></details>
+<details id="Media"><summary>Media</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;storage_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;size_bytes&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 32774,
+      &quot;maximum&quot;: 8589934592
+    },
+    &quot;sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;queued&quot;,
+        &quot;dispatched&quot;,
+        &quot;succeeded&quot;,
+        &quot;failed&quot;,
+        &quot;needs_attention&quot;
+      ]
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;storage_id&quot;,
+    &quot;name&quot;,
+    &quot;size_bytes&quot;,
+    &quot;sha256&quot;,
+    &quot;operation_id&quot;,
+    &quot;status&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.Media&quot;
+}</pre></details>
+<details id="VMCreateSpec"><summary>VMCreateSpec</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$&quot;
+    },
+    &quot;storage_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;network_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;media_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;cpus&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1,
+      &quot;maximum&quot;: 64
+    },
+    &quot;memory_mib&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 512,
+      &quot;maximum&quot;: 262144
+    },
+    &quot;disk_gib&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1,
+      &quot;maximum&quot;: 2048
+    },
+    &quot;firmware&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;bios&quot;,
+        &quot;uefi&quot;
+      ]
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;name&quot;,
+    &quot;storage_id&quot;,
+    &quot;network_id&quot;,
+    &quot;media_id&quot;,
+    &quot;cpus&quot;,
+    &quot;memory_mib&quot;,
+    &quot;disk_gib&quot;,
+    &quot;firmware&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.VMCreateSpec&quot;,
+  &quot;description&quot;: &quot;Controller-assigned stable UUID and pool membership with separate host assignment. Creation defines a stopped VM, never boots it. Dependencies must be verified on this host/pool; ISO must use selected storage.&quot;
+}</pre></details>
+<details id="StorageRegistrationRequest"><summary>StorageRegistrationRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;path&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 4096,
+      &quot;description&quot;: &quot;Clean absolute existing non-root local directory, without NUL/CR/LF or symlinks. Core verifies ext4/XFS/Btrfs, free space and write access. Selected directory and all ancestors must be root-owned without group or other write permission. Each directory also requires other-execute permission for QEMU traversal; custom ACL-only paths are unsupported.&quot;
+    },
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;const&quot;: &quot;&quot;
+    },
+    &quot;source&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;const&quot;: &quot;&quot;
+    },
+    &quot;uplink&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;const&quot;: &quot;&quot;
+    },
+    &quot;vlan&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;const&quot;: 0
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;name&quot;,
+    &quot;path&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="NetworkRegistrationRequest"><summary>NetworkRegistrationRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;path&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;const&quot;: &quot;&quot;
+    },
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;bridge&quot;,
+        &quot;network&quot;,
+        &quot;vlan&quot;
+      ]
+    },
+    &quot;source&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$&quot;,
+      &quot;description&quot;: &quot;kind bridge/network only: existing bridge or active libvirt network name. Omit for kind vlan; Controller derives the bridge name &lt;uplink&gt;v&lt;vlan&gt;.&quot;
+    },
+    &quot;uplink&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[a-zA-Z0-9][a-zA-Z0-9_-]{0,9}$&quot;,
+      &quot;description&quot;: &quot;kind vlan only: host NIC or bond name that carries the VLAN, at most 10 characters; it must appear in the host inventory as physical or bond (or without a kind from an older agent).&quot;
+    },
+    &quot;vlan&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;maximum&quot;: 4094,
+      &quot;description&quot;: &quot;kind vlan only: 802.1Q tag; 0 uses the uplink untagged, which Core refuses when the host has addresses on it.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;name&quot;,
+    &quot;kind&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;Exactly one shape: kind bridge/network with source, or kind vlan with uplink and vlan. Mixed fields are rejected with 400.&quot;
+}</pre></details>
+<details id="CreateVMRequest"><summary>CreateVMRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;const&quot;: &quot;&quot;,
+      &quot;description&quot;: &quot;Omit; Controller generates the VM UUID.&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$&quot;
+    },
+    &quot;storage_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;network_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;media_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;cpus&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1,
+      &quot;maximum&quot;: 64
+    },
+    &quot;memory_mib&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 512,
+      &quot;maximum&quot;: 262144
+    },
+    &quot;disk_gib&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1,
+      &quot;maximum&quot;: 2048
+    },
+    &quot;firmware&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;bios&quot;,
+        &quot;uefi&quot;
+      ]
+    },
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;name&quot;,
+    &quot;storage_id&quot;,
+    &quot;network_id&quot;,
+    &quot;media_id&quot;,
+    &quot;cpus&quot;,
+    &quot;memory_mib&quot;,
+    &quot;disk_gib&quot;,
+    &quot;firmware&quot;,
+    &quot;request_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="CreateVMResponse"><summary>CreateVMResponse</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;operation&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;vm_id&quot;,
+    &quot;operation&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="ManagedState"><summary>ManagedState</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;storage&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StorageRegistration&quot;
+      },
+      &quot;maxItems&quot;: 10000,
+      &quot;description&quot;: &quot;Succeeded storage registrations from the host journal.&quot;
+    },
+    &quot;networks&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/NetworkRegistration&quot;
+      },
+      &quot;maxItems&quot;: 10000,
+      &quot;description&quot;: &quot;Succeeded network registrations from the host journal.&quot;
+    },
+    &quot;media&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/Media&quot;
+      },
+      &quot;maxItems&quot;: 10000,
+      &quot;description&quot;: &quot;Succeeded ISO imports from the host journal.&quot;
+    },
+    &quot;vms&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/VMCreateSpec&quot;
+      },
+      &quot;maxItems&quot;: 10000,
+      &quot;description&quot;: &quot;Succeeded VM definitions from the host journal.&quot;
+    }
+  },
+  &quot;required&quot;: [],
+  &quot;x-go-type&quot;: &quot;protocol.ManagedState&quot;,
+  &quot;description&quot;: &quot;Every succeeded registration and VM definition from the Core managed journal, at most 10000 entries per list; each list is omitted when empty. pool_id and host_id inside entries are those of the Controller that created them and are rewritten on adoption; resource IDs are stable across Controllers, which is how a replaced Controller recovers a pool from its master.&quot;
+}</pre></details>
+<details id="ConsoleRequest"><summary>ConsoleRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;token&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Single-use pairing secret; the host presents it on POST /api/v1/agent/console/{token} within the ticket lifetime.&quot;
+    },
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;token&quot;,
+    &quot;vm_id&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ConsoleRequest&quot;,
+  &quot;example&quot;: {
+    &quot;token&quot;: &quot;&lt;console-ticket&gt;&quot;,
+    &quot;vm_id&quot;: &quot;&lt;vm-uuid&gt;&quot;
+  }
+}</pre></details>
+<details id="ConsoleTicket"><summary>ConsoleTicket</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;ticket&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;expires_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;websocket&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Same-origin path for the wss:// console stream; carries the ticket.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;ticket&quot;,
+    &quot;vm_id&quot;,
+    &quot;host_id&quot;,
+    &quot;expires_at&quot;,
+    &quot;websocket&quot;
+  ],
+  &quot;example&quot;: {
+    &quot;ticket&quot;: &quot;&lt;console-ticket&gt;&quot;,
+    &quot;vm_id&quot;: &quot;&lt;vm-uuid&gt;&quot;,
+    &quot;host_id&quot;: &quot;&lt;host-id&gt;&quot;,
+    &quot;expires_at&quot;: &quot;2026-09-09T12:00:00Z&quot;,
+    &quot;websocket&quot;: &quot;/api/v1/vms/&lt;vm-uuid&gt;/console/&lt;console-ticket&gt;&quot;
+  }
+}</pre></details>
+<details id="UpdateStatus"><summary>UpdateStatus</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;package&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;installed_version&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;available_version&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;update_available&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;repo_url&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;phase&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;idle, downloading, installing, restarting, done, or failed when an apply is tracked.&quot;
+    },
+    &quot;progress&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;maximum&quot;: 100,
+      &quot;description&quot;: &quot;Percent complete for the current apply when known.&quot;
+    },
+    &quot;message&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Non-fatal repo or apply problem; installed_version remains valid for check.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;package&quot;,
+    &quot;installed_version&quot;,
+    &quot;update_available&quot;,
+    &quot;repo_url&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="UpdateApplyResult"><summary>UpdateApplyResult</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;scheduled&quot;,
+        &quot;completed&quot;,
+        &quot;failed&quot;
+      ]
+    },
+    &quot;message&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;operation&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;status&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="VMPowerRequest"><summary>VMPowerRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;action&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;start&quot;,
+        &quot;shutdown&quot;,
+        &quot;reboot&quot;,
+        &quot;force-stop&quot;
+      ]
+    }
+  },
+  &quot;required&quot;: [
+    &quot;vm_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;action&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.VMPowerRequest&quot;,
+  &quot;example&quot;: {
+    &quot;vm_id&quot;: &quot;&lt;vm-uuid&gt;&quot;,
+    &quot;pool_id&quot;: &quot;&lt;pool-id&gt;&quot;,
+    &quot;host_id&quot;: &quot;&lt;host-id&gt;&quot;,
+    &quot;action&quot;: &quot;start&quot;
+  }
+}</pre></details>
+<details id="PowerVMRequest"><summary>PowerVMRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Nonblank after trimming whitespace; at most 200 UTF-8 bytes; no CR, LF, or NUL. Persist before sending; the same id replays the same operation.&quot;
+    },
+    &quot;action&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;start&quot;,
+        &quot;shutdown&quot;,
+        &quot;reboot&quot;,
+        &quot;force-stop&quot;
+      ]
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;action&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;example&quot;: {
+    &quot;request_id&quot;: &quot;&lt;persisted-client-request-id&gt;&quot;,
+    &quot;action&quot;: &quot;start&quot;
+  }
+}</pre></details>
+<details id="PowerVMResponse"><summary>PowerVMResponse</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;action&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;operation&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;vm_id&quot;,
+    &quot;action&quot;,
+    &quot;operation&quot;
   ],
   &quot;additionalProperties&quot;: false
 }</pre></details>

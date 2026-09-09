@@ -181,3 +181,52 @@ func TestRunStopsOnJournalPersistenceFailure(t *testing.T) {
 		t.Fatalf("reported %d times after persistence failure", calls)
 	}
 }
+
+// issuingController returns a fake Controller with its own CA that issues hostID.
+func issuingController(t *testing.T, hostID string) (*httptest.Server, string) {
+	t.Helper()
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	ca := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "CA " + hostID}, IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour)}
+	caDER, _ := x509.CreateCertificate(rand.Reader, ca, ca, &caKey.PublicKey, caKey)
+	caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}))
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.EnrollRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		block, _ := pem.Decode([]byte(req.CSRPEM))
+		csr, err := x509.ParseCertificateRequest(block.Bytes)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		cert := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: hostID}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, KeyUsage: x509.KeyUsageDigitalSignature}
+		der, _ := x509.CreateCertificate(rand.Reader, cert, ca, csr.PublicKey, caKey)
+		json.NewEncoder(w).Encode(protocol.EnrollResponse{HostID: hostID, CertificatePEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), CAPEM: caPEM})
+	}))
+	t.Cleanup(srv.Close)
+	return srv, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))
+}
+
+// A host connects to a replacement Controller in place: fresh identity there, same state
+// directory (so its managed journal is reported), pending results for the old one dropped.
+func TestEnrollWithReplacementController(t *testing.T) {
+	first, firstTrust := issuingController(t, "host-a")
+	second, secondTrust := issuingController(t, "host-b")
+	s := testStore(t)
+	if err := Enroll(context.Background(), s, first.URL, firstTrust, "token", ""); err != nil {
+		t.Fatal(err)
+	}
+	oldKey := s.State.KeyPEM
+	s.State.Journal["op-old"] = JournalEntry{Status: "pending"}
+	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", "host-a"); err == nil {
+		t.Fatal("replace-host accepted against a different Controller")
+	}
+	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", ""); err != nil {
+		t.Fatal("switching Controller refused:", err)
+	}
+	if s.State.HostID != "host-b" || s.State.Controller != second.URL || s.State.TrustPEM != secondTrust || s.State.KeyPEM == oldKey || len(s.State.Journal) != 0 {
+		t.Fatalf("replacement identity not applied: %+v", s.State)
+	}
+	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", ""); err == nil {
+		t.Fatal("duplicate enrollment with the same Controller accepted")
+	}
+}

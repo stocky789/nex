@@ -1,0 +1,80 @@
+{
+  "date": "2026-09-09",
+  "purpose": "Private disposable fresh-install QA; not external release certification",
+  "versions": {
+    "appliance": "0.1.0+managed1",
+    "core_local_package": "0.1.0+managed1",
+    "iso_recipe": "0.1.0-alpha1",
+    "go": "go1.27.1"
+  },
+  "source": {
+    "snapshot_method": "Regular-file build-source allowlist plus complete installer tree; frozen before compilation",
+    "original_files": 131,
+    "appliance_source_files_compared": 110,
+    "iso_recipe_source_files_compared": 24,
+    "post_freeze_changes": [
+      "installer/README.md documentation correction only; compiled runtime, UI and logo unchanged"
+    ]
+  },
+  "artifacts": {
+    ".cache/local-install-managed1/source/dist/nex-core-0.1.0-alpha1-amd64.iso": {
+      "sha256": "5ca79c902ce39cb11c15f710abbf6629d2785089eb17b641435f8240af5e1dff",
+      "bytes": 1607794688
+    },
+    ".cache/local-install-managed1/source/dist/core-local/nex-core-local_0.1.0+managed1_amd64.deb": {
+      "sha256": "68816aa3975357881e0b946683fc37d604bd53022b8eeabcd48116352e2dce6f",
+      "bytes": 713464172
+    },
+    ".cache/local-install-managed1/source/dist/appliance/controller.qcow2": {
+      "sha256": "bce48d51651f17742cf452ae64a8456ac94af00d982c2896cd7a2446f6d29d88",
+      "bytes": 732495872
+    },
+    ".cache/local-install-managed1/source/dist/appliance/nex-source.tar.gz": {
+      "sha256": "7ee7e8e258915f9bbc316cb32607a97a281bbf3e8700e88c1a59032b0d1b41d4",
+      "bytes": 124350613
+    },
+    ".cache/local-install-managed1/source/dist/appliance/manifest.json": {
+      "sha256": "20ec864725eecd744f012359ba92f9157859585cd80a321fedc34df462393afe",
+      "bytes": 257
+    },
+    ".cache/local-install-managed1/source/dist/appliance/manifest.sig": {
+      "sha256": "522f0d9161b388c7fc3b231309a47a9631b82303d27bbc24b5c6f6b224d6e86b",
+      "bytes": 64
+    },
+    ".cache/local-install-managed1/source/dist/appliance/public-key.raw": {
+      "sha256": "18b92408993fa6949ded87bb9ab9ccc01e383f4a846c5282f449af243877764d",
+      "bytes": 32
+    },
+    ".cache/local-install-managed1/verify/iso-recipe-source.tar.gz": {
+      "sha256": "082d947d81a241b496f40a1bc79f7de8e4bf1aea72150d1161948eddad9d94cd",
+      "bytes": 321766
+    },
+    ".cache/local-install-managed1/verify/iso-package-manifest.tsv": {
+      "sha256": "08bc4e5f8ebd4574b0a049f9e33da03601b156a6a0ac94430489a05800ec3f9f",
+      "bytes": 11984
+    },
+    ".cache/local-install-managed1/verify/installer-initrd.gz": {
+      "sha256": "6d9307f184791219393a3fe7b87fae5a3486992cea11ac93d5602be63ec0c5a7",
+      "bytes": 77024609
+    },
+    ".cache/local-install-managed1/source-snapshot.json": {
+      "sha256": "4f2d03be239b9bad680583e0463245fedd4890571ae087852e32774ef18d7877",
+      "bytes": 13204
+    }
+  },
+  "checks": [
+    "Appliance and Core package builds exit zero; qcow2 check reports no errors",
+    "Ed25519 manifest verified against retained prior desktop1 trusted public identity",
+    "Core package contains exact appliance source/archive/image; independent archive inspection passed",
+    "Final ISO checksum passes; extracted embedded package equals selected new package",
+    "Final ISO graphical initrd approved-artwork regression passes",
+    "BIOS and UEFI El Torito entries and hybrid metadata retained",
+    "ISO recipe source files equal frozen snapshot",
+    "Actual Debian13 disposable package smoke exits zero: PAM/TLS/source/API checks and safe package removal"
+  ],
+  "limits": [
+    "No external redistribution approval or complete Debian corresponding-source certification",
+    "Native installation and rendered GUI evidence recorded separately",
+    "Installer recipe version label is unchanged; identify exact build by digest"
+  ]
+}

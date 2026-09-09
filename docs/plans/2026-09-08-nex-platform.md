@@ -5,6 +5,15 @@ Status: Standalone installer alpha and Phase 1 Controller/agent development foun
 
 Project planning files live in `docs/plans/`.
 
+**Core project priority, 2026-09-09:** Matt confirmed successful installation and
+authorized [the first managed VM creation slice](2026-09-09-first-managed-vm.md):
+host-local storage, existing guest-network registration, ISO upload and VM creation
+through Controller. A separate worker corrects the installer's distorted logo.
+Website and release/download work retain their separate owners. API impact:
+**new contract** for resource verification, media transfer and durable VM creation;
+guide impact: **updated** with actual implementation and walkthrough evidence.
+The complete Phase 2 lifecycle/console acceptance gate remains separate.
+
 **Controller layout direction, 2026-09-09:** Matt redirected the next work to a
 Windows XenCenter-style overhaul of the Controller web GUI: compact menu/toolbar,
 left inventory tree, selected-resource header and tabs, dense properties/tables,
@@ -17,6 +26,18 @@ remain unchanged; this is not authorization to add Phase 2 features.
 host-action, operation and audit APIs and existing Core commands/results.
 **Guide impact: updated** — align navigation instructions with the delivered UI
 and record actual browser walkthrough evidence before accepting the redesign.
+
+**Pool model correction, 2026-09-09:** Matt decided that Nex pools follow the
+XenServer/XCP-ng model. Administrators never create pools; every enrolling Nex Core
+host becomes the **pool master** of its own automatically created pool, named after
+its hostname. Other hosts in a pool are **member hosts** (XenServer calls them slaves).
+Enrollment tokens bind to a site, not a pool. Joining a member to an existing pool,
+changing the master and ejecting a member remain Phase 4 work and are not available.
+See the [pool master model decision](2026-09-09-pool-master-model.md).
+**API impact: changed contract** — enrollment tokens, agent enrollment, appliance
+bootstrap/adoption and the pool listing change; manual pool creation is removed.
+**Guide impact: updated** — Controller, appliance and VM-creation pages describe
+the automatic pool and pool master.
 
 ## Build order: basics first
 
@@ -163,11 +184,11 @@ Nex Core is our own **Debian-derived distribution**, not an installed system pre
 
 Both products share the Nex identity, with Core and Controller as product descriptors. Matt approved the graphite wordmark, continuous x, n icon, and platinum-led palette on 2026-09-08. Matt clarified that the original blue/white/grey treatment remains primary; the later reference colors extend the supporting palette without recoloring the logo or replacing the light presentation. The [brand guide](../brand/README.md) and selected board are the canonical identity reference; production vector assets remain to be prepared. Branding work does not change the implementation phases or imply released functionality.
 
-The management hierarchy is **Sites → Pools → Hosts → VMs**. Storage sits at the pool level. Snapshots, backups, restoration, and live migration with compatible shared storage are required features. Start shared storage with NFS; implement Ceph later.
+The management hierarchy is **Sites → Pools (one master host + members) → Hosts → VMs**. A pool is created automatically when its first host enrolls; that host is the pool master. Storage sits at the pool level. Snapshots, backups, restoration, and live migration with compatible shared storage are required features. Start shared storage with NFS; implement Ceph later.
 
 Also agreed: pool-level **Container Services** using Docker Swarm inside Nex-managed worker VMs, with provisioning and day-to-day operations entirely through Nex Controller. These are Docker application containers, not LXC; Docker runs inside the managed VMs rather than directly on Nex Core. This is a later milestone after the VM foundation. The application area must remain colorful, with attractive colored application/service icons; see the [UI plan](2026-09-08-feature-and-ux-review.md).
 
-Use **Pool** as the product term for the host grouping previously called a cluster. HA is a pool capability enabled later, not a prerequisite for membership. Do not introduce a second Cluster object beneath Pool without a concrete need.
+Use **Pool** as the product term for the host grouping previously called a cluster. A pool has exactly one pool master and zero or more member hosts; the master controls the pool. HA is a pool capability enabled later, not a prerequisite for membership. Do not introduce a second Cluster object beneath Pool without a concrete need.
 
 ## Ownership and navigation
 
@@ -191,13 +212,13 @@ Nex Controller
             └── Infrastructure       [managed Docker node VMs]
 ```
 
-VMs belong to pools and have separate host assignments. The UI displays them beneath hosts and in a pool-wide list, including unassigned and unavailable VMs. Migration changes placement, not identity or ownership.
+VMs belong to pools and have separate host assignments. The UI displays them beneath hosts and in a pool-wide list, including unassigned and unavailable VMs. Within-pool migration changes placement, not identity or ownership. The agreed cross-site migration follow-on preserves VM UUID while explicitly transferring pool ownership and host assignment at a reconciled cutover; it does not clone the VM or move the host between pools.
 
 | Resource | Ownership and rules |
 |---|---|
 | Site | Administrative/location grouping containing pools; not a WAN HA boundary |
-| Pool | Hosts, VMs, storage registrations, logical networks, and protection policies |
-| Host | One pool; unique identity; observed resources, capabilities, and health |
+| Pool | Created automatically at first host enrollment and named after that host; exactly one pool master plus member hosts, VMs, storage registrations, logical networks, and protection policies |
+| Host | One pool, as its pool master or a member; unique identity; observed resources, capabilities, and health |
 | Storage | One pool; backend, capacity, capabilities, and verified access per host |
 | Volume | One storage resource; tracks VM attachment and exclusivity |
 | VM | One pool; stable UUID, desired configuration, assigned host, observed execution state |
@@ -234,7 +255,7 @@ SQLite is a deliberate single-controller starting point; do not place its databa
 
 The Go libvirt bindings use CGo and the installed native library. Build and package against the supported Debian environment; this agent is not a completely static binary. [Official bindings](https://libvirt.org/go/libvirt.html)
 
-The controller owns desired configuration, membership, permissions, and operations. Libvirt and agents report actual VM/runtime/storage state. Record drift and reconcile deliberately; neither stale controller records nor unsolicited host reports should silently authorize destructive changes.
+Nex Controller is a replaceable management front end; the pool master's Nex Core is the durable source of truth for everything scoped to its pool (see [Replaceable Controller](#replaceable-controller--2026-09-09)). Controller holds user intent, authorization, and operation history, and persists each accepted pool-scoped change on the master so a new Controller re-adopts it. Libvirt and agents report actual VM/runtime/storage state. Record drift and reconcile deliberately; neither stale controller records nor unsolicited host reports should silently authorize destructive changes.
 
 Agents initiate outbound authenticated HTTPS connections to the controller for inventory, commands, and console forwarding. VM disks, migrations, and backup data travel directly between authorized hosts/storage endpoints rather than through the controller database or API.
 
@@ -272,7 +293,7 @@ Corosync supplies membership/quorum facilities; Pacemaker coordinates resource m
 
 ### Authority and outage rules
 
-Nex Controller owns configured pool membership and desired policy; the pool-local cluster layer owns current HA membership, quorum, and exclusive recovery decisions. Controller connectivity is not a quorum vote. The initial controller stays outside pool voting/fencing dependencies so a controller or WAN outage alone does not remove a pool's decision-making authority.
+Nex Controller holds configured pool membership and desired policy on behalf of the pool master, which persists them; the pool-local cluster layer owns current HA membership, quorum, and exclusive recovery decisions. Controller connectivity is not a quorum vote. The initial controller stays outside pool voting/fencing dependencies so a controller or WAN outage alone does not remove a pool's decision-making authority.
 
 Controller outage leaves running guests and established pool-local HA operating. Before HA exists, uncertainty results in alerts and restricted operations, never an automatic failover. With HA enabled, a missing heartbeat alone still cannot authorize a second VM start: the HA authority must establish quorum, required storage/capacity, and successful fencing of an uncertain previous owner.
 
@@ -335,20 +356,25 @@ tests apply. The generated API website remains a Phase 1 deliverable, not a clai
 ### 1. Controller foundation and host enrollment
 
 1. Create the Go controller and agent, minimal UI, schema migrations, systemd units, and development build commands.
-2. Implement Sites, Pools, and Hosts, then bootstrap the first administrator without a shared default password.
-3. Enroll using short-lived single-use tokens bound to a pool. Issue a unique host certificate; support rotation, revocation, and re-enrollment. Verify controller identity during enrollment.
+2. Implement Sites, Pools, and Hosts, then bootstrap the first administrator without a shared default password. Pools are created automatically at enrollment, named after the enrolling host, which becomes the pool master.
+3. Enroll using short-lived single-use tokens bound to a site. Issue a unique host certificate; support rotation, revocation, and re-enrollment. Verify controller identity during enrollment.
+   **Simple enrollment, 2026-09-09:** the Controller can also push a minted token to a reachable
+   host's own local API by address and root password, after operator fingerprint confirmation,
+   instead of requiring a manual `nex-core-agent enroll` run; the token/certificate contract
+   underneath is unchanged. See [the plan](2026-09-09-simple-host-enrollment.md).
 4. Display CPU, RAM, virtualization features, OS/agent versions, NICs, disks, reachability, and last observation time.
 5. Enforce administrator login and authorization in the API from the start; limit agent credentials to the enrolled host. Add scoped operator/viewer roles before the supported release in Phase 8.
 6. Persist asynchronous operations and audit attribution. Serialize conflicting VM operations and use stable request/resource IDs. Reconcile unknown outcomes before retrying; timeout alone does not prove failure.
 7. Implement the monitoring contract above: authenticated heartbeats, bounded local health checks, fresh/stale reporting, and reconnect reconciliation. Add checks alongside the resources introduced in later phases.
 8. Deliver the living API reference, HTTP OpenAPI contracts, generated browsable documentation, and runnable contract/coverage checks described above; cover enrollment, inventory, monitoring, commands/results, and operations actually implemented in this phase.
 
-**Gate:** create a site/pool, enroll and revoke a host, reject unauthorized requests, and restart either process without losing identity or duplicating operations. Interrupt the controller connection, fail a libvirt check, and stall a probe: show distinct stale/degraded outcomes, keep other reports responsive, and recover with fresh observations. Offline hosts show stale/unknown state; monitoring never issues an automatic VM restart.
+**Gate:** create a site, enroll a host so it becomes the pool master of its automatically created pool, revoke the host, reject unauthorized requests, and restart either process without losing identity or duplicating operations. Interrupt the controller connection, fail a libvirt check, and stall a probe: show distinct stale/degraded outcomes, keep other reports responsive, and recover with fresh observations. Offline hosts show stale/unknown state; monitoring never issues an automatic VM restart.
 
 ### 2. One-host VM management
 
 1. Register host-local storage at pool level with explicit host accessibility.
 2. Register a pool network and map it to the host's existing guest network/bridge. Keep management connectivity intact; defer editing host interfaces to Phase 4.
+   **Pool VLAN networks, 2026-09-09:** a pool network is name + uplink NIC name + VLAN ID; Core creates an additive per-VLAN guest bridge without touching the management bridge, so this does not wait for the Phase 4 staged-apply gate, which still covers host interface/address edits. See [the plan](2026-09-09-pool-vlan-networks.md), which also records the guest tools direction.
 3. Upload a guest ISO with size/path validation and free-space checks. Create a VM with selected CPU, RAM, storage, disk, network, and firmware.
 4. Implement list/details, start, graceful shutdown, explicit force-stop, restart, edit while stopped where required, and deletion with separate disk-retention choices.
 5. Implement authenticated browser console sessions with short-lived authorization. Keep raw VNC endpoints inaccessible from untrusted networks.
@@ -396,7 +422,7 @@ on its local console → authenticate → choose one of:
 | Choice | Planned behavior |
 | --- | --- |
 | Create a new environment | Select existing usable storage, Controller CPU/RAM, a supported management network/address and a new administrator credential; review, deploy and boot a verified Controller appliance. |
-| Connect to an existing Controller | Verify Controller identity and use a short-lived pool-bound enrollment token; works with a Controller on another host, an external supported Debian machine/VM or a remote reachable network. |
+| Connect to an existing Controller | Verify Controller identity and use a short-lived site-bound enrollment token; the host becomes the pool master of a new pool; works with a Controller on another host, an external supported Debian machine/VM or a remote reachable network. **Implemented from the Controller side 2026-09-09:** **Add host** by address and root password pushes the token to this host's local API after operator fingerprint confirmation ([plan](2026-09-09-simple-host-enrollment.md)); the host-initiated form of this choice remains Phase 3 work. |
 | Recover this host's Controller | Inspect the existing appliance, open its console and perform explicitly confirmed local power recovery without needing the Controller API. |
 
 Bundle a versioned appliance with the installation media for offline bootstrap;
@@ -411,8 +437,8 @@ actionable preflight blocker instead of silently reconfiguring its live manageme
 interface. General network editing keeps its Phase 4 staged-apply/recovery gate.
 
 Generate instance-specific keys and credentials on first boot. Use protected,
-single-use bootstrap material to initialize the administrator, first Site/Pool
-and host enrollment, then remove that material. Show durable progress and the
+single-use bootstrap material to initialize the administrator, first Site
+and host enrollment (which creates the host's pool automatically), then remove that material. Show durable progress and the
 verified Controller URL. Adopt the already-created appliance into Controller
 inventory with its stable VM UUID and host assignment; never recreate it during
 handoff. Preserve local bootstrap operation IDs so browser refresh, lost replies,
@@ -476,7 +502,7 @@ must update installation, first-server setup, local control, external enrollment
 and recovery guidance with actual walkthroughs in the same slice.
 
 **Acceptance gate:** from an empty disposable server, install offline, deploy the
-Controller through the local browser UI, create/enroll the first Site/Pool/Host
+Controller through the local browser UI, create the first Site, enroll the first Host as pool master of its automatic Pool,
 and reach central VM management without manually creating a VM elsewhere. Repeat
 with an external Controller. Reboot the host with the Controller initially down;
 verify independent appliance autostart, local UI/console access and stable IDs.
@@ -494,13 +520,13 @@ All these gates remain outstanding until implemented and executed.
 
 ### 4. Multi-host pools and shared storage
 
-1. Enroll a second host; provide pool-wide inventory and explicit placement.
+1. Enroll a second host; join it to an existing pool as a member host under that pool's master (“Add host to pool”), provide master change and member eject with safety checks, and provide pool-wide inventory and explicit placement. Until this phase every enrolled host remains the master of its own pool.
 2. Add existing NFS storage through the pool UI. Validate access, write permissions, identity, capacity, and mount health per host before marking it usable.
 3. Distinguish local/shared storage visibly. Track disk attachment and exclusive VM execution; never launch a second writer because a host stopped reporting.
 4. Add logical LAN bridges/VLAN mappings with host compatibility checks. Do not assume bridge names mean equivalent connectivity. Remote host network edits require staged apply, explicit confirmation, and timed recovery if management connectivity is lost.
 5. Add maintenance mode, with new placements blocked and remaining guests clearly reported. Refuse unsafe host removal.
 
-**UX acceptance:** guide “Add host to pool” through identity/capability checks; explain storage location, per-host access, capacity, and failure consequences. Pair network relationships with accessible details and a preview of affected VMs/management access; verify staged apply and timed recovery before offering remote edits. A visual view does not require a freeform network canvas.
+**UX acceptance:** guide “Add host to pool” (joining an existing pool as a member under its master) through identity/capability checks; explain storage location, per-host access, capacity, and failure consequences. Pair network relationships with accessible details and a preview of affected VMs/management access; verify staged apply and timed recovery before offering remote edits. A visual view does not require a freeform network canvas.
 
 **Gate:** VMs can be placed on either compatible host, inaccessible storage prevents placement, shared free space is reported once, and a disconnected host does not trigger duplicate VM startup.
 
@@ -548,6 +574,81 @@ Live migration over shared pool storage is part of the first supported release, 
 **Gate:** migrate while a guest workload writes data; verify continuity and exactly one active execution owner. Disconnect the migration/control network mid-transfer and recover. Drain, reboot, and return a host to service.
 
 [Libvirt migration requirements and transports](https://libvirt.org/migration.html)
+
+#### Cross-site VM migration
+
+**Agreed 2026-09-09:** Nex Controller must support moving a VM from one Site to a
+different Site managed by that same Controller. The operator selects the destination
+Site, Pool and Host, maps destination storage/networks, reviews downtime and policy
+changes, then follows one durable migration operation. This is an agreed follow-on
+after the Phase 7 migration foundation and Phases 0–8 safety/recovery gates, not a
+new blocker for the first supported release. Independent-Controller transfers and
+cross-site automatic HA are separate, unagreed capabilities.
+
+1. Start with a controlled **stopped-VM transfer**, including encrypted disk transfer
+   between authorized source/destination hosts or storage endpoints. Different sites
+   need not share storage or a Layer 2 network. Preflight a reachable supported data
+   path, bandwidth/space needs and supported resume behavior; refuse unsupported
+   connectivity rather than silently routing disks through the Controller API/database.
+   Show estimated downtime and transfer progress without promising WAN live migration.
+2. Validate destination CPU/runtime, firmware/NVRAM and vTPM support, disk formats,
+   backing chains/snapshot history, host storage access and capacity. Transfer every
+   required writable disk and supported VM state with integrity validation; reject
+   unsupported passthrough, external disks or state before stopping the source. A
+   destination registration alone never establishes data completeness or readiness.
+3. Require explicit mappings to destination pool storage and logical networks; equal
+   bridge/VLAN names do not prove connectivity. Preserve VM UUID and guest identity;
+   retain MAC addresses only after destination collision checks. Explain IP/subnet,
+   routing, DNS and guest configuration changes and obtain an explicit cutover plan;
+   use an isolated/disconnected target network until validation where required.
+4. Preflight permissions in both sites/pools and review destination access, backup,
+   retention and placement policies. Transfer pool ownership and host assignment only
+   at the durable cutover, retaining migration/audit history. Existing recovery points
+   remain in their original repositories with authorized recovery access; they do not
+   move automatically or become accessible simply because the VM changed pools.
+5. Prove the source is stopped and prevent its local autostart, HA or concurrent
+   operations from starting it before authorizing target execution. Serialize against
+   power, snapshot, backup, restore and other migration operations. Reconcile both
+   hosts after timeout, restart or partition; an unreachable source is not permission
+   to start the destination. Block managed Docker node VMs until their application,
+   storage and quorum-aware relocation workflow is explicitly supported.
+6. Retain source disks/configuration as a non-runnable recovery copy until destination
+   integrity, boot and workload checks pass and cleanup is confirmed. Before target
+   execution, cancellation may restore source ownership only after excluding target
+   execution. Once the target has written data, stale source disks are not a rollback:
+   require a reconciled reverse transfer or an explicit recovery-point restore with
+   disclosed data loss. Never leave two independently runnable writable instances.
+7. Consider cross-site live migration only as a later, separately validated extension
+   with compatible storage transfer, networking, CPU/runtime and bounded workload
+   convergence/downtime. No shared-storage, stretched-network or zero-downtime claim
+   follows from merely managing both sites through one Controller.
+
+**Planned API impact: new contract** — browser preflight/submit/status/cancel →
+Controller authorization, reservations and durable ownership transition → scoped
+source/destination Core prepare, transfer, validate, cutover and cleanup commands →
+observed execution/storage state and resumable operation results. Reuse the Phase 7
+operation contract where it covers this flow; add destination-site/pool mappings and
+cross-pool ownership semantics together on Controller and Core. Define mutual peer
+authentication, short-lived transfer credentials scoped to the selected VM/disks,
+input/error validation, idempotent retries, cancellation boundaries, reconnect
+reconciliation and Controller/Core compatibility before shipping. Update the API
+reference and machine-readable contracts with runnable authorization, invalid mapping,
+failure/retry and version-mismatch checks in that implementation slice.
+
+**Gate:** move a multi-disk VM between two separately networked sites with distinct
+pool/storage registrations; verify stable UUID, destination ownership/permissions,
+network mapping, firmware state, application data and exactly one execution owner.
+Exercise limited bandwidth, dropped connections, full target storage, corrupt/partial
+transfers, source/target/Controller restarts, cancellation around cutover, stale-source
+restart attempts and recovery after target writes. Verify old backup access and new
+protection policy application. Record actual downtime/data integrity and run the GUI
+workflow with keyboard, error/stale/progress states; documentation and independent
+API/safety review are required. Live migration needs its own workload-continuity gate.
+
+**API impact of this planning change: none** — no implemented caller, command or
+service API changes; the intended flow and future contract work are defined above.
+**Guide impact: none** — the feature remains planned and unavailable; publish verified
+operator migration/recovery instructions alongside its implementation.
 
 ### 8. Release and operating procedures
 
@@ -630,6 +731,7 @@ These are prioritized candidates, not all prerequisites for the first supported 
 |---|---|---|
 | Next | Templates, full clones, and Linux cloud-init | Reliable VM creation; clone boots with unique identity, MAC, and credentials |
 | Agreed follow-on | Guided NVIDIA/AMD GPU and PCIe passthrough | [Hardware passthrough gate](#guided-hardware-passthrough); safe host preparation, assignment, recovery, and physical tests for both GPU vendors |
+| Agreed follow-on | Site-to-site VM migration through one Nex Controller | [Cross-site migration gate](#cross-site-vm-migration); stopped transfer first, explicit target pool/storage/network mappings, stable identity and exclusive cutover |
 | Next | qcow2/raw import and export | Validated untrusted image handling and explicit firmware/network mapping; imported guest boots |
 | Next | Tags, saved filters, bulk actions | Stable inventory and per-object authorization; bulk result reports partial failures without hiding them |
 | Next | Permission-scoped global search and command palette | Local search first; reuse inventory and existing workflows, preserve confirmation and keyboard focus, and test forbidden-object leakage |
@@ -681,14 +783,55 @@ All destructive tests require explicitly selected disposable disks/VMs and must 
 - First end-to-end demo: one site, one pool, one ISO-installed host, one VM managed and consoled through Nex Controller.
 - First supported release: multi-host pools, local and NFS storage, complete snapshot lifecycle, scheduled full backups, verified restoration, shared-storage live migration, host evacuation, and tested upgrades. Complete Phases 0–8. Automatic HA follows its separate gate.
 - Managed Docker Container Services are an agreed later extension (Phase 10), not a prerequisite for the first VM release; the colorful UI and full controller-driven lifecycle are part of that extension's acceptance criteria.
+- Site-to-site VM migration is an agreed follow-on after Phases 0–8, managed by one Controller: stopped disk transfer and explicit pool-ownership cutover first. Cross-site live migration requires its separate gate; cross-site HA and independent-Controller transfer are not included.
 - Ceph is an explicitly planned later backend: register RBD storage at pool level, provision scoped credentials, verify host access/health, then validate disks, snapshots, backups/restores, and live migration against its capabilities. Decide separately whether Nex manages an existing Ceph cluster or also deploys and operates Ceph; start with existing-cluster integration. Do not build a generic storage plugin framework in advance.
 - Guided NVIDIA/AMD hardware passthrough is an agreed follow-on requirement with its [own workflow and acceptance gate](#guided-hardware-passthrough), outside the initial release; keep its host-bound placement and recovery limits explicit.
-- No Ceph deployment/operation, iSCSI/SAN provisioning, memory snapshots, deduplication, incremental backup chains, cross-pool live migration, multi-controller failover, or automatic balancing in the initial release. Add each only with its required lifecycle/recovery tests.
+- No Ceph deployment/operation, iSCSI/SAN provisioning, memory snapshots, deduplication, incremental backup chains, cross-pool live migration, multi-controller failover, or automatic balancing in the initial release. Add each only with its required lifecycle/recovery tests. Controller *replacement* (below) is required for the first supported release; multi-controller failover is not.
 - Cross-pool movement starts as an explicit backup import/restore workflow with destination authorization and storage/network remapping; it is not an ordinary host reassignment.
 - Before Phase 0: choose lab machines, management subnet, guest OS test images, and usable disks. Default to amd64, UEFI, Linux guests, local qcow2, then external NFS.
 - Before production protection: agree backup destination/failure domain, encryption/key custody, retention, downtime tolerance, and RPO/RTO targets. Before HA: agree fencing hardware, node count, and availability requirements.
 
 Implementation should proceed phase by phase, with each gate demonstrated before dependent features are treated as supported.
+
+### Replaceable Controller — 2026-09-09
+
+Matt identified a gap in the development model: the Controller web UI/API must be a front end
+onto the pool master's state, so a failed Controller can be replaced by installing a new one and
+connecting each pool master to it, with every setting coming across. Decisions:
+
+- **Source of truth:** every pool-scoped setting is persisted on the pool master's Nex Core in a
+  durable, host-local record (today: the managed journal and `/etc/network/interfaces.d`) and is
+  reported in inventory so a Controller that does not know it re-adopts it with the same identity
+  and name. This applies to pool membership, networks, storage registrations, media, VM
+  definitions and identity, and later snapshot/backup policies. Running workloads and local
+  recovery never depend on the Controller (unchanged).
+- **Replacement procedure target:** install a new Controller, connect each pool master (token or
+  address plus root password), wait for adoption. No re-entry of pool settings. Controller-scoped
+  data (sites, administrator accounts and roles, audit history, enrollment tokens, the Controller
+  CA) is backed up and restored separately; until that exists, it is re-created by hand and this is
+  documented as a limit.
+- **Rule for every slice:** a new pool-scoped setting defines its host-side record and adoption
+  path in the same change (see `AGENTS.md`). A setting that lives only in the Controller database
+  leaves the slice open.
+- **Status:** implemented for storage registrations, networks, media and VM definitions
+  (`Inventory.managed`, automatic adoption with preserved IDs; Core resolves VM-create references
+  by resource ID). Open: pool membership and master role for multi-host pools, later policies,
+  and backup/restore of Controller-scoped data. The lost-Controller test in the Phase 6 gate becomes a **Controller
+  replacement gate** for the first supported release: destroy the Controller appliance, deploy a
+  fresh one, connect the master, and verify the pool's networks, storage, media, VMs and policies
+  return with their identities and that no duplicate resources or writers are created.
+  Enrollment: an enrolled host that targets a different Controller URL or trust now takes a
+  fresh identity there in place, keeping its state directory and journal (agent `enroll`,
+  local `POST /api/local/v1/enrollment`, and therefore **Add host**); the same Controller still
+  answers "already enrolled". Independent review (2026-09-09) confirmed adoption and trust
+  handling and found this enrollment gap, now closed by regression tests in
+  `internal/agent` and `internal/localcore`. `tests/integration/controller_replacement.py`
+  and `controller_replacement_debian.sh` prove the replacement end to end with real
+  processes for storage, networks, ISO records and VM definitions (Debian 13 libvirt/KVM
+  container; both CI workflows). Remaining review notes: same-Controller
+  re-enrollment under a new host record does not move records (use Re-enroll host);
+  `needs_attention` VM creations are not in the journal report; silent skips of invalid
+  journal entries have no audit entry yet.
 
 ### Installer welcome copy clarification — 2026-09-08
 

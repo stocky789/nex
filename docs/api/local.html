@@ -2,7 +2,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Nex Core host-local API — 0.1.0</title>
 <link rel="stylesheet" href="reference.css">
-<main><h1>Nex Core host-local API — 0.1.0</h1><p>Development host-local HTTPS API v1, independent of Controller sessions and outages. Narrow appliance deployment and owned local power recovery; no generic VM creation, network editor or console stream. Core outbound protocol and signed appliance format/protocol version 1 only. Deploy matching development components; no mixed-version upgrade window is promised.</p>
+<main><h1>Nex Core host-local API — 0.1.0</h1><p>Development host-local HTTPS API v1, independent of Controller sessions and outages. Narrow appliance deployment and owned local power recovery; a local VM console WebSocket; no generic VM creation or network editor. Core outbound protocol and signed appliance format/protocol version 1 only. Deploy matching development components; no mixed-version upgrade window is promised.</p>
 <p><a href="local-openapi.json">Download OpenAPI JSON</a>. This reference works offline; examples do not execute requests.</p>
 <nav aria-label="API operations"><ul>
 <li><a href="#localLogin">POST /api/local/v1/session</a></li>
@@ -19,9 +19,13 @@
 <li><a href="#localGUI">GET /</a></li>
 <li><a href="#localRetryDeployment">POST /api/local/v1/deployments/{id}/retry</a></li>
 <li><a href="#localAPIDocs">GET /api/docs/</a></li>
+<li><a href="#localEnroll">POST /api/local/v1/enrollment</a></li>
+<li><a href="#localConsoleStream">GET /api/local/v1/vms/{id}/console</a></li>
+<li><a href="#localGetUpdates">GET /api/local/v1/updates</a></li>
+<li><a href="#localApplyUpdates">POST /api/local/v1/updates/apply</a></li>
 </ul></nav>
 <section><h2>nex-core-local -prepare-recovery-file</h2><pre>{
-  &quot;description&quot;: &quot;Root-only manual replacement preparation, not an HTTP operation or running listener. Requires stopped local service and a clean replacement host without outbound agent identity or normal deployments. Uses the selected signed appliance and existing local storage/bridge. Does not bootstrap Site/Pool, enroll a host or adopt the VM. Repeated identical normalized file contents reconcile the persisted request and original VM UUID; changed contents fail. TLS-verified readiness and seed removal precede recovery_prepared.&quot;,
+  &quot;description&quot;: &quot;Root-only manual replacement preparation, not an HTTP operation or running listener. Requires stopped local service and a clean replacement host without outbound agent identity or normal deployments. Uses the selected signed appliance and existing local storage/bridge. Does not bootstrap a Site, enroll a host or adopt the VM. Repeated identical normalized file contents reconcile the persisted request and original VM UUID; changed contents fail. TLS-verified readiness and seed removal precede recovery_prepared.&quot;,
   &quot;inputFile&quot;: {
     &quot;schema&quot;: {
       &quot;$ref&quot;: &quot;#/components/schemas/RecoveryPreparationRequest&quot;
@@ -488,12 +492,12 @@
   }
 }</pre></details></section>
 <section id="localDeploy"><h2>POST <code>/api/local/v1/deployments</code></h2>
-<p>Deploy this host&#x27;s Controller appliance</p><p>Persists one deployment intent before asynchronous work. Set a stable request_id, explicit configured local storage/bridge, resources, network_mode (static or dhcp), first Site/Pool and Controller password. Zero or omitted resource fields use 2 vCPUs, 4096 MiB and 32 GiB. Repeating identical normalized input returns the same operation; different input or a second deployment conflicts. The worker verifies the signed appliance, creates an independent disk and cloud-init seed, starts the original VM, verifies Controller TLS and completes enrollment/adoption. Poll the operation; guest boot is not completed handoff. Interrupted VM effects require observation and never recreate the appliance. DHCP waits up to five minutes at waiting_for_network for one usable IPv4 address from the guest agent on the exact owned VM/MAC; missing or ambiguous addresses produce needs_attention and can be retried. controller_url is absent until an address is found. The discovered IP is verified using the per-instance Controller certificate and hostname before handoff. DHCP requires matching rebuilt host and appliance components; omitted network_mode preserves static clients.</p>
+<p>Deploy this host&#x27;s Controller appliance</p><p>Persists one deployment intent before asynchronous work. Set a stable request_id, explicit configured local storage/bridge, resources, network_mode (static or dhcp), first Site and Controller password. Zero or omitted resource fields use 2 vCPUs, 4096 MiB and 32 GiB. Repeating identical normalized input returns the same operation; different input or a second deployment conflicts. The worker verifies the signed appliance, creates an independent disk and cloud-init seed, starts the original VM, verifies Controller TLS and completes enrollment/adoption. Poll the operation; guest boot is not completed handoff. Interrupted VM effects require observation and never recreate the appliance. DHCP waits up to five minutes at waiting_for_network for one usable IPv4 address from the guest agent on the exact owned VM/MAC; missing or ambiguous addresses produce needs_attention and can be retried. controller_url is absent until an address is found. The discovered IP is verified using the per-instance Controller certificate and hostname before handoff. DHCP requires matching rebuilt host and appliance components; omitted network_mode preserves static clients.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;localDeploy&quot;,
   &quot;summary&quot;: &quot;Deploy this host&#x27;s Controller appliance&quot;,
-  &quot;description&quot;: &quot;Persists one deployment intent before asynchronous work. Set a stable request_id, explicit configured local storage/bridge, resources, network_mode (static or dhcp), first Site/Pool and Controller password. Zero or omitted resource fields use 2 vCPUs, 4096 MiB and 32 GiB. Repeating identical normalized input returns the same operation; different input or a second deployment conflicts. The worker verifies the signed appliance, creates an independent disk and cloud-init seed, starts the original VM, verifies Controller TLS and completes enrollment/adoption. Poll the operation; guest boot is not completed handoff. Interrupted VM effects require observation and never recreate the appliance. DHCP waits up to five minutes at waiting_for_network for one usable IPv4 address from the guest agent on the exact owned VM/MAC; missing or ambiguous addresses produce needs_attention and can be retried. controller_url is absent until an address is found. The discovered IP is verified using the per-instance Controller certificate and hostname before handoff. DHCP requires matching rebuilt host and appliance components; omitted network_mode preserves static clients.&quot;,
+  &quot;description&quot;: &quot;Persists one deployment intent before asynchronous work. Set a stable request_id, explicit configured local storage/bridge, resources, network_mode (static or dhcp), first Site and Controller password. Zero or omitted resource fields use 2 vCPUs, 4096 MiB and 32 GiB. Repeating identical normalized input returns the same operation; different input or a second deployment conflicts. The worker verifies the signed appliance, creates an independent disk and cloud-init seed, starts the original VM, verifies Controller TLS and completes enrollment/adoption. Poll the operation; guest boot is not completed handoff. Interrupted VM effects require observation and never recreate the appliance. DHCP waits up to five minutes at waiting_for_network for one usable IPv4 address from the guest agent on the exact owned VM/MAC; missing or ambiguous addresses produce needs_attention and can be retried. controller_url is absent until an address is found. The discovered IP is verified using the per-instance Controller certificate and hostname before handoff. DHCP requires matching rebuilt host and appliance components; omitted network_mode preserves static clients.&quot;,
   &quot;security&quot;: [
     {
       &quot;LocalSession&quot;: []
@@ -975,6 +979,311 @@
     }
   }
 }</pre></details></section>
+<section id="localEnroll"><h2>POST <code>/api/local/v1/enrollment</code></h2>
+<p>Push an enrollment token to this host</p><p>Lets the Controller enroll this host over its existing local session instead of the manual nex-core-agent enroll step. controller_url must be a bare HTTPS origin (no userinfo, path, query or fragment); ca_pem must contain at least one certificate; token must be 1-256 bytes with no control characters; replace_host, when set, is an existing revoked host id being replaced and must be at most 128 characters. Enrollment attempts on this host are serialized; a retried request queues rather than racing the embedded agent&#x27;s on-disk identity. Already enrolled with a different replace_host returns 409 with the current host_id and changes nothing. On success the embedded agent persists its new identity, starts reporting to the Controller, and the response host_id also appears from GET /api/local/v1/host. The Controller&#x27;s rejection of the token (expired, already used, wrong site) surfaces as 502 and leaves this host unenrolled; retrying with a fresh token is safe. The token and ca_pem are never logged or echoed back.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localEnroll&quot;,
+  &quot;summary&quot;: &quot;Push an enrollment token to this host&quot;,
+  &quot;description&quot;: &quot;Lets the Controller enroll this host over its existing local session instead of the manual nex-core-agent enroll step. controller_url must be a bare HTTPS origin (no userinfo, path, query or fragment); ca_pem must contain at least one certificate; token must be 1-256 bytes with no control characters; replace_host, when set, is an existing revoked host id being replaced and must be at most 128 characters. Enrollment attempts on this host are serialized; a retried request queues rather than racing the embedded agent&#x27;s on-disk identity. Already enrolled with a different replace_host returns 409 with the current host_id and changes nothing. On success the embedded agent persists its new identity, starts reporting to the Controller, and the response host_id also appears from GET /api/local/v1/host. The Controller&#x27;s rejection of the token (expired, already used, wrong site) surfaces as 502 and leaves this host unenrolled; retrying with a fresh token is safe. The token and ca_pem are never logged or echoed back.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/EnrollmentResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;HTTPS required or invalid JSON/input: controller_url not a bare HTTPS origin, ca_pem has no certificate, token empty/too long/contains control characters, or replace_host too long.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired local administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin must equal the request HTTPS origin; authenticated mutations also require the session CSRF token.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;This host is already enrolled with a different identity than replace_host; host_id names the current identity and nothing changed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/EnrollmentConflict&quot;
+          }
+        }
+      }
+    },
+    &quot;415&quot;: {
+      &quot;description&quot;: &quot;application/json required; request body limited to 32 KiB. Unknown fields and multiple JSON values are rejected with 400.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;502&quot;: {
+      &quot;description&quot;: &quot;The Controller rejected the enrollment token or was unreachable; this host remains unenrolled and the request may be retried with a fresh token.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;name&quot;: &quot;Origin&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Exactly https:// plus the request Host header.&quot;
+    },
+    {
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/EnrollmentRequest&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localConsoleStream"><h2>GET <code>/api/local/v1/vms/{id}/console</code></h2>
+<p>Open a local VM console WebSocket</p><p>Implemented in development product 0.1.0. WebSocket upgrade (RFC 6455, binary frames carrying raw RFB/VNC bytes for noVNC) authenticated by the local root session cookie; the Origin header must equal this host&#x27;s HTTPS origin. The selected VM must be running on this host&#x27;s system libvirt with a local UNIX-socket VNC display; any other display type is refused. The service bridges the browser to that socket directly and never opens a network VNC listener. This works without Nex Controller and is intended for guest installation and recovery from the host itself.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localConsoleStream&quot;,
+  &quot;summary&quot;: &quot;Open a local VM console WebSocket&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0. WebSocket upgrade (RFC 6455, binary frames carrying raw RFB/VNC bytes for noVNC) authenticated by the local root session cookie; the Origin header must equal this host&#x27;s HTTPS origin. The selected VM must be running on this host&#x27;s system libvirt with a local UNIX-socket VNC display; any other display type is refused. The service bridges the browser to that socket directly and never opens a network VNC listener. This works without Nex Controller and is intended for guest installation and recovery from the host itself.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;VM UUID.&quot;
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;101&quot;: {
+      &quot;description&quot;: &quot;WebSocket established; binary frames relay the VM display stream.&quot;
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Not returned; the stream is the 101 response.&quot;
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;HTTPS required or missing WebSocket upgrade headers.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired local administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin must equal the request HTTPS origin.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;VM is not running, not found, or has no local VNC socket display.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;The VM console socket refused the connection.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localGetUpdates"><h2>GET <code>/api/local/v1/updates</code></h2>
+<p>Check host-local package updates</p><p>Checks the configured package repo updates.json for nex-core-local. Repo failures surface in error with HTTP 200. Root local session required.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localGetUpdates&quot;,
+  &quot;summary&quot;: &quot;Check host-local package updates&quot;,
+  &quot;description&quot;: &quot;Checks the configured package repo updates.json for nex-core-local. Repo failures surface in error with HTTP 200. Root local session required.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Success&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateStatus&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localApplyUpdates"><h2>POST <code>/api/local/v1/updates/apply</code></h2>
+<p>Apply host-local package update</p><p>Downloads the nex-core-local deb from the configured repo, runs dpkg -i as root, then schedules systemctl restart via systemd-run --no-block. Returns 202 scheduled on success. CSRF and same-origin required.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localApplyUpdates&quot;,
+  &quot;summary&quot;: &quot;Apply host-local package update&quot;,
+  &quot;description&quot;: &quot;Downloads the nex-core-local deb from the configured repo, runs dpkg -i as root, then schedules systemctl restart via systemd-run --no-block. Returns 202 scheduled on success. CSRF and same-origin required.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: false,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;additionalProperties&quot;: false
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Update scheduled&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateApplyResult&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Download, install or restart failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateApplyResult&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
 <section id="schemas"><h2>Schemas and authentication</h2>
 <h3>securitySchemes</h3>
 <details id="LocalSession"><summary>LocalSession</summary><pre>{
@@ -1194,10 +1503,6 @@
       &quot;type&quot;: &quot;string&quot;,
       &quot;description&quot;: &quot;Required nonblank name, maximum 200 UTF-8 bytes.&quot;
     },
-    &quot;pool_name&quot;: {
-      &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;Required nonblank name, maximum 200 UTF-8 bytes.&quot;
-    },
     &quot;bridge&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;description&quot;: &quot;Explicitly select the configured existing management bridge. Deployment does not create or edit host networks.&quot;
@@ -1223,7 +1528,6 @@
     &quot;hostname&quot;,
     &quot;admin_password&quot;,
     &quot;site_name&quot;,
-    &quot;pool_name&quot;,
     &quot;bridge&quot;,
     &quot;storage_dir&quot;
   ],
@@ -1240,7 +1544,6 @@
     &quot;dns&quot;,
     &quot;admin_password&quot;,
     &quot;site_name&quot;,
-    &quot;pool_name&quot;,
     &quot;bridge&quot;,
     &quot;storage_dir&quot;
   ],
@@ -1430,6 +1733,14 @@
     },
     &quot;preflight&quot;: {
       &quot;$ref&quot;: &quot;#/components/schemas/Preflight&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Enrolled agent host id, empty when not yet enrolled.&quot;
+    },
+    &quot;controller&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Enrolled Controller HTTPS origin, empty when not yet enrolled.&quot;
     }
   },
   &quot;required&quot;: [
@@ -1437,7 +1748,9 @@
     &quot;bridge&quot;,
     &quot;storage_dir&quot;,
     &quot;defaults&quot;,
-    &quot;preflight&quot;
+    &quot;preflight&quot;,
+    &quot;host_id&quot;,
+    &quot;controller&quot;
   ],
   &quot;additionalProperties&quot;: false
 }</pre></details>
@@ -1515,11 +1828,6 @@
       &quot;const&quot;: &quot;&quot;,
       &quot;description&quot;: &quot;Must be absent or empty for replacement preparation.&quot;
     },
-    &quot;pool_name&quot;: {
-      &quot;type&quot;: &quot;string&quot;,
-      &quot;const&quot;: &quot;&quot;,
-      &quot;description&quot;: &quot;Must be absent or empty for replacement preparation.&quot;
-    },
     &quot;bridge&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;description&quot;: &quot;Explicitly select the configured existing management bridge. Deployment does not create or edit host networks.&quot;
@@ -1560,11 +1868,10 @@
     &quot;dns&quot;,
     &quot;admin_password&quot;,
     &quot;site_name&quot;,
-    &quot;pool_name&quot;,
     &quot;bridge&quot;,
     &quot;storage_dir&quot;
   ],
-  &quot;description&quot;: &quot;Private 0600 JSON file consumed only by nex-core-local -prepare-recovery-file. Reuses deployment resource, network mode and password validation, but Site/Pool names must be absent or empty: no handoff or enrollment is performed.&quot;,
+  &quot;description&quot;: &quot;Private 0600 JSON file consumed only by nex-core-local -prepare-recovery-file. Reuses deployment resource, network mode and password validation, but the Site name must be absent or empty: no handoff or enrollment is performed.&quot;,
   &quot;allOf&quot;: [
     {
       &quot;if&quot;: {
@@ -1610,5 +1917,129 @@
       }
     }
   ]
+}</pre></details>
+<details id="EnrollmentRequest"><summary>EnrollmentRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;controller_url&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Bare HTTPS origin of the Controller, no userinfo, path, query or fragment.&quot;
+    },
+    &quot;ca_pem&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;PEM containing at least one Controller CA certificate.&quot;
+    },
+    &quot;token&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Single-use enrollment token minted by the Controller, 1-256 bytes with no control characters.&quot;,
+      &quot;writeOnly&quot;: true
+    },
+    &quot;replace_host&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Existing revoked host id being re-enrolled, at most 128 characters. Omit for a new host.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;controller_url&quot;,
+    &quot;ca_pem&quot;,
+    &quot;token&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="EnrollmentResponse"><summary>EnrollmentResponse</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="EnrollmentConflict"><summary>EnrollmentConflict</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The host id this service is already enrolled as.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;error&quot;,
+    &quot;host_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="UpdateStatus"><summary>UpdateStatus</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;package&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;installed_version&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;available_version&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;update_available&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;repo_url&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;phase&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;idle, downloading, installing, restarting, done, or failed when an apply is tracked.&quot;
+    },
+    &quot;progress&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;maximum&quot;: 100,
+      &quot;description&quot;: &quot;Percent complete for the current apply when known.&quot;
+    },
+    &quot;message&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Non-fatal repo or apply problem; installed_version remains valid for check.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;package&quot;,
+    &quot;installed_version&quot;,
+    &quot;update_available&quot;,
+    &quot;repo_url&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="UpdateApplyResult"><summary>UpdateApplyResult</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;scheduled&quot;,
+        &quot;completed&quot;,
+        &quot;failed&quot;
+      ]
+    },
+    &quot;message&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;operation&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;status&quot;
+  ],
+  &quot;additionalProperties&quot;: false
 }</pre></details>
 </section></main></html>

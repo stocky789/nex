@@ -11,16 +11,32 @@ build**. Both are for local lab evaluation; the installer does not yet deliver a
    (separate development package).
 5. [Secure Controller and host web access](secure-web-access.md)
    (security development changes and verification limits).
+6. [Explore the private HTTPS website](website-preview.md)
+   (product information only; separate from Controller management).
+7. [Operate the private website](operate-website.md)
+   (authorized maintainers; nginx releases, monitoring and rollback).
+8. [Register resources and create a virtual machine](create-virtual-machine.md)
+9. [Control VM power](vm-power.md)
+10. [Open a VM console](vm-console.md)
+   (matching Controller/Core development builds; creates a stopped VM).
+10. [Check and apply software updates](software-updates.md)
+   (Controller and host-local package updates from a configured repo).
 
 Each procedure states its prerequisites, expected outcome, troubleshooting, and verification
 limits. A documented procedure is not automatically a tested procedure: check its Verification
 section for the exact evidence and outstanding checks.
 
-Controller's development build includes its web GUI, administrator login, sites/pools,
-enrollment, observed host health and inventory, and read-only inventory refresh tasks.
+Controller's development build includes its web GUI, administrator login, sites,
+enrollment (**Add host** by address and root password, or a manual token), observed host
+health and inventory, and read-only inventory refresh tasks.
+Pools are created automatically: each enrolled host becomes the pool master of its
+own pool, so there is no pool-creation step.
 The separate appliance slice adds local deployment and restricted VM power recovery.
-General VM management, consoles, managed snapshots/backups/restores, migrations, HA, and Docker
-Container Services remain **planned and unavailable**. Their intended behavior belongs in the
+The managed-VM creation slice adds pool-owned local storage, VLAN or existing guest networks,
+ISO upload and creation of a stopped VM, with separate verification evidence.
+Central VM power/edit/delete controls, consoles, managed snapshots/backups/restores,
+migrations, HA, and Docker Container Services remain **planned and unavailable**.
+Their intended behavior belongs in the
 [roadmap](../plans/2026-09-08-nex-platform.md).
 
 The [API reference](../API.md) tracks implemented Nex interfaces separately. Build developers

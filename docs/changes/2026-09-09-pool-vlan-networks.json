@@ -1,0 +1,88 @@
+{
+  "summary": "Add pool VLAN networks: a network is name + uplink NIC + VLAN ID; Core creates an additive per-VLAN guest bridge and persists it, the form offers observed NICs instead of free-text bridge names, and VMs pick networks by name. API impact: changed contract (POST /api/v1/networks kind vlan with uplink/vlan and derived source; NetworkRegistration and NIC.kind fields; network-register command semantics). Records the guest tools assessment in the plan. Also: automatic untagged default network per host bridge on a physical NIC, host-held pool state re-adopted by a replacement Controller (Inventory.guest_networks replaced by Inventory.managed with storage, networks, media and VM definitions from the Core journal; Controller adopts all four kinds with preserved IDs under actor system, request_id adopt-<kind>:<host>:<id>; Core resolves VM-create storage/network/media references by resource ID; nics[].master/parent), and a host Networking panel that shows physical NICs with what they carry. Enrollment with a different Controller now replaces the host identity in place (state and journal kept) so Add host works from a replacement Controller; report body cap raised to 16 MiB.",
+  "paths": [
+    ".gitea/workflows/phase1.yml",
+    ".github/workflows/phase1.yml",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/api/index.html",
+    "docs/api/openapi.json",
+    "docs/guide/README.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/manage-controller.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-09-pool-vlan-networks.md",
+    "docs/qa/pool-vlan-networks/browser-simulated-network-form.png",
+    "docs/qa/pool-vlan-networks/browser-simulated-network.png",
+    "docs/qa/pool-vlan-networks/browser-simulated-results.json",
+    "docs/qa/pool-vlan-networks/browser-simulated-review-desktop.png",
+    "docs/qa/pool-vlan-networks/checks.md",
+    "docs/qa/pool-vlan-networks/controller-replacement-debian-environment.txt",
+    "docs/qa/pool-vlan-networks/controller-replacement-debian.json",
+    "docs/qa/pool-vlan-networks/controller-replacement.json",
+    "docs/qa/pool-vlan-networks/native/blank-disk.json",
+    "docs/qa/pool-vlan-networks/native/installer-boot-menu.png",
+    "docs/qa/pool-vlan-networks/native/installer-confirmation-required.png",
+    "docs/qa/pool-vlan-networks/native/installer-host.png",
+    "docs/qa/pool-vlan-networks/native/installer-network.png",
+    "docs/qa/pool-vlan-networks/native/installer-review.png",
+    "docs/qa/pool-vlan-networks/native/installer-target.png",
+    "docs/qa/pool-vlan-networks/native/installer-welcome.png",
+    "docs/qa/pool-vlan-networks/native/iso.json",
+    "docs/qa/pool-vlan-networks/netns-test.log",
+    "installer/gui/nex-network.c",
+    "internal/agent/client.go",
+    "internal/agent/client_test.go",
+    "internal/agent/probes.go",
+    "internal/agent/run.go",
+    "internal/controller/controller.go",
+    "internal/controller/identity.go",
+    "internal/controller/managed.go",
+    "internal/controller/managed_test.go",
+    "internal/controller/monitor.go",
+    "internal/localcore/enroll.go",
+    "internal/localcore/enroll_test.go",
+    "internal/protocol/managed.go",
+    "internal/protocol/protocol.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/vlan.go",
+    "internal/vmhost/vlan_test.go",
+    "packaging/systemd/nex-core-agent.service",
+    "tests/integration/controller_replacement.py",
+    "tests/integration/controller_replacement_debian.sh",
+    "tests/integration/fresh_install_browser.py",
+    "tests/integration/managed_vm_browser.py",
+    "tests/integration/vlan_lab.py",
+    "web/src/main.tsx",
+    "web/src/managed.tsx"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The network registration form changed from typed bridge names to a Connection/VLAN ID choice, with new prerequisites, refusal errors and switch-trunk troubleshooting. The Controller-rebuilt troubleshooting and a new \"Replace a failed Controller\" procedure describe what a replacement Controller recovers from each pool master and what it does not.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/README.md",
+      "docs/guide/manage-controller.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Changed contract: kind vlan with uplink/vlan on network registration, derived bridge source, NIC kind in inventory, and additive bridge creation in the network-register command; both Controller and Core sides implemented with contract tests. Later the same day: Inventory.guest_networks/GuestNetwork replaced by Inventory.managed (ManagedState) so storage, networks, media and VM definitions are all adopted from the host journal.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "verification": {
+    "method": "go test -race ./... passed; Python contract/tool checks passed; installer network C test passed; TestGuestVLANNetns ran inside an unprivileged user+network namespace with sysfs remounted (dummy uplink; real VLAN device, bridge, ifupdown persistence and six refusals); simulated Chromium walkthrough registered VLAN 100 on the simulated host's nex1 and created a VM on it, captures inspected. Not run: native nested-KVM lab, physical NIC/switch trunking, Windows/Linux guest tools (assessed only). Controller adoption tests in internal/controller (TestHostReportedNetworksAreReadopted, TestDefaultUntaggedNetworkAutoRegistration) and the vmhost Applied() journal test cover automatic default-network creation, no duplication after failure, and adoption of host-reported storage, networks, media and VM definitions from Inventory.managed with preserved IDs. No Controller-replacement walkthrough against a real or nested-KVM host has run. The native lab harness tests/integration/vlan_lab.py was written but not executed; the fresh ISO lab reached the installer review page only. The main ISO in dist/ was rebuilt from this tree (0.1.0+vlan1 package and appliance). controller_replacement.py proved end-to-end recovery of a network across two real Controller processes in a network namespace; wired into both CI workflows. controller_replacement_debian.sh proved all four kinds (storage, network, ISO, VM) across two real Controllers with real libvirt/KVM; BUG-0039 fixed on the way. UI explanatory copy on the Networking tab and form was removed at Matt's request.",
+    "evidence": [
+      "docs/qa/pool-vlan-networks/checks.md",
+      "docs/qa/pool-vlan-networks/browser-simulated-results.json",
+      "docs/qa/pool-vlan-networks/netns-test.log",
+      "docs/qa/pool-vlan-networks/controller-replacement.json",
+      "docs/qa/pool-vlan-networks/controller-replacement-debian.json"
+    ]
+  }
+}

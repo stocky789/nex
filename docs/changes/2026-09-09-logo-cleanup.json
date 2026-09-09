@@ -1,0 +1,36 @@
+{
+  "summary": "Remove the installer logo board texture in both GTK headers. API impact: none; native asset rendering only.",
+  "paths": [
+    "installer/assets/nex-core-lockup.png",
+    "installer/build-gui.sh",
+    "installer/gui/nex-wizard.c",
+    "installer/gui/nex-shell.c",
+    "tests/integration/installer-logo.py",
+    "tests/integration/wizard-review.py",
+    "docs/qa/iso/2026-09-09-logo-cleanup.md",
+    "docs/qa/iso/2026-09-09-logo-cleanup/after-progress.png",
+    "docs/qa/iso/2026-09-09-logo-cleanup/after-wizard.png",
+    "docs/qa/iso/2026-09-09-logo-cleanup/before.png",
+    "docs/qa/iso/2026-09-09-logo-cleanup/progress.txt",
+    "docs/qa/iso/2026-09-09-logo-cleanup/regression-before.txt",
+    "docs/qa/iso/2026-09-09-logo-cleanup/wizard.txt"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Visual background correction preserves installation steps, choices, layout allocations and recovery behavior.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Local asset loading and GTK rendering change no Controller operation, Core command/result, client-facing API or Debian question contract.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Build isolated GTK initrd; prove native pixel regression fails old background; pass final QEMU/KVM wizard and diskless progress reviews, initrd/source retention and installer checks; inspect captures. No full ISO or real installation rerun.",
+    "evidence": [
+      "docs/qa/iso/2026-09-09-logo-cleanup.md",
+      "tests/integration/installer-logo.py",
+      "tests/integration/wizard-review.py"
+    ]
+  }
+}

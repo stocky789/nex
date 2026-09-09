@@ -21,8 +21,24 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Install nginx and dpkg tools for hosting and apt checks
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends nginx-core dpkg-dev gnupg
       - name: Test Go services and recovery
         run: go test -race ./...
+      - name: Verify guest VLAN bridge creation in a disposable network namespace
+        run: |
+          mkdir -p .cache
+          go test -c -o .cache/vmhost.test ./internal/vmhost
+          sudo unshare -nm sh -c 'mount -t sysfs none /sys && NEX_NETNS_TEST=1 .cache/vmhost.test -test.run TestGuestVLANNetns -test.v'
+      - name: Verify Controller replacement with real processes in a disposable network namespace
+        run: |
+          mkdir -p .cache/replacement-bin
+          go build -o .cache/replacement-bin/nex-controller ./cmd/nex-controller
+          go build -o .cache/replacement-bin/nex-core-agent ./cmd/nex-core-agent
+          python3 scripts/build-source.py --output .cache/replacement-bin/nex-source.tar.gz
+          sudo NEX_BIN="$PWD/.cache/replacement-bin" unshare -nm sh -c 'mount -t sysfs none /sys && ip link set lo up && ip link add nexqa type bridge && ip link set nexqa up && python3 tests/integration/controller_replacement.py --bridge nexqa --storage-root /var/lib/nexqa-replacement --evidence .cache/controller-replacement'
       - name: Check contracts and contributor tools
         run: |
           python3 scripts/generate_api.py --check
@@ -42,11 +58,42 @@ jobs:
           python3 -m venv .cache/phase1-qa-venv
           .cache/phase1-qa-venv/bin/pip install playwright==1.62.0
           .cache/phase1-qa-venv/bin/python -m playwright install --with-deps chromium
+      - name: Capture Controller gallery with neutral demo inventory
+        run: .cache/phase1-qa-venv/bin/python tests/integration/website_controller_captures.py --output .cache/website-controller-captures/images --evidence .cache/website-controller-captures/results.json
+      - name: Build and check private website
+        run: |
+          npm --prefix website ci
+          npm --prefix website run check
+          npm --prefix website run build
+      - name: Verify website browser workflows
+        run: |
+          python3 -m http.server 8080 --bind 127.0.0.1 --directory website/build > /tmp/nex-website-preview.log 2>&1 &
+          preview_pid=$!
+          trap 'kill "$preview_pid"' EXIT
+          .cache/phase1-qa-venv/bin/python tests/integration/website_browser.py --url http://127.0.0.1:8080 --evidence .cache/website-qa
+      - name: Verify hardened website browser workflow
+        run: |
+          qa_root="$PWD/.cache/website-nginx"
+          mkdir -p "$qa_root/log"
+          sed -e 's|@NEX_WEBSITE_LISTEN@|127.0.0.1:8081|' -e "s|/srv/nex-website/current|$PWD/website/build|" -e "s|/run/nex-website/nginx.pid|$qa_root/nginx.pid|" -e "s|/run/nex-website|$qa_root|g" -e "s|/var/log/nex-website|$qa_root/log|g" packaging/website/nginx.conf.template > "$qa_root/nginx.conf"
+          nginx -t -c "$qa_root/nginx.conf"
+          nginx -c "$qa_root/nginx.conf" -g 'daemon off;' &
+          nginx_pid=$!
+          trap 'kill "$nginx_pid"' EXIT
+          .cache/phase1-qa-venv/bin/python tests/integration/website_hardening_browser.py --url http://127.0.0.1:8081 --evidence .cache/website-hardening-qa
       - name: Verify enrollment, recovery and browser workflows
         run: .cache/phase1-qa-venv/bin/python tests/integration/phase1.py --browser
+      - name: Verify managed VM browser workflows with simulated host
+        run: .cache/phase1-qa-venv/bin/python tests/integration/managed_vm_browser.py --simulated --evidence .cache/managed-vm-browser
+      - name: Verify host storage ISO visibility
+        run: .cache/phase1-qa-venv/bin/python tests/integration/host_iso_browser.py --evidence .cache/host-iso-browser
+      - name: Verify searchable site selection
+        run: .cache/phase1-qa-venv/bin/python tests/integration/site_selector_browser.py --evidence .cache/site-selector-browser
       - name: Build local host browser service
         run: go build -o dist/nex-core-local ./cmd/nex-core-local
       - name: Verify local host browser authentication and preflight blockers
         run: .cache/phase1-qa-venv/bin/python tests/integration/localcore_browser.py --blocked-only
       - name: Verify Debian and native libvirt observations
         run: bash tests/integration/phase1-debian.sh
+      - name: Verify Controller replacement end to end with Debian libvirt (storage, network, ISO, VM)
+        run: bash tests/integration/controller_replacement_debian.sh .cache/controller-replacement-debian

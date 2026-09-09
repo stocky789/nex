@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[Unit]
+Description=Nex Controller software update trigger
+DefaultDependencies=no
+
+[Path]
+PathExists=/var/lib/nex-controller/pending-update.json
+PathChanged=/var/lib/nex-controller/pending-update.json
+Unit=nex-controller-update.service
+
+[Install]
+WantedBy=multi-user.target

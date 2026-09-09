@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"database/sql"
 	"encoding/json"
 	"encoding/pem"
 	"net/http"
@@ -115,24 +116,31 @@ func certificate(t *testing.T, s string) *x509.Certificate {
 	}
 	return c
 }
-func (a *testClient) pool() string {
+func (a *testClient) site() string {
 	a.t.Helper()
 	var s protocol.Site
 	read(a.t, a.call("POST", "/api/v1/sites", map[string]string{"name": "Lab"}, nil, 201), &s)
-	var p protocol.Pool
-	read(a.t, a.call("POST", "/api/v1/pools", map[string]string{"name": "Pool", "site_id": s.ID}, nil, 201), &p)
-	if p.SiteID != s.ID || p.ID == "" {
-		a.t.Fatal("pool ownership missing")
-	}
-	return p.ID
+	return s.ID
 }
-func (a *testClient) token(pool, host string) string {
+func (a *testClient) token(site, host string) string {
 	a.t.Helper()
 	var v struct {
 		Token string `json:"token"`
 	}
-	read(a.t, a.call("POST", "/api/v1/enrollment-tokens", map[string]string{"pool_id": pool, "host_id": host}, nil, 201), &v)
+	read(a.t, a.call("POST", "/api/v1/enrollment-tokens", map[string]string{"site_id": site, "host_id": host}, nil, 201), &v)
 	return v.Token
+}
+
+// poolOf returns the pool created automatically for an enrolled host.
+func (a *testClient) poolOf(host string) string {
+	a.t.Helper()
+	for _, h := range a.hosts() {
+		if h.ID == host {
+			return h.PoolID
+		}
+	}
+	a.t.Fatal("host missing")
+	return ""
 }
 func (a *testClient) enroll(token, key string) protocol.EnrollResponse {
 	a.t.Helper()
@@ -175,7 +183,7 @@ func TestAdminBoundaryAndStrictJSON(t *testing.T) {
 	if w.Code != 403 {
 		t.Fatalf("cross-origin mutation: %d", w.Code)
 	}
-	a.call("POST", "/api/v1/pools", `{"name":"Pool","site_id":"absent"}`, nil, 400)
+	a.call("POST", "/api/v1/enrollment-tokens", `{"site_id":"absent"}`, nil, 400)
 	a.call("POST", "/api/v1/agent/report", protocol.ReportRequest{Version: 1, Sequence: 1}, nil, 401)
 	a.call("DELETE", "/api/v1/session", nil, nil, 200)
 	a.call("GET", "/api/v1/session", nil, nil, 401)
@@ -183,7 +191,7 @@ func TestAdminBoundaryAndStrictJSON(t *testing.T) {
 
 func TestEnrollmentRotationRevocationAndReplacement(t *testing.T) {
 	a := newClient(t)
-	pool := a.pool()
+	pool := a.site()
 	token, key := a.token(pool, ""), csr(t)
 	original := a.enroll(token, key)
 	if retry := a.enroll(token, key); retry != original {
@@ -225,7 +233,7 @@ func TestEnrollmentRotationRevocationAndReplacement(t *testing.T) {
 
 func TestOperationRetryAndRestartFreshness(t *testing.T) {
 	a := newClient(t)
-	pool := a.pool()
+	pool := a.site()
 	host := a.enroll(a.token(pool, ""), csr(t))
 	cert := certificate(t, host.CertificatePEM)
 	path := "/api/v1/hosts/" + host.HostID + "/operations"
@@ -313,7 +321,7 @@ func TestOperationRetryAndRestartFreshness(t *testing.T) {
 
 func TestReportRejectsInvalidInventory(t *testing.T) {
 	a := newClient(t)
-	host := a.enroll(a.token(a.pool(), ""), csr(t))
+	host := a.enroll(a.token(a.site(), ""), csr(t))
 	cert := certificate(t, host.CertificatePEM)
 	for _, inventory := range []*protocol.Inventory{
 		{CPUCount: -1},
@@ -330,5 +338,101 @@ func TestReportRejectsInvalidInventory(t *testing.T) {
 	a.call("POST", "/api/v1/agent/report", protocol.ReportRequest{Version: 1, Sequence: 0}, cert, 400)
 	if a.hosts()[0].Connection != "unknown" {
 		t.Fatal("invalid report updated host state")
+	}
+}
+
+func TestEnrollmentCreatesPoolWithMaster(t *testing.T) {
+	a := newClient(t)
+	site := a.site()
+	host := a.enroll(a.token(site, ""), csr(t))
+	var pools []protocol.Pool
+	read(t, a.call("GET", "/api/v1/pools", nil, nil, 200), &pools)
+	if len(pools) != 1 || pools[0].SiteID != site || pools[0].Name != "core" || pools[0].MasterHostID != host.HostID || pools[0].ID != a.poolOf(host.HostID) {
+		t.Fatalf("enrollment did not create a pool mastered by the host: %+v", pools)
+	}
+	var audits []protocol.Audit
+	read(t, a.call("GET", "/api/v1/audit", nil, nil, 200), &audits)
+	found := false
+	for _, entry := range audits {
+		if entry.Action == "pool.create" && entry.ResourceID == pools[0].ID && entry.Actor == "host:"+host.HostID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing pool.create audit: %+v", audits)
+	}
+	// Administrators never create pools by hand; the route no longer exists.
+	a.call("POST", "/api/v1/pools", `{"name":"Pool","site_id":"`+site+`"}`, nil, 404)
+	// Re-enrollment keeps the existing pool and requires the host's own site.
+	a.call("POST", "/api/v1/hosts/"+host.HostID+"/revoke", nil, nil, 200)
+	other := a.site()
+	a.call("POST", "/api/v1/enrollment-tokens", map[string]string{"site_id": other, "host_id": host.HostID}, nil, 409)
+	replacement := a.enroll(a.token(site, host.HostID), csr(t))
+	read(t, a.call("GET", "/api/v1/pools", nil, nil, 200), &pools)
+	if replacement.HostID != host.HostID || len(pools) != 1 || pools[0].MasterHostID != host.HostID || a.poolOf(host.HostID) != pools[0].ID {
+		t.Fatalf("re-enrollment changed pool membership: %+v", pools)
+	}
+}
+
+// Databases from the manual-pool era gain a master per pool and lose pools that never had a host.
+func TestOpenMigratesManualPools(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := dir + "/controller.db"
+	if err := os.WriteFile(path, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE schema_version(version INTEGER NOT NULL); INSERT INTO schema_version VALUES(1);
+ CREATE TABLE sites(id TEXT PRIMARY KEY,name TEXT NOT NULL);
+ CREATE TABLE pools(id TEXT PRIMARY KEY,site_id TEXT NOT NULL REFERENCES sites(id),name TEXT NOT NULL);
+ CREATE TABLE hosts(id TEXT PRIMARY KEY,pool_id TEXT NOT NULL REFERENCES pools(id),hostname TEXT NOT NULL,revoked INTEGER NOT NULL DEFAULT 0,last_seen TEXT,inventory TEXT,sequence INTEGER NOT NULL DEFAULT 0);
+ CREATE TABLE tokens(hash TEXT PRIMARY KEY,pool_id TEXT NOT NULL REFERENCES pools(id),host_id TEXT,expires INTEGER NOT NULL,csr TEXT,response TEXT);
+ CREATE TABLE appliance_bootstraps(request_id TEXT PRIMARY KEY,site_name TEXT NOT NULL,pool_name TEXT NOT NULL,token_hash TEXT NOT NULL UNIQUE,site_id TEXT NOT NULL REFERENCES sites(id),pool_id TEXT NOT NULL REFERENCES pools(id));
+ INSERT INTO sites VALUES('s','Lab');
+ INSERT INTO pools VALUES('shared','s','Shared'); INSERT INTO pools VALUES('empty','s','Empty'); INSERT INTO pools VALUES('gone','s','Gone');
+ INSERT INTO hosts(id,pool_id,hostname,revoked) VALUES('old','shared','old',1); INSERT INTO hosts(id,pool_id,hostname) VALUES('second','shared','second'); INSERT INTO hosts(id,pool_id,hostname) VALUES('third','shared','third');
+ INSERT INTO hosts(id,pool_id,hostname,revoked) VALUES('retired','gone','retired',1);
+ INSERT INTO tokens(hash,pool_id,host_id,expires) VALUES('t','empty','',0);
+ INSERT INTO appliance_bootstraps VALUES('r','Lab','Shared','h','s','shared')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	c, err := Open(Config{DataDir: dir, Username: "admin", Password: "a-long-test-password"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	rows, err := c.db.Query("SELECT id,master_host_id FROM pools ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := map[string]string{}
+	for rows.Next() {
+		var id, master string
+		if err := rows.Scan(&id, &master); err != nil {
+			t.Fatal(err)
+		}
+		got[id] = master
+	}
+	if len(got) != 2 || got["shared"] != "second" || got["gone"] != "retired" {
+		t.Fatalf("migration masters/orphans wrong: %v", got)
+	}
+	for table, column := range map[string]string{"tokens": "site_id", "appliance_bootstraps": "site_id"} {
+		cols, err := columns(c.db, table)
+		if err != nil || !cols[column] || cols["pool_id"] {
+			t.Fatalf("%s not recreated: %v %v", table, cols, err)
+		}
+	}
+	var n int
+	if c.db.QueryRow("SELECT count(*) FROM tokens").Scan(&n) != nil || n != 0 {
+		t.Fatal("old pool-bound tokens survived")
 	}
 }

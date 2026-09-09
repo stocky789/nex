@@ -1,0 +1,36 @@
+{
+  "environment": "Real built React UI in Chromium; explicit API route fixtures with 500 sites, one pool/host/VM per site. All inventory and creation responses simulated; no Controller or libvirt execution.",
+  "recorded_at": "2026-09-09T03:11:03.426788+00:00",
+  "checks": [
+    "One closed control opens focused popup search; 500 options scroll within bounds; search/clear/no-match and arrows/Enter/Escape preserve correct selection and focus",
+    "Outside click and Tab dismiss the popup without trapping or stealing keyboard focus",
+    "Explicit site changes filter all three resource levels; global task navigation and reload preserve selected site",
+    "Pool, host and VM deep links select their owning site on navigation/reload; in-page route change also updates the tree",
+    "Popup search, long names and selection remain reachable at 360px without horizontal page overflow",
+    "An absent saved site falls back to the first available site on reload",
+    "Empty inventory offers site creation; successful fixture creation selects its new route without unrelated resources",
+    "The sole default site with no pools can open Site overview from workspace/tasks and exposes Create pool"
+  ],
+  "captures": [
+    "desktop-500-sites.png",
+    "dropdown-500-sites.png",
+    "search-matches.png",
+    "search-no-matches.png",
+    "last-site-reopened.png",
+    "deep-link.png",
+    "narrow-long-name.png",
+    "narrow-dropdown.png",
+    "narrow-selected-site.png",
+    "empty-sites.png",
+    "first-site-created.png",
+    "only-site-overview.png"
+  ],
+  "ui_sha256": {
+    "app.js": "fd82675f5553f6ccfbe3f07a2fa8cb7e46769975622b137cacec3baf19887288",
+    "app.css": "570292dc1d37ffc9825190e8a90b014c5eecac3db9d449271445ad2c5757882e"
+  },
+  "limits": [
+    "Browser navigation/presentation only; no backend authorization or native-host claim",
+    "No deployment or hosted CI execution"
+  ]
+}

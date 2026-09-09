@@ -33,6 +33,10 @@ below describe implemented work, not completion of the full platform roadmap.
 - Removed the Controller deployment password minimum; short nonempty passwords are accepted, with input size and encoding checks retained.
 - Simplified local VM power confirmations so operators do not have to type a hostname, while retaining target confirmation and ownership checks.
 - Added host credential rotation, revocation and deliberate re-enrollment, with persistent identity and task state across service restarts.
+- Pools are now created automatically: administrators create sites only, and every enrolled Nex Core host becomes the **pool master** of its own pool, named after its hostname. Enrollment tokens are bound to a site. The **Create pool** action and its API (`POST /api/v1/pools`) are removed; existing pools gain a master on upgrade. Controller and Core must be upgraded together. Joining a member host, changing the master and ejecting remain planned.
+- Added **Add host** by address and root password: Controller shows the host's certificate fingerprint for confirmation, then enrolls the host over its local HTTPS API without storing or logging the password. The manual enrollment token remains available for hosts Controller cannot reach.
+- Added software update checks and apply flows for Controller and Core local packages, including a Debian `nex-controller` package that upgrades appliance installs in place, with download/install progress and error status in both UIs.
+- Cleaned up the Core local sidebar navigation so Overview and Updates read as quiet nav items instead of mismatched form buttons.
 
 ### Bug Fixes
 
@@ -52,6 +56,7 @@ below describe implemented work, not completion of the full platform roadmap.
 
 ### Miscellaneous
 
+- Added private APT repository publish tooling for the website host (`/apt/`), including signing bootstrap and package metadata.
 - Hardened web sessions, cookies, request validation, login throttling and browser security headers; rebuilt application binaries with an updated Go compiler and checked their dependencies.
 - Rebuilt the Controller appliance, host-local Debian package and Core ISO with matching Nex source snapshots; the latest ISO includes installer DHCP feedback.
 - Expanded the operator guides, API reference, bug ledger and verification records, with regression checks for installer, networking, authentication, appliance deployment and recovery.
@@ -60,8 +65,12 @@ below describe implemented work, not completion of the full platform roadmap.
 
 Verification and remaining limits: see the [Controller foundation checks](docs/qa/phase1/checks.md),
 [appliance acceptance](docs/plans/2026-09-08-controller-appliance.md),
-[security checks](docs/qa/security/checks.md), [appliance rebuild](docs/qa/appliance/usability-rebuild.md)
-and [latest installer DHCP checks](docs/qa/iso/2026-09-09-installer-dhcp.md).
+[security checks](docs/qa/security/checks.md), [appliance rebuild](docs/qa/appliance/usability-rebuild.md),
+[latest installer DHCP checks](docs/qa/iso/2026-09-09-installer-dhcp.md),
+[pool master lab checks](docs/qa/pool-master/lab/checks.md) and
+[add host lab checks](docs/qa/simple-host-enrollment/lab/checks.md).
+The packaged appliance image still ships the previous Controller; deploying it with the
+updated host package stops at needs attention until the image is rebuilt.
 The latest ISO has not had a complete fresh installation walkthrough. Physical hardware,
 external redistribution requirements and full phase acceptance remain open. General
 Controller VM management and consoles, shared storage, backups, migration, HA and

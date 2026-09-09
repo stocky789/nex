@@ -424,3 +424,243 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
   `.github/workflows/phase1.yml` and `.gitea/workflows/phase1.yml` already run
   `tests/integration/phase1.py --browser` on pushes and pull requests.
 - Avoid: aligning menus by first/last position without checking the actual popup bounds.
+
+## BUG-0027 — Website wordmark retained a grey raster background
+
+- Date: 2026-09-09.
+- Symptom: the header and footer wordmarks displayed a pale rectangular patch on
+  the website canvas.
+- Root cause: the approved raster brand board has an opaque pale backdrop; CSS
+  multiply blending multiplied that backdrop into the page instead of removing it.
+- Fix: whiten the pale backdrop with a shared CSS brightness filter before blending.
+  Retain the original logo shapes and apply the same rule to header/footer and mobile.
+- Regression evidence: `tests/integration/website_browser.py` now compares rendered
+  logo background pixels with the page canvas at desktop/tablet/mobile sizes. Running
+  it against the original VM build failed with `Logo raster background differs from
+  the page` before the CSS correction. Final command/results and inspected captures
+  are recorded in [website QA](qa/website/checks.md). Both GitHub and Gitea phase1
+  workflows invoke this same browser check on pushes and pull requests.
+- Avoid: assuming multiply blending makes a nonwhite raster background transparent,
+  or fixing only the header while leaving the shared footer/mobile treatment broken.
+
+## BUG-0028 — Website gallery reused personal workstation identity
+
+- Date: 2026-09-09.
+- Symptom: gallery screenshots displayed the contributor's workstation name and
+  underlying machine inventory, unsuitable for intended public-facing images.
+- Root cause: reusing internal acceptance captures whose agent collected native
+  workstation telemetry, rather than a dedicated neutral demonstration fixture.
+- Fix: run a fresh disposable Controller, enroll a fictional host through existing
+  TLS/mTLS contracts, report explicit demo inventory and capture its actual browser
+  views. No native probes, personal data, DOM substitutions or image editing are used.
+- Regression evidence: `tests/integration/website_controller_captures.py` checks
+  returned inventory and rendered identity before saving each image, rejects the
+  original personal host label/name in negative guard checks, and asserts credentials
+  are absent. Both GitHub and Gitea phase1 workflows run it on pushes and PRs.
+  Original failure was identified by visual inspection, not OCR; see the
+  [fresh-capture evidence](qa/website-controller-captures/results.json) and
+  [website walkthrough](qa/website/checks.md) for executed results and limits.
+- Avoid: publishing general internal QA screenshots without reviewing personal
+  identity and telemetry, or treating absence of passwords as a complete privacy check.
+
+## BUG-0029 — Website source README included private deployment details
+
+- Date: 2026-09-09.
+- Symptom: the website folder's contributor README named a private deployment
+  address, workstation account/home path and environment-specific restart commands.
+- Root cause: keeping an internal deployment handoff in prospective public source.
+- Fix: use generic build/deploy guidance and explain reviewed website contributions;
+  ignore local credentials/configuration and keep generated artifacts out of Git.
+- Regression evidence: `python3 -m unittest discover -s tests -p
+  'test_website_public_files.py'` failed on the original README, then passed both
+  checks after cleanup. It checks Git-visible files (including force-added ignored
+  files), private deployment patterns, credential markers and package download URLs.
+  Both phase1 workflows already run this suite on pushes and PRs via `test_*.py`.
+  See [website source review](qa/website/public-source-review.md) for scope and limits.
+- Avoid: copying real deployment instructions into public contributor documentation
+  or treating `.gitignore` as protection for files already tracked by Git.
+
+## BUG-0030 — Installer logo included the textured reference-board background
+
+- Date: 2026-09-09.
+- Symptom: the installer logo looked distorted with a pale rippled rectangle.
+- Root cause: both native GTK headers cropped the opaque textured brand board.
+- Fix: use one dedicated transparent Nex Core lockup, proportional GDK scaling,
+  and the original widget allocation to preserve the wizard and progress layout.
+- Regression evidence: `tests/integration/wizard-review.py` fails the original
+  initrd's logo-background pixel check and passes the rebuilt native header;
+  `tests/integration/installer-logo.py` checks matching asset/source packaging.
+  Both installer workflows run these tests on pushes and pull requests. See
+  [before/after captures and executed commands](qa/iso/2026-09-09-logo-cleanup.md).
+  No full ISO rebuild or hosted CI execution is claimed.
+- Avoid: shipping a design-reference board crop as a production logo, or reducing
+  the image allocation and shifting unrelated installer controls.
+
+## BUG-0031 — Agent service sandbox blocked Linux network inventory
+
+- Date: 2026-09-09.
+- Symptom: the packaged agent reported `netlinkrib: address family not supported
+  by protocol`; host CPU/memory inventory remained unavailable and valid VM
+  creation failed its capacity check in the disposable native lab.
+- Root cause: `RestrictAddressFamilies` omitted AF_NETLINK, which Go's Linux
+  network-interface discovery requires.
+- Fix: permit AF_NETLINK alongside the existing local/IP socket families.
+- Regression evidence: `python3 -m unittest discover -s tests -p
+  'test_agent_service.py' -v` passes; the same test run with the original HEAD
+  service in an isolated temporary tree fails with `'AF_NETLINK' not found`.
+  Both phase1 workflows run it via `test_*.py` on pushes and pull requests.
+  The [native managed-VM run](qa/managed-vm/checks.md) also passed actual network
+  inventory and VM creation under the corrected packaged systemd unit; the
+  static check alone is not runtime proof.
+- Avoid: weakening placement validation to accept missing inventory, or disabling
+  all socket restrictions instead of allowing the required native family.
+
+## BUG-0032 — Agent result backlog exceeded the Controller report limit
+
+- Date: 2026-09-09.
+- Symptom: a large backlog of completed operations made every reconnect report
+  fail with HTTP 400, preventing acknowledgement and recovery.
+- Root cause: the agent sent all unacknowledged results while Controller accepts
+  at most 100 per report.
+- Fix: send at most 100 durable results per report and continue draining only as
+  Controller acknowledges them; do not discard unacknowledged results.
+- Regression evidence: `go test -race ./internal/agent` passes with
+  `TestResultBacklogDrainsInControllerSizedBatches`, which drains 150 results in
+  100/50 batches and verifies all acknowledgements. The test failed without the
+  batching fix with `controller rejected request (HTTP 400)`. Both phase1
+  workflows run the Go suite on pushes and pull requests; hosted runs were not
+  triggered by this unpushed change.
+- Avoid: dropping old results, clearing the journal, or weakening Controller's
+  bounded-input validation to accommodate an unbounded client report.
+
+## BUG-0033 — VM details read configuration from the wrong response shape
+
+- Date: 2026-09-09.
+- Symptom: a newly created guest's details omitted CPU, memory, disk, firmware
+  and its creation task.
+- Root cause: the UI expected flat configuration fields, but the VM API returns
+  the requested configuration in `spec`.
+- Fix: read `vm.spec` and render the creation task independently when an operation
+  ID exists.
+- Regression evidence: `tests/integration/managed_vm_browser.py` checks exact
+  selected resources and the successful creation task in real browser rendering.
+  An isolated reproduction of the original flat-field conditional failed the CPU
+  assertion; the actual current bundle passed all selected values and task state.
+  See [the reproduction and its limits](qa/managed-vm/browser-regression-results.json).
+  Both phase1 workflows invoke the simulated-host browser mode on pushes and PRs;
+  native browser evidence is recorded separately.
+- Avoid: treating a successful create response as proof that its settings and
+  durable task are visible, or guessing a response shape instead of checking it.
+
+## BUG-0034 — Oversized operation errors blocked agent reporting
+
+- Date: 2026-09-09.
+- Symptom: a long filesystem error caused HTTP 400 on every report, preventing
+  acknowledgement and fresh host reporting.
+- Root cause: an accepted long storage path produced an OS error longer than
+  Controller's 4096-byte result-error limit; the agent forwarded it unbounded.
+- Fix: limit the outbound error to a valid UTF-8 prefix within 4096 bytes while
+  retaining the full error in the private durable journal.
+- Regression evidence: `go test ./internal/agent -run
+  TestOversizedResultErrorDoesNotBlockHeartbeat -count=1` failed before the fix
+  with `controller rejected request (HTTP 400)`. The final
+  `go test -race -count=1 ./internal/agent ./internal/vmhost` passed (2.481s/1.406s),
+  including acknowledgement, continued reporting and retained local error detail.
+  Both phase1 workflows run these Go tests on pushes and pull requests.
+  [Native supplemental verification](qa/managed-vm/agent-reconnect.json) also
+  exercised the actual systemd agent: a 4122-byte local error produced an accepted
+  4096-byte report and subsequent fresh heartbeat after restart.
+- Avoid: truncating away local recovery diagnostics, cutting invalid UTF-8 on
+  the wire, or weakening the Controller's bounded-input validation.
+
+## BUG-0035 — Website preview hosting exposed listings and lacked browser policy
+
+- Date: 2026-09-09.
+- Symptom: the deployed static website listed asset directories and returned pages
+  without CSP, framing, MIME, referrer or HTTPS transport policy headers.
+- Root cause: the temporary Python HTTP preview remained the deployed web server.
+- Fix: use the dedicated unprivileged nginx service, read-only releases, disabled
+  listings and asset symlinks, restrictive headers on success/error responses, and
+  relative directory redirects through the HTTPS proxy.
+- Regression evidence: `python3 -m unittest discover -s tests -p
+  'test_website_*.py' -v` exercises actual nginx and reproduces the prior Python
+  behavior in disposable fixtures. The live pre-cutover CSP assertion failed;
+  post-cutover policy, HTTPS browser and all 11 asset-hash checks passed.
+  Both GitHub and Gitea phase1 push/PR workflows install nginx and run the unit
+  discovery plus `tests/integration/website_hardening_browser.py`.
+  See [hosting evidence](qa/website-security/hardening.md) for exact results and limits.
+- Avoid: treating valid proxy TLS as evidence that origin directory/response policy
+  is hardened, weakening CSP to accommodate test-only injected resources, or using
+  absolute origin redirects that reveal the private HTTP port.
+
+## BUG-0036 — Site dropdown retained an unintended keyboard Tab stop
+
+- Date: 2026-09-09.
+- Symptom: Tab from the site dropdown's search field moved focus into its scrolling
+  option container instead of closing the popup and moving to the next control.
+- Root cause: Chromium made the scrollable listbox implicitly keyboard-focusable;
+  the picker already manages option navigation through the search input.
+- Fix: exclude the listbox container from sequential focus with `tabIndex={-1}`;
+  retain arrow-key selection and Escape focus restoration.
+- Regression evidence: [before/after browser record](qa/site-selector/popup-tab-regression.json).
+  `tests/integration/site_selector_browser.py` opens the popup, presses Tab from
+  search and asserts dismissal. Both GitHub and Gitea Phase 1 push/PR workflows
+  run this check in Chromium. The original popup build failed; final execution
+  and exact build identity are recorded in that evidence.
+- Avoid: removing the Tab assertion, trapping keyboard focus, or disabling scrolling
+  to hide browser-native focus behavior.
+
+## BUG-0037 — Host-local enrollment raced the running embedded agent
+
+- Date: 2026-09-09.
+- Symptom: `go test -race` on the new `POST /api/local/v1/enrollment` re-enrollment test
+  reported a data race: `agent.Enroll` mutated a Store whose embedded `agent.Run` loop
+  (started by an earlier enrollment) was reading and writing the same in-memory state.
+- Root cause: `nex-core-local` runs the enrolled agent in-process from the shared
+  handoff registry, and the enrollment handler called `agent.Enroll` without pausing it.
+- Fix: each running agent gets a stoppable per-agent context (`internal/localcore/handoff.go`);
+  the enrollment handler stops it before `agent.Enroll`, restores the pre-attempt
+  controller/trust on failure, and restarts it afterward.
+- Regression evidence: `TestEnrollmentReplaceHostSuccess` (`internal/localcore/enroll_test.go`)
+  and `TestAddSiteHostReEnrollmentSuccess` (`internal/controller/addhost_test.go`) reproduced
+  the race before the fix and pass under `go test -race ./...`, which both GitHub and Gitea
+  Phase 1 push/PR workflows run. The real-lab re-enrollment in
+  [add host lab checks](qa/simple-host-enrollment/lab/checks.md) passed twice.
+- Avoid: calling `agent.Enroll` or otherwise mutating a Store while its `Run` loop is live,
+  or tearing down the registry entry when only pausing the agent.
+
+## BUG-0038 — Add host pushed the host-identity CA instead of the served certificate
+
+- Date: 2026-09-09.
+- Symptom: found while preparing the lab: the appliance serves a self-signed HTTPS
+  certificate, but `POST /api/v1/sites/{id}/hosts` pushed the Controller's host-identity CA
+  as the host's trust, so `agent.Enroll` on a real host would fail with
+  `certificate signed by unknown authority`.
+- Root cause: the unit test signed its Controller listener with that CA, masking the
+  mismatch between HTTPS server trust and host-identity issuance.
+- Fix: `cmd/nex-controller/main.go` reads `-tls-cert` into `Config.ServerCertPEM`; the push
+  sends that certificate, and the route answers 503 before any host contact when it is
+  absent. Contract and `docs/API.md` updated.
+- Regression evidence: `TestAddSiteHostSuccess` now serves a self-signed listener and fails
+  on the old value; `TestAddSiteHostRequiresServerCertificate` covers the 503. Both run
+  under `go test -race ./...` in the GitHub and Gitea Phase 1 workflows. Real enrollment
+  through the fixed binary passed in the [lab checks](qa/simple-host-enrollment/lab/checks.md).
+- Avoid: test listeners chained to the host-identity CA, or treating the host CA as the
+  Controller's HTTPS trust anchor.
+
+## BUG-0039 — libvirt probe blocked on `virsh dominfo` for defined domains
+
+- Date: 2026-09-09.
+- Symptom: found by the Controller-replacement check on Debian 13 (libvirt 11.3.0): once a
+  domain was defined, the agent's libvirt observation reported `unknown` with
+  `probe deadline exceeded; previous observation retained`, so adopted VMs never showed a state.
+- Root cause: the probe called `virsh dominfo` per domain; on that libvirt build `dominfo`
+  prints the first fields and then blocks (read-only and read-write connections alike),
+  exceeding any probe deadline. One blocking call stalled the whole VM observation.
+- Fix: `internal/agent/probes.go` reads `virsh domstate` and `virsh domname` per domain,
+  which answer from the domain object only.
+- Regression evidence: `tests/integration/controller_replacement_debian.sh` (both Phase 1
+  workflows) defines a domain through the real agent in a Debian 13 libvirt container and
+  waits for Controller B to observe it `shut off` with fresh libvirt data; it failed on the
+  old probe and passes with the fix ([evidence](qa/pool-vlan-networks/controller-replacement-debian.json)).
+- Avoid: per-domain `dominfo` in bounded probes; prefer single-purpose queries.

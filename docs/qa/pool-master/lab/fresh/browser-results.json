@@ -1,0 +1,76 @@
+{
+ "date": "2026-09-09",
+ "environment": "disposable nested-KVM lab nex-fresh-lab (Nex Core 0.1.0-alpha1 install, 0.1.0+managed1 package) with real Controller appliance; binaries/UI replaced in place from the uncommitted working tree (Debian 13 container build)",
+ "checks": [
+  {
+   "check": "no Create pool anywhere on home",
+   "result": "pass"
+  },
+  {
+   "check": "File menu has no Create pool",
+   "result": "pass"
+  },
+  {
+   "check": "File menu has Add host",
+   "result": "pass"
+  },
+  {
+   "check": "tree shows host with \u00b7 master suffix",
+   "result": "pass"
+  },
+  {
+   "check": "tree master host is nex-fresh-lab",
+   "result": "pass"
+  },
+  {
+   "check": "pool page shows Pool master metric",
+   "result": "pass"
+  },
+  {
+   "check": "pool subtitle says master controls the pool",
+   "result": "pass"
+  },
+  {
+   "check": "host page shows Pool master badge",
+   "result": "pass"
+  },
+  {
+   "check": "host connection fresh after upgrade",
+   "result": "pass"
+  },
+  {
+   "check": "Add host form titled for the site",
+   "result": "pass"
+  },
+  {
+   "check": "Add host help explains automatic pool/master",
+   "result": "pass"
+  },
+  {
+   "check": "no page errors in Controller",
+   "result": "pass"
+  },
+  {
+   "check": "local UI shows existing ready deployment",
+   "result": "pass"
+  },
+  {
+   "check": "local UI has no Pool name label",
+   "result": "pass"
+  },
+  {
+   "check": "no page errors in Core local UI",
+   "result": "pass"
+  }
+ ],
+ "captures": [
+  "lab-controller-home.png",
+  "lab-controller-file-menu.png",
+  "lab-controller-pool-page.png",
+  "lab-controller-host-page.png",
+  "lab-controller-site-page.png",
+  "lab-controller-add-host-form.png",
+  "lab-core-local-overview.png"
+ ],
+ "page_errors": []
+}

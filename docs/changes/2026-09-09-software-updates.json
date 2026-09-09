@@ -1,0 +1,68 @@
+{
+  "summary": "Add nex-controller Debian packaging and software-update APIs for Controller and Core local, with minimal Updates UI.",
+  "paths": [
+    "internal/version/version.go",
+    "internal/nexupdate/nexupdate.go",
+    "internal/nexupdate/nexupdate_test.go",
+    "internal/agent/run.go",
+    "internal/controller/updates.go",
+    "internal/controller/updates_test.go",
+    "internal/controller/controller.go",
+    "internal/localcore/updates.go",
+    "internal/localcore/updates_test.go",
+    "internal/localcore/service.go",
+    "internal/protocol/managed.go",
+    "internal/protocol/protocol.go",
+    "packaging/controller/Dockerfile",
+    "packaging/controller/build-inside.sh",
+    "packaging/controller/build.py",
+    "packaging/controller/run-controller",
+    "packaging/controller/apply-update",
+    "packaging/controller/nex-controller.service",
+    "packaging/controller/nex-controller-update.path",
+    "packaging/controller/nex-controller-update.service",
+    "packaging/controller/postinst",
+    "packaging/controller/prerm",
+    "packaging/core-local/build-inside.sh",
+    "packaging/core-local/nex.list.example",
+    "appliance/build-inside.sh",
+    "appliance/build.py",
+    "web/src/local.tsx",
+    "web/src/main.tsx",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/guide/README.md",
+    "docs/guide/software-updates.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "New operator Updates workflow on Controller and host-local UI.",
+    "pages": [
+      "docs/guide/software-updates.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Runtime API impact: new contract. Four update routes and UpdateStatus/UpdateApplyResult schemas; both OpenAPI contracts regenerated.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html",
+      "docs/api/local-openapi.json",
+      "docs/api/local.html"
+    ]
+  },
+  "verification": {
+    "method": "go test ./internal/nexupdate ./internal/version ./internal/controller ./internal/localcore (update-focused), python3 scripts/generate_api.py; GUI browser walkthrough against a live update repo outstanding.",
+    "evidence": [
+      "internal/nexupdate/nexupdate_test.go",
+      "internal/controller/updates_test.go",
+      "internal/localcore/updates_test.go"
+    ]
+  }
+}

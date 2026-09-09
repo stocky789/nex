@@ -37,6 +37,7 @@ type Service struct {
 	cancel     context.CancelFunc
 	lock       *os.File
 	wg         sync.WaitGroup
+	enrollMu   sync.Mutex
 }
 type DeployRequest struct {
 	RequestID     string   `json:"request_id"`
@@ -51,7 +52,6 @@ type DeployRequest struct {
 	DNS           []string `json:"dns"`
 	AdminPassword string   `json:"admin_password"`
 	SiteName      string   `json:"site_name"`
-	PoolName      string   `json:"pool_name"`
 	Bridge        string   `json:"bridge"`
 	StorageDir    string   `json:"storage_dir"`
 }
@@ -111,8 +111,12 @@ func Open(cfg Config) (*Service, error) {
 	ok = true
 	return s, nil
 }
-func (s *Service) Close() error           { s.cancel(); s.wg.Wait(); return s.lock.Close() }
-func (s *Service) TLSConfig() *tls.Config { return &tls.Config{MinVersion: tls.VersionTLS13} }
+func (s *Service) Close() error { s.cancel(); s.wg.Wait(); return s.lock.Close() }
+
+// HTTP/1.1 is preferred so the console WebSocket can upgrade; HTTP/2 cannot be hijacked.
+func (s *Service) TLSConfig() *tls.Config {
+	return &tls.Config{MinVersion: tls.VersionTLS13, NextProtos: []string{"http/1.1"}}
+}
 func (s *Service) persist() error {
 	return savePrivate(filepath.Join(s.cfg.DataDir, "deployments.json"), s.operations)
 }
@@ -122,12 +126,16 @@ func (s *Service) Handler() http.Handler {
 	m.HandleFunc("GET /api/local/v1/session", s.auth(s.getSession))
 	m.HandleFunc("DELETE /api/local/v1/session", s.auth(s.logout))
 	m.HandleFunc("GET /api/local/v1/host", s.auth(s.host))
+	m.HandleFunc("POST /api/local/v1/enrollment", s.auth(s.enrollment))
 	m.HandleFunc("GET /api/local/v1/vms", s.auth(s.vms))
 	m.HandleFunc("POST /api/local/v1/vms/{id}/actions", s.auth(s.power))
+	m.HandleFunc("GET /api/local/v1/vms/{id}/console", s.auth(s.console))
 	m.HandleFunc("POST /api/local/v1/deployments", s.auth(s.deploy))
 	m.HandleFunc("GET /api/local/v1/deployments", s.auth(s.deployments))
 	m.HandleFunc("GET /api/local/v1/deployments/{id}", s.auth(s.operation))
 	m.HandleFunc("POST /api/local/v1/deployments/{id}/retry", s.auth(s.retry))
+	m.HandleFunc("GET /api/local/v1/updates", s.auth(s.updates))
+	m.HandleFunc("POST /api/local/v1/updates/apply", s.auth(s.applyUpdate))
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { reply(w, 200, map[string]string{"status": "ok"}) })
 	m.Handle("GET /api/docs/", http.StripPrefix("/api/docs/", http.FileServer(http.Dir(s.cfg.DocsPath))))
 	m.HandleFunc("GET /source", func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, s.cfg.SourcePath) })
@@ -160,7 +168,8 @@ func (s *Service) host(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "host preflight unavailable")
 		return
 	}
-	reply(w, 200, map[string]any{"hostname": hostname, "bridge": s.cfg.Engine.Bridge, "storage_dir": s.cfg.Engine.StorageDir, "defaults": map[string]int{"cpus": 2, "memory_mib": 4096, "disk_gib": 32}, "preflight": pre})
+	hostID, controllerURL := s.enrollmentState()
+	reply(w, 200, map[string]any{"hostname": hostname, "bridge": s.cfg.Engine.Bridge, "storage_dir": s.cfg.Engine.StorageDir, "defaults": map[string]int{"cpus": 2, "memory_mib": 4096, "disk_gib": 32}, "preflight": pre, "host_id": hostID, "controller": controllerURL})
 }
 func (s *Service) vms(w http.ResponseWriter, r *http.Request) {
 	v, err := s.engine.List(r.Context())
@@ -279,10 +288,8 @@ func (s *Service) validate(v DeployRequest) error {
 	if v.Bridge != s.cfg.Engine.Bridge || v.StorageDir != s.cfg.Engine.StorageDir || v.Bridge == "" || v.StorageDir == "" {
 		return errors.New("explicitly select configured bridge and storage")
 	}
-	for _, name := range []string{v.SiteName, v.PoolName} {
-		if strings.TrimSpace(name) == "" || len(name) > 200 {
-			return errors.New("Site and Pool names are required (maximum 200 bytes)")
-		}
+	if strings.TrimSpace(v.SiteName) == "" || len(v.SiteName) > 200 {
+		return errors.New("Site name is required (maximum 200 bytes)")
 	}
 	return nil
 }

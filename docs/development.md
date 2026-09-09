@@ -138,7 +138,7 @@ The package also installs `/usr/lib/nex/host-recovery` for host-root guest-agent
 export/import. Empty replacement preparation uses
 `/usr/lib/nex/core-local-setup prepare-recovery --request-file /secure/replacement.json`
 with local management stopped, an un-enrolled clean replacement host, and a private
-0600 request. It creates no Site/Pool or enrollment. See the operator guide for exact
+0600 request. It creates no Site or enrollment (pools are only created when a host enrolls). See the operator guide for exact
 request fields, external-original exclusion, source matching and verification limits.
 
 

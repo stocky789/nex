@@ -1,0 +1,101 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: AGPL-3.0-only
+"""Root helper: apply a pending nex-controller package update."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import urllib.request
+
+STATE = Path('/var/lib/nex-controller')
+PENDING = STATE / 'pending-update.json'
+PROGRESS = STATE / 'update-progress.json'
+DEFAULT_REPO = 'http://172.16.4.3:8080/apt'
+
+
+def fail(message):
+    write_progress('failed', 0, error=message)
+    print(message, file=sys.stderr)
+    sys.exit(1)
+
+
+def write_progress(phase, percent, message='', error=''):
+    payload = {'phase': phase, 'percent': int(percent)}
+    if message:
+        payload['message'] = message
+    if error:
+        payload['error'] = error
+    tmp = PROGRESS.with_suffix('.tmp')
+    tmp.write_text(json.dumps(payload) + '\n')
+    os.chmod(tmp, 0o600)
+    tmp.replace(PROGRESS)
+
+
+def load_pending():
+    if not PENDING.is_file():
+        fail('no pending update')
+    data = json.loads(PENDING.read_text())
+    package = data.get('package') or 'nex-controller'
+    repo = (data.get('repo_url') or DEFAULT_REPO).rstrip('/')
+    return package, repo
+
+
+def fetch_index(repo):
+    with urllib.request.urlopen(repo + '/updates.json', timeout=60) as response:
+        return json.load(response)
+
+
+def download(repo, info, dest):
+    filename = info['filename']
+    url = repo + '/' + filename.lstrip('/')
+    path = dest / Path(filename).name
+    expected = int(info.get('size') or 0)
+    req = urllib.request.Request(url)
+    with urllib.request.urlopen(req, timeout=3600) as response, path.open('wb') as out:
+        total = int(response.headers.get('Content-Length') or expected or 0)
+        digest = hashlib.sha256()
+        read = 0
+        last = -1
+        while True:
+            chunk = response.read(1024 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+            digest.update(chunk)
+            read += len(chunk)
+            if total > 0:
+                pct = min(100, int(read * 100 / total))
+                if pct != last:
+                    last = pct
+                    write_progress('downloading', pct, message='Downloading package')
+    if digest.hexdigest().lower() != info['sha256'].lower():
+        fail('sha256 mismatch')
+    write_progress('downloading', 100, message='Downloading package')
+    return path
+
+
+def main():
+    if os.geteuid() != 0:
+        fail('root required')
+    STATE.mkdir(mode=0o700, exist_ok=True)
+    package, repo = load_pending()
+    write_progress('downloading', 0, message='Downloading package')
+    index = fetch_index(repo)
+    info = (index.get('packages') or {}).get(package)
+    if not info or not info.get('filename') or not info.get('sha256'):
+        fail('package missing from updates index')
+    with tempfile.TemporaryDirectory(prefix='nex-controller-update-') as temporary:
+        deb = download(repo, info, Path(temporary))
+        write_progress('installing', 90, message='Installing package')
+        subprocess.run(['dpkg', '-i', str(deb)], check=True)
+    PENDING.unlink(missing_ok=True)
+    write_progress('restarting', 98, message='Restarting service')
+    subprocess.run(['systemctl', 'restart', 'nex-controller.service'], check=False)
+    write_progress('done', 100, message='Update complete')
+
+
+if __name__ == '__main__':
+    main()

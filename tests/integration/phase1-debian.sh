@@ -58,15 +58,18 @@ with tempfile.TemporaryDirectory(prefix='nex-native-') as directory:
         session = lab.api('/api/v1/session', {'username':'admin', 'password':password.read_text()})
         lab.csrf = session['csrf_token']
         site = lab.api('/api/v1/sites', {'name':'Debian smoke'}, expected=201)
-        pool = lab.api('/api/v1/pools', {'name':'Disposable', 'site_id':site['id']}, expected=201)
+        lab.api('/api/v1/pools', {'name':'Disposable', 'site_id':site['id']}, expected=404)
         token = lab.path / 'token'
-        token.write_text(lab.api('/api/v1/enrollment-tokens', {'pool_id':pool['id']}, expected=201)['token'])
+        token.write_text(lab.api('/api/v1/enrollment-tokens', {'site_id':site['id']}, expected=201)['token'])
         token.chmod(0o600)
         state = lab.path / 'agent'
         run('/artifacts/agent', 'enroll', '--state-dir', state, '--controller', lab.url,
             '--ca-file', cert, '--token-file', token)
         host_id = json.loads((state / 'state.json').read_text())['host_id']
         host = lambda: next(h for h in lab.api('/api/v1/hosts') if h['id']==host_id)
+        pool = next(p for p in lab.api('/api/v1/pools') if p['id']==host()['pool_id'])
+        assert pool['site_id']==site['id'] and pool['master_host_id']==host_id and pool['name']==host()['hostname']
+        lab.passed('real agent enrollment created the host pool automatically with the host as pool master')
         def check(name, status):
             h = host()
             return h['connection']=='fresh' and h.get('inventory') and any(

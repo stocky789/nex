@@ -1,0 +1,76 @@
+{
+  "summary": "Add host-scoped ISO transfer visibility and searchable site selection with a pool-root resource tree. API impact: existing contract; unchanged authenticated reads and Controller/Core import results.",
+  "paths": [
+    ".gitea/workflows/phase1.yml",
+    ".github/workflows/phase1.yml",
+    "docs/BUG_LEDGER.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/manage-controller.md",
+    "docs/plans/2026-09-09-controller-desktop-layout.md",
+    "docs/plans/2026-09-09-first-managed-vm.md",
+    "docs/qa/host-isos/browser.md",
+    "docs/qa/host-isos/checks.md",
+    "docs/qa/host-isos/deployment.json",
+    "docs/qa/host-isos/native-360.png",
+    "docs/qa/host-isos/native-desktop.png",
+    "docs/qa/host-isos/native-results.json",
+    "docs/qa/host-isos/native-site-picker.png",
+    "docs/qa/host-isos/review.md",
+    "docs/qa/host-isos/simulated-controller-unavailable.png",
+    "docs/qa/host-isos/simulated-empty.png",
+    "docs/qa/host-isos/simulated-no-inventory.png",
+    "docs/qa/host-isos/simulated-old-agent.png",
+    "docs/qa/host-isos/simulated-results.json",
+    "docs/qa/host-isos/simulated-revoked.png",
+    "docs/qa/host-isos/simulated-stale.png",
+    "docs/qa/host-isos/simulated-statuses-360.png",
+    "docs/qa/host-isos/simulated-statuses-desktop.png",
+    "docs/qa/host-isos/simulated-task-keyboard-360.png",
+    "docs/qa/host-isos/site-dropdown-deployment.json",
+    "docs/qa/site-selector/browser.md",
+    "docs/qa/site-selector/deep-link.png",
+    "docs/qa/site-selector/desktop-500-sites.png",
+    "docs/qa/site-selector/dropdown-500-sites.png",
+    "docs/qa/site-selector/empty-sites.png",
+    "docs/qa/site-selector/first-site-created.png",
+    "docs/qa/site-selector/last-site-reopened.png",
+    "docs/qa/site-selector/narrow-dropdown.png",
+    "docs/qa/site-selector/narrow-long-name.png",
+    "docs/qa/site-selector/narrow-selected-site.png",
+    "docs/qa/site-selector/only-site-overview.png",
+    "docs/qa/site-selector/phase1-results.json",
+    "docs/qa/site-selector/popup-tab-regression.json",
+    "docs/qa/site-selector/results.json",
+    "docs/qa/site-selector/search-matches.png",
+    "docs/qa/site-selector/search-no-matches.png",
+    "tests/integration/host_iso_browser.py",
+    "tests/integration/phase1_browser.py",
+    "tests/integration/site_selector_browser.py",
+    "web/src/main.tsx",
+    "web/src/managed.tsx",
+    "web/src/style.css"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Explain host Storage ISO records and limitations plus selected-site search/navigation and direct links.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/manage-controller.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: existing contract. Presentation reuses existing authenticated site/pool/host/VM/storage/media/operation reads; no API or command behavior changes, so API reference updates are not applicable.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Typecheck/build, focused host ISO browser checks, labeled 500-site browser fixture, existing Phase1 browser regression, independent review and read-only native lab browser verification. Evidence distinguishes simulation and deployment.",
+    "evidence": [
+      "docs/qa/host-isos/browser.md",
+      "docs/qa/host-isos/checks.md",
+      "docs/qa/host-isos/review.md",
+      "docs/qa/site-selector/browser.md",
+      "docs/qa/site-selector/popup-tab-regression.json"
+    ]
+  }
+}

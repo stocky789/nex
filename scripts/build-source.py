@@ -22,19 +22,28 @@ FILES = ('go.mod', 'go.sum', 'LICENSE', 'NOTICE', 'Makefile',
          'appliance/Dockerfile', 'packaging/core-local/Dockerfile',
          'packaging/core-local/core-local-setup', 'packaging/core-local/postinst',
          'packaging/core-local/prerm',
+         'packaging/controller/Dockerfile', 'packaging/controller/run-controller',
+         'packaging/controller/apply-update', 'packaging/controller/postinst',
+         'packaging/controller/prerm',
          'docs/API.md', 'docs/api/openapi.json', 'docs/api/index.html', 'docs/api/reference.css')
 TREES = {'cmd': {'.go'}, 'internal': {'.go', '.sql'}, 'web/src': {'.tsx', '.ts', '.css'},
          'web/public': {'.html'}, 'packaging/systemd': {'.service'},
          'appliance': {'.py', '.sh', '.service', '.md'},
-         'packaging/core-local': {'.py', '.sh', '.service', '.md', '.c', '.pam'},
+         'packaging/core-local': {'.py', '.sh', '.service', '.md', '.c', '.pam', '.example'},
+         'packaging/controller': {'.py', '.sh', '.service', '.path', '.md'},
          'docs/api': {'.json', '.html', '.css'}}
 SCRIPTS = ('scripts/build-source.py', 'tests/test_build_source.py',
            'scripts/generate_api.py', 'tests/test_api_contract.py',
+           'tests/test_agent_service.py', 'tests/integration/phase1.py',
+           'tests/integration/managed_vm.py', 'tests/integration/managed_vm_lab.py',
+           'tests/integration/managed_vm_browser.py',
+           'tests/integration/console_lab.py',
            'tests/test_appliance_build.py', 'tests/test_core_local_package.py',
            'tests/test_host_recovery.py', 'tests/integration/localcore_browser.py',
            'tests/integration/web_security.py',
            'tests/integration/appliance-lab.py', 'tests/integration/appliance-dhcp-boot.py',
-           'tests/integration/core-local-package.sh')
+           'tests/integration/core-local-package.sh',
+           'scripts/apt-publish.py', 'tests/test_apt_publish.py')
 
 
 def copy_sources(root, target):
@@ -47,6 +56,26 @@ def copy_sources(root, target):
         destination = target / source.relative_to(root)
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
+
+
+GO_LICENSE_SYSTEM_PATHS = (Path('/usr/share/licenses/go/LICENSE'),)
+
+
+def go_license_path(goroot, system_candidates=GO_LICENSE_SYSTEM_PATHS):
+    """Locate the Go toolchain's LICENSE file.
+
+    Official go.dev/actions-setup-go distributions ship it at GOROOT/LICENSE.
+    Distro-packaged Go (e.g. Arch/CachyOS `go`) omits it from GOROOT and
+    installs it under the system license directory instead.
+    """
+    override = os.environ.get('GO_LICENSE')
+    if override:
+        return Path(override)
+    for candidate in (goroot / 'LICENSE', *system_candidates):
+        if candidate.is_file():
+            return candidate
+    searched = ', '.join(str(p) for p in (goroot / 'LICENSE', *system_candidates))
+    raise RuntimeError(f'no Go LICENSE file found (searched {searched}); set GO_LICENSE to its path')
 
 
 def verify(data, integrity):
@@ -72,7 +101,7 @@ def main():
         goroot = Path(subprocess.check_output([go, 'env', 'GOROOT'], text=True).strip())
         toolchain = target / 'third_party/go'
         toolchain.mkdir(parents=True)
-        shutil.copyfile(goroot / 'LICENSE', toolchain / 'LICENSE')
+        shutil.copyfile(go_license_path(goroot), toolchain / 'LICENSE')
         (toolchain / 'VERSION').write_text(subprocess.check_output([go, 'version'], text=True))
         packages = json.loads((target / 'web/package-lock.json').read_text())['packages']
         cache = ROOT / '.cache/source-packages'

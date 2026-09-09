@@ -1,0 +1,9 @@
+{
+  "method": "Run site_selector_browser.py against the first popup build in Chromium; open Site picker, focus Search sites, press Tab and inspect actual focused element before the dismissal assertion.",
+  "original_ui_sha256": "a52982257eee343bff8577f6f164aea35c53c32aa966cb12dfd1d46cb2f06cd5",
+  "before": "FAIL: expected Search sites combobox count 0 after Tab, actual count 1. Focus moved to div#site-options[role=listbox], Chromium's implicitly focusable scrolling container.",
+  "after": "PASS: same retained Tab dismissal assertion passes with listbox tabIndex=-1; complete final popup suite passed eight groups.",
+  "limits": "Real built UI with explicit API route fixtures; no native host or Controller execution.",
+  "fixed_ui_sha256": "fd82675f5553f6ccfbe3f07a2fa8cb7e46769975622b137cacec3baf19887288",
+  "test_command": ".cache/phase1-qa-venv/bin/python tests/integration/site_selector_browser.py --evidence docs/qa/site-selector"
+}

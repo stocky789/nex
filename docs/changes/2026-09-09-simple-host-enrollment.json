@@ -1,0 +1,70 @@
+{
+  "summary": "Add host by IP + root password: Controller pushes an existing site-bound enrollment token to a reachable host's local API (POST /api/local/v1/enrollment) after operator fingerprint confirmation (POST /api/v1/hosts/probe, POST /api/v1/sites/{id}/hosts), replacing the manual nex-core-agent enroll step for reachable hosts while keeping it as a documented fallback. API impact: new contract (probeHost, addSiteHost, localEnroll); the underlying token/certificate contract (createEnrollmentToken, agent.Enroll, POST /api/v1/agent/enroll) is reused unchanged.",
+  "paths": [
+    "README.md",
+    "cmd/nex-controller/main.go",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/api/index.html",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/api/openapi.json",
+    "docs/guide/README.md",
+    "docs/guide/manage-controller.md",
+    "docs/plans/2026-09-08-feature-and-ux-review.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-09-simple-host-enrollment.md",
+    "docs/qa/simple-host-enrollment/lab/browser-fingerprint-confirmation.png",
+    "docs/qa/simple-host-enrollment/lab/browser-host-fresh.png",
+    "docs/qa/simple-host-enrollment/lab/browser-re-enroll-form.png",
+    "docs/qa/simple-host-enrollment/lab/browser-re-enroll-success.png",
+    "docs/qa/simple-host-enrollment/lab/checks.md",
+    "docs/qa/simple-host-enrollment/lab/fresh-enrollment.json",
+    "docs/qa/simple-host-enrollment/lab/results.json",
+    "internal/controller/addhost.go",
+    "internal/controller/addhost_test.go",
+    "internal/controller/controller.go",
+    "internal/localcore/enroll.go",
+    "internal/localcore/enroll_test.go",
+    "internal/localcore/handoff.go",
+    "internal/localcore/service.go",
+    "tests/integration/add_host_lab.py",
+    "tests/integration/phase1_browser.py",
+    "tests/test_api_contract.py",
+    "web/src/main.tsx",
+    "web/src/style.css"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The operator-facing Add host workflow changed from a manual token + CLI step to an address/root-password panel with fingerprint confirmation; the manual token flow remains documented as the fallback for unreachable hosts, and new error cases (fingerprint mismatch, wrong password, host unreachable, already enrolled, revoked-host re-enrollment) needed troubleshooting entries.",
+    "pages": [
+      "docs/guide/manage-controller.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Three new operations (probeHost, addSiteHost, localEnroll) are documented in both OpenAPI contracts, regenerated into their HTML references, and given a dedicated docs/API.md section covering auth, validation, errors, retry/outage behavior and version compatibility with hosts/Controllers that lack the new routes.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/local-openapi.json",
+      "docs/api/index.html",
+      "docs/api/local.html"
+    ]
+  },
+  "verification": {
+    "method": "Real lab walkthrough passed 2026-09-09: tests/integration/add_host_lab.py ran 12 checks with real Chromium against the disposable nested-KVM lab (Nex Core host 10.0.2.15, Controller appliance 10.0.2.20 running the working-tree Controller rebuilt in debian:13-slim): probe fingerprint verified against the host's served certificate, wrong fingerprint 502 before login, wrong password 401, already-enrolled 409, non-revoked re-enrollment 409, revoke then browser re-enrollment keeping identity and pool, retry 409, audit without passwords; plus a fresh enrollment through a second isolated nex-core-local instance (auto-created pool with the host as master, in-process agent reporting fresh), a nex-core-local restart, and journal hygiene. Lab preparation caught a real bug hidden by the unit tests: the push sent the host-identity CA as trust while the appliance serves a self-signed HTTPS certificate; fixed by pushing the Controller's served certificate (cmd/nex-controller/main.go reads -tls-cert into Config.ServerCertPEM) with 503 when absent, and TestAddSiteHostSuccess now uses a self-signed listener that fails on the old value. Local checks after the fix: go test -race ./..., python3 scripts/generate_api.py --check, python3 -m unittest discover -s tests, npm --prefix web run typecheck/build, python3 scripts/check_docs.py --all, and tests/integration/phase1.py --browser all pass. Not covered: package upgrade, physical hardware, other L2 segments, manual fallback in the lab.",
+    "evidence": [
+      "docs/plans/2026-09-09-simple-host-enrollment.md",
+      "docs/qa/simple-host-enrollment/lab/checks.md",
+      "docs/qa/simple-host-enrollment/lab/fresh-enrollment.json",
+      "docs/qa/simple-host-enrollment/lab/results.json",
+      "internal/controller/addhost_test.go",
+      "internal/localcore/enroll_test.go",
+      "internal/localcore/handoff.go",
+      "tests/integration/add_host_lab.py",
+      "tests/integration/phase1_browser.py",
+      "tests/test_api_contract.py"
+    ]
+  }
+}

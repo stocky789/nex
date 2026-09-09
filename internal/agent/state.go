@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"nex.local/nex/internal/protocol"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -18,11 +19,12 @@ import (
 )
 
 type JournalEntry struct {
-	Status       string    `json:"status"`
-	Error        string    `json:"error,omitempty"`
-	RequestedAt  time.Time `json:"requested_at"`
-	ObservedAt   time.Time `json:"observed_at"`
-	Acknowledged bool      `json:"acknowledged"`
+	Command      *protocol.Command `json:"command,omitempty"`
+	Status       string            `json:"status"`
+	Error        string            `json:"error,omitempty"`
+	RequestedAt  time.Time         `json:"requested_at"`
+	ObservedAt   time.Time         `json:"observed_at"`
+	Acknowledged bool              `json:"acknowledged"`
 }
 type State struct {
 	Controller           string                  `json:"controller"`

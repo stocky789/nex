@@ -1,0 +1,27 @@
+{
+  "mode": "simulated",
+  "completed": true,
+  "checks": [
+    "A matching storage ID from another host or pool supplies neither a name nor access verification",
+    "Actual empty-to-completed Controller transfer record appears; explicitly injected status rows distinguish pending/dispatched/failed/attention; other host/pool excluded and unknown storage stays unverified",
+    "Keyboard opens host Storage and the real transfer task history; 360px document has no horizontal overflow",
+    "Injected stale/revoked/old-agent/no-inventory states preserve honest ISO records; failed Controller refresh retains records as unknown and Retry recovers"
+  ],
+  "captures": [
+    "simulated-empty.png",
+    "simulated-statuses-desktop.png",
+    "simulated-statuses-360.png",
+    "simulated-task-keyboard-360.png",
+    "simulated-stale.png",
+    "simulated-revoked.png",
+    "simulated-old-agent.png",
+    "simulated-no-inventory.png",
+    "simulated-controller-unavailable.png"
+  ],
+  "served_ui_sha256": "fd82675f5553f6ccfbe3f07a2fa8cb7e46769975622b137cacec3baf19887288",
+  "environment": "Playwright Chromium, real HTTPS Controller; simulated mTLS agent and synthetic ISO; additional media/host/error browser responses explicitly injected",
+  "limits": [
+    "Availability derives from transfer records, host connectivity and validated storage, not continuous file rescanning",
+    "Native storage correctness is covered separately by fresh-install acceptance"
+  ]
+}

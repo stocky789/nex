@@ -1,0 +1,62 @@
+{
+  "mode": "simulated",
+  "environment": "Chromium; real HTTPS Controller; simulated mTLS agent, synthetic ISO, no libvirt execution",
+  "checks": [
+    "Loading and rejected login captured; keyboard sign-in succeeds; enrolled fixture labels are neutral",
+    "Pool General shows the automatic pool master hostname; the tree suffixes the master and the host badge reads Pool master",
+    "GUI registers existing local directory; durable task succeeds; GUI registers existing guest network; durable task succeeds",
+    "ISO picker validation, upload and four-stage keyboard-accessible VM creation; lost reply retry creates exactly one stopped VM; desktop and 360px checks",
+    "Injected stale observation, Controller request failure and reload recovery; no browser page errors"
+  ],
+  "captures": [
+    "browser-simulated-loading.png",
+    "browser-simulated-unauthorized.png",
+    "browser-simulated-pool-master.png",
+    "browser-simulated-host-master-badge.png",
+    "browser-simulated-empty.png",
+    "browser-simulated-storage.png",
+    "browser-simulated-network-form.png",
+    "browser-simulated-network.png",
+    "browser-simulated-invalid-iso.png",
+    "browser-simulated-iso.png",
+    "browser-simulated-review-desktop.png",
+    "browser-simulated-review-360.png",
+    "browser-simulated-interrupted-create.png",
+    "browser-simulated-created-desktop.png",
+    "browser-simulated-created-360.png",
+    "browser-simulated-stale.png",
+    "browser-simulated-unavailable.png"
+  ],
+  "vm": {
+    "id": "bb066918-b4a1-4f04-ab97-ed5c2e3b5bbe",
+    "pool_id": "e1063dcbe482fdb378c912d6b3e58919e20495fc3ea006542a8111d5f0493c4c",
+    "host_id": "e7c1ad68befef16224d549de0cecf37eebde70ed2b0ca015f082a0880852c64f",
+    "name": "browser-vm-182807",
+    "role": "guest",
+    "protected": false,
+    "state": "shut off",
+    "freshness": "fresh",
+    "spec": {
+      "id": "bb066918-b4a1-4f04-ab97-ed5c2e3b5bbe",
+      "pool_id": "e1063dcbe482fdb378c912d6b3e58919e20495fc3ea006542a8111d5f0493c4c",
+      "host_id": "e7c1ad68befef16224d549de0cecf37eebde70ed2b0ca015f082a0880852c64f",
+      "name": "browser-vm-182807",
+      "storage_id": "2d4fb911d4c39391ba4cdca528c99e19a0200e0b80490585a671e190b0557db3",
+      "network_id": "9314898cabaebb53798d7b9b62ca2afbad9dd2d96e3c690f44bcde42066209b5",
+      "media_id": "f338662d53586c89c5a989fe8203e7a98cd8179f51a6a29ca55f2700e7b49e9a",
+      "cpus": 2,
+      "memory_mib": 512,
+      "disk_gib": 1,
+      "firmware": "bios"
+    },
+    "operation_id": "5fe92bbc8f032ca372cef9d9f68b7acbcd68d8867c1b60d6a1cabd0ee00749a5",
+    "status": "succeeded"
+  },
+  "storage_reused_after_409": false,
+  "network_reused_after_409": false,
+  "ui_sha256": "6679c2f7f4a53d40728f4749eb655aed39448beb60e01bed335e471d187432fc",
+  "limits": [
+    "No guest installation, console or power controls",
+    "Native domain inspection and controller outage evidence recorded separately"
+  ]
+}

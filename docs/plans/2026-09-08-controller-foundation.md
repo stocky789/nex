@@ -63,6 +63,10 @@ enrollment, monitoring and recovery workflows with actual walkthrough evidence.
       execution until actual runs have been inspected.
 - [x] Obtain independent review, correct findings and verify corrections.
 
+**Note, 2026-09-09:** manual pool creation in the checklist above was removed by the
+[pool master model correction](2026-09-09-pool-master-model.md); administrators create
+sites only and each enrolling host becomes the master of its automatically created pool.
+
 Acceptance is supported by [final checks and build evidence](../qa/phase1/checks.md),
 [process/browser walkthroughs](../qa/phase1/acceptance.md), [native Debian/libvirt
 checks](../qa/phase1/debian.md), and [independent review](../qa/phase1/review.md).

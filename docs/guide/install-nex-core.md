@@ -173,6 +173,12 @@ to configured Debian repositories. No Nex package repository is configured yet.
 
 ## Verification
 
+The [fresh local installation](../qa/fresh-install/checks.md) used the ISO containing
+Core/Controller `0.1.0+managed1`: actual graphical installation onto a blank disk,
+explicit erase confirmation, corrected logo, disk-only BIOS boot, automatic local
+HTTPS access and deployment of the bundled Controller. Artifact hashes and lab
+networking are recorded there; this does not establish physical-hardware coverage.
+
 The [Nex wizard QA report](../qa/iso/2026-09-08-nex-wizard.md) records the current
 artifact, actual custom-page and network checks, inspected captures, and untested limits.
 The [installer usability QA report](../qa/iso/2026-09-08-installer-qol.md) separately records

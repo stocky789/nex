@@ -1,0 +1,22 @@
+{
+  "method": "Use repository checker record/link primitives with the declared scoped changed paths, verify modified guide H1/sections/navigation and exact existing assessment references. This is a scoped check, not the full CLI gate.",
+  "scoped_paths": 93,
+  "modified_guide_pages": [
+    "docs/guide/manage-controller.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/README.md"
+  ],
+  "scoped_checks": "passed",
+  "combined_checker_exit_code": 0,
+  "combined_checker_output": "Documentation structure passed; historical references not resolved and diff coverage NOT checked (--all).",
+  "limits": "Final full --all structure and clean isolated scoped-range checks pass; semantic/behavior evidence was independently reviewed. This is not a hosted CI run or a committed range in the shared checkout.",
+  "additional_final_checks": "Assessment coverage and actual existing references refreshed after final evidence/cleanup records; changed guide, slice plan and aggregate QA report links passed.",
+  "earlier_failure": "An earlier combined CLI and isolated snapshot failed because the concurrent website draft referenced docs/qa/website-security/hardening.md before its owner wrote that file. Final shared-tree --all passed once it was present.",
+  "clean_snapshot_range": {
+    "base": "e1f0d98a86b359e5f1ebd1c47c62435cf7dfb4bd",
+    "head": "8441db6138c43b91b4da4cceea38718f4b925571",
+    "changed_paths": 93,
+    "result": "Documentation structure and impact records passed for 93 changed paths; semantic review still required.",
+    "method": "An isolated Git copy retains concurrent unrelated work in its baseline; only the two declared managed-VM/logo assessments and their paths form the final diff. Shared checkout and remote branches were not changed."
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "date_utc": "2026-09-09T06:05:25.356003+00:00",
+  "results": [
+    "real Controller, neutral site, CSR enrollment creating the automatic pool with the host as master; authenticated mTLS simulated inventory",
+    "privacy guard rejected the original workstation label rendered by the real Controller",
+    "four real browser resource views, neutral rendered identity, no credential fields or browser errors"
+  ],
+  "simulation": "All host inventory is an explicit demo fixture; actual Controller, TLS enrollment, mTLS report and browser UI. No native probes, live host changes, DOM replacements or image editing.",
+  "viewport": "1440x1000",
+  "browser": "Chromium 151.0.7922.34",
+  "controller_sha256": "5d4be8b50be146adaec92034dab00dbeefa5e3e87b7c80d5acc1e3c1a62cbc1b",
+  "web_dist_sha256": {
+    "app.css": "5bbbc2d12898e61eae442d91061ffc64bc8ab1cc3bec7d49cc495c4438037bb8",
+    "app.js": "34a11b2ba9369c6d23b13cafa92eef4147d48c97a96e5e41e7c0f6c9e0ecbcdd",
+    "app.js.LEGAL.txt": "7dff61d0cd5b7cff2403db6cf5c586b1218c9e663784caeda7fd06916c997d46",
+    "index.html": "fe3a212c4edad4414940432247e7937194d8ebba960f8ef1525bcfd5e3e6a2a7",
+    "local.css": "dc94aeab25b9791f09782e32a5272e8a025d062ccaa0a9d29416c89660677b8e",
+    "local.html": "328ec1c90075ef067253ecf34b1993cbd05a23c4d64ee502feec55c9438b2b42",
+    "local.js": "80b0109d078469b030a4a7c5dc448b0418ba4e73a5585a32a0504fd02cfa78ab",
+    "local.js.LEGAL.txt": "7dff61d0cd5b7cff2403db6cf5c586b1218c9e663784caeda7fd06916c997d46",
+    "nex-brand.png": "c96550ec6ef71bdca8caec7874573e4cc9e24c5d03909a0785a60dd21ba1b003",
+    "third-party-notices.txt": "2a1d6e0408d0208c317a8986586e7b8e95443ab4f3dffae866b79f13c8cd1c8a"
+  },
+  "images_sha256": {
+    "desktop-shell.png": "8b972680aff0bc5cbfa9bfd8fd7f9d9ccdb452dd6d02434e8bad02c265f03fce",
+    "networking-desktop.png": "88f3260bee067de3c05e4160b71593206f07693e0c1eaa9f6eeb506d768d6c42",
+    "storage-desktop.png": "063daa496c4b6d6a8ef9b52839bbed71952f0139ff09f09b40ae4221a43742d3",
+    "activity-desktop.png": "f74b9b51ff2f43faf4499eeb2c112fe81c953eac907b2eeabe079cf918999fd6"
+  }
+}

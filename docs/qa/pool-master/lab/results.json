@@ -1,0 +1,34 @@
+{
+ "date": "2026-09-09",
+ "environment": "disposable nested-KVM lab nex-fresh-lab; real Controller appliance; working-tree binaries built in debian:13-slim",
+ "commands": [
+  {
+   "command": "bash tests/integration/phase1-debian.sh",
+   "result": "pass (after fixture correction)"
+  },
+  {
+   "command": "in-place Controller upgrade of migrated appliance + API checks (after-upgrade.json)",
+   "result": "pass 12/12"
+  },
+  {
+   "command": "browser walkthrough upgraded appliance + core local (browser-results.json)",
+   "result": "pass 15/15"
+  },
+  {
+   "command": "fresh_install_browser.py --stage deploy (old packaged Controller image)",
+   "result": "needs_attention: bootstrap HTTP 400 (expected version skew)"
+  },
+  {
+   "command": "retry after in-guest Controller upgrade",
+   "result": "ready"
+  },
+  {
+   "command": "fresh-deploy API checks (fresh-deploy.json)",
+   "result": "pass 10/10"
+  },
+  {
+   "command": "browser walkthrough fresh appliance (fresh/browser-results.json)",
+   "result": "pass 15/15"
+  }
+ ]
+}

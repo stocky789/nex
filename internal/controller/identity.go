@@ -72,7 +72,9 @@ func loadAuthority(dir string) (*authority, error) {
 	return &authority{cert, key, string(certPEM)}, nil
 }
 func (c *Controller) TLSConfig() *tls.Config {
-	return &tls.Config{MinVersion: tls.VersionTLS13, ClientAuth: tls.RequestClientCert}
+	// HTTP/1.1 is preferred so browser console WebSockets and host console tunnels can
+	// upgrade the connection; HTTP/2 cannot be hijacked.
+	return &tls.Config{MinVersion: tls.VersionTLS13, ClientAuth: tls.RequestClientCert, NextProtos: []string{"http/1.1"}}
 }
 func (c *Controller) issue(csrPEM, hostID string) (string, string, error) {
 	block, rest := pem.Decode([]byte(csrPEM))
@@ -121,10 +123,10 @@ func (c *Controller) enroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	var pool, host string
+	var site, host string
 	var expiry int64
 	var csr, response sql.NullString
-	err = tx.QueryRow("SELECT pool_id,host_id,expires,csr,response FROM tokens WHERE hash=?", digest(v.Token)).Scan(&pool, &host, &expiry, &csr, &response)
+	err = tx.QueryRow("SELECT site_id,host_id,expires,csr,response FROM tokens WHERE hash=?", digest(v.Token)).Scan(&site, &host, &expiry, &csr, &response)
 	if err != nil || expiry < time.Now().Unix() {
 		fail(w, 401, "enrollment token invalid or expired")
 		return
@@ -144,11 +146,14 @@ func (c *Controller) enroll(w http.ResponseWriter, r *http.Request) {
 		write(w, 200, previous)
 		return
 	}
-	if host == "" {
-		host = random()
+	// A fresh host becomes the master of its own new pool; re-enrollment keeps the existing pool.
+	var pool string
+	fresh := host == ""
+	if fresh {
+		host, pool = random(), random()
 	} else {
 		var revoked bool
-		if tx.QueryRow("SELECT revoked FROM hosts WHERE id=? AND pool_id=?", host, pool).Scan(&revoked) != nil || !revoked {
+		if tx.QueryRow("SELECT h.revoked,h.pool_id FROM hosts h JOIN pools p ON p.id=h.pool_id WHERE h.id=? AND p.site_id=?", host, site).Scan(&revoked, &pool) != nil || !revoked {
 			fail(w, 409, "replacement host must still be revoked")
 			return
 		}
@@ -157,6 +162,12 @@ func (c *Controller) enroll(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		fail(w, 400, err.Error())
 		return
+	}
+	if fresh {
+		if _, err = tx.Exec("INSERT INTO pools(id,site_id,name,master_host_id) VALUES(?,?,?,?)", pool, site, v.Hostname, host); err != nil || c.audit(tx, "host:"+host, "pool.create", pool) != nil {
+			fail(w, 500, "pool storage failed")
+			return
+		}
 	}
 	_, err = tx.Exec("INSERT INTO hosts(id,pool_id,hostname) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET revoked=0,hostname=excluded.hostname,sequence=0,last_seen=NULL,inventory=NULL", host, pool, v.Hostname)
 	if err != nil {
@@ -249,7 +260,7 @@ func (c *Controller) rotate(w http.ResponseWriter, r *http.Request, host string)
 }
 func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string) {
 	var v protocol.ReportRequest
-	if !decode(w, r, &v) {
+	if !decodeLimit(w, r, &v, 16<<20) {
 		return
 	}
 	if v.Version != protocol.Version {
@@ -260,12 +271,22 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		fail(w, 400, err.Error())
 		return
 	}
+	if len(v.Capabilities) > 32 {
+		fail(w, 400, "too many capabilities")
+		return
+	}
+	for _, capability := range v.Capabilities {
+		if len(capability) > 100 {
+			fail(w, 400, "invalid capability")
+			return
+		}
+	}
 	if v.Sequence == 0 || v.Sequence > 1<<63-1 || len(v.Results) > 100 {
 		fail(w, 400, "invalid report sequence or result count")
 		return
 	}
 	for _, res := range v.Results {
-		if (res.Status != "succeeded" && res.Status != "failed") || len(res.Error) > 4096 {
+		if (res.Status != "succeeded" && res.Status != "failed" && res.Status != "needs_attention") || len(res.Error) > 4096 {
 			fail(w, 400, "invalid operation result")
 			return
 		}
@@ -310,6 +331,11 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		out.AcknowledgedResults = append(out.AcknowledgedResults, res.OperationID)
 	}
 	if v.Sequence > seq {
+		capabilities, _ := json.Marshal(v.Capabilities)
+		if _, err = tx.Exec("INSERT INTO host_capabilities VALUES(?,?) ON CONFLICT(host_id) DO UPDATE SET capabilities=excluded.capabilities", host, string(capabilities)); err != nil {
+			fail(w, 500, "capability storage failed")
+			return
+		}
 		if v.Inventory != nil {
 			if previous.Valid {
 				if err = json.Unmarshal([]byte(previous.String), &merged); err != nil {
@@ -327,8 +353,18 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 				fail(w, 400, "too many distinct health checks")
 				return
 			}
-			b, _ := json.Marshal(merged)
-			_, err = tx.Exec("UPDATE hosts SET inventory=?,last_seen=?,sequence=? WHERE id=?", string(b), stamp(), v.Sequence, host)
+			if hasManagedCapability(v.Capabilities) {
+				if err = c.adoptManaged(tx, host, merged); err == nil {
+					err = c.autoNetworks(tx, host, merged)
+				}
+			}
+			// The managed journal is mirrored into managed_resources, not stored as inventory.
+			stored := *merged
+			stored.Managed = nil
+			b, _ := json.Marshal(stored)
+			if err == nil {
+				_, err = tx.Exec("UPDATE hosts SET inventory=?,last_seen=?,sequence=? WHERE id=?", string(b), stamp(), v.Sequence, host)
+			}
 		} else {
 			_, err = tx.Exec("UPDATE hosts SET last_seen=?,sequence=? WHERE id=?", stamp(), v.Sequence, host)
 		}
@@ -337,6 +373,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 			return
 		}
 	}
+	out.Consoles = c.consoles.pending(host)
 	rows, err := tx.Query("SELECT id,kind FROM operations WHERE host_id=? AND status IN ('queued','dispatched') ORDER BY created_at LIMIT 100", host)
 	if err != nil {
 		fail(w, 500, "command lookup failed")
@@ -357,6 +394,21 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		fail(w, 500, "command lookup failed")
 		return
 	}
+	filtered := out.Commands[:0]
+	for _, cmd := range out.Commands {
+		if cmd.Kind != "refresh-inventory" {
+			if !hasManagedCapability(v.Capabilities) {
+				continue
+			}
+			var raw string
+			if tx.QueryRow("SELECT command FROM managed_resources WHERE operation_id=?", cmd.OperationID).Scan(&raw) != nil || json.Unmarshal([]byte(raw), &cmd) != nil {
+				fail(w, 500, "command payload unavailable")
+				return
+			}
+		}
+		filtered = append(filtered, cmd)
+	}
+	out.Commands = filtered
 	for _, cmd := range out.Commands {
 		if _, err = tx.Exec("UPDATE operations SET status='dispatched',updated_at=? WHERE id=? AND status='queued'", stamp(), cmd.OperationID); err != nil {
 			fail(w, 500, "command dispatch failed")
@@ -381,6 +433,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		}
 		c.mu.Unlock()
 	}
+	c.cleanMedia()
 	write(w, 200, out)
 }
 

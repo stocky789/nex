@@ -2,9 +2,11 @@
 import base64
 import hashlib
 import importlib.util
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location('build_source', Path(__file__).parents[1] / 'scripts/build-source.py')
 source = importlib.util.module_from_spec(spec)
@@ -44,6 +46,25 @@ class SourceArchiveTests(unittest.TestCase):
         source.verify(b'package', integrity)
         with self.assertRaises(ValueError):
             source.verify(b'changed', integrity)
+
+    def test_go_license_falls_back_when_goroot_lacks_one(self):
+        with tempfile.TemporaryDirectory() as directory:
+            goroot = Path(directory) / 'goroot'
+            goroot.mkdir()
+            system = Path(directory) / 'system-license'
+            with self.assertRaises(RuntimeError):
+                source.go_license_path(goroot, system_candidates=(system,))
+            system.write_text('packaged go license')
+            self.assertEqual(source.go_license_path(goroot, system_candidates=(system,)), system)
+            (goroot / 'LICENSE').write_text('go license')
+            self.assertEqual(source.go_license_path(goroot, system_candidates=(system,)), goroot / 'LICENSE')
+
+    def test_go_license_override_env_wins(self):
+        with tempfile.TemporaryDirectory() as directory:
+            override = Path(directory) / 'override-license'
+            override.write_text('override')
+            with mock.patch.dict(os.environ, {'GO_LICENSE': str(override)}):
+                self.assertEqual(source.go_license_path(Path(directory) / 'missing-goroot'), override)
 
 
 if __name__ == '__main__':

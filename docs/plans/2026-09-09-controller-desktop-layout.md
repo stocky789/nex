@@ -18,6 +18,11 @@ This changes presentation and navigation of available Controller features, not
 phase order, backend capability, or completion of any outstanding platform gate.
 The Nex Core host-local UI and installer are outside this redesign.
 
+**Note, 2026-09-09:** the site/pool creation actions mentioned below were later reduced
+to site creation by the [pool master model correction](2026-09-09-pool-master-model.md);
+**Create pool** no longer exists and each enrolling host becomes the master of its
+automatically created pool. The checklists remain as recorded for this slice.
+
 ## Screenshot references
 
 The implementation workstream inspected downloaded Windows XenCenter screenshots
@@ -98,3 +103,45 @@ mobile menu correction/regression and independent review. API impact remains
 
 This accepts the bounded frontend slice only. No backend/VM phase, installed image,
 real hardware or hosted CI gate is closed by these UI checks.
+
+## ISO delivery rebuild — 2026-09-09
+
+Matt requested rebuilding the ISO to include this Controller layout. Rebuild a
+matching signed appliance and local-host package before assembling the ISO; keep
+existing development trust and source snapshots. API impact: **none** for artifact
+assembly, which delivers the existing contracts. Guide impact: **updated** for
+artifact availability and verification evidence. Record actual results and limits
+in the [rebuild report](../qa/controller-desktop-rebuild/checks.md). This is not an
+upgrade of already deployed Controller VMs or acceptance of full ISO installation.
+
+## Site selection at scale — 2026-09-09
+
+Matt requested a searchable site selector directly below **Resources**, replacing
+the all-sites tree that becomes unwieldy at 100–500 sites. Show only the selected
+site's **Pools → Hosts → VMs** hierarchy. Retain accessible keyboard navigation,
+separate resource search within the selected site, deep links that select the
+correct site, and clear empty/no-match states. Site creation and global task
+history remain reachable. Use existing controls and dependencies.
+
+After viewing the local update, Matt refined the design: show one closed site
+dropdown, with its search field inside the opened menu rather than a second box
+above it. Keep a bounded scrolling result list and keyboard/focus/escape behavior;
+reverify and update the selected local Controller with the final interaction.
+
+API impact: **existing contract** — authenticated site/pool/host/VM lists already
+contain the parent IDs needed for selection and filtering; creation requests and
+Controller/Core command/results remain unchanged. This is a navigation change,
+not a permissions boundary or backend pagination claim. Guide impact: **updated**
+for selection, search and pool-root navigation.
+
+Acceptance requires typecheck/build, focused browser checks including a labeled
+500-site fixture, deep-link and keyboard/narrow behavior, independent review, and
+verification in the selected disposable local Controller alongside host ISO
+visibility. No global resource hierarchy or API schema change is required.
+
+The requested host ISO view and final single-dropdown site selector are now
+implemented and [verified in the selected local Controller](../qa/host-isos/checks.md).
+Final browser checks cover transfer/status isolation, the searchable 500-site
+fixture, keyboard focus and eight selector groups; all 16 existing Controller
+walkthrough groups also passed. The local UI/source update preserves the backend
+binary and is not a rebuilt installation/release image.

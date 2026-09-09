@@ -11,6 +11,7 @@ import (
 	"nex.local/nex/internal/protocol"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -128,9 +129,46 @@ type NativeInventory struct {
 }
 
 type NativeNIC struct {
-	Name, MAC, State string
-	Addresses        []string
+	Name, MAC, State, Kind, Master, Parent string
+	Addresses                              []string
 }
+
+// nicTopology reports the bridge/bond a device is enslaved to and, for VLAN devices, the
+// raw device they sit on, so clients can present networks instead of plumbing.
+func nicTopology(name string) (master, parent string) {
+	if target, err := os.Readlink("/sys/class/net/" + name + "/master"); err == nil {
+		master = filepath.Base(target)
+	}
+	if b, err := os.ReadFile("/proc/net/vlan/" + name); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(line, "Device:") {
+				parent = strings.TrimSpace(strings.TrimPrefix(line, "Device:"))
+			}
+		}
+	}
+	return master, parent
+}
+
+// nicKind classifies a host interface for uplink selection: physical NICs and bonds
+// can carry guest VLANs; bridges, VLAN devices, loopback and taps cannot.
+func nicKind(name string, flags net.Flags) string {
+	sys := "/sys/class/net/" + name
+	switch {
+	case flags&net.FlagLoopback != 0:
+		return "loopback"
+	case exists(sys + "/bridge"):
+		return "bridge"
+	case exists(sys + "/bonding"):
+		return "bond"
+	case exists("/proc/net/vlan/" + name):
+		return "vlan"
+	case exists(sys + "/device"):
+		return "physical"
+	}
+	return "virtual"
+}
+func exists(path string) bool { _, err := os.Stat(path); return err == nil }
+
 type DiskCapacity struct {
 	Path                       string
 	TotalBytes, AvailableBytes uint64
@@ -166,22 +204,19 @@ func NativeProbes(version string) map[string]Probe {
 			}
 			vms := make([]protocol.VM, 0, len(names))
 			for _, id := range names {
-				info, e := virsh(ctx, "dominfo", id)
+				// domstate/domname answer from the domain object only; dominfo can block on
+				// libvirt 11 (Debian 13) querying the security model, stalling the probe.
+				state, e := virsh(ctx, "domstate", id)
 				if e != nil {
 					return nil, e
 				}
-				vm := protocol.VM{ID: id, State: "unknown"}
-				for _, line := range strings.Split(info, "\n") {
-					key, value, ok := strings.Cut(line, ":")
-					if !ok {
-						continue
-					}
-					switch strings.TrimSpace(key) {
-					case "Name":
-						vm.Name = strings.TrimSpace(value)
-					case "State":
-						vm.State = strings.TrimSpace(value)
-					}
+				name, e := virsh(ctx, "domname", id)
+				if e != nil {
+					return nil, e
+				}
+				vm := protocol.VM{ID: id, Name: strings.TrimSpace(name), State: strings.TrimSpace(state)}
+				if vm.State == "" {
+					vm.State = "unknown"
 				}
 				vms = append(vms, vm)
 			}
@@ -245,7 +280,8 @@ func readInventory(version string) (NativeInventory, error) {
 		return v, err
 	}
 	for _, nic := range nics {
-		n := NativeNIC{Name: nic.Name, MAC: nic.HardwareAddr.String(), State: "unknown"}
+		n := NativeNIC{Name: nic.Name, MAC: nic.HardwareAddr.String(), State: "unknown", Kind: nicKind(nic.Name, nic.Flags)}
+		n.Master, n.Parent = nicTopology(nic.Name)
 		if state, e := os.ReadFile("/sys/class/net/" + nic.Name + "/operstate"); e == nil {
 			n.State = strings.TrimSpace(string(state))
 		}
@@ -310,7 +346,7 @@ func (m *Monitor) Snapshot() *protocol.Inventory {
 			out.OSVersion = data.OS
 			out.AgentVersion = data.AgentVersion
 			for _, n := range data.NICs {
-				out.NICs = append(out.NICs, protocol.NIC{Name: n.Name, MAC: n.MAC, State: n.State, Addresses: append([]string(nil), n.Addresses...)})
+				out.NICs = append(out.NICs, protocol.NIC{Name: n.Name, MAC: n.MAC, Kind: n.Kind, Master: n.Master, Parent: n.Parent, State: n.State, Addresses: append([]string(nil), n.Addresses...)})
 			}
 		case DiskCapacity:
 			out.Disks = append(out.Disks, protocol.Disk{Name: data.Path, SizeBytes: data.TotalBytes, AvailableBytes: &data.AvailableBytes})

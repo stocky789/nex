@@ -1,0 +1,21 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-only
+set -eu
+if [ "$1" = configure ]; then
+    if ! getent passwd nex-controller >/dev/null; then
+        useradd --system --home /var/lib/nex-controller --shell /usr/sbin/nologin nex-controller
+    fi
+    install -d -m700 -o nex-controller -g nex-controller /var/lib/nex-controller
+    install -d -m700 /etc/nex-controller
+    # Prefer the packaged unit over an older appliance copy under /etc.
+    if [ -f /etc/systemd/system/nex-controller.service ]; then
+        rm -f /etc/systemd/system/nex-controller.service
+    fi
+    deb-systemd-helper enable nex-controller.service
+    deb-systemd-helper enable nex-controller-update.path
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload
+        deb-systemd-invoke restart nex-controller.service || true
+        deb-systemd-invoke start nex-controller-update.path || true
+    fi
+fi

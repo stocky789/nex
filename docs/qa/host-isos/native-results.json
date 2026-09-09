@@ -1,0 +1,19 @@
+{
+  "mode": "native",
+  "completed": true,
+  "checks": [
+    "Actual site picker opens, filters the current site and selects it with Enter without changing records",
+    "Read-only actual retained host Storage shows its existing ISO with completed-transfer record, storage/size/task, via keyboard navigation and at 360px"
+  ],
+  "captures": [
+    "native-site-picker.png",
+    "native-desktop.png",
+    "native-360.png"
+  ],
+  "served_ui_sha256": "fd82675f5553f6ccfbe3f07a2fa8cb7e46769975622b137cacec3baf19887288",
+  "environment": "Playwright Chromium, real HTTPS Controller; actual retained disposable fresh-install Nex host; read-only browser interactions",
+  "limits": [
+    "Availability derives from transfer records, host connectivity and validated storage, not continuous file rescanning",
+    "Native storage correctness is covered separately by fresh-install acceptance"
+  ]
+}

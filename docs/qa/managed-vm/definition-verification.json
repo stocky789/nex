@@ -1,0 +1,30 @@
+{
+  "bios": {
+    "uuid": "f5f4a1e0-ae7f-4076-a990-6eec667bcfcb",
+    "cpus": 2,
+    "memory_mib": 1024,
+    "disk_gib": 2,
+    "firmware": "bios",
+    "network": "default",
+    "iso_sha256": "65273beed27b2df543b68b65630ba525cfbad8df2b12035732b2dff87d6664e7",
+    "boot_order": [
+      "cdrom",
+      "hd"
+    ],
+    "disk_backing_file": null
+  },
+  "uefi": {
+    "uuid": "8e0e6ad9-26d2-4c34-ad79-c6bb5f239b9a",
+    "cpus": 2,
+    "memory_mib": 1024,
+    "disk_gib": 2,
+    "firmware": "uefi",
+    "network": "default",
+    "iso_sha256": "65273beed27b2df543b68b65630ba525cfbad8df2b12035732b2dff87d6664e7",
+    "boot_order": [
+      "cdrom",
+      "hd"
+    ],
+    "disk_backing_file": null
+  }
+}

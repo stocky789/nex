@@ -90,7 +90,11 @@ and hosted-CI checks are not claimed.
 ## Limits
 
 This frontend slice does not establish real guest, storage, hardware, appliance or
-ISO acceptance. Existing built deployment images retain their older UI until a
-separate matching-source artifact rebuild. Hosted GitHub/Gitea Actions have not
+ISO acceptance. The later [matching-source artifact rebuild](../controller-desktop-rebuild/checks.md)
+records delivery of this UI; already deployed Controller VMs are not upgraded by
+rebuilding installation media. Hosted GitHub/Gitea Actions have not
 been run by this change. Both workflows already invoke the extended Phase 1 browser
 harness on pushes and pull requests.
+
+The captures above are pinned to this slice's build. The current icon and color
+refresh is captured under [controller-ui-colors](../controller-ui-colors/checks.md).

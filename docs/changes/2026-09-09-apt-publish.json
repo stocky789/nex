@@ -1,0 +1,31 @@
+{
+  "summary": "Add signed APT repository publish tooling, nginx /apt/ snippets and unit tests for the private website host. API impact: none; no Controller/Core contracts.",
+  "paths": [
+    ".gitea/workflows/phase1.yml",
+    ".github/workflows/phase1.yml",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-09-apt-publish.json",
+    "packaging/apt/README.md",
+    "packaging/apt/bootstrap.sh",
+    "packaging/apt/nginx-apt.inc",
+    "packaging/website/nginx.conf.template",
+    "scripts/apt-publish.py",
+    "tests/test_apt_publish.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Private website-host APT packaging notes live in packaging/apt/README.md; Controller/Core operator workflows are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Static APT repository files and publish scripts do not call or change Nex Controller operations, Core commands, observed-state results or client-facing service APIs.",
+    "pages": []
+  },
+  "verification": {
+    "method": "python3 -m unittest tests.test_apt_publish -v against disposable tempfile repos; dpkg-deb/dpkg-scanpackages and gpg exercised locally.",
+    "evidence": [
+      "tests/test_apt_publish.py"
+    ]
+  }
+}

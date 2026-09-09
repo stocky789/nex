@@ -297,7 +297,7 @@ void cdebconf_gtk_nex_progress(struct frontend *fe, const char *step,
         "nex-progress-track")), fraction);
 }
 
-/* Render the approved Core lockup from the existing brand board. Keep its
+/* Render the transparent Core lockup without the reference board texture. Keep its
  * drawn letterforms instead of approximating the mark with a system font.
  */
 static GtkWidget *nex_brand_image(void)
@@ -305,16 +305,17 @@ static GtkWidget *nex_brand_image(void)
     GdkPixbuf *board, *lockup, *scaled;
     GtkWidget *image;
 
-    board = gdk_pixbuf_new_from_file("/usr/share/nex-installer/nex-brand.png", NULL);
+    board = gdk_pixbuf_new_from_file("/usr/share/nex-installer/nex-core-lockup.png", NULL);
     if (board == NULL)
         return nex_label("Nex Core", "nex-brand");
-    if (gdk_pixbuf_get_width(board) < 445 || gdk_pixbuf_get_height(board) < 606) {
+    if (gdk_pixbuf_get_width(board) < 2030 || gdk_pixbuf_get_height(board) < 550) {
         g_object_unref(board);
         return nex_label("Nex Core", "nex-brand");
     }
-    lockup = gdk_pixbuf_new_subpixbuf(board, 45, 510, 400, 96);
-    scaled = gdk_pixbuf_scale_simple(lockup, 240, 58, GDK_INTERP_BILINEAR);
+    lockup = gdk_pixbuf_new_subpixbuf(board, 150, 190, 1880, 360);
+    scaled = gdk_pixbuf_scale_simple(lockup, 240, 46, GDK_INTERP_BILINEAR);
     image = gtk_image_new_from_pixbuf(scaled);
+    gtk_widget_set_size_request(image, 240, 58);
     gtk_misc_set_alignment(GTK_MISC(image), 0, 0.5);
     atk_object_set_name(gtk_widget_get_accessible(image), "Nex Core");
     g_object_unref(scaled);

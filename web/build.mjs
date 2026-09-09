@@ -10,6 +10,7 @@ const options = {
   outdir: "dist",
   entryNames: "[name]",
   target: "es2022",
+  format: "esm",
   legalComments: "external",
   external: ["/nex-brand.png"],
 };

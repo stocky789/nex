@@ -1,0 +1,58 @@
+{
+  "date": "2026-09-09",
+  "deployment": "Second local UI/source overlay: single site dropdown with search inside popup; unchanged packaged Controller binary",
+  "scope": [
+    "Single Resources site dropdown with internal search and keyboard navigation",
+    "Existing host Storage ISO list retained"
+  ],
+  "base_version": "0.1.0+managed1",
+  "source_sha256": "dde0f3526bbcf456873aab58b3254a5f75270cbc39c075d9e4fb6469c7a49afd",
+  "source_snapshot_sha256": "ef5257d28c962418fb01cf2b0c4bff1ce477b034f61dabd11311475803c57cd2",
+  "payload_sha256": "9d1067496b77dce558a97902a58e45edb76d6b36e8e780157f9b859d974d7092",
+  "unchanged_backend_source_files_verified": 44,
+  "before": {
+    "source_sha256": "363067650c31d9f514193cf378b97982aa2901a066edc3552e5a8d3afbf917cc",
+    "app_js_sha256": "f5b81e091035902b0fe76f3d286f644f727de610bcc03d15d946458e113b3c35",
+    "app_css_sha256": "cdd27e4549533a6f9b41f25ae7038db3a86f3f450b5c24c14778ab044001e871",
+    "controller_binary_sha256": "2184272188e7edeb8c2c4c6ddc7addcfe7be97e99f2dfe3055fa49f8dc8bd1a6"
+  },
+  "after": {
+    "controller_binary_sha256": "2184272188e7edeb8c2c4c6ddc7addcfe7be97e99f2dfe3055fa49f8dc8bd1a6",
+    "source_sha256": "dde0f3526bbcf456873aab58b3254a5f75270cbc39c075d9e4fb6469c7a49afd"
+  },
+  "served_hashes": {
+    "/app.css": "570292dc1d37ffc9825190e8a90b014c5eecac3db9d449271445ad2c5757882e",
+    "/app.js": "fd82675f5553f6ccfbe3f07a2fa8cb7e46769975622b137cacec3baf19887288",
+    "/app.js.LEGAL.txt": "7dff61d0cd5b7cff2403db6cf5c586b1218c9e663784caeda7fd06916c997d46",
+    "/index.html": "fe3a212c4edad4414940432247e7937194d8ebba960f8ef1525bcfd5e3e6a2a7",
+    "/local.css": "dc94aeab25b9791f09782e32a5272e8a025d062ccaa0a9d29416c89660677b8e",
+    "/local.html": "328ec1c90075ef067253ecf34b1993cbd05a23c4d64ee502feec55c9438b2b42",
+    "/local.js": "709139e8a50466b153636999d93d9a7f54a58133d95351c0ae94fcced9696c08",
+    "/local.js.LEGAL.txt": "7dff61d0cd5b7cff2403db6cf5c586b1218c9e663784caeda7fd06916c997d46",
+    "/nex-brand.png": "c96550ec6ef71bdca8caec7874573e4cc9e24c5d03909a0785a60dd21ba1b003",
+    "/third-party-notices.txt": "2a1d6e0408d0208c317a8986586e7b8e95443ab4f3dffae866b79f13c8cd1c8a",
+    "/source": "dde0f3526bbcf456873aab58b3254a5f75270cbc39c075d9e4fb6469c7a49afd"
+  },
+  "checks": [
+    "Exact browser-tested asset hashes copied without rebuilding",
+    "Existing disposable raw target and named Controller UUID verified",
+    "Transfer bound workstation loopback; guest pulled via isolated QEMU gateway and checked SHA256 before extracting",
+    "Private original UI/source rollback copies retained",
+    "Every served UI asset and /source matched staged bytes over guest certificate-verified HTTPS",
+    "Controller binary remained byte-identical; no backend restart or Core change",
+    "Temporary HTTP listener closed, temporary key-only SSH configuration removed, stock root SSH=no and key-login rejection verified, console logged out"
+  ],
+  "rollback_backup_retained": true,
+  "cleanup": {
+    "transport_closed": true,
+    "temporary_ssh_removed": true,
+    "stock_root_ssh_policy": "permitrootlogin no",
+    "temporary_key_login_rejected": true,
+    "root_console_logged_out": true
+  },
+  "limits": [
+    "This is a local lab overlay, not a new package/appliance/ISO release",
+    "Native visual acceptance is recorded separately"
+  ],
+  "supersedes_overlay_evidence": "docs/qa/host-isos/deployment.json"
+}

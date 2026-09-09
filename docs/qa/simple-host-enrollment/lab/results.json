@@ -1,0 +1,27 @@
+{
+  "checks": [
+    "Probe fingerprint matches the certificate the Nex Core host serves on its local API",
+    "Wrong fingerprint is rejected with 502 before any credential is sent",
+    "Wrong root password is rejected by the host and surfaced as 401",
+    "Adding an already-enrolled host returns 409 naming the existing host_id",
+    "Re-enrolling a host that is not revoked is refused with 409 before any network attempt",
+    "Probe validates the address shape and reports an unreachable address as 502",
+    "Existing host revoked through the Controller API",
+    "Browser panel shows the probed fingerprint for confirmation before adding the host",
+    "Browser re-enrollment succeeded and the password field is gone",
+    "Re-enrolled host kept its identity and pool, remains pool master and reports fresh",
+    "Repeating the push after success is refused with 409, no duplicate host",
+    "Audit records host.add and token creation without any password"
+  ],
+  "captures": [
+    "browser-re-enroll-form.png",
+    "browser-fingerprint-confirmation.png",
+    "browser-re-enroll-success.png",
+    "browser-host-fresh.png"
+  ],
+  "host_id": "bcff7c9e31e517b102edf81850d6fdd9e730fc10883dcf2a639ed88d4704efc1",
+  "pool_id": "209406250ad3f85435f846b003f0716098a3fa58d6ae61aee88e02881394a0d0",
+  "environment": "Actual fresh ISO-installed nested KVM lab with the Controller appliance inside it; loopback forwards; no API mocking",
+  "api_impact": "new contract exercised: probeHost, addSiteHost, localEnroll",
+  "guide_impact": "updated: verifies the Add host by address workflow documented in manage-controller.md"
+}

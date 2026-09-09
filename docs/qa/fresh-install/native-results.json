@@ -1,0 +1,39 @@
+{
+  "date": "2026-09-09",
+  "completed": true,
+  "environment": "New 128GiB sparse raw disk, KVM 4vCPU/12GiB RAM, BIOS host ISO installation; isolated QEMU user networking and loopback-only forwards; no old host image reused",
+  "checks": [
+    "Unmodified validated ISO branded GUI installed new selected disk after explicit erase confirmation; unchecked attempt left disk blank",
+    "Disk-only boot started installed 0.1.0+managed1 local service with working br0/KVM and root web login",
+    "Bundled Controller deployed ready through GUI; embedded packaged agent enrolled and Controller VM adopted",
+    "GUI first registrations of real local storage and br0, real ISO upload, stopped ordinary 2vCPU/1GiB/4GiB UEFI VM definition",
+    "Exact new ordinary UUID, memory/CPU/network/ISO SHA256/QCOW2 capacity verified; locally started UUID reached Debian UEFI installer menu",
+    "Native 401/403/400/409 and immutable replay checks passed without unintended new resources",
+    "Actual Controller-service outage left both domains running and independent local root browser access available; restoration succeeded",
+    "Actual host reboot changed boot ID, retained enrolled host/certificate, identical persistent domain XML and disk capacity; Controller autostart running, ordinary guest stopped",
+    "Installed Core and Controller binary/UI/API files matched exact package/appliance extraction; TLS trust and forwarded certificates matched and persisted after reboot; deployment seed/bootstrap sensitive files removed",
+    "Temporary key-only QA SSH enabled only after stock root web login; removed QA key/override after checks and restored shipping PermitRootLogin no"
+  ],
+  "evidence": [
+    "installer-result.json",
+    "installed-host.txt",
+    "installed-provenance.json",
+    "controller-installed.txt",
+    "enrollment-identity.json",
+    "guest-domain.xml",
+    "guest-boot-uefi.png",
+    "recovery-before.json",
+    "recovery-after.json",
+    "controller-stop.json",
+    "controller-start.json",
+    "browser.md",
+    "retained-state.json"
+  ],
+  "limits": [
+    "Disposable nested KVM, not physical hardware or physical LAN validation",
+    "Host installed in BIOS mode; UEFI host installation untested",
+    "Ordinary guest only booted installation ISO; no guest OS installation or guest data durability test",
+    "Central VM console/power lifecycle remains outside this implemented slice",
+    "No external release certification or hosted CI run claimed"
+  ]
+}

@@ -150,7 +150,7 @@ gboolean nex_network_write(GKeyFile *c, const char *root, GError **error)
     if (!nex_network_validate(c, error)) return FALSE;
     char **groups = g_key_file_get_groups(c, NULL);
     GString *dhcpcd = g_string_new("# Nex Core: only management DHCP owns routes and DNS.\n");
-    GString *interfaces = g_string_new("# Nex Core: interface identity is bound by MAC in /etc/systemd/network.\nauto lo\niface lo inet loopback\n");
+    GString *interfaces = g_string_new("# Nex Core: interface identity is bound by MAC in /etc/systemd/network.\n# Nex Core agent adds guest VLAN bridges under interfaces.d.\nsource /etc/network/interfaces.d/*\n\nauto lo\niface lo inet loopback\n");
     char *management = value(c, "Network", "management");
     char *dns_override = value(c, "Network", "dns");
     gboolean custom_dns = *g_strstrip(dns_override) != 0;

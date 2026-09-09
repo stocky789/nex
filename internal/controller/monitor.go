@@ -45,8 +45,31 @@ func validateInventory(v *protocol.Inventory) error {
 		}
 	}
 	for _, nic := range v.NICs {
-		if !nameValid(nic.Name) || len(nic.Addresses) > 128 {
+		if !nameValid(nic.Name) || len(nic.Addresses) > 128 || len(nic.Kind) > 20 || len(nic.Master) > 200 || len(nic.Parent) > 200 {
 			return errors.New("invalid NIC")
+		}
+	}
+	if m := v.Managed; m != nil {
+		if len(m.Storage) > 10000 || len(m.Networks) > 10000 || len(m.Media) > 10000 || len(m.VMs) > 10000 {
+			return errors.New("managed state limits exceeded")
+		}
+		var fields []string
+		for _, s := range m.Storage {
+			fields = append(fields, s.ID, s.Name)
+		}
+		for _, n := range m.Networks {
+			fields = append(fields, n.ID, n.Name)
+		}
+		for _, md := range m.Media {
+			fields = append(fields, md.ID, md.Name)
+		}
+		for _, vm := range m.VMs {
+			fields = append(fields, vm.ID, vm.Name)
+		}
+		for _, f := range fields {
+			if !nameValid(f) {
+				return errors.New("invalid managed entry")
+			}
 		}
 	}
 	for _, disk := range v.Disks {
@@ -82,6 +105,7 @@ func mergeInventory(old, incoming *protocol.Inventory) *protocol.Inventory {
 		o, exists := previous[name]
 		return ok && !n.ObservedAt.IsZero() && (!exists || !n.ObservedAt.Equal(o.ObservedAt))
 	}
+	out.Managed = incoming.Managed
 	out.VMs = old.VMs
 	if newer("libvirt") {
 		out.VMs = incoming.VMs

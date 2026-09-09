@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+worker_processes auto;
+pid /run/nex-website/nginx.pid;
+error_log /var/log/nex-website/error.log warn;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    log_format nex '$remote_addr - $request $status $body_bytes_sent';
+    access_log /var/log/nex-website/access.log nex;
+    sendfile on;
+    server_tokens off;
+    client_body_temp_path /run/nex-website/client_body;
+    proxy_temp_path /run/nex-website/proxy;
+    fastcgi_temp_path /run/nex-website/fastcgi;
+    uwsgi_temp_path /run/nex-website/uwsgi;
+    scgi_temp_path /run/nex-website/scgi;
+
+    server {
+        listen @NEX_WEBSITE_LISTEN@;
+        server_name _;
+        root /srv/nex-website/current;
+        index index.html;
+        autoindex off;
+        absolute_redirect off;
+
+        # The root-owned current selector is the document root. No served artifact
+        # beneath it may be a symlink.
+        disable_symlinks on from=$document_root;
+
+        add_header Content-Security-Policy "default-src 'self'; base-uri 'none'; connect-src 'none'; font-src 'self'; form-action 'none'; frame-ancestors 'none'; img-src 'self'; object-src 'none'; script-src 'none'; style-src 'self'" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+
+        location ~ /\. {
+            access_log off;
+            log_not_found off;
+            deny all;
+        }
+
+        # APT repository (GET/HEAD only; no directory listing; no symlink follow).
+        location /apt/ {
+            alias /srv/nex-apt/;
+            disable_symlinks on;
+            autoindex off;
+            absolute_redirect off;
+            limit_except GET HEAD { deny all; }
+            types {
+                text/plain Packages;
+                application/json json;
+                application/octet-stream deb;
+            }
+            default_type application/octet-stream;
+            # Location-level headers replace server add_header inheritance. Omit CSP so
+            # apt clients are not affected by the website policy.
+            add_header Referrer-Policy "no-referrer" always;
+            add_header X-Content-Type-Options "nosniff" always;
+            add_header X-Frame-Options "DENY" always;
+        }
+
+        location = /apt/conf {
+            deny all;
+        }
+
+        location /apt/conf/ {
+            deny all;
+        }
+
+        location = /apt/gnupg {
+            deny all;
+        }
+
+        location /apt/gnupg/ {
+            deny all;
+        }
+
+        location / {
+            limit_except GET HEAD { deny all; }
+            try_files $uri $uri/ =404;
+        }
+    }
+}

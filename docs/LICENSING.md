@@ -196,3 +196,16 @@ code. The generated ifupdown configuration invokes the installed platform hooks.
 Retain `/usr/share/doc/bridge-utils/copyright`, the component manifest and matching
 corresponding source under the existing distribution gate. This is aggregation,
 not a relicensing or combined-library compatibility claim.
+
+## Browser console client (noVNC) — 2026-09-09
+
+The Controller and host-local browser bundles now include the noVNC core library
+(`@novnc/novnc` 1.7.0 from the npm registry, MPL-2.0; its `vendor/pako` is MIT and
+`core/des.js` carries BSD-style notices) to render VM consoles. Only the JavaScript core
+is bundled; noVNC's HTML, CSS, fonts and images are not used. MPL-2.0 section 3.3 permits
+combining these files with AGPL-3.0-only code as a Larger Work while the noVNC files stay
+under MPL-2.0, and noVNC is not marked "Incompatible With Secondary Licenses". The files
+are bundled unmodified; if a noVNC file is ever changed, its source must remain available
+under MPL-2.0. The bundled notice file `web/public/third-party-notices.txt` and the source
+archive's retained npm package tarball carry the license texts. The Go WebSocket bridge is
+original Nex code; no Go dependency was added.

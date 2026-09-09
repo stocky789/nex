@@ -1,0 +1,57 @@
+{
+  "mode": "native",
+  "environment": "Chromium; real HTTPS Controller; disposable Debian nested-KVM host and real libvirt; stale/error/response-loss presentation injected",
+  "checks": [
+    "Loading and rejected login captured; keyboard sign-in succeeds; enrolled fixture labels are neutral",
+    "GUI explicitly rejects duplicate storage registration; reuses previously validated directory; GUI explicitly rejects duplicate network registration; reuses previously validated network",
+    "ISO picker validation, upload and four-stage keyboard-accessible VM creation; lost reply retry creates exactly one stopped VM; desktop and 360px checks",
+    "Injected stale observation, Controller request failure and reload recovery; no browser page errors"
+  ],
+  "captures": [
+    "browser-native-loading.png",
+    "browser-native-unauthorized.png",
+    "browser-native-storage.png",
+    "browser-native-network.png",
+    "browser-native-invalid-iso.png",
+    "browser-native-iso.png",
+    "browser-native-review-desktop.png",
+    "browser-native-review-360.png",
+    "browser-native-interrupted-create.png",
+    "browser-native-created-desktop.png",
+    "browser-native-created-360.png",
+    "browser-native-stale.png",
+    "browser-native-unavailable.png"
+  ],
+  "vm": {
+    "id": "71edcaac-427f-4710-a894-fe04e24885e1",
+    "pool_id": "83c0641a7bd5dfe37fde9d5ea4ffdc76242f375ab08fa424e5d655f0a41cdc86",
+    "host_id": "4584354348db5ce7e62211b691551100dc3e9275d5b62e38661bf5c99465f47e",
+    "name": "browser-vm-120926",
+    "role": "guest",
+    "protected": false,
+    "state": "shut off",
+    "freshness": "fresh",
+    "spec": {
+      "id": "71edcaac-427f-4710-a894-fe04e24885e1",
+      "pool_id": "83c0641a7bd5dfe37fde9d5ea4ffdc76242f375ab08fa424e5d655f0a41cdc86",
+      "host_id": "4584354348db5ce7e62211b691551100dc3e9275d5b62e38661bf5c99465f47e",
+      "name": "browser-vm-120926",
+      "storage_id": "407c225e84bccedaf16877df0361adc7d6ec04c833f61df328030fff0140ec8a",
+      "network_id": "6a4f5b58ddb37edcf49311bd83571186fc15319113cd6e3500df75d01c800c50",
+      "media_id": "54c67cdf5c0ddddd6aec073140d1b61523d57230039cc3373e2141e62913cc5b",
+      "cpus": 2,
+      "memory_mib": 512,
+      "disk_gib": 1,
+      "firmware": "bios"
+    },
+    "operation_id": "d50ed79ae125bf603be1a5332e2a51f05ff26cbb87bf383f5c1bd7f17d4f3942",
+    "status": "succeeded"
+  },
+  "storage_reused_after_409": true,
+  "network_reused_after_409": true,
+  "ui_sha256": "a07e5430a22566eaec9e7988723aadfbe9e3eb031de1a6029cbca6ce31d76af4",
+  "limits": [
+    "No guest installation, console or power controls",
+    "Native domain inspection and controller outage evidence recorded separately"
+  ]
+}

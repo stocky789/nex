@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[Unit]
+Description=Run Nex website health checks
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=nex-website-health.service
+
+[Install]
+WantedBy=timers.target

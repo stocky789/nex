@@ -1,0 +1,22 @@
+{
+  "summary": "Record private website source and authenticated host security review. API impact: none; no runtime changes.",
+  "paths": [
+    "docs/qa/website-security/review.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Review-only evidence changes no user workflow; existing preview guide already describes temporary private hosting.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Static-file observations and review documentation change no client API, Controller operation, Core command or result flow.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Read-only HTTP, artifact hashes, SSH/sudo configuration, firewall, socket, service isolation and cached security-update checks completed. Independent source review and documentation checks passed; no remediation or external isolation/recovery acceptance claimed.",
+    "evidence": [
+      "docs/qa/website-security/review.md"
+    ]
+  }
+}

@@ -1,0 +1,75 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+package controller
+
+import (
+	"encoding/json"
+	"net/http"
+	"nex.local/nex/internal/protocol"
+	"slices"
+)
+
+type powerRequest struct {
+	RequestID string `json:"request_id"`
+	Action    string `json:"action"`
+}
+
+// powerVM queues a durable start/shutdown/reboot/force-stop request for the VM's assigned
+// host. Shutdown and reboot are ACPI requests the guest may ignore; the observed state,
+// not the task result, establishes what happened.
+func (c *Controller) powerVM(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	var v powerRequest
+	if !decode(w, r, &v) {
+		return
+	}
+	if !nameValid(v.RequestID) || !protocol.ValidPowerAction(v.Action) {
+		fail(w, 400, "stable request_id and action start, shutdown, reboot or force-stop required")
+		return
+	}
+	id := r.PathValue("id")
+	host, pool, _, _, err := c.vmPlacement(id)
+	if err != nil {
+		fail(w, 404, "VM not found")
+		return
+	}
+	tx, err := c.db.Begin()
+	if err != nil {
+		fail(w, 500, "storage unavailable")
+		return
+	}
+	defer tx.Rollback()
+	payload := map[string]string{"vm_id": id, "request_id": v.RequestID, "action": v.Action}
+	if c.replayResource(w, tx, v.RequestID, "vm-power", payload) {
+		return
+	}
+	if err = c.managedHost(tx, pool, host); err != nil {
+		fail(w, 409, err.Error())
+		return
+	}
+	var raw string
+	var caps []string
+	tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", host).Scan(&raw)
+	json.Unmarshal([]byte(raw), &caps)
+	if !slices.Contains(caps, protocol.PowerCapability) {
+		fail(w, 409, "the VM's host agent does not support central power requests; upgrade Nex Core")
+		return
+	}
+	// Power rows carry the VM id as their name so one in-flight request per VM is enforced
+	// without JSON functions; a lookup failure refuses rather than allowing a duplicate.
+	var pending int
+	if err = tx.QueryRow("SELECT count(*) FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind='vm-power' AND r.name=? AND o.status IN ('queued','dispatched')", id).Scan(&pending); err != nil {
+		fail(w, 500, "power request lookup failed")
+		return
+	}
+	if pending > 0 {
+		fail(w, 409, "a power request for this VM is still pending; wait for its task")
+		return
+	}
+	opID := random()
+	cmd := protocol.Command{OperationID: opID, Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: id, PoolID: pool, HostID: host, Action: v.Action}}
+	op, err := c.saveResource(tx, user, v.RequestID, pool, host, id, opID, cmd, payload)
+	if err != nil || tx.Commit() != nil {
+		fail(w, 500, "power request storage failed")
+		return
+	}
+	write(w, 202, resourceResponse(cmd, op))
+}

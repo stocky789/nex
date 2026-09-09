@@ -1,0 +1,15 @@
+{
+  "url": "http://172.16.4.3:8080",
+  "html_sha256": "3ccba4c504edd2d5953549f4e08241fd5fd241e9fe66dd9654720ddb1f0cd380",
+  "results": [
+    "1440px: logo backdrop, no overflow, anchors, skip link, keyboard FAQ, reduced motion",
+    "1440px: gallery navigation, images, alt text, keyboard full-size/skip and Home return",
+    "768px: logo backdrop, no overflow, anchors, skip link, keyboard FAQ, reduced motion",
+    "768px: gallery navigation, images, alt text, keyboard full-size/skip and Home return",
+    "360px: logo backdrop, no overflow, anchors, skip link, keyboard FAQ, reduced motion",
+    "360px: gallery navigation, images, alt text, keyboard full-size/skip and Home return",
+    "JavaScript disabled: content, release status and FAQ available",
+    "JavaScript disabled: gallery navigation and screenshots available"
+  ],
+  "browser_errors": []
+}

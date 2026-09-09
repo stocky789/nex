@@ -1,0 +1,70 @@
+{
+  "summary": "Build the private community-driven website and gallery with fresh neutral Controller captures; fix logo backdrop and personal-identity reuse. API impact: existing contract for disposable capture tooling; static website has no service API.",
+  "paths": [
+    ".gitea/workflows/phase1.yml",
+    ".github/workflows/phase1.yml",
+    "docs/BUG_LEDGER.md",
+    "docs/guide/README.md",
+    "docs/guide/website-preview.md",
+    "docs/plans/2026-09-09-public-website.md",
+    "docs/qa/website-controller-captures/results.json",
+    "docs/qa/website/build.json",
+    "docs/qa/website/checks.md",
+    "docs/qa/website/faq-1440.png",
+    "docs/qa/website/faq-360.png",
+    "docs/qa/website/faq-768.png",
+    "docs/qa/website/gallery-1440.png",
+    "docs/qa/website/gallery-360.png",
+    "docs/qa/website/gallery-768.png",
+    "docs/qa/website/header-1440.png",
+    "docs/qa/website/header-360.png",
+    "docs/qa/website/header-768.png",
+    "docs/qa/website/page-1440.png",
+    "docs/qa/website/page-360.png",
+    "docs/qa/website/page-768.png",
+    "docs/qa/website/results.json",
+    "tests/integration/website_browser.py",
+    "tests/integration/website_controller_captures.py",
+    "website/.gitignore",
+    "website/README.md",
+    "website/package-lock.json",
+    "website/package.json",
+    "website/src/app.css",
+    "website/src/app.html",
+    "website/src/routes/+layout.ts",
+    "website/src/routes/+page.svelte",
+    "website/src/routes/gallery/+page.svelte",
+    "website/static/LICENSE.txt",
+    "website/static/THIRD-PARTY-NOTICES.txt",
+    "website/static/gallery/activity-desktop.png",
+    "website/static/gallery/desktop-shell.png",
+    "website/static/gallery/networking-desktop.png",
+    "website/static/gallery/storage-desktop.png",
+    "website/static/nex-brand.png",
+    "website/svelte.config.js",
+    "website/tsconfig.json",
+    "website/vite.config.ts"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "New private website navigation and release-status workflow is documented.",
+    "pages": [
+      "docs/guide/README.md",
+      "docs/guide/website-preview.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Static website introduces no service API. Disposable screenshot capture exercises existing session, site/pool, enrollment, mTLS reporting and inventory/audit contracts without behavior changes; reference updates are unnecessary.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Svelte check/build and all eight VM website browser groups passed. Fresh Controller capture passed real TLS/mTLS setup, neutral rendering and rejection of original personal identity; all 11 served assets match hashes. Captures independently inspected; both CI workflows run the privacy check, with no hosted run claimed.",
+    "evidence": [
+      "docs/qa/website-controller-captures/results.json",
+      "docs/qa/website/build.json",
+      "docs/qa/website/checks.md",
+      "docs/qa/website/results.json"
+    ]
+  }
+}

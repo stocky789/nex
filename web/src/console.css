@@ -1,0 +1,17 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.console-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #cbd0d6; }
+.console-toolbar .muted { font-size: 11px; }
+.console-status { margin: 0; padding: 6px 10px; font-size: 12px; background: #fffbeb; color: #92400e; border-bottom: 1px solid #fcd34d; }
+.console-screen { position: relative; height: clamp(240px, 50vh, 720px); background: #000; overflow: hidden; }
+.console-screen:fullscreen { height: 100vh; }
+.console-screen[data-phase="idle"]::after, .console-screen[data-phase="closed"]::after { content: "No console connection"; position: absolute; inset: 0; display: grid; place-items: center; color: #9ca3af; font-size: 13px; pointer-events: none; }
+.console-screen[data-phase="connecting"]::after { content: "Connecting to the VM display…"; position: absolute; inset: 0; display: grid; place-items: center; color: #9ca3af; font-size: 13px; pointer-events: none; }
+.console-screen canvas { outline: none; }
+section.console { padding: 0; overflow: hidden; margin-bottom: 12px; }
+.console .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 12px; }
+.console h2 { margin: 0; font-size: 15px; }
+.console .badge { font-size: 11px; }
+.vm-power-actions { padding: 8px 10px; align-items: center; }
+.vm-power-actions .help { font-size: 11px; }
+.confirm-power { margin: 0; padding: 8px 10px; border-top: 1px solid #e0e3e7; background: #fffbeb; }
+.confirm-power p { margin: 0 0 8px; font-size: 12px; }

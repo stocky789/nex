@@ -136,13 +136,14 @@ def acceptance(lab, args):
     lab.csrf = session['csrf_token']
     lab.api('/api/v1/sites', {'name': 'Denied'}, expected=403, headers={'X-CSRF-Token': ''})
     lab.api('/api/v1/sites', {'name': ''}, expected=400)
-    lab.api('/api/v1/pools', {'name': 'Invalid', 'site_id': 'absent'}, expected=400)
+    lab.api('/api/v1/enrollment-tokens', {'site_id': 'absent'}, expected=400)
     site = lab.api('/api/v1/sites', {'name': 'Acceptance site'}, expected=201)
-    pool = lab.api('/api/v1/pools', {'name': 'Acceptance pool', 'site_id': site['id']}, expected=201)
-    lab.passed('administrator bootstrap, login, unauthorized/CSRF/invalid input rejection, site and pool creation')
+    # Pools are never created by hand; the manual route is gone.
+    lab.api('/api/v1/pools', {'name': 'Manual pool', 'site_id': site['id']}, expected=404)
+    lab.passed('administrator bootstrap, login, unauthorized/CSRF/invalid input rejection, site creation and removed manual pool creation')
 
     def token(host_id=None):
-        payload = {'pool_id': pool['id']}
+        payload = {'site_id': site['id']}
         if host_id:
             payload['host_id'] = host_id
         result = lab.api('/api/v1/enrollment-tokens', payload, expected=201)
@@ -159,13 +160,18 @@ def acceptance(lab, args):
     state = lambda: json.loads((state_dir / 'state.json').read_text())
     host_id = state()['host_id']
     host = lambda: next(h for h in lab.api('/api/v1/hosts') if h['id'] == host_id)
-    assert host()['pool_id'] == pool['id']
+    # Enrollment created the pool automatically: named after the host, host is its master.
+    pool = next(p for p in lab.api('/api/v1/pools') if p['id'] == host()['pool_id'])
+    assert pool['site_id'] == site['id'] and pool['name'] == host()['hostname'] and pool['master_host_id'] == host_id, pool
+    assert len(lab.api('/api/v1/pools')) == 1
+    assert any(a['action'] == 'pool.create' and a['resource_id'] == pool['id'] for a in lab.api('/api/v1/audit')), 'pool.create audit row'
+    lab.api('/api/v1/enrollment-tokens', {'site_id': site['id'], 'host_id': host_id}, expected=409)
     assert (state_dir / 'state.json').stat().st_mode & 0o777 == 0o600
     # A distinct CSR must not reuse the consumed enrollment token.
     retry = subprocess.run([str(x) for x in enroll_args[:-1] + [lab.path / 'other-agent']],
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     assert retry.returncode != 0
-    lab.passed('trusted TLS enrollment, pool-scoped identity, private state and single-use token')
+    lab.passed('trusted TLS enrollment, automatic pool named after the master host, private state and single-use token')
 
     shim = lab.path / 'shim'
     shim.mkdir()
@@ -255,7 +261,8 @@ def acceptance(lab, args):
     assert state()['host_id'] == host_id
     ap = lab.start('agent', *agent_args, env=env)
     eventually(lambda: check_status('libvirt', 'healthy'), 're-enrolled host reconnects')
-    assert len(lab.api('/api/v1/hosts')) == 1
+    assert len(lab.api('/api/v1/hosts')) == 1 and len(lab.api('/api/v1/pools')) == 1
+    assert host()['pool_id'] == pool['id'] and next(p for p in lab.api('/api/v1/pools'))['master_host_id'] == host_id
     assert any(a['actor'] == 'admin' and a['action'] == 'host.revoke' for a in lab.api('/api/v1/audit'))
     lab.passed('revocation rejects credential use and operations; explicit re-enrollment preserves identity; audit attribution')
     if args.evidence:

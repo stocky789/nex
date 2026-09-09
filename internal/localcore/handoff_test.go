@@ -30,7 +30,7 @@ func privateDir(t *testing.T) string {
 }
 
 func TestHandoffDurableSecrets(t *testing.T) {
-	c := HandoffConfig{AgentStateDir: privateDir(t), ControllerURL: "https://controller.test", RequestID: "deployment-1", SiteName: "Site", PoolName: "Pool", VMID: "vm", Name: "Controller", AdminPassword: "never-write-this"}
+	c := HandoffConfig{AgentStateDir: privateDir(t), ControllerURL: "https://controller.test", RequestID: "deployment-1", SiteName: "Site", VMID: "vm", Name: "Controller", AdminPassword: "never-write-this"}
 	first, err := loadHandoffState(c)
 	if err != nil {
 		t.Fatal(err)
@@ -111,12 +111,12 @@ func TestHandoffControllerLostResponses(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.csrf = session.CSRF
-	cfg := HandoffConfig{AgentStateDir: privateDir(t), ControllerURL: srv.URL, TrustPEM: trust, RequestID: "bootstrap-test", SiteName: "Site", PoolName: "Pool"}
+	cfg := HandoffConfig{AgentStateDir: privateDir(t), ControllerURL: srv.URL, TrustPEM: trust, RequestID: "bootstrap-test", SiteName: "Site"}
 	state, err := loadHandoffState(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := map[string]string{"request_id": cfg.RequestID, "site_name": cfg.SiteName, "pool_name": cfg.PoolName, "enrollment_token": state.Token}
+	body := map[string]string{"request_id": cfg.RequestID, "site_name": cfg.SiteName, "enrollment_token": state.Token}
 	var bootstrap struct {
 		PoolID string `json:"pool_id"`
 	}
@@ -126,10 +126,11 @@ func TestHandoffControllerLostResponses(t *testing.T) {
 	if _, err = h.call(context.Background(), "POST", "/api/v1/appliances/bootstrap", body, &bootstrap); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/api/v1/sites", "/api/v1/pools"} {
+	// Bootstrap creates one site; the pool appears only when the appliance host enrolls.
+	for path, want := range map[string]int{"/api/v1/sites": 1, "/api/v1/pools": 0} {
 		var rows []json.RawMessage
-		if _, err = h.call(context.Background(), "GET", path, nil, &rows); err != nil || len(rows) != 1 {
-			t.Fatalf("duplicate scope %s: %d %v", path, len(rows), err)
+		if _, err = h.call(context.Background(), "GET", path, nil, &rows); err != nil || len(rows) != want {
+			t.Fatalf("scope %s: %d %v", path, len(rows), err)
 		}
 	}
 	savedCSRF := h.csrf
@@ -194,7 +195,7 @@ func TestResumeUnenrolledReleasesStore(t *testing.T) {
 func TestHandoffAdoptsObservedApplianceAndResumesOffline(t *testing.T) {
 	const vmID = "42d944ac-093d-4240-99a1-d44f3301f124"
 	bin := t.TempDir()
-	script := "#!/bin/sh\ncase \"$4\" in\nlist) printf '%s\\n' '" + vmID + "';;\ndominfo) printf 'Name: Controller\\nState: running\\n';;\nevent) exit 0;;\n*) exit 1;;\nesac\n"
+	script := "#!/bin/sh\ncase \"$4\" in\nlist) printf '%s\\n' '" + vmID + "';;\ndomstate) printf 'running\\n';;\ndomname) printf 'Controller\\n';;\nevent) exit 0;;\n*) exit 1;;\nesac\n"
 	if err := os.WriteFile(filepath.Join(bin, "virsh"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +258,7 @@ func TestHandoffAdoptsObservedApplianceAndResumesOffline(t *testing.T) {
 	srv.StartTLS()
 	defer srv.Close()
 	trust := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))
-	cfg := HandoffConfig{ControllerURL: srv.URL, TrustPEM: trust, AdminPassword: "test-controller-password", SiteName: "Site", PoolName: "Pool", VMID: vmID, Name: "Controller", RequestID: "complete-handoff", AgentStateDir: privateDir(t)}
+	cfg := HandoffConfig{ControllerURL: srv.URL, TrustPEM: trust, AdminPassword: "test-controller-password", SiteName: "Site", VMID: vmID, Name: "Controller", RequestID: "complete-handoff", AgentStateDir: privateDir(t)}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	result := make(chan error, 1)

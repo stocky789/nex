@@ -80,16 +80,21 @@ minimal installation keeps the shared media seed. The pinned cdebconf frontend r
 installation progress and native backend errors/recovery questions. It is not the primary
 GUI configuration workflow. Hardware preparation failures remain visible and retryable.
 
-Both modes install the same headless host, not a desktop or management UI. A mirror is not
-needed. No ordinary user account is created; Debian service accounts remain. GUI root
+Both modes install the same headless host with the Nex Core local HTTPS management UI
+and bundled Controller appliance. A mirror is not needed. No ordinary user account is
+created; Debian service accounts remain. GUI root
 passwords require at least eight characters and matching confirmation; minimal rejects
 blank passwords. Use root at the local console after reboot. Root SSH remains disabled,
 so a fresh installation has no SSH login account. Eject the ISO after installation.
-SSH host keys are generated per installation. No Nex Controller, enrollment agent, pool,
-shared storage, HA or Docker service exists in this alpha.
+SSH host keys are generated per installation. Open the local management URL shown at
+the console and follow the [Controller deployment procedure](../docs/guide/deploy-controller-appliance.md).
+Controller deployment creates its VM and enrolls this host using Core's embedded agent;
+the installer itself does not deploy a running Controller. Shared storage, HA and
+Container Services remain later milestones.
 
-Nex does not silently enable a management bridge or firewall policy. Use an isolated lab
-network and only disposable disks. If graphics fail, choose minimal installation before
+The GUI configures the selected management adapter on `br0` for the installed host;
+it does not configure a firewall policy. Use an isolated lab network and only disposable
+disks. If graphics fail, choose minimal installation before
 accepting disk writes. [Wizard QA](../docs/qa/iso/2026-09-08-nex-wizard.md) records actual
 checks and limits; [installer usability QA](../docs/qa/iso/2026-09-08-installer-qol.md)
 tracks the fullscreen and input-control checks separately. Earlier custom-shell evidence

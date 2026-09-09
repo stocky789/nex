@@ -1,0 +1,134 @@
+{
+  "date_utc": "2026-09-09",
+  "git_head": "1fb97824a9acdcfc25e071eb48c18e9645ca2c16",
+  "working_tree": "uncommitted working tree (backend, UI, docs and tests for the pool-master model)",
+  "environment": "Local workstation, Linux; Go 1.27 vendored toolchain in .cache/toolchains/go; Chromium via Playwright in .cache/phase1-qa-venv; disposable local HTTPS Controller processes with temporary SQLite state. Host inventory in browser suites is SIMULATED (phase1: real agent process with fake virsh; managed_vm_browser/host_iso/website captures: scripted mTLS reports; site_selector: route fixtures).",
+  "commands": [
+    {
+      "command": "go test -race ./...",
+      "result": "pass",
+      "duration_s": 36,
+      "notes": "Run with -count=1 to avoid cached results: agent 2.5s, controller 36.5s, localcore 9.9s, vmhost 1.3s, websecurity 1.0s."
+    },
+    {
+      "command": "python3 scripts/generate_api.py --check",
+      "result": "pass",
+      "duration_s": 1,
+      "notes": "index.html and local.html current."
+    },
+    {
+      "command": "python3 -m unittest discover -s tests -p 'test_*.py' -v",
+      "result": "fail",
+      "duration_s": 1,
+      "notes": "72 tests: 70 ok, 1 error (test_website_hosting.WebsiteHosting setUpClass: nginx not installed locally; CI installs nginx-core), 1 failure (test_api_contract.LocalAPIContractTests.test_all_runtime_api_routes_are_documented_and_implemented: implemented but undocumented POST /api/local/v1/enrollment from a separate in-progress local enrollment slice). Neither is caused by the pool-master change; not fixed here."
+    },
+    {
+      "command": "npm --prefix web run typecheck && npm --prefix web run build",
+      "result": "pass",
+      "duration_s": 2
+    },
+    {
+      "command": "GO=$PWD/.cache/toolchains/go/bin/go .cache/phase1-qa-venv/bin/python tests/integration/website_controller_captures.py --output .cache/website-controller-captures/images --evidence .cache/website-controller-captures/results.json",
+      "result": "pass",
+      "duration_s": 5,
+      "notes": "First attempt without GO failed in scripts/build-source.py (system Go has no LICENSE file); second attempt failed on a stale fixture expecting a site tree link removed by the site selector; fixture updated to use the site picker option. Final run passed 3/3 result groups."
+    },
+    {
+      "command": "GO=$PWD/.cache/toolchains/go/bin/go NEX_QA_CAPTURES=.cache/phase1-captures .cache/phase1-qa-venv/bin/python tests/integration/phase1.py --browser",
+      "result": "pass",
+      "duration_s": 31,
+      "notes": "16/16 result groups."
+    },
+    {
+      "command": "GO=$PWD/.cache/toolchains/go/bin/go .cache/phase1-qa-venv/bin/python tests/integration/managed_vm_browser.py --simulated --evidence .cache/managed-vm-browser",
+      "result": "pass",
+      "duration_s": 36
+    },
+    {
+      "command": "GO=$PWD/.cache/toolchains/go/bin/go .cache/phase1-qa-venv/bin/python tests/integration/host_iso_browser.py --evidence .cache/host-iso-browser",
+      "result": "pass",
+      "duration_s": 7
+    },
+    {
+      "command": ".cache/phase1-qa-venv/bin/python tests/integration/site_selector_browser.py --evidence .cache/site-selector-browser",
+      "result": "pass",
+      "duration_s": 3
+    },
+    {
+      "command": "go build -o dist/nex-core-local ./cmd/nex-core-local && .cache/phase1-qa-venv/bin/python tests/integration/localcore_browser.py --blocked-only --docker <sudo wrapper>",
+      "result": "pass",
+      "duration_s": 16,
+      "notes": "The local user is not in the docker group, so a one-line wrapper that runs `sudo -n docker` was passed with --docker. VM commands are simulated (blocked-only)."
+    },
+    {
+      "command": "python3 scripts/check_docs.py --all",
+      "result": "pass",
+      "duration_s": 1,
+      "notes": "Documentation structure passed; historical references not resolved and diff coverage not checked in --all mode."
+    }
+  ],
+  "results": {
+    "phase1": [
+      "administrator bootstrap, login, unauthorized/CSRF/invalid input rejection, site creation and removed manual pool creation",
+      "trusted TLS enrollment, automatic pool named after the master host, private state and single-use token",
+      "real CPU/RAM/OS/NIC inventory and fresh independent heartbeat (libvirt simulated)",
+      "simulated libvirt failure remains fresh with failed service check",
+      "simulated stalled probe times out independently; native inventory and heartbeat continue",
+      "stale/unknown outage state, controller+agent restart identity, durable deduplicated refresh",
+      "agent survives controller outage and reconciles fresh inventory on reconnect",
+      "certificate rotation retains host identity and authenticated reporting",
+      "browser keyboard sign-in, invalid credentials, site creation, add-first-host empty state and ephemeral enrollment token",
+      "browser keyboard File/View/Help menus and Escape, menu creation, resource search with ancestors, collapsible tree and current selection, scoped General/Networking/Storage/Activity views, task dock and desktop shell",
+      "browser pool aggregate healthy enum, failed libvirt and timed-out probe distinct from fresh heartbeat; recovered checks",
+      "browser desktop/360px host and task views, refresh operation, exact-host confirmation and keyboard skip link",
+      "browser __Host cookie attributes, legacy rejection, restrictive CSP, real inline-script blocking, idle GET/mutation semantics and expired-session login recovery; logout and actual-peer throttle",
+      "browser interrupted request/retry, genuine stopped-agent stale state, revoke and re-enroll entry, sign-out; no page errors",
+      "browser delayed-token site scope, automatic pool master labels, and older inventory response cannot overwrite newer revocation",
+      "revocation rejects credential use and operations; explicit re-enrollment preserves identity; audit attribution"
+    ],
+    "website_controller_captures": [
+      "real Controller, neutral site, CSR enrollment creating the automatic pool with the host as master; authenticated mTLS simulated inventory",
+      "privacy guard rejected the original workstation label rendered by the real Controller",
+      "four real browser resource views, neutral rendered identity, no credential fields or browser errors"
+    ],
+    "managed_vm_browser": [
+      "Loading and rejected login captured; keyboard sign-in succeeds; enrolled fixture labels are neutral",
+      "Pool General shows the automatic pool master hostname; the tree suffixes the master and the host badge reads Pool master",
+      "GUI registers existing local directory; durable task succeeds; GUI registers existing guest network; durable task succeeds",
+      "ISO picker validation, upload and four-stage keyboard-accessible VM creation; lost reply retry creates exactly one stopped VM; desktop and 360px checks",
+      "Injected stale observation, Controller request failure and reload recovery; no browser page errors"
+    ],
+    "host_iso_browser": [
+      "A matching storage ID from another host or pool supplies neither a name nor access verification",
+      "Actual empty-to-completed Controller transfer record appears; explicitly injected status rows distinguish pending/dispatched/failed/attention; other host/pool excluded and unknown storage stays unverified",
+      "Keyboard opens host Storage and the real transfer task history; 360px document has no horizontal overflow",
+      "Injected stale/revoked/old-agent/no-inventory states preserve honest ISO records; failed Controller refresh retains records as unknown and Retry recovers"
+    ],
+    "site_selector_browser": [
+      "One closed control opens focused popup search; 500 options scroll within bounds; search/clear/no-match and arrows/Enter/Escape preserve correct selection and focus",
+      "Outside click and Tab dismiss the popup without trapping or stealing keyboard focus",
+      "Explicit site changes filter all three resource levels; global task navigation and reload preserve selected site",
+      "Pool, host and VM deep links select their owning site on navigation/reload; in-page route change also updates the tree",
+      "Popup search, long names and selection remain reachable at 360px without horizontal page overflow",
+      "An absent saved site falls back to the first available site on reload",
+      "Empty inventory offers site creation; successful fixture creation selects its new route without unrelated resources",
+      "The sole default site with no hosts can open Site overview from workspace/tasks, shows Add your first host and exposes Add host without any Create pool action"
+    ]
+  },
+  "captures_sha256": {
+    "add-host-form-desktop.png": "f3de1ac581e7390f4526aa4f78930d2a68d30256cdfe983651d98031eead4dca",
+    "empty-site-desktop.png": "f217e005c0f515f6671aed9fe89ebe594317cec6709f5b87c707a8f0aefda220",
+    "host-master-badge-desktop.png": "5f8720e3a54396952d142b7b42d50a1c3debfa301b08817fd51ae86cd7fd06b6",
+    "host-tree-master-suffix.png": "e4fce545d6b920366f4c35bd4db759b06333424f41c3165d91a06281932d3c45",
+    "pool-master-desktop.png": "dfee3c2a2c2e1c4f15b849ae3ec7c9d9da25118c51cae0b9b6ca83ca8291d219",
+    "site-empty-360.png": "6a5e9e640a4f31bec8cbe67757b39152580094e91bdf412422ff52f07a0b0b75",
+    "tree-fixture-master-suffix.png": "b5808c5a1b023937fd50864f3166167e9db6fe1379df079946f8ff89c20fe0a7"
+  },
+  "untested": [
+    "Real Nex Core hardware and a native libvirt host",
+    "Appliance handoff (bootstrap/adopt) against a real Core host",
+    "Fresh-install and managed VM native labs (tests updated, not executed)",
+    "Joining a member host, changing the pool master and ejecting a member: not implemented",
+    "Hosted GitHub/Gitea Actions runs"
+  ]
+}

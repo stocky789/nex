@@ -97,7 +97,7 @@ func TestAuthOriginCSRFAndNoStoredCredentials(t *testing.T) {
 func TestInvalidDeploymentNeverPersistsOrMutates(t *testing.T) {
 	s, _ := testService(t)
 	cookie, csrf := loginLocal(t, s)
-	valid := DeployRequest{RequestID: "request-001", Name: "nex-controller", Hostname: "controller", CPUs: 2, MemoryMiB: 4096, DiskGiB: 32, AddressCIDR: "192.168.1.10/24", Gateway: "192.168.1.1", DNS: []string{"192.168.1.1"}, AdminPassword: "controller-password", SiteName: "Site", PoolName: "Pool", Bridge: "br0", StorageDir: s.cfg.Engine.StorageDir}
+	valid := DeployRequest{RequestID: "request-001", Name: "nex-controller", Hostname: "controller", CPUs: 2, MemoryMiB: 4096, DiskGiB: 32, AddressCIDR: "192.168.1.10/24", Gateway: "192.168.1.1", DNS: []string{"192.168.1.1"}, AdminPassword: "controller-password", SiteName: "Site", Bridge: "br0", StorageDir: s.cfg.Engine.StorageDir}
 	cases := []DeployRequest{}
 	v := valid
 	v.AdminPassword = ""

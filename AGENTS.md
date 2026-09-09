@@ -46,13 +46,23 @@ when blocked; do not repeatedly ask permission for already authorized work.
   host distribution with KVM/QEMU, libvirt, and a local agent. Do not implement a new hypervisor.
 - Use Go for controller/agent, React and TypeScript for the UI, and Debian packages/systemd plus
   installer automation for delivery. Keep the Debian base intact; prefer existing platform capabilities.
-- Product hierarchy: **Sites → Pools → Hosts → VMs**. Pool is the management grouping; HA is a later
-  capability, not a prerequisite. Do not add a duplicate Cluster tier without an agreed requirement.
+- Product hierarchy: **Sites → Pools (one master host + members) → Hosts → VMs**. Pool is the
+  management grouping. Administrators never create pools: each enrolling host becomes the pool master
+  of its own automatically created pool, named after its hostname; enrollment tokens bind to a site.
+  Joining a member, changing the master and ejecting are Phase 4 work. HA is a later capability, not
+  a prerequisite. Do not add a duplicate Cluster tier without an agreed requirement.
 - VMs belong to pools and have separate host assignments. Preserve identity across migration.
 - Storage registrations, backup repositories/policies, and logical networks belong to pools.
   Track actual access per host: pool-level registration never makes a local disk shared.
-- The controller owns desired configuration, membership, permissions, and operations. Agents/libvirt
-  report observed state. Show stale/unknown state honestly and reconcile ambiguous outcomes before retrying.
+- **Nex Controller is replaceable; the pool master is the durable source of truth for its pool.**
+  The web UI and API act on hosts, not on a private Controller model. Every pool-scoped setting
+  (membership, networks, storage, media, VM definitions, policies, VM identity) must be persisted on
+  the pool master's Nex Core and re-adopted, with identity and names, when a host (re-)enrolls with a
+  new or rebuilt Controller. Replacing a failed Controller must need no more than installing a new one
+  and connecting each pool master to it; nothing else is re-entered. Controller-scoped data (sites,
+  administrator accounts/roles, audit history, enrollment tokens, its CA) is the only exception and
+  needs Controller backup/restore. Agents/libvirt report observed state; show stale/unknown state
+  honestly and reconcile ambiguous outcomes before retrying. Decision: Matt, 2026-09-09.
 - Running VMs and local recovery access must survive a controller outage. Never interpret an unreachable
   host as proof its VMs stopped. Never permit duplicate writable execution after a timeout or partition.
 - Snapshots, independent backups, verified restoration, and compatible shared-storage live migration
@@ -109,6 +119,9 @@ when blocked; do not repeatedly ask permission for already authorized work.
 - Reuse an existing contract when it covers the behavior. When a contract must change, implement both
   sides and define authentication, authorization, validation, errors, asynchronous results, safe retries,
   outage/reconnect behavior, and Controller/Core version compatibility in the same slice.
+- Every new pool-scoped setting must name its durable host-side record on the pool master and the
+  inventory/adoption path a fresh Controller uses to recover it. A setting that exists only in the
+  Controller database leaves the slice open; record it as such in the plan.
 - Maintain [docs/API.md](docs/API.md), the living reference for all Nex API calls, functions/commands,
   events, and streams. Update the applicable machine-readable contracts and generated reference in the
   same change as API behavior; keep planned interfaces clearly separate from implemented ones.

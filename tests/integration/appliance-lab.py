@@ -212,6 +212,7 @@ def main():
                     assert len(inventory[resource]) == 1, inventory[resource]
                 assert inventory['vms'][0]['id'] == vm_id, inventory['vms']
                 assert inventory['vms'][0]['host_id'] == inventory['hosts'][0]['id']
+                assert inventory['pools'][0]['master_host_id'] == inventory['hosts'][0]['id'] and inventory['pools'][0]['name'] == inventory['hosts'][0]['hostname'], inventory['pools']
                 (args.evidence / 'controller-inventory.json').write_text(json.dumps(inventory, indent=2) + '\n')
                 controller.screenshot(path=str(args.evidence / 'controller-ready.png'), full_page=True)
                 results.append('Actual Controller browser sign-in and exactly one Site/Pool/enrolled host/adopted original VM UUID')

@@ -34,12 +34,13 @@ while offset < len(payload):
     if mode & 0o170000 == 0o040000:
         assert name not in symlinks, f"Overlay directory replaces base symlink: {name}"
         directories.add(name)
-    if name == 'usr/share/nex-installer/nex-brand.png':
+    if name == 'usr/share/nex-installer/nex-core-lockup.png':
         assert 'usr/share/nex-installer' in directories, 'Kernel needs parent directory before logo file'
         artwork = payload[start:start + size]
     if name in expected:
         found[name] = payload[start:start + size]
     offset = (start + size + 3) & ~3
 assert found == expected, 'Missing or stale installer startup/recheck scripts'
-assert artwork == Path('docs/brand/nex-brand.png').read_bytes(), 'Missing or different approved artwork'
+assert artwork == Path('installer/assets/nex-core-lockup.png').read_bytes(), 'Missing or different approved artwork'
+assert artwork[25] == 6, 'Lockup must have native RGBA transparency, not a painted background'
 print('PASS: complete initrd contains approved artwork with its parent directory before the file')

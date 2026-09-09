@@ -1,0 +1,127 @@
+{
+ "sites": [
+  {
+   "id": "90080af7fe1fa0ee48c15c191ce5863c96b556123fe1ee172f5e560fb661641e",
+   "name": "Fresh install site"
+  }
+ ],
+ "pools": [
+  {
+   "id": "209406250ad3f85435f846b003f0716098a3fa58d6ae61aee88e02881394a0d0",
+   "site_id": "90080af7fe1fa0ee48c15c191ce5863c96b556123fe1ee172f5e560fb661641e",
+   "name": "nex-fresh-lab",
+   "master_host_id": "bcff7c9e31e517b102edf81850d6fdd9e730fc10883dcf2a639ed88d4704efc1"
+  }
+ ],
+ "hosts": [
+  {
+   "capabilities": [
+    "managed-vm-v1"
+   ],
+   "id": "bcff7c9e31e517b102edf81850d6fdd9e730fc10883dcf2a639ed88d4704efc1",
+   "pool_id": "209406250ad3f85435f846b003f0716098a3fa58d6ae61aee88e02881394a0d0",
+   "hostname": "nex-fresh-lab",
+   "revoked": false,
+   "connection": "fresh",
+   "last_seen": "2026-09-09T04:57:43.843198377Z",
+   "inventory": true
+  }
+ ],
+ "vms": [
+  {
+   "id": "f0cac778-7b67-45c0-9407-716c489d597d",
+   "pool_id": "209406250ad3f85435f846b003f0716098a3fa58d6ae61aee88e02881394a0d0",
+   "host_id": "bcff7c9e31e517b102edf81850d6fdd9e730fc10883dcf2a639ed88d4704efc1",
+   "name": "nex-controller",
+   "role": "controller",
+   "protected": true,
+   "state": "running",
+   "freshness": "fresh"
+  }
+ ],
+ "audit": [
+  {
+   "id": 10,
+   "actor": "monitor",
+   "action": "health.healthy",
+   "resource_id": "bcff7c9e31e517b102edf81850d6fdd9e730fc10883dcf2a639ed88d4704efc1/disk",
+   "created_at": "2026-09-09T04:51:43.221831764Z"
+  },
+  {
+   "id": 9,
+   "actor": "monitor",
+   "action": "health.healthy",
+   "resource_id": "bcff7c9e31e517b102edf81850d6fdd9e730fc10883dcf2a639ed88d4704efc1/block-disks",
+   "created_at": "2026-09-09T04:51:43.221773816Z"
+  },
+  {
+   "id": 8,
+   "actor": "monitor",
+   "action": "health.healthy",
+   "resource_id": "bcff7c9e31e517b102edf81850d6fdd9e730fc10883dcf2a639ed88d4704efc1/libvirt",
+   "created_at": "2026-09-09T04:51:43.221664536Z"
+  },
+  {
+   "id": 7,
+   "actor": "monitor",
+   "action": "health.healthy",
+   "resource_id": "bcff7c9e31e517b102edf81850d6fdd9e730fc10883dcf2a639ed88d4704efc1/kvm",
+   "created_at": "2026-09-09T04:51:43.221563983Z"
+  },
+  {
+   "id": 6,
+   "actor": "monitor",
+   "action": "health.healthy",
+   "resource_id": "bcff7c9e31e517b102edf81850d6fdd9e730fc10883dcf2a639ed88d4704efc1/inventory",
+   "created_at": "2026-09-09T04:51:43.221456619Z"
+  },
+  {
+   "detail": "Management connection healthy",
+   "id": 5,
+   "actor": "monitor",
+   "action": "health.healthy",
+   "resource_id": "bcff7c9e31e517b102edf81850d6fdd9e730fc10883dcf2a639ed88d4704efc1/connection",
+   "created_at": "2026-09-09T04:51:42.471441994Z"
+  },
+  {
+   "id": 4,
+   "actor": "admin",
+   "action": "appliance.adopt",
+   "resource_id": "f0cac778-7b67-45c0-9407-716c489d597d",
+   "created_at": "2026-09-09T04:51:38.657214767Z"
+  },
+  {
+   "id": 3,
+   "actor": "host:bcff7c9e31e517b102edf81850d6fdd9e730fc10883dcf2a639ed88d4704efc1",
+   "action": "host.enroll",
+   "resource_id": "bcff7c9e31e517b102edf81850d6fdd9e730fc10883dcf2a639ed88d4704efc1",
+   "created_at": "2026-09-09T04:51:36.488404044Z"
+  },
+  {
+   "id": 2,
+   "actor": "host:bcff7c9e31e517b102edf81850d6fdd9e730fc10883dcf2a639ed88d4704efc1",
+   "action": "pool.create",
+   "resource_id": "209406250ad3f85435f846b003f0716098a3fa58d6ae61aee88e02881394a0d0",
+   "created_at": "2026-09-09T04:51:36.488269908Z"
+  },
+  {
+   "id": 1,
+   "actor": "admin",
+   "action": "appliance.bootstrap",
+   "resource_id": "90080af7fe1fa0ee48c15c191ce5863c96b556123fe1ee172f5e560fb661641e",
+   "created_at": "2026-09-09T04:51:36.371319012Z"
+  }
+ ],
+ "checks": {
+  "exactly one site named by the deploy form": true,
+  "exactly one pool, created automatically": true,
+  "pool named after the host": true,
+  "pool in the bootstrap site": true,
+  "host is the pool master": true,
+  "host fresh": true,
+  "appliance adopted into that pool and host": true,
+  "audit records pool.create with host.enroll": true,
+  "audit records appliance bootstrap and adoption": true,
+  "POST /pools removed (404)": true
+ }
+}

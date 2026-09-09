@@ -1,0 +1,7 @@
+{
+  "action": "systemctl stop nex-controller inside bundled appliance via guest agent",
+  "ordinary_vm_id": "3035054a-87b0-4adb-a40d-512ce050032b",
+  "ordinary_vm_running": true,
+  "controller_vm_id": "72a34e46-5483-4239-b552-c18ddfa5e2d1",
+  "controller_vm_running": true
+}

@@ -1,0 +1,218 @@
+{
+  "hosts": [
+    {
+      "capabilities": [
+        "managed-vm-v1"
+      ],
+      "id": "5fed69ca1dd993962d9264af45a20882ad9333733cb94d9f166850013c172c07",
+      "pool_id": "f83ac8fdb9226f1acd6437b43dcce8e5c2d8ce3c9d51f4dfa00e4a05a09b5fd5",
+      "hostname": "nex-fresh-lab",
+      "revoked": false,
+      "connection": "fresh",
+      "last_seen": "2026-09-09T02:45:31.734419861Z",
+      "inventory": {
+        "observed_at": "2026-09-09T02:45:29.714699133Z",
+        "hostname": "nex-fresh-lab",
+        "cpu_model": "13th Gen Intel(R) Core(TM) i7-13700K",
+        "cpu_count": 4,
+        "memory_bytes": 12548624384,
+        "virtualization": [
+          "vmx",
+          "tpr_shadow",
+          "flexpriority",
+          "ept",
+          "vpid",
+          "ept_ad",
+          "vnmi"
+        ],
+        "os_version": "Nex Core 0.1.0-alpha1",
+        "agent_version": "0.1.0-dev",
+        "nics": [
+          {
+            "name": "lo",
+            "mac": "",
+            "addresses": [
+              "127.0.0.1/8",
+              "::1/128"
+            ],
+            "state": "unknown"
+          },
+          {
+            "name": "nex0",
+            "mac": "52:54:00:91:20:15",
+            "addresses": null,
+            "state": "up"
+          },
+          {
+            "name": "br0",
+            "mac": "52:54:00:91:20:15",
+            "addresses": [
+              "10.0.2.15/24",
+              "fec0::5054:ff:fe91:2015/64",
+              "fe80::5054:ff:fe91:2015/64"
+            ],
+            "state": "up"
+          },
+          {
+            "name": "vnet0",
+            "mac": "fe:54:00:72:a3:4e",
+            "addresses": [
+              "fe80::fc54:ff:fe72:a34e/64"
+            ],
+            "state": "unknown"
+          }
+        ],
+        "disks": [
+          {
+            "name": "/dev/fd0",
+            "size_bytes": 4096
+          },
+          {
+            "name": "/dev/sr0",
+            "size_bytes": 1073741312
+          },
+          {
+            "name": "/dev/vda",
+            "size_bytes": 137438953472
+          },
+          {
+            "name": "/",
+            "size_bytes": 127776755712,
+            "available_bytes": 117069615104
+          }
+        ],
+        "vms": [
+          {
+            "id": "72a34e46-5483-4239-b552-c18ddfa5e2d1",
+            "name": "nex-controller",
+            "state": "running"
+          },
+          {
+            "id": "3035054a-87b0-4adb-a40d-512ce050032b",
+            "name": "fresh-install-guest",
+            "state": "shut off"
+          }
+        ],
+        "checks": [
+          {
+            "freshness": "fresh",
+            "name": "block-disks",
+            "status": "healthy",
+            "observed_at": "2026-09-09T02:45:29.714699133Z",
+            "last_success": "2026-09-09T02:45:29.714699133Z"
+          },
+          {
+            "freshness": "fresh",
+            "name": "disk",
+            "status": "healthy",
+            "observed_at": "2026-09-09T02:45:29.714699133Z",
+            "last_success": "2026-09-09T02:45:29.714699133Z"
+          },
+          {
+            "freshness": "fresh",
+            "name": "inventory",
+            "status": "healthy",
+            "observed_at": "2026-09-09T02:45:29.714699133Z",
+            "last_success": "2026-09-09T02:45:29.714699133Z"
+          },
+          {
+            "freshness": "fresh",
+            "name": "kvm",
+            "status": "healthy",
+            "observed_at": "2026-09-09T02:45:29.714699133Z",
+            "last_success": "2026-09-09T02:45:29.714699133Z"
+          },
+          {
+            "freshness": "fresh",
+            "name": "libvirt",
+            "status": "healthy",
+            "observed_at": "2026-09-09T02:45:29.714699133Z",
+            "last_success": "2026-09-09T02:45:29.714699133Z"
+          }
+        ]
+      }
+    }
+  ],
+  "vms": [
+    {
+      "id": "72a34e46-5483-4239-b552-c18ddfa5e2d1",
+      "pool_id": "f83ac8fdb9226f1acd6437b43dcce8e5c2d8ce3c9d51f4dfa00e4a05a09b5fd5",
+      "host_id": "5fed69ca1dd993962d9264af45a20882ad9333733cb94d9f166850013c172c07",
+      "name": "nex-controller",
+      "role": "controller",
+      "protected": true,
+      "state": "running",
+      "freshness": "fresh"
+    },
+    {
+      "id": "3035054a-87b0-4adb-a40d-512ce050032b",
+      "pool_id": "f83ac8fdb9226f1acd6437b43dcce8e5c2d8ce3c9d51f4dfa00e4a05a09b5fd5",
+      "host_id": "5fed69ca1dd993962d9264af45a20882ad9333733cb94d9f166850013c172c07",
+      "name": "fresh-install-guest",
+      "role": "guest",
+      "protected": false,
+      "state": "shut off",
+      "freshness": "fresh",
+      "spec": {
+        "id": "3035054a-87b0-4adb-a40d-512ce050032b",
+        "pool_id": "f83ac8fdb9226f1acd6437b43dcce8e5c2d8ce3c9d51f4dfa00e4a05a09b5fd5",
+        "host_id": "5fed69ca1dd993962d9264af45a20882ad9333733cb94d9f166850013c172c07",
+        "name": "fresh-install-guest",
+        "storage_id": "1d6e373f757ff569ecd37344c3dc7e4a73000ceeef0ca260c983049ec4bd2ff9",
+        "network_id": "5ebcfb5b22c63a86450398c916952c8bc0f1108fc3bfe009f2dc5334ae9c0155",
+        "media_id": "0c349d65717ca146b8970fc5bee6b1b418c53ccee90c5d8a53da3c16b798a199",
+        "cpus": 2,
+        "memory_mib": 1024,
+        "disk_gib": 4,
+        "firmware": "uefi"
+      },
+      "operation_id": "d4c8e263dc72fce93e17bbbe568a98340684df2fcac0f375f1403ce599ec9cc2",
+      "status": "succeeded"
+    }
+  ],
+  "local_vms": [
+    {
+      "id": "72a34e46-5483-4239-b552-c18ddfa5e2d1",
+      "name": "nex-controller",
+      "state": "running",
+      "managed": true,
+      "power_allowed": true
+    },
+    {
+      "id": "3035054a-87b0-4adb-a40d-512ce050032b",
+      "name": "fresh-install-guest",
+      "state": "shut off",
+      "managed": false,
+      "power_allowed": false,
+      "blocked_reason": "VM is not owned by the local appliance engine"
+    }
+  ],
+  "stage": "post-reboot",
+  "checks": [
+    "Post-reboot root/central login, original enrolled host and both VM identities, running protected appliance and fresh stopped guest persistence"
+  ],
+  "captures": [
+    "browser-post-reboot-local.png",
+    "browser-post-reboot-central.png"
+  ],
+  "browser": "151.0.7922.34",
+  "environment": "Actual fresh ISO-installed nested KVM/libvirt with bundled systemd services; loopback forwards; no API mocking",
+  "artifacts": {
+    "iso_sha256": "5ca79c902ce39cb11c15f710abbf6629d2785089eb17b641435f8240af5e1dff",
+    "package_version": "0.1.0+managed1",
+    "package_sha256": "68816aa3975357881e0b946683fc37d604bd53022b8eeabcd48116352e2dce6f",
+    "installed_manifest": {
+      "architecture": "amd64",
+      "format": "qcow2",
+      "format_version": 1,
+      "image_sha256": "bce48d51651f17742cf452ae64a8456ac94af00d982c2896cd7a2446f6d29d88",
+      "minimum_disk_gib": 32,
+      "minimum_memory_mib": 4096,
+      "minimum_vcpus": 2,
+      "protocol_version": 1,
+      "version": "0.1.0+managed1"
+    }
+  },
+  "api_impact": "existing contract: browser exercises local deployment/session, Controller inventory, storage/network registration, ISO transfer and VM creation without changing interfaces",
+  "guide_impact": "none: verifies existing documented workflows; parent records updated evidence links"
+}

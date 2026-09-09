@@ -42,6 +42,9 @@ remain applicable. Existing standalone installer work is preserved.
 - Initialize Controller credentials and TLS per deployment, then create the first
   Site/Pool, enroll this host, and adopt the original appliance UUID. Remove bootstrap
   material after successful handoff. A running VM alone is not readiness.
+  **Note, 2026-09-09:** bootstrap now creates the Site only; the pool is created at
+  enrollment with this host as its pool master, and the deploy request carries no pool
+  name. See the [pool master model](2026-09-09-pool-master-model.md).
 - Local authenticated HTTPS remains independent of Controller. Restrict power
   actions to proven local ownership and serialize through the same VM engine.
   Controller power actions and general VM lifecycle remain separate Phase 2 work.

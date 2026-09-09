@@ -156,7 +156,7 @@ func (s *Service) runDeployment(id string) {
 	if !s.update(id, op) {
 		return
 	}
-	err = Handoff(s.ctx, HandoffConfig{ControllerURL: op.ControllerURL, ServerName: controllerServerName(v), TrustPEM: d.Certificate, AdminPassword: v.AdminPassword, SiteName: v.SiteName, PoolName: v.PoolName, VMID: op.VMID, Name: v.Name, RequestID: id, AgentStateDir: s.cfg.AgentStateDir})
+	err = Handoff(s.ctx, HandoffConfig{ControllerURL: op.ControllerURL, ServerName: controllerServerName(v), TrustPEM: d.Certificate, AdminPassword: v.AdminPassword, SiteName: v.SiteName, VMID: op.VMID, Name: v.Name, RequestID: id, AgentStateDir: s.cfg.AgentStateDir})
 	if err != nil {
 		op.Status = "needs_attention"
 		op.Error = "Controller setup needs recovery: " + err.Error()

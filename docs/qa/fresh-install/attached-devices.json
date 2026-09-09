@@ -1,0 +1,20 @@
+[
+  {
+    "device": "hostdisk",
+    "format": "raw",
+    "file": "host.raw",
+    "readonly": false
+  },
+  {
+    "device": "ide1-cd0",
+    "format": "raw",
+    "file": "nex-core-0.1.0-alpha1-amd64.iso",
+    "readonly": true
+  },
+  {
+    "device": "floppy0",
+    "format": null,
+    "file": "",
+    "readonly": null
+  }
+]

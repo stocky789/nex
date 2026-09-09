@@ -527,10 +527,11 @@ int main(int argc, char **argv)
     window = gtk_window_new(GTK_WINDOW_TOPLEVEL); gtk_window_set_title(GTK_WINDOW(window), "Install Nex Core"); gtk_window_set_decorated(GTK_WINDOW(window), FALSE); fit_screen(gtk_widget_get_screen(window), NULL); g_signal_connect(gtk_widget_get_screen(window), "size-changed", G_CALLBACK(fit_screen), NULL); g_signal_connect(window, "delete-event", G_CALLBACK(prevent_close), NULL);
     root = gtk_vbox_new(FALSE, 10); gtk_container_set_border_width(GTK_CONTAINER(root), 18); gtk_container_add(GTK_CONTAINER(window), root);
     header = gtk_hbox_new(FALSE, 12); gtk_box_pack_start(GTK_BOX(root), header, FALSE, FALSE, 0);
-    board = gdk_pixbuf_new_from_file("/usr/share/nex-installer/nex-brand.png", NULL);
-    if (board && gdk_pixbuf_get_width(board) >= 445 && gdk_pixbuf_get_height(board) >= 606) { crop = gdk_pixbuf_new_subpixbuf(board, 45, 510, 400, 96); scaled = gdk_pixbuf_scale_simple(crop, 200, 48, GDK_INTERP_BILINEAR); brand = gtk_image_new_from_pixbuf(scaled); atk_object_set_name(gtk_widget_get_accessible(brand), "Nex Core"); g_object_unref(scaled); g_object_unref(crop); }
+    board = gdk_pixbuf_new_from_file("/usr/share/nex-installer/nex-core-lockup.png", NULL);
+    if (board && gdk_pixbuf_get_width(board) >= 2030 && gdk_pixbuf_get_height(board) >= 550) { crop = gdk_pixbuf_new_subpixbuf(board, 150, 190, 1880, 360); scaled = gdk_pixbuf_scale_simple(crop, 200, 38, GDK_INTERP_BILINEAR); brand = gtk_image_new_from_pixbuf(scaled); atk_object_set_name(gtk_widget_get_accessible(brand), "Nex Core"); g_object_unref(scaled); g_object_unref(crop); }
     else brand = label("Nex Core");
     if (board) g_object_unref(board);
+    gtk_widget_set_size_request(brand, 200, 48);
     gtk_box_pack_start(GTK_BOX(header), brand, FALSE, FALSE, 0); gtk_box_pack_end(GTK_BOX(header), label("HOST INSTALLATION"), FALSE, FALSE, 0);
     body = gtk_hbox_new(FALSE, 18); gtk_box_pack_start(GTK_BOX(root), body, TRUE, TRUE, 0);
     steps = gtk_vbox_new(FALSE, 22); gtk_widget_set_size_request(steps, 108, -1); gtk_box_pack_start(GTK_BOX(body), steps, FALSE, FALSE, 0);

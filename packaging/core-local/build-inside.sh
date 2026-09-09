@@ -4,14 +4,16 @@ set -euo pipefail
 mkdir /build
 cd /build
 tar -xzf /input/nex-source.tar.gz --strip-components=1
-go build -mod=vendor -trimpath -o /build/nex-core-local ./cmd/nex-core-local
+go build -mod=vendor -trimpath -ldflags "-X nex.local/nex/internal/version.Version=${NEX_VERSION}" -o /build/nex-core-local ./cmd/nex-core-local
 (cd web && npm ci && npm run typecheck && npm run build)
 cc -Wall -Wextra -Werror -O2 packaging/core-local/nex-root-auth.c -lpam -o /build/nex-root-auth
 pkg=/build/package
 install -d "$pkg/DEBIAN" "$pkg/usr/lib/nex" "$pkg/usr/lib/systemd/system" "$pkg/usr/share/nex/core-local/web" "$pkg/usr/share/nex/appliance" "$pkg/usr/share/doc/nex-core-local"
-install -d "$pkg/etc/pam.d"
+install -d "$pkg/etc/pam.d" "$pkg/etc/nex"
+printf 'repo_url=http://172.16.4.3:8080/apt\n' > "$pkg/etc/nex/updates.conf"
+install -m644 packaging/core-local/nex.list.example "$pkg/usr/share/nex/core-local/"
 install -m644 packaging/core-local/nex-core-local.pam "$pkg/etc/pam.d/nex-core-local"
-printf '/etc/pam.d/nex-core-local\n' > "$pkg/DEBIAN/conffiles"
+printf '/etc/pam.d/nex-core-local\n/etc/nex/updates.conf\n' > "$pkg/DEBIAN/conffiles"
 install -m755 /build/nex-root-auth "$pkg/usr/lib/nex/"
 install -m755 /build/nex-core-local "$pkg/usr/lib/nex/"
 install -m755 packaging/core-local/core-local-setup "$pkg/usr/lib/nex/"

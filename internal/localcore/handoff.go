@@ -25,16 +25,22 @@ import (
 	"nex.local/nex/internal/agent"
 )
 
-type HandoffConfig struct{ ControllerURL, ServerName, TrustPEM, AdminPassword, SiteName, PoolName, VMID, Name, RequestID, AgentStateDir string }
+type HandoffConfig struct{ ControllerURL, ServerName, TrustPEM, AdminPassword, SiteName, VMID, Name, RequestID, AgentStateDir string }
 
 type handoffHTTP struct {
 	client       *http.Client
 	origin, csrf string
 }
 
-func newHandoffHTTP(origin, trust string, serverName ...string) (*handoffHTTP, error) {
+// validHTTPSOrigin rejects anything but a bare HTTPS origin: no userinfo, query,
+// fragment or path beyond "/". Shared by handoff and host-local enrollment.
+func validHTTPSOrigin(origin string) bool {
 	u, err := url.Parse(origin)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && (u.Path == "" || u.Path == "/")
+}
+
+func newHandoffHTTP(origin, trust string, serverName ...string) (*handoffHTTP, error) {
+	if !validHTTPSOrigin(origin) {
 		return nil, errors.New("controller must be an HTTPS origin")
 	}
 	roots := x509.NewCertPool()
@@ -129,6 +135,7 @@ type runningAgent struct {
 	store                     *agent.Store
 	hostID, controller, trust string
 	started                   bool
+	stop                      context.CancelFunc
 	done                      chan struct{}
 }
 
@@ -154,26 +161,40 @@ func getHandoffAgent(dir string) (*runningAgent, error) {
 	handoffAgents.entries[key] = a
 	return a, nil
 }
+// startHandoffAgent runs the embedded agent under a context derived from ctx (the
+// service lifetime), so a.stop can pause this one agent — e.g. so a live
+// re-enrollment can safely mutate its store — without tearing down the registry
+// entry or the service itself. Cleanup (closing the store, dropping the entry) only
+// runs when ctx itself ends; a directly-invoked a.stop leaves both intact so the
+// caller can call startHandoffAgent again to resume with a mutated identity.
 func startHandoffAgent(ctx context.Context, dir string, a *runningAgent) {
 	if a.started {
 		return
 	}
 	a.started = true
+	agentCtx, cancel := context.WithCancel(ctx)
+	a.stop = cancel
+	a.done = make(chan struct{})
+	done := a.done
 	key, _ := filepath.Abs(dir)
 	go func() {
 		if a.hostID != "" {
-			err := agent.Run(ctx, a.store, agent.RunConfig{Heartbeat: time.Second, ProbeInterval: 5 * time.Second, ProbeTimeout: 3 * time.Second})
+			err := agent.Run(agentCtx, a.store, agent.RunConfig{Heartbeat: time.Second, ProbeInterval: 5 * time.Second, ProbeTimeout: 3 * time.Second})
 			if err != nil {
 				log.Printf("local agent stopped: %v", err)
 			}
 		} else {
-			<-ctx.Done()
+			<-agentCtx.Done()
 		}
-		close(a.done)
 		handoffAgents.Lock()
-		defer handoffAgents.Unlock()
-		a.store.Close()
-		delete(handoffAgents.entries, key)
+		a.started = false
+		a.stop = nil
+		if ctx.Err() != nil {
+			a.store.Close()
+			delete(handoffAgents.entries, key)
+		}
+		handoffAgents.Unlock()
+		close(done)
 	}()
 }
 
@@ -197,9 +218,9 @@ func ResumeAgent(ctx context.Context, dir string) error {
 }
 
 type handoffState struct {
-	RequestID, ControllerURL, TrustPEM, SiteName, PoolName, VMID, Name, Token, PoolID string
-	Completed                                                                         bool
-	ReadyVersion                                                                      int
+	RequestID, ControllerURL, TrustPEM, SiteName, VMID, Name, Token, PoolID string
+	Completed                                                               bool
+	ReadyVersion                                                            int
 }
 
 func saveHandoffState(dir string, s handoffState) error {
@@ -234,7 +255,7 @@ func saveHandoffState(dir string, s handoffState) error {
 	return d.Sync()
 }
 func loadHandoffState(c HandoffConfig) (handoffState, error) {
-	want := handoffState{RequestID: c.RequestID, ControllerURL: c.ControllerURL, TrustPEM: c.TrustPEM, SiteName: c.SiteName, PoolName: c.PoolName, VMID: c.VMID, Name: c.Name}
+	want := handoffState{RequestID: c.RequestID, ControllerURL: c.ControllerURL, TrustPEM: c.TrustPEM, SiteName: c.SiteName, VMID: c.VMID, Name: c.Name}
 	path := filepath.Join(c.AgentStateDir, "handoff.json")
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
@@ -359,17 +380,8 @@ func Handoff(ctx context.Context, c HandoffConfig) error {
 		defer cancel()
 		h.call(logout, "DELETE", "/api/v1/session", nil, nil)
 	}()
-	var bootstrap struct {
-		PoolID string `json:"pool_id"`
-	}
-	if _, err = h.call(ctx, "POST", "/api/v1/appliances/bootstrap", map[string]string{"request_id": c.RequestID, "site_name": c.SiteName, "pool_name": c.PoolName, "enrollment_token": state.Token}, &bootstrap); err != nil {
-		return err
-	}
-	if bootstrap.PoolID == "" || (state.PoolID != "" && state.PoolID != bootstrap.PoolID) {
-		return errors.New("bootstrap returned inconsistent pool identity")
-	}
-	state.PoolID = bootstrap.PoolID
-	if err = saveHandoffState(c.AgentStateDir, state); err != nil {
+	// The pool is created at enrollment with the appliance host as master; adoption reports it.
+	if _, err = h.call(ctx, "POST", "/api/v1/appliances/bootstrap", map[string]string{"request_id": c.RequestID, "site_name": c.SiteName, "enrollment_token": state.Token}, nil); err != nil {
 		return err
 	}
 	if a.hostID == "" {
@@ -390,10 +402,20 @@ func Handoff(ctx context.Context, c HandoffConfig) error {
 			PoolID string `json:"pool_id"`
 			HostID string `json:"host_id"`
 		}
-		status, e := h.call(wait, "POST", "/api/v1/appliances/adopt", map[string]string{"request_id": c.RequestID, "pool_id": state.PoolID, "host_id": a.hostID, "vm_id": c.VMID, "name": c.Name}, &adopted)
+		adopt := map[string]string{"request_id": c.RequestID, "host_id": a.hostID, "vm_id": c.VMID, "name": c.Name}
+		if state.PoolID != "" {
+			adopt["pool_id"] = state.PoolID
+		}
+		status, e := h.call(wait, "POST", "/api/v1/appliances/adopt", adopt, &adopted)
 		if e == nil {
-			if adopted.ID != c.VMID || adopted.PoolID != state.PoolID || adopted.HostID != a.hostID {
+			if adopted.ID != c.VMID || adopted.PoolID == "" || (state.PoolID != "" && adopted.PoolID != state.PoolID) || adopted.HostID != a.hostID {
 				return errors.New("Controller adoption returned inconsistent ownership")
+			}
+			if state.PoolID == "" {
+				state.PoolID = adopted.PoolID
+				if err = saveHandoffState(c.AgentStateDir, state); err != nil {
+					return err
+				}
 			}
 			if err = h.waitApplianceReady(ctx); err != nil {
 				return err

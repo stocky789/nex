@@ -42,7 +42,7 @@ candidate remain follow-on proposals, not new first-release commitments.
 | Drag/drop ISO and template management | ISO upload in Phase 2; templates follow reliable VM creation | Drag/drop and an accessible file chooser use the same upload flow with explicit destination, size/free-space validation, progress, and interrupted-upload cleanup. Incomplete media cannot be selected. Templates/clones remain a separate follow-on capability with unique guest identity and safe in-use deletion rules. |
 | Easy GPU/PCI passthrough | Agreed follow-on; excluded from initial release | Follow the [NVIDIA/AMD hardware passthrough gate](2026-09-08-nex-platform.md#guided-hardware-passthrough): guided discovery and assignment after validated isolation, exclusive ownership, reset/recovery, and protection of host-critical devices. Explain migration/backup limitations and verify on selected disposable hardware. |
 | One-click backup policies | Phase 6, after backup/restore proof | Offer a short preset-based setup with explicit VM scope, independent repository, schedule/time zone, retention, and downtime/consistency review. Applying an already reviewed policy can be quick; do not guess the destination or promise an RPO. Show next run, missed/failed jobs, and last verified restore separately from backup success. |
-| Simple cluster joining | Host enrollment in Phase 1, installer integration in 3, second host in 4 | Use “Add host to pool”: select site/pool, verify controller and host identity, use a short-lived single-use token, show preflight and durable progress, and reconcile reconnect/retry without duplicate membership. Enrollment grants neither shared-storage access nor HA automatically. |
+| Simple cluster joining | Host enrollment in Phase 1 (each enrolled host becomes master of its own automatic pool), installer integration in 3, member join in 4 | Phase 4 “Add host to pool” joins an existing pool as a member under its master: select the pool, verify controller and host identity, show preflight and durable progress, and reconcile reconnect/retry without duplicate membership. Enrollment grants neither shared-storage access nor HA automatically. |
 | Integrated dark mode | Theme-ready shell in Phases 1–2; optional dark-theme candidate after shell review | Use shared semantic surface/text/status tokens; retain approved light/blue branding as default. If delivered, provide an explicit light/dark/system preference and review forms, tables, dialogs, focus, and status contrast in both themes. Preserve colorful application icons in Phase 10. |
 
 ### Planned API flow assessment
@@ -62,6 +62,8 @@ alone need no extra endpoint.
 | Backup policy shortcut | Validate/save policy and schedule jobs → existing backup/restore commands of Phase 6 → job, manifest, and verification records | Phase 6 new contracts; presets reuse policy operations, with missed-run and conflict behavior intact. |
 | Global search / palette candidate | Query permission-scoped controller inventory or open an authorized workflow → no separate Core command → scoped objects or normal operation record | Assess a client search contract when implemented; reuse existing list operations if sufficient. Palette mutations use ordinary authorized operations. |
 | Agreed passthrough follow-on | Discover/reserve/attach/detach device → capability/isolation checks and libvirt/device changes → reconciled ownership and VM configuration | Planned new contract in the hardware passthrough gate, reusing earlier inventory/VM operations; includes version/capability gating and failure/reconnect recovery on both sides. |
+
+**Superseding decision, 2026-09-09:** pools are no longer selected or created by operators (each enrolling host becomes master of its own automatically created pool, tokens bind to a site), and **Add host** is implemented as address + root password with fingerprint confirmation pushed from the Controller, with the manual token as fallback; see [simple host enrollment](2026-09-09-simple-host-enrollment.md) and [pool master model](2026-09-09-pool-master-model.md). The Phase 4 “Add host to pool” member-join workflow above still stands.
 
 Every operation-bearing slice retains API authentication/authorization, validation/errors, durable
 results, safe retries and outage reconciliation, and Controller/Core compatibility checks from the
@@ -87,7 +89,7 @@ Evidence: [Proxmox VM guide](https://github.com/proxmox/pve-docs/blob/master/qm.
 
 ### First: make one host usable
 
-- Login, site/pool creation, host enrollment, observed host capabilities and freshness.
+- Login, site creation, host enrollment (the first enrolled host becomes master of its automatic pool), observed host capabilities and freshness.
 - VM create/install, ISO selection, console, power controls, disk persistence, and clear pending changes.
 - Pool-owned local storage and explicit mapping to an existing guest network.
 - Useful resource tables, task history, failure reasons, and deletion protection.
@@ -170,7 +172,7 @@ Initially search the current list/tree. Introduce permission-scoped global searc
 
 | Phase | Surface | Essential content |
 |---|---|---|
-| 1 | Setup and enrollment | Create site/pool, enrollment instructions, connection status, useful next action |
+| 1 | Setup and enrollment | Create site; the first enrolled host becomes master of its automatic pool; enrollment instructions, connection status, useful next action |
 | 1–2 | Pool | Overview, Hosts, VMs, Storage, Networks, Tasks; only expose functional tabs/actions |
 | 2 | Host | Summary, capacity/freshness, VMs, existing network/storage access, tasks |
 | 2 | VM | Summary, Console, Hardware, Tasks; current/pending settings and clear power state |

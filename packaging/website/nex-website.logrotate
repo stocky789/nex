@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+/var/log/nex-website/*.log {
+    daily
+    rotate 7
+    maxsize 10M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    create 0640 nex-website nex-website
+    su nex-website nex-website
+    sharedscripts
+    postrotate
+        systemctl kill -s USR1 nex-website.service >/dev/null 2>&1 || true
+    endscript
+}
