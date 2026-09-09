@@ -4,6 +4,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"nex.local/nex/internal/protocol"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -211,5 +212,37 @@ func TestVirtualizationInventoryExcludesUnrelatedCPUFlags(t *testing.T) {
 	want := []string{"vmx", "ept", "vpid", "svm", "npt", "nrip_save", "avic"}
 	if got := m.Snapshot().Virtualization; !reflect.DeepEqual(got, want) {
 		t.Fatalf("virtualization = %v, want %v", got, want)
+	}
+}
+
+func TestSnapshotAttachesGuestObservationsToRunningVMsOnly(t *testing.T) {
+	guest := &protocol.GuestInfo{Agent: "connected", Hostname: "g1", Clipboard: "ready", Resize: true}
+	m := NewMonitor(time.Second, map[string]Probe{
+		"libvirt": func(context.Context) (any, error) {
+			return []protocol.VM{{ID: "A", Name: "one", State: "running"}, {ID: "B", Name: "two", State: "shut off"}}, nil
+		},
+		"guest": func(context.Context) (any, error) {
+			return []guestObservation{{"a", guest}, {"B", &protocol.GuestInfo{Agent: "connected"}}}, nil
+		},
+	})
+	m.Tick(context.Background())
+	waitProbe(t, m, "libvirt", "healthy")
+	waitProbe(t, m, "guest", "healthy")
+	vms := m.Snapshot().VMs
+	if len(vms) != 2 || !reflect.DeepEqual(vms[0].Guest, guest) || vms[1].Guest != nil {
+		t.Fatalf("guest attachment wrong: %+v", vms)
+	}
+	// A guest probe that later fails keeps its retained data out of the snapshot.
+	fail := NewMonitor(50*time.Millisecond, map[string]Probe{
+		"libvirt": func(context.Context) (any, error) {
+			return []protocol.VM{{ID: "A", Name: "one", State: "running"}}, nil
+		},
+		"guest": func(ctx context.Context) (any, error) { <-ctx.Done(); return []guestObservation{{"A", guest}}, nil },
+	})
+	fail.Tick(context.Background())
+	waitProbe(t, fail, "libvirt", "healthy")
+	time.Sleep(80 * time.Millisecond)
+	if vms := fail.Snapshot().VMs; len(vms) != 1 || vms[0].Guest != nil {
+		t.Fatalf("stale guest data attached: %+v", vms)
 	}
 }

@@ -12,18 +12,25 @@ see [licensing](../docs/LICENSING.md) before distributing an image.
 
 ## Build
 
-On an amd64 Linux machine with Docker, network access and approximately 10 GB free.
-A built `nex-core-local_*.deb` must exist under `dist/core-local/` (or set
-`CORE_LOCAL_DEB` to a package path inside this repository):
+On an amd64 Linux machine with Docker, network access, the pinned Debian cloud
+base image under `.cache/appliance/`, and the appliance signing key:
 
 ```sh
 ./installer/build.sh
 ```
 
-Every ISO build regenerates `dist/nex-source.tar.gz`, injects that archive into the
-`nex-core-local` package on the media, and ships the same corresponding source (plus
-the installer recipe) as `/nex/nex-source.tar.gz` on the ISO. Do not reuse a stale
-hand-built source tarball.
+Every ISO build always rebuilds from the current tree:
+
+1. Corresponding source archive (`scripts/build-source.py`)
+2. Controller appliance qcow (`appliance/build.py`) with that source
+3. `nex-core-local` package from that appliance + source
+4. The ISO itself
+
+Reusing an older `CORE_LOCAL_DEB` is rejected. Set `NEX_VERSION` (default `0.1.5~alpha1`; use `~` for pre-release marks so a later final version sorts above it).
+Signing defaults to `~/.local/share/nex-dev/nex-appliance-signing.pem`; override with
+`NEX_APPLIANCE_SIGNING_KEY`, `NEX_APPLIANCE_BASE_IMAGE`, and `NEX_APPLIANCE_BASE_SHA256`.
+The build refuses to finish unless Core package source, Controller appliance source,
+and appliance version all match this build.
 
 The builder is pinned to a Debian container digest. It verifies the base ISO
 against a pinned SHA256 and Debian's signed checksum list using the documented
@@ -33,7 +40,7 @@ cannot accidentally be omitted. The host-local UI package is copied into the off
 repository and installed with the hypervisor packages. Installation uses only the
 bundled local repository.
 
-Output: `dist/nex-core-0.1.0-alpha1-amd64.iso`, its SHA256 file, package manifest,
+Output: `dist/nex-core-<version>-amd64.iso` (version = the `nex-core-local` package it installs), its SHA256 file, package manifest,
 and build record. Cache/extracted media: `.cache/nex-iso/`. Exact Nex recipe source,
 license notices and source checksum are included on the ISO and installed host.
 The custom graphical frontend is built from authenticated cdebconf 0.280 source;

@@ -33,8 +33,13 @@ func TestLocalUpdatesAuthAndApply(t *testing.T) {
 	mux.HandleFunc("/apt/nex-core-local_9.9.9_amd64.deb", func(w http.ResponseWriter, r *http.Request) {
 		w.Write(payload)
 	})
-	srv := httptest.NewServer(mux)
+	// NormalizeRepoURL rewrites plain-http loopback URLs to the public repo, so the
+	// test server must be TLS and trusted through the package HTTP client.
+	srv := httptest.NewTLSServer(mux)
 	t.Cleanup(srv.Close)
+	prevHTTP := nexupdate.HTTPClient
+	nexupdate.HTTPClient = srv.Client()
+	t.Cleanup(func() { nexupdate.HTTPClient = prevHTTP })
 	t.Setenv("NEX_UPDATE_REPO", srv.URL+"/apt")
 
 	s, _ := testService(t)

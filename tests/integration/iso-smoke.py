@@ -99,6 +99,9 @@ check_identity() {
     test "$ID" = nex-core
     test "$ID_LIKE" = debian
     test "$NAME" = 'Nex Core'
+    test "$VERSION_ID" = "$(dpkg-query -W -f='${Version}' nex-core-local)"
+    test "$PRETTY_NAME" = "Nex Core $VERSION_ID"
+    grep -qF "$PRETTY_NAME" /etc/motd /etc/issue
     test -s /etc/debian_version
     ( . /usr/lib/os-release; test "$ID" = debian )
     grep -q Nex /etc/default/grub.d/nex-core.cfg

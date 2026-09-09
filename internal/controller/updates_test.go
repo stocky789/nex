@@ -29,8 +29,13 @@ func TestUpdatesAuthAndApply(t *testing.T) {
 			},
 		})
 	})
-	srv := httptest.NewServer(mux)
+	// NormalizeRepoURL rewrites plain-http loopback URLs to the public repo, so the
+	// test server must be TLS and trusted through the package HTTP client.
+	srv := httptest.NewTLSServer(mux)
 	t.Cleanup(srv.Close)
+	prevHTTP := nexupdate.HTTPClient
+	nexupdate.HTTPClient = srv.Client()
+	t.Cleanup(func() { nexupdate.HTTPClient = prevHTTP })
 	t.Setenv("NEX_UPDATE_REPO", srv.URL+"/apt")
 
 	helper := filepath.Join(t.TempDir(), "apply-update")

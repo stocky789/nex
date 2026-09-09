@@ -234,7 +234,7 @@ function App() {
   const generation = useRef(0);
   const reloadOrdinal = useRef(0);
   const [kind, id] = route.split("/").filter(Boolean);
-  const vm = data.vms.find(v => kind === "vms" && v.id === id);
+  const vm = data.vms.find(v => (kind === "vms" || kind === "console") && v.id === id);
   const host = data.hosts.find((h) => kind === "hosts" && h.id === id);
   const pool = data.pools.find(
     (p) => p.id === (vm?.pool_id || host?.pool_id || (kind === "pools" ? id : "")),
@@ -315,6 +315,10 @@ function App() {
     if (requestGeneration !== generation.current)
       throw new Error("Session changed. Sign in and retry the action.");
     return result;
+  }
+  async function openConsole(id: string) {
+    const ticket = await api<{ websocket: string }>(`vms/${encodeURIComponent(id)}/console`, "POST", {});
+    return `wss://${location.host}${ticket.websocket}`;
   }
   async function reload() {
     const current = generation.current;
@@ -490,6 +494,15 @@ function App() {
           <span>Nex Controller · AGPL-3.0-only</span>
         </footer>
       </main>
+    );
+  // Console-only page for a separate browser window; the VM page's Console tab links here.
+  if (kind === "console")
+    return (
+      <div className="console-page">
+        <div className="console-page-bar"><a href={`#/vms/${id}`}>Nex Controller</a><strong>{vm ? vm.name : "VM console"}</strong>{vm && <span className="muted">{vm.state || "unknown"}</span>}</div>
+        {vm ? <Console key={vm.id} name={vm.name} guest={vm.guest} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={() => openConsole(vm.id)} />
+          : <p className="empty">{loading ? "Loading…" : error || "This VM is not known to Nex Controller. Choose it from the Resources tree."}</p>}
+      </div>
     );
   const invalid = Boolean(
     kind &&
@@ -1041,10 +1054,7 @@ function App() {
               {pool && !host && !vm && <ManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} tab={tab} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={setTab} unavailable={Boolean(error)} />}
               {vm && tab !== "Activity" && <VMPower key={`power-${vm.id}`} vm={vm} host={data.hosts.find(h => h.id === vm.host_id)} api={api} reload={reload} busy={busy} unavailable={Boolean(error)} onNotice={setNotice} />}
               {vm && tab === "General" && <VMDetails vm={vm} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} />}
-              {vm && tab === "Console" && <Console key={vm.id} name={vm.name} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={async () => {
-                const ticket = await api<{ websocket: string }>(`vms/${encodeURIComponent(vm.id)}/console`, "POST", {});
-                return `wss://${location.host}${ticket.websocket}`;
-              }} />}
+              {vm && tab === "Console" && <Console key={vm.id} name={vm.name} guest={vm.guest} popout={`#/console/${vm.id}`} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={() => openConsole(vm.id)} />}
               <div hidden={Boolean(vm) || tab === "Activity" || Boolean(pool && !host && tab !== "General")}>
               {!host && (
                 <div className="metrics">
@@ -1273,7 +1283,7 @@ function UpdatesPanel({
         </div>
         <div>
           <dt>Available</dt>
-          <dd>{update?.available_version || (update ? "—" : "—")}</dd>
+          <dd>{!update ? "—" : update.update_available ? (update.available_version || "—") : "Up to date"}</dd>
         </div>
       </dl>
       {(working || phase === "done") && <p className="small" role="status">{label}</p>}
@@ -1346,10 +1356,8 @@ function HostDetails({ host, master, tab }: { host: Host; master: boolean; tab: 
               <dd>{size(inv.memory_bytes)}</dd>
               <dt>Virtualization features</dt>
               <dd>{inv.virtualization?.join(", ") || "None reported"}</dd>
-              <dt>Operating system</dt>
+              <dt>Version</dt>
               <dd>{inv.os_version}</dd>
-              <dt>Agent version</dt>
-              <dd>{inv.agent_version}</dd>
             </>
           )}
         </Details>

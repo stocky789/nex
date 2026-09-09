@@ -42,6 +42,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-system-x86 python3-pil
-          python3 tests/integration/wizard-review.py dist/nex-core-0.1.0-alpha1-amd64.iso --kernel .cache/nex-iso/stage/install.amd/vmlinuz --initrd .cache/nex-iso/stage/install.amd/gtk/initrd.gz --output /tmp/nex-wizard-review
-          python3 tests/integration/wizard-review.py dist/nex-core-0.1.0-alpha1-amd64.iso --kernel .cache/nex-iso/stage/install.amd/vmlinuz --initrd .cache/nex-iso/stage/install.amd/gtk/initrd.gz --output /tmp/nex-wizard-review-large --resolution 1024x768 --nics 2
-          python3 tests/integration/installer-progress.py dist/nex-core-0.1.0-alpha1-amd64.iso --kernel .cache/nex-iso/stage/install.amd/vmlinuz --initrd .cache/nex-iso/stage/install.amd/gtk/initrd.gz --output /tmp/nex-installer-progress
+          python3 tests/integration/wizard-review.py dist/nex-core-*-amd64.iso --kernel .cache/nex-iso/stage/install.amd/vmlinuz --initrd .cache/nex-iso/stage/install.amd/gtk/initrd.gz --output /tmp/nex-wizard-review
+          python3 tests/integration/wizard-review.py dist/nex-core-*-amd64.iso --kernel .cache/nex-iso/stage/install.amd/vmlinuz --initrd .cache/nex-iso/stage/install.amd/gtk/initrd.gz --output /tmp/nex-wizard-review-large --resolution 1024x768 --nics 2
+          python3 tests/integration/installer-progress.py dist/nex-core-*-amd64.iso --kernel .cache/nex-iso/stage/install.amd/vmlinuz --initrd .cache/nex-iso/stage/install.amd/gtk/initrd.gz --output /tmp/nex-installer-progress

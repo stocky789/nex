@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"nex.local/nex/internal/protocol"
+	"slices"
 	"time"
 )
 
@@ -80,6 +81,18 @@ func validateInventory(v *protocol.Inventory) error {
 	for _, vm := range v.VMs {
 		if !nameValid(vm.ID) || !nameValid(vm.Name) || len(vm.State) > 100 {
 			return errors.New("invalid VM")
+		}
+		if g := vm.Guest; g != nil {
+			if !slices.Contains([]string{"connected", "unresponsive", "disconnected", "no-channel"}, g.Agent) ||
+				!slices.Contains([]string{"ready", "waiting", "no-channel"}, g.Clipboard) ||
+				len(g.OS) > 4096 || len(g.Hostname) > 200 || len(g.Addresses) > 32 {
+				return errors.New("invalid VM")
+			}
+			for _, a := range g.Addresses {
+				if len(a.Interface) > 200 || len(a.Address) > 100 {
+					return errors.New("invalid VM")
+				}
+			}
 		}
 	}
 	return nil

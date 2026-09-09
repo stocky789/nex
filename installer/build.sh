@@ -4,64 +4,117 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Every ISO build regenerates corresponding source and injects it into the
-# nex-core-local package copied onto the media, so installs never ship stale
-# AGPL source from an older package rebuild.
-prepare_iso_core_local() {
-    local src_deb=$1
-    local out_deb=$2
-    local extract work
-    [[ -f $src_deb ]] || { echo "missing nex-core-local package: $src_deb" >&2; exit 1; }
-    [[ -f dist/nex-source.tar.gz ]] || { echo 'dist/nex-source.tar.gz missing after build-source' >&2; exit 1; }
+# Every ISO build rebuilds from current tree source:
+#   1) corresponding source archive
+#   2) Controller appliance (qcow with current nex-controller/UI)
+#   3) nex-core-local package from that appliance + source
+# Reusing an older CORE_LOCAL_DEB is intentionally not supported.
+default_appliance_base=.cache/appliance/debian-13-genericcloud-amd64-20260831-2587.qcow2
+default_appliance_sha256=85a969b7e99d7c817414136033df18c58d5c45ac8d27bb36e8ccb67173d2d4e3
+default_signing_key=$HOME/.local/share/nex-dev/nex-appliance-signing.pem
+
+rebuild_iso_artifacts() {
+    local version=$1
+    local docker_bin=${NEX_DOCKER:-docker}
+    local signing_key=${NEX_APPLIANCE_SIGNING_KEY:-$default_signing_key}
+    local base_image=${NEX_APPLIANCE_BASE_IMAGE:-$default_appliance_base}
+    local base_sha=${NEX_APPLIANCE_BASE_SHA256:-$default_appliance_sha256}
+    local appliance_out=.cache/nex-iso/appliance
+    local trusted_key=.cache/nex-iso/release-public-key.raw
+    local package_out=.cache/nex-iso/core-local
+    [[ -f $signing_key ]] || { echo "appliance signing key missing: $signing_key (set NEX_APPLIANCE_SIGNING_KEY)" >&2; exit 1; }
+    [[ -f $base_image ]] || { echo "Debian cloud base image missing: $base_image (set NEX_APPLIANCE_BASE_IMAGE)" >&2; exit 1; }
+    python3 scripts/build-source.py
+    rm -rf "$appliance_out"
+    mkdir -p "$appliance_out"
+    # Rebuilds dist/nex-source.tar.gz again and embeds that exact archive in the qcow.
+    python3 appliance/build.py \
+        --base-image "$base_image" \
+        --base-sha256 "$base_sha" \
+        --version "$version" \
+        --signing-key "$signing_key" \
+        --output "$appliance_out" \
+        --docker "$docker_bin"
+    install -m644 "$appliance_out/public-key.raw" "$trusted_key"
+    # Use the same source snapshot the appliance just embedded — do not regenerate
+    # again, or Core and Controller could diverge.
+    product_source=$(sha256sum dist/nex-source.tar.gz | awk '{print $1}')
+    appliance_source=$(sha256sum "$appliance_out/nex-source.tar.gz" | awk '{print $1}')
+    [[ $product_source == "$appliance_source" ]] || {
+        echo "dist/nex-source.tar.gz ($product_source) != appliance source ($appliance_source)" >&2
+        exit 1
+    }
+    rm -rf "$package_out"
+    mkdir -p "$package_out"
+    python3 packaging/core-local/build.py \
+        --source dist/nex-source.tar.gz \
+        --bundle "$appliance_out" \
+        --trusted-key "$trusted_key" \
+        --version "$version" \
+        --output "$package_out" \
+        --docker "$docker_bin"
+    mkdir -p dist/core-local dist/appliance
+    cp -f "$package_out/nex-core-local_${version}_amd64.deb" "dist/core-local/"
+    rm -rf dist/appliance/*
+    cp -a "$appliance_out"/. dist/appliance/
+}
+
+assert_iso_artifacts_current() {
+    local deb=$1
+    local want=$2
+    local work extract appliance_version package_source product_source appliance_source
     work=$(mktemp -d)
     extract=$work/pkg
-    mkdir -p "$extract"
-    dpkg-deb -x "$src_deb" "$extract"
-    dpkg-deb -e "$src_deb" "$extract/DEBIAN"
-    install -d "$extract/usr/share/nex/core-local"
-    install -m644 dist/nex-source.tar.gz "$extract/usr/share/nex/core-local/nex-source.tar.gz"
-    mkdir -p "$(dirname "$out_deb")"
-    fakeroot dpkg-deb -Zxz -b "$extract" "$out_deb"
+    dpkg-deb -x "$deb" "$extract"
+    appliance_version=$(python3 -c "import json; print(json.load(open('$extract/usr/share/nex/appliance/manifest.json'))['version'])")
+    package_source=$(sha256sum "$extract/usr/share/nex/core-local/nex-source.tar.gz" | awk '{print $1}')
+    product_source=$(sha256sum dist/nex-source.tar.gz | awk '{print $1}')
+    appliance_source=$(sha256sum "$extract/usr/share/nex/appliance/nex-source.tar.gz" | awk '{print $1}')
     rm -rf "$work"
+    [[ $appliance_version == "$want" ]] || {
+        echo "Controller appliance in package is $appliance_version; expected $want from this ISO build." >&2
+        exit 1
+    }
+    [[ $package_source == "$product_source" ]] || {
+        echo "Core package source digest $package_source does not match dist/nex-source.tar.gz $product_source." >&2
+        exit 1
+    }
+    # Appliance source is captured when the qcow is built; it must still match the
+    # product source used for this ISO (no intervening tree drift).
+    [[ $appliance_source == "$product_source" ]] || {
+        echo "Controller appliance source digest $appliance_source does not match dist/nex-source.tar.gz $product_source." >&2
+        echo "Rebuild refused: Core and Controller must share the same current source snapshot." >&2
+        exit 1
+    }
 }
 
 if [[ ${1:-} != --inside ]]; then
     mkdir -p .cache/nex-iso dist
-    python3 scripts/build-source.py
-    docker build -t nex-iso-builder -f installer/Dockerfile installer
-    env_args=()
-    core_local_deb=${CORE_LOCAL_DEB:-}
-    if [[ -z $core_local_deb ]]; then
-        shopt -s nullglob
-        core_local_candidates=(dist/core-local/nex-core-local_*_amd64.deb)
-        shopt -u nullglob
-        if [[ ${#core_local_candidates[@]} -eq 0 ]]; then
-            echo 'nex-core-local .deb required: set CORE_LOCAL_DEB or place a package under dist/core-local/' >&2
-            exit 1
-        fi
-        core_local_deb=$(ls -1t "${core_local_candidates[@]}" | head -n1)
+    version=${NEX_VERSION:-0.1.5~alpha1}
+    docker_bin=${NEX_DOCKER:-docker}
+    if [[ -n ${CORE_LOCAL_DEB:-} || ${NEX_SKIP_APPLIANCE_REBUILD:-} == 1 ]]; then
+        echo 'ISO builds always rebuild Core and Controller from current source.' >&2
+        echo 'Unset CORE_LOCAL_DEB and NEX_SKIP_APPLIANCE_REBUILD.' >&2
+        exit 1
     fi
-    abs=$(readlink -f -- "$core_local_deb")
-    case $abs in
-        "$PWD"/*) ;;
-        *)
-            echo 'CORE_LOCAL_DEB must be a path inside this repository' >&2
-            exit 1
-            ;;
-    esac
-    version=$(dpkg-deb -f "$abs" Version)
-    iso_core_local=.cache/nex-iso/nex-core-local_${version}_amd64.deb
-    prepare_iso_core_local "$abs" "$iso_core_local"
-    env_args+=(-e "CORE_LOCAL_DEB=/work/${iso_core_local}")
-    exec docker run --rm --platform linux/amd64 \
+    rebuild_iso_artifacts "$version"
+    iso_core_local=.cache/nex-iso/core-local/nex-core-local_${version}_amd64.deb
+    assert_iso_artifacts_current "$iso_core_local" "$version"
+    "$docker_bin" build -t nex-iso-builder -f installer/Dockerfile installer
+    exec "$docker_bin" run --rm --platform linux/amd64 \
         -v "$PWD:/work" -e BUILD_UID="$(id -u)" -e BUILD_GID="$(id -g)" \
-        "${env_args[@]}" \
+        -e "CORE_LOCAL_DEB=/work/${iso_core_local#"$PWD"/}" \
+        -e "NEX_ISO_VERSION=$version" \
         nex-iso-builder
 fi
 [[ $(dpkg --print-architecture) == amd64 ]]
 cache=/work/.cache/nex-iso
 stage=$cache/stage
-output=/work/dist/nex-core-0.1.0-alpha1-amd64.iso
+# The ISO carries exactly one Nex Core version: the nex-core-local package it installs.
+core_local_deb=${CORE_LOCAL_DEB:?nex-core-local package path required}
+[[ -f $core_local_deb ]] || { echo "missing nex-core-local package: $core_local_deb" >&2; exit 1; }
+version=$(dpkg-deb -f "$core_local_deb" Version)
+output=/work/dist/nex-core-${version}-amd64.iso
 mkdir -p "$cache" /work/dist
 trap 'chown -R "${BUILD_UID:-0}:${BUILD_GID:-0}" /work/dist "$cache"' EXIT
 # Explicit release + expected digest; update together only after Debian signature
@@ -97,9 +150,9 @@ chmod -R u+w "$stage"
 for image in install.amd/vmlinuz install.amd/initrd.gz install.amd/gtk/initrd.gz; do
     test -s "$stage/$image"
 done
-printf '%s\n' 'Nex Core 0.1.0-alpha1 amd64 development installer — derived from Debian 13' > "$stage/.disk/info"
-cat > "$stage/README-NEX.txt" <<'MEDIA'
-Nex Core 0.1.0-alpha1 — development installation media
+printf '%s\n' "Nex Core $version amd64 development installer — derived from Debian 13" > "$stage/.disk/info"
+cat > "$stage/README-NEX.txt" <<MEDIA
+Nex Core $version — development installation media
 
 Nex Core is an independent Debian-derived virtualization host distribution.
 This is modified Nex media, not an official Debian release. Debian 13 supplies
@@ -124,19 +177,7 @@ apt-get -y --download-only --no-install-recommends \
     -o Dir::State::status="$cache/empty-status" \
     -o Dir::Cache::archives="$cache/debs" install "${packages[@]}"
 cp "$cache/debs/"*.deb "$stage/nex/repo/"
-# Host-local UI is a Nex package, not from Debian APT. Prefer CORE_LOCAL_DEB.
-core_local_deb=${CORE_LOCAL_DEB:-}
-if [[ -z $core_local_deb ]]; then
-    shopt -s nullglob
-    core_local_candidates=(/work/dist/core-local/nex-core-local_*_amd64.deb)
-    shopt -u nullglob
-    if [[ ${#core_local_candidates[@]} -eq 0 ]]; then
-        echo 'nex-core-local .deb required: set CORE_LOCAL_DEB or place a package under dist/core-local/' >&2
-        exit 1
-    fi
-    core_local_deb=$(ls -1t "${core_local_candidates[@]}" | head -n1)
-fi
-[[ -f $core_local_deb ]] || { echo "missing nex-core-local package: $core_local_deb" >&2; exit 1; }
+# Host-local UI is a Nex package, not from Debian APT; CORE_LOCAL_DEB was validated above.
 cp -f "$core_local_deb" "$stage/nex/repo/"
 printf 'nex-core-local\n' >> "$stage/nex/packages.txt"
 (cd "$stage/nex/repo" && dpkg-scanpackages --multiversion . /dev/null > Packages)
@@ -146,13 +187,16 @@ for deb in "$stage/nex/repo/"*.deb; do
 done | sort >> "$stage/nex/package-manifest.tsv"
 cp "$cache/SHA256SUMS" "$cache/SHA256SUMS.sign" "$cache/cd-key.asc" "$stage/nex/"
 cat > "$stage/nex/BUILD.txt" <<BUILD
-Nex Core 0.1.0-alpha1 / internal development image
+Nex Core $version / internal development image
 Base: $base/$iso
 Base SHA256: $expected
 Debian signing fingerprint: $fingerprint
 APT sources: Debian trixie, trixie-updates, trixie-security
 Build UTC: $(date -u +%FT%TZ)
+Nex package version: ${NEX_ISO_VERSION:-unknown}
 Nex source: AGPL-3.0-only; upstream packages retain their own licenses.
+Core and Controller on this media were rebuilt from the same corresponding-source
+snapshot for this ISO build (see nex-source.product.sha256).
 Not approved for public redistribution: source-compliance/release review pending.
 Build recipe: installer/build.sh; installed packages: nex/package-manifest.tsv
 Packages authenticated by Debian APT signed repository metadata during build.
@@ -185,7 +229,7 @@ timeout 0
 BIOS
 cat > "$stage/isolinux/menu.cfg" <<'BIOS'
 menu background splash.png
-menu title Nex Core 0.1.0-alpha1
+menu title Nex Core
 menu width 72
 menu margin 4
 menu vshift 9
@@ -262,7 +306,7 @@ GRUB
 rm -f "$output"
 # Replay original hybrid BIOS/UEFI boot structure and signed EFI binaries.
 xorriso -indev "$cache/$iso" -outdev "$output" \
-    -boot_image any replay -update_r "$stage" / -volid NEX_CORE_010A1 -commit -end
+    -boot_image any replay -update_r "$stage" / -volid NEX_CORE -commit -end
 cp "$stage/nex/package-manifest.tsv" /work/dist/package-manifest.tsv
 cp "$stage/nex/BUILD.txt" /work/dist/BUILD.txt
 (cd /work/dist && sha256sum "$(basename "$output")" > "$(basename "$output").sha256")

@@ -181,6 +181,16 @@ func TestManagedReferencesAndXML(t *testing.T) {
 			if (d.OS.Firmware == "efi") != (firmware == "uefi") || d.OS.Boot[0].Dev != "cdrom" {
 				t.Fatal("firmware/boot mismatch")
 			}
+			// Console features: guest agent, clipboard channel, absolute pointer and a resizable display.
+			text := string(b)
+			for _, want := range []string{`<channel type="unix">`, `name="org.qemu.guest_agent.0"`, `<channel type="qemu-vdagent">`, `<clipboard copypaste="yes">`, `<mouse mode="server">`, `name="com.redhat.spice.0"`, `<input type="tablet" bus="usb">`, `<model type="virtio"></model>`} {
+				if !strings.Contains(text, want) {
+					t.Fatalf("definition lacks %s: %s", want, b)
+				}
+			}
+			if strings.Count(text, "<graphics") != 1 {
+				t.Fatalf("expected exactly one display: %s", b)
+			}
 		}
 	}
 }

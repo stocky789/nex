@@ -2,7 +2,8 @@
 
 ## Status
 
-Applies to the current **Nex Core 0.1.0-alpha1 installer source**. Local lab alpha. The
+Applies to the current **Nex Core installer source**. Local lab alpha; the ISO file is named
+after the single Nex Core version it installs (`nex-core-<version>-amd64.iso`). The
 boot menu offers graphical and text installation. Installed hosts include the host-local
 web UI; the console login banner shows its URL after network is up. Central Controller is
 still deployed from that UI or separately. The graphical path starts with Nex's own host,
@@ -27,8 +28,10 @@ limits are recorded below.
 1. From the repository's `dist` directory, verify the image before attaching it:
 
    ```sh
-   sha256sum -c nex-core-0.1.0-alpha1-amd64.iso.sha256
+   sha256sum -c nex-core-<version>-amd64.iso.sha256
    ```
+
+   Replace `<version>` with the version in the built file name.
 
    Continue only if the matching ISO reports `OK`. A checksum detects a mismatched file;
    obtain the image and checksum from a trusted build.
@@ -124,8 +127,8 @@ limits are recorded below.
 
 ## Expected result
 
-The installed boot menu identifies **Nex Core GNU/Linux** and the host identifies as Nex Core
-0.1.0-alpha1. Management networking follows your installer choices. For a qualified hostname such as
+The installed boot menu identifies **Nex Core GNU/Linux** and the host identifies as
+`Nex Core <version>` in `/etc/os-release` and the console banner, matching the ISO version. Management networking follows your installer choices. For a qualified hostname such as
 `nexcore.matthome`, the installed short hostname is `nexcore`; local hostname resolution
 retains the full name and short alias. This does not create a DNS record on your router
 or DNS server; configure that separately if other machines should resolve the name. Selecting a management NIC in the GUI creates its bridge on first boot.

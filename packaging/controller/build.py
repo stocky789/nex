@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', required=True, type=Path)
-    parser.add_argument('--version', default='0.1.0')
+    parser.add_argument('--version', default='0.1.5~alpha1')
     parser.add_argument('--output', type=Path, default=ROOT / 'dist/controller')
     parser.add_argument('--docker', default='docker', help='Docker executable or wrapper path')
     args = parser.parse_args()

@@ -243,10 +243,10 @@ func TestSeedInjectsUpdateHelperWhenPresent(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, body := range map[string]string{
-		"apply-update":                   "#!/usr/bin/python3\nprint('ok')\n",
-		"nex-controller-update.path":     "[Path]\n",
-		"nex-controller-update.service":  "[Service]\n",
-		"updates.conf":                   "repo_url=https://nexvirtualization.com/apt\n",
+		"apply-update":                  "#!/usr/bin/python3\nprint('ok')\n",
+		"nex-controller-update.path":    "[Path]\n",
+		"nex-controller-update.service": "[Service]\n",
+		"updates.conf":                  "repo_url=https://nexvirtualization.com/apt\n",
 	} {
 		if err := os.WriteFile(filepath.Join(updateDir, name), []byte(body), 0644); err != nil {
 			t.Fatal(err)

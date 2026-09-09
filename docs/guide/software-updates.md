@@ -2,7 +2,7 @@
 
 ## Status
 
-Available in Nex Core / Controller **0.1.0-alpha1** development builds that include
+Available in Nex Core / Controller development builds (alpha) that include
 the Updates APIs and packaged installers. Lab package repos are assumed; signing-key
 rollout for APT sources remains separate. GUI walkthrough evidence is not yet recorded.
 
@@ -25,7 +25,9 @@ rollout for APT sources remains separate. GUI walkthrough evidence is not yet re
 ## Expected result
 
 Installed and available versions are shown. Apply schedules a package install and
-service restart; the page reports that the service is restarting.
+service restart; the page reports that the service is restarting. After a Core update the
+host identifies as `Nex Core <new version>` in `/etc/os-release`, the console banner and the
+Controller host page **Version** field; that package version is the only Nex Core version.
 
 ## Troubleshooting
 
@@ -38,6 +40,10 @@ service restart; the page reports that the service is restarting.
   installs clear themselves once the installed version matches available.
 
 ## Verification
+
+The [single Nex Core version checks](../qa/single-nex-core-version.md) record the package
+identity path (real `dpkg` into a temporary root, labeled simulation) and the Controller host
+page showing one **Version** row; no installed host has yet taken an update with this change.
 
 Automated API tests cover check/apply scheduling. Browser walkthrough against a live
 update repo is outstanding.

@@ -102,6 +102,7 @@ class ApplianceTests(unittest.TestCase):
 
     def test_firstboot_resumes_after_bootstrap_cleanup_interruption(self):
         firstboot = module('firstboot')
+        self.addCleanup(os.umask, os.umask(0o022))  # firstboot.main() sets a process-wide 077 umask
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             config, state = root / 'etc/nex-controller', root / 'var/lib/nex-controller'

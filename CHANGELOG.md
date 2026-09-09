@@ -21,6 +21,10 @@ below describe implemented work, not completion of the full platform roadmap.
 
 ### Minor Feature
 
+- Extended the VM console: send key combinations, fit/actual/resize-to-window display modes, quality presets, view-only mode, screenshots, reconnect, full screen with the toolbar and a console-only browser window.
+- Added console clipboard in both directions for guests running the guest tools, plus **Type into VM** for installers and text consoles; new VMs are defined with the clipboard channel, an absolute pointer and a resizable VirtIO display.
+- Added a **Guest tools** panel showing the guest agent state, operating system, hostname, IP addresses and clipboard readiness reported by the host. When a running VM has no responding agent it shows an install advisory with the exact commands for Linux and Windows guests.
+- Nex Core reports one version: the host page shows `Nex Core <version>` with no separate agent version, and the installed identity, console banner and ISO name follow the Nex Core package version through updates.
 - Added installer timezone dropdowns, keyboard layout selection, password visibility controls and shared hostname editing on the Host and Network pages.
 - Added a welcome introduction and a reminder to deploy at least one Nex Controller.
 - Added detected network adapters with MAC addresses and a green link indicator, per-adapter DHCP or static IPv4, VLAN settings, and an explicit management adapter selection.
@@ -40,6 +44,9 @@ below describe implemented work, not completion of the full platform roadmap.
 - Fixed Controller package updates that could stop the service and report success when restart failed; updates now verify the service is running.
 - Fixed Core updates that could leave progress stuck on Installing after a successful package upgrade.
 - ISO builds always regenerate corresponding source and install it with Core, so media never ships a stale source snapshot.
+- ISO builds rebuild the Controller appliance and refuse packages whose embedded Controller is behind the package version.
+- ISO builds always rebuild Core and Controller together from the current source tree; reusing an older package is rejected.
+- Fixed Updates to show Available as Up to date when the installed package is already newest.
 - Controller appliances include the update helper so Check/Update work without a manual package install; old lab repo URLs are ignored automatically.
 - New Controller deploys from Core also inject the update helper at first boot.
 - Cleaned up the Core local sidebar navigation so Overview and Updates read as quiet nav items instead of mismatched form buttons.

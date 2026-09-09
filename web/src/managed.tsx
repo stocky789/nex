@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import type { Guest } from "./console";
 
 export type Registration = { id: string; pool_id: string; host_id: string; name: string; operation_id: string; status: string; error?: string };
 export type Storage = Registration & { path: string };
 export type Network = Registration & { kind: string; source: string; uplink?: string; vlan?: number };
 export type Media = Registration & { storage_id: string; size_bytes: number; sha256: string };
-export type VM = Registration & { spec?: { storage_id: string; network_id: string; media_id: string; cpus: number; memory_mib: number; disk_gib: number; firmware: string }; state: string; freshness: string; role: string; protected: boolean };
+export type VM = Registration & { spec?: { storage_id: string; network_id: string; media_id: string; cpus: number; memory_mib: number; disk_gib: number; firmware: string }; state: string; freshness: string; role: string; protected: boolean; guest?: Guest | null };
 type NIC = { name: string; mac: string; kind?: string; master?: string; parent?: string; state: string; addresses?: string[] | null };
 type Host = { id: string; pool_id: string; hostname: string; connection: string; revoked: boolean; capabilities?: string[]; inventory: { cpu_count: number; memory_bytes: number; nics?: NIC[] | null } | null };
 type API = <T>(path: string, method?: string, body?: unknown, progress?: (percent: number) => void) => Promise<T>;
@@ -224,11 +225,68 @@ export function ManagedVMs({ account, poolID, tab, hosts: allHosts, storage: all
 
 export function VMDetails({ vm, hosts, storage, networks, media }: { vm: VM; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[] }) {
   const spec = vm.spec;
-  return <section className="panel"><div className="section-heading"><h2>VM details</h2>{status(vm.freshness)}</div>
+  return <><section className="panel"><div className="section-heading"><h2>VM details</h2>{status(vm.freshness)}</div>
     {vm.freshness !== "fresh" && <p className="warning">Current execution state is unknown. Last reported state: {vm.state || "unknown"}. An unreachable host does not prove that this VM stopped.</p>}
     <dl className="details"><dt>VM identity</dt><dd>{vm.id}</dd><dt>Assigned host</dt><dd><a href={`#/hosts/${vm.host_id}`}>{hosts.find(h => h.id === vm.host_id)?.hostname || vm.host_id}</a></dd><dt>Observed state</dt><dd>{vm.state || "unknown"}</dd><dt>Role</dt><dd>{vm.protected ? "Protected Controller appliance" : "Guest VM"}</dd>{spec && <><dt>Virtual CPUs</dt><dd>{spec.cpus}</dd><dt>Memory</dt><dd>{spec.memory_mib} MiB</dd><dt>Disk</dt><dd>{spec.disk_gib} GiB · VirtIO</dd><dt>Storage</dt><dd>{storage.find(s => s.id === spec.storage_id)?.name || spec.storage_id}</dd><dt>Network</dt><dd>{networks.find(n => n.id === spec.network_id)?.name || spec.network_id}</dd><dt>Install ISO</dt><dd>{media.find(m => m.id === spec.media_id)?.name || spec.media_id}</dd><dt>Firmware</dt><dd>{spec.firmware?.toUpperCase()}</dd></>}{vm.operation_id && <><dt>Creation task</dt><dd>{task(vm)}</dd></>}</dl>
     {!vm.protected && <p className="panel-note">Creation provisions a stopped VM. Use the Power controls to start it, then open the Console tab.</p>}
+  </section>
+  <GuestTools vm={vm} />
+  </>;
+}
+
+// GuestTools shows what the host observed inside a running guest: agent facts and the
+// console channels behind clipboard and display resize. Absence is shown as unknown.
+const guestAgentText: Record<string, string> = {
+  connected: "Connected · guest agent answering",
+  unresponsive: "Attached but not answering · the guest agent may be starting or hung",
+  disconnected: "Not running in the guest",
+  "no-channel": "Channel missing · this VM was created before guest tools support; recreate it to add the channel",
+};
+const guestClipboardText: Record<string, string> = {
+  ready: "Ready · copy and paste work both ways in the Console tab",
+  waiting: "Waiting for spice-vdagent in the guest · Type into VM still works",
+  "no-channel": "Channel missing · this VM was created before console clipboard support; recreate it to add the channel",
+};
+export function GuestTools({ vm }: { vm: VM }) {
+  const g = vm.guest;
+  const running = vm.freshness === "fresh" && vm.state === "running";
+  return <section className="panel" aria-label="Guest tools">
+    <div className="section-heading"><h2>Guest tools</h2>{g ? status(g.agent === "connected" ? "fresh" : g.agent === "unresponsive" || g.agent === "disconnected" ? "stale" : "unknown") : status("unknown")}</div>
+    {!g ? <p className="empty">{running ? "No guest observation yet. The host reports guest tools for running VMs on Nex Core builds with guest observation; wait for the next report or upgrade Nex Core." : "Guest tools are observed while the VM is running."}</p>
+      : <dl className="details">
+        <dt>Guest agent</dt><dd>{guestAgentText[g.agent] || g.agent}</dd>
+        {g.os && <><dt>Operating system</dt><dd>{g.os}</dd></>}
+        {g.hostname && <><dt>Guest hostname</dt><dd>{g.hostname}</dd></>}
+        <dt>IP addresses</dt><dd>{g.addresses?.length ? <ul className="plain">{g.addresses.map(a => <li key={a.interface + a.address} className="mono">{a.address} <small>{a.interface}</small></li>)}</ul> : g.agent === "connected" ? "None reported" : "Unknown until the guest agent answers"}</dd>
+        <dt>Console clipboard</dt><dd>{guestClipboardText[g.clipboard] || g.clipboard}</dd>
+        <dt>Display resize</dt><dd>{g.resize ? "Available · VirtIO display; the console can resize the guest to the browser window" : "Not available · no VirtIO display in this VM's definition"}</dd>
+      </dl>}
+    {g && running && (g.agent === "disconnected" || g.agent === "unresponsive") && <GuestToolsAdvisory />}
+    {g && g.agent === "no-channel" && <p className="warning">This VM was created before guest tools support, so it has no guest agent channel. Recreate it to add the channel, then install the tools below. In the meantime the console's <strong>Type into VM</strong> still works.</p>}
+    <p className="panel-note">A connected agent reports facts and enables graceful operations; it is not proof that the guest's applications are healthy.</p>
   </section>;
+}
+
+// GuestToolsAdvisory tells an operator how to install the guest tools in a running VM whose
+// agent has not connected, for both Linux and Windows guests.
+export function GuestToolsAdvisory() {
+  return <div className="warning guest-advisory">
+    <p><strong>Guest tools are not responding.</strong> Install them inside the VM to see its OS, hostname and IP addresses here and to use the console clipboard. They are standard packages; use the <strong>Console</strong> tab to run these if the VM has no network yet.</p>
+    <div className="guest-advisory-grid">
+      <div>
+        <h3>Linux</h3>
+        <p className="help">Debian and Ubuntu:</p>
+        <pre>sudo apt update{"\n"}sudo apt install qemu-guest-agent spice-vdagent</pre>
+        <p className="help">Other distributions: install their <code>qemu-guest-agent</code> and <code>spice-vdagent</code> packages, then <code>systemctl enable --now qemu-guest-agent spice-vdagentd</code>. Both start on their own; no reboot is needed. The clipboard needs a graphical desktop session.</p>
+      </div>
+      <div>
+        <h3>Windows</h3>
+        <p className="help">Run the virtio-win guest tools installer, which bundles the QEMU guest agent and the SPICE vdagent:</p>
+        <pre>virtio-win-guest-tools.exe</pre>
+        <p className="help">Download it from the <a href="https://github.com/virtio-win/virtio-win-pkg-scripts" target="_blank" rel="noopener">virtio-win project</a>. It installs both as Windows services that start automatically.</p>
+      </div>
+    </div>
+  </div>;
 }
 
 export function HostISOs({ host, media, storage, unavailable }: { host: Host; media: Media[]; storage: Storage[]; unavailable: boolean }) {

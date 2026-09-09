@@ -33,6 +33,9 @@ type managedAppliance struct {
 	OperationID string                 `json:"operation_id,omitempty"`
 	Status      string                 `json:"status,omitempty"`
 	Error       string                 `json:"error,omitempty"`
+	// Guest is the host's latest guest-agent and console-channel observation of a
+	// running VM; absent when the VM is not running or the host predates it.
+	Guest *protocol.GuestInfo `json:"guest,omitempty"`
 }
 
 func applianceUUID(s string) bool {
@@ -53,10 +56,16 @@ func applianceUUID(s string) bool {
 
 // A persisted VM state is history, never proof of its current power state.
 func (c *Controller) applianceObservation(host, id string, revoked bool, raw sql.NullString) (string, string) {
+	state, fresh, _ := c.observeVM(host, id, revoked, raw)
+	return state, fresh
+}
+
+// observeVM is applianceObservation with the guest observation of a fresh running VM.
+func (c *Controller) observeVM(host, id string, revoked bool, raw sql.NullString) (string, string, *protocol.GuestInfo) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if revoked {
-		return "unknown", "revoked"
+		return "unknown", "revoked", nil
 	}
 	fresh := c.observationFreshness(host + "/libvirt")
 	if seen, ok := c.seen[host]; !ok {
@@ -65,11 +74,11 @@ func (c *Controller) applianceObservation(host, id string, revoked bool, raw sql
 		fresh = "stale"
 	}
 	if fresh != "fresh" {
-		return "unknown", fresh
+		return "unknown", fresh, nil
 	}
 	var inv protocol.Inventory
 	if !raw.Valid || json.Unmarshal([]byte(raw.String), &inv) != nil {
-		return "unknown", "unknown"
+		return "unknown", "unknown", nil
 	}
 	healthy := false
 	for _, check := range inv.Checks {
@@ -78,14 +87,14 @@ func (c *Controller) applianceObservation(host, id string, revoked bool, raw sql
 		}
 	}
 	if !healthy {
-		return "unknown", "unknown"
+		return "unknown", "unknown", nil
 	}
 	for _, vm := range inv.VMs {
 		if strings.EqualFold(vm.ID, id) {
-			return vm.State, "fresh"
+			return vm.State, "fresh", vm.Guest
 		}
 	}
-	return "unknown", "fresh"
+	return "unknown", "fresh", nil
 }
 
 func (c *Controller) adoptAppliance(w http.ResponseWriter, r *http.Request, user, csrf string) {
@@ -211,7 +220,7 @@ func (c *Controller) appliances(w http.ResponseWriter, r *http.Request, user, cs
 			fail(w, 500, "VM decode failed")
 			return
 		}
-		v.State, v.Freshness = c.applianceObservation(v.HostID, v.ID, revoked, raw)
+		v.State, v.Freshness, v.Guest = c.observeVM(v.HostID, v.ID, revoked, raw)
 		out = append(out, v)
 	}
 	if rows.Err() != nil {
@@ -246,7 +255,7 @@ func (c *Controller) appliances(w http.ResponseWriter, r *http.Request, user, cs
 		v.Role = "guest"
 		v.Spec = cmd.VM
 		v.OperationID = cmd.OperationID
-		v.State, v.Freshness = c.applianceObservation(v.HostID, v.ID, revoked, raw)
+		v.State, v.Freshness, v.Guest = c.observeVM(v.HostID, v.ID, revoked, raw)
 		out = append(out, v)
 	}
 	if managed.Err() != nil {

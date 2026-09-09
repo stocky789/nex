@@ -1,14 +1,37 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-only
 set -eu
+# DPKG_ROOT is set by dpkg for chrootless installs (empty on a live host).
+root=${DPKG_ROOT:-}
 if [ "$1" = configure ]; then
-    install -d -m755 /etc/nex
-    if [ ! -f /etc/nex/updates.conf ] || grep -Eq 'repo_url=http://(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)' /etc/nex/updates.conf; then
-        printf 'repo_url=https://nexvirtualization.com/apt\n' > /etc/nex/updates.conf
+    install -d -m755 "$root/etc/nex"
+    if [ ! -f "$root/etc/nex/updates.conf" ] || grep -Eq 'repo_url=http://(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)' "$root/etc/nex/updates.conf"; then
+        printf 'repo_url=https://nexvirtualization.com/apt\n' > "$root/etc/nex/updates.conf"
     fi
+    # Nex Core's release identity is this package's version: the distribution and
+    # the software Nex ships on it are one thing. Divert Debian's package-owned
+    # symlink once so the local /etc file wins without touching /usr/lib/os-release.
+    if [ "$(dpkg-divert --truename /etc/os-release)" = /etc/os-release ]; then
+        dpkg-divert --local --add --rename --divert /etc/os-release.debian /etc/os-release
+    fi
+    version=$(dpkg-query -W -f='${Version}' nex-core-local)
+    codename=$(. "$root/usr/lib/os-release" && printf '%s' "${VERSION_CODENAME:-trixie}")
+    cat > "$root/etc/os-release" <<RELEASE
+NAME="Nex Core"
+PRETTY_NAME="Nex Core $version"
+ID=nex-core
+ID_LIKE=debian
+VERSION="$version"
+VERSION_ID=$version
+DEBIAN_CODENAME=$codename
+RELEASE
+    # The installer writes the console identity from PRETTY_NAME; keep it current.
+    for banner in "$root/etc/motd" "$root/etc/issue"; do
+        [ -f "$banner" ] && sed -i "s/^Nex Core [^ ]*/Nex Core $version/" "$banner" || true
+    done
     # Enable in installer chroots too; native Debian policy controls starting services.
     deb-systemd-helper enable nex-core-local.service
-    if [ -d /run/systemd/system ]; then
+    if [ -z "$root" ] && [ -d /run/systemd/system ]; then
         systemctl daemon-reload
         # In-GUI apply writes update-progress.json then runs dpkg; restarting here
         # kills that process before it can finish and mark the update done.

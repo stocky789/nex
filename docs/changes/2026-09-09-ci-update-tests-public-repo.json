@@ -1,0 +1,32 @@
+{
+  "summary": "Fix Actions: update tests no longer reach the public apt repository, the local-core TLS address check reads the OpenSSL verdict, the stale API reference is regenerated, a test umask leak is restored, and the ISO source record cites tracked evidence.",
+  "paths": [
+    "packaging/core-local/core-local-setup",
+    "internal/controller/updates_test.go",
+    "internal/localcore/updates_test.go",
+    "docs/api/index.html",
+    "tests/test_appliance_build.py",
+    "docs/changes/2026-09-09-iso-fresh-source.json",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Test fixtures, generated reference, and contributor records only; no operator behavior changed.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No contract change; docs/api/index.html regenerated from the already-committed openapi.json.",
+    "pages": []
+  },
+  "verification": {
+    "method": "go test -race ./...; python3 scripts/generate_api.py --check; python3 -m unittest discover -s tests -p 'test_*.py'; python3 scripts/check_docs.py --base <parent> --head <commit> in a clean worktree. Affected unit tests also run inside docker.gitea.com/runner-images:ubuntu-latest (OpenSSL 3.0.13).",
+    "evidence": [
+      "tests/test_core_local_package.py",
+      "internal/controller/updates_test.go",
+      "internal/localcore/updates_test.go",
+      "tests/test_appliance_build.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

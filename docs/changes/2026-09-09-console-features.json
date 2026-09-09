@@ -1,0 +1,66 @@
+{
+  "summary": "Console features and guest tools observation: send key combinations, fit/actual/resize-to-window display modes, quality presets, view only, screenshots, reconnect, full screen with toolbar, console-only window, clipboard in both directions and Type into VM in the shared console component; new VM definitions add the qemu-vdagent clipboard channel, USB tablet and VirtIO display; Core observes per-VM guest agent facts and channel readiness which Controller shows in a Guest tools panel, including an install advisory (Linux and Windows) when a running VM has no responding agent. API impact: changed contract (report inventory vms[].guest and guest check; VM list guest member); console routes unchanged.",
+  "paths": [
+    "internal/protocol/guest.go",
+    "internal/protocol/protocol.go",
+    "internal/vmhost/engine.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/guest.go",
+    "internal/vmhost/guest_test.go",
+    "internal/agent/probes.go",
+    "internal/agent/probes_test.go",
+    "internal/controller/appliance.go",
+    "internal/controller/managed_test.go",
+    "web/src/console.tsx",
+    "web/src/console.css",
+    "web/src/novnc.d.ts",
+    "web/src/main.tsx",
+    "web/src/managed.tsx",
+    "web/src/style.css",
+    "tests/integration/console_features_lab.py",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/README.md",
+    "docs/guide/vm-console.md",
+    "docs/guide/guest-tools.md",
+    "docs/plans/2026-09-09-console-features.md",
+    "docs/plans/2026-09-09-vm-console.md",
+    "docs/plans/2026-09-09-pool-vlan-networks.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/qa/console-features/checks.md",
+    "docs/qa/console-features/results.json",
+    "CHANGELOG.md",
+    "docs/qa/console-features/guest-tools-advisory.png"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The console toolbar gains send keys, display modes, clipboard, typing, screenshots, view only, reconnect and a console-only window; a new page documents installing the guest tools and reading the Guest tools panel, with troubleshooting for missing channels and agents.",
+    "pages": [
+      "docs/guide/vm-console.md",
+      "docs/guide/guest-tools.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Report inventory gains vms[].guest (GuestInfo, GuestAddress) and the guest check; GET /api/v1/vms passes guest through. OpenAPI schemas and the generated reference are updated with the contract test; the console routes are unchanged and documented as existing contract with the new VM definition devices.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "verification": {
+    "method": "go test -race ./... (definition devices, guest observation parsing, snapshot attachment, VM list pass-through), go vet, Python contract and documentation checks, UI typecheck/build, and tests/integration/console_features_lab.py: a disposable nested-KVM lab copy with a Debian 13 guest whose guest tools were installed by cloud-init, driving the Guest tools panel and every console toolbar feature in Playwright with guest-exec checks inside the guest for send keys, typed text and clipboard contents; results, captures and limits in the QA report.",
+    "evidence": [
+      "docs/qa/console-features/checks.md",
+      "docs/qa/console-features/results.json",
+      "internal/vmhost/guest_test.go",
+      "internal/agent/probes_test.go",
+      "internal/controller/managed_test.go",
+      "tests/integration/console_features_lab.py"
+    ]
+  }
+}

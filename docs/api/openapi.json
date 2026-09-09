@@ -3442,6 +3442,17 @@
      "state": {
       "type": "string",
       "description": "Observed libvirt state; maximum 100 UTF-8 bytes."
+     },
+     "guest": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/GuestInfo"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Host observation of the running guest through its virtio channels; absent for VMs that are not running and from Core builds that predate guest observation."
      }
     },
     "required": [
@@ -3487,11 +3498,11 @@
      },
      "os_version": {
       "type": "string",
-      "description": "Maximum 4096 UTF-8 bytes."
+      "description": "PRETTY_NAME from /etc/os-release. On Nex Core this is \"Nex Core <version>\", the single product version (the nex-core-local package). Maximum 4096 UTF-8 bytes."
      },
      "agent_version": {
       "type": "string",
-      "description": "Maximum 200 UTF-8 bytes."
+      "description": "nex-core-local package version; equals the Nex Core version on Nex Core hosts. Maximum 200 UTF-8 bytes."
      },
      "nics": {
       "type": [
@@ -4851,6 +4862,17 @@
      },
      "error": {
       "type": "string"
+     },
+     "guest": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/GuestInfo"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Latest host guest observation for a VM observed running in a fresh report; omitted otherwise."
      }
     },
     "required": [
@@ -5594,6 +5616,78 @@
      "operation"
     ],
     "additionalProperties": false
+   },
+   "GuestAddress": {
+    "type": "object",
+    "properties": {
+     "interface": {
+      "type": "string",
+      "description": "Guest interface name as reported by the guest agent; maximum 200 UTF-8 bytes."
+     },
+     "address": {
+      "type": "string",
+      "description": "IPv4 or IPv6 address in CIDR form. Loopback and link-local addresses are omitted."
+     }
+    },
+    "required": [
+     "interface",
+     "address"
+    ],
+    "x-go-type": "protocol.GuestAddress"
+   },
+   "GuestInfo": {
+    "type": "object",
+    "properties": {
+     "agent": {
+      "type": "string",
+      "enum": [
+       "connected",
+       "unresponsive",
+       "disconnected",
+       "no-channel"
+      ],
+      "description": "connected: the QEMU guest agent answered; unresponsive: the org.qemu.guest_agent.0 channel is attached but the agent did not answer within 1 second; disconnected: nothing in the guest has opened the channel; no-channel: the VM definition lacks the channel."
+     },
+     "os": {
+      "type": "string",
+      "description": "guest-get-osinfo pretty name; absent unless agent is connected. Maximum 4096 UTF-8 bytes."
+     },
+     "hostname": {
+      "type": "string",
+      "description": "guest-get-host-name; absent unless agent is connected. Maximum 200 UTF-8 bytes."
+     },
+     "addresses": {
+      "type": [
+       "array",
+       "null"
+      ],
+      "items": {
+       "$ref": "#/components/schemas/GuestAddress"
+      },
+      "maxItems": 32,
+      "description": "guest-network-get-interfaces addresses without loopback or link-local entries; at most 32."
+     },
+     "clipboard": {
+      "type": "string",
+      "enum": [
+       "ready",
+       "waiting",
+       "no-channel"
+      ],
+      "description": "ready: the guest opened the qemu-vdagent channel (spice-vdagent is running) so the console clipboard works both ways; waiting: the channel exists but nothing in the guest opened it; no-channel: the VM was defined before console clipboard support and must be recreated to gain it."
+     },
+     "resize": {
+      "type": "boolean",
+      "description": "True when the VM has a VirtIO display, so the console can ask the guest to adopt the browser's resolution (needs a virtio-gpu driver in the guest)."
+     }
+    },
+    "required": [
+     "agent",
+     "clipboard",
+     "resize"
+    ],
+    "x-go-type": "protocol.GuestInfo",
+    "description": "Observed inside a running VM by its host through host-local virtio channels: guest agent facts and console channel states. Observation only; a connected agent is not proof of application health."
    }
   }
  },

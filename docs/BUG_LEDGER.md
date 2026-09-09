@@ -664,3 +664,52 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
   waits for Controller B to observe it `shut off` with fresh libvirt data; it failed on the
   old probe and passes with the fix ([evidence](qa/pool-vlan-networks/controller-replacement-debian.json)).
 - Avoid: per-domain `dominfo` in bounded probes; prefer single-purpose queries.
+
+## BUG-0040 — Update tests reached the public apt repository after the loopback rewrite
+
+- Date: 2026-09-09.
+- Symptom: Gitea Actions `phase1` failed at "Test Go services and recovery" on every push since
+  `aeb32d4`: `TestUpdatesAuthAndApply` and `TestLocalUpdatesAuthAndApply` reported
+  `RepoURL:https://nexvirtualization.com/apt ... Error:updates index HTTP 401`; locally they
+  returned the real published version instead of the test server's `9.9.9`.
+- Root cause: `NormalizeRepoURL` now replaces plain-http private/loopback repository URLs with the
+  public default, so the `httptest.NewServer` URL each test exported through `NEX_UPDATE_REPO`
+  was discarded and the tests depended on network access to the public site. The `nexupdate`
+  package tests were switched to TLS in `8d587e8`, but the Controller and Core local tests were not.
+- Fix: `internal/controller/updates_test.go` and `internal/localcore/updates_test.go` serve the
+  fake index over `httptest.NewTLSServer` and trust it through `nexupdate.HTTPClient`, matching
+  the `nexupdate` tests. The same change regenerated the stale `docs/api/index.html`. The
+  `documentation` workflow failure on `8d587e8` had a separate cause: evidence entries in
+  `docs/changes/2026-09-09-core-update-progress-stuck.json` carried test names after the path,
+  so they were not files; that record is historical and is left unchanged because the checker
+  re-validates edited records against the current diff range.
+- Regression evidence: `go test -race ./...` (both Phase 1 workflows) failed on the old tests
+  whenever the public repository rejected or differed from the fixture and passes with the fix;
+  `python3 scripts/generate_api.py --check` covers the reference.
+- Also fixed in the same change: `tests/test_appliance_build.py` called `firstboot.main()`, which
+  sets a process-wide `077` umask, and never restored it, so `test_apt_publish` failed with
+  `control directory has bad permissions 700` under full discovery; the test now restores the
+  umask. `docs/changes/2026-09-09-iso-fresh-source.json` cited an untracked ISO as evidence,
+  which failed the `documentation` workflow on `76037a5`; it now cites the tracked scripts.
+- Also fixed: `packaging/core-local/core-local-setup` decided whether the local TLS certificate
+  matched the host address from the exit status of `openssl x509 -checkip`, which OpenSSL 3.0
+  (the Ubuntu 24.04 runner image) returns as 0 on both match and mismatch; the script now reads
+  the printed verdict. Nex Core itself runs Debian 13 with OpenSSL 3.5, where the exit status was
+  already meaningful, so this failed `test_core_local_package` only in Actions.
+- Avoid: plain-http loopback fixtures for update checks; tests that change process-wide state
+  without a cleanup; relying on `openssl x509 -check*` exit codes; any `nexupdate` test server must be TLS
+  with `HTTPClient` overridden, and verification evidence entries must be bare repository paths.
+
+## BUG-0041 — Controller capture harness rejected its own fixture addresses
+
+- Date: 2026-09-09.
+- Symptom: `tests/integration/website_controller_captures.py` (Phase 1 workflows, "website
+  controller captures" step) exited before opening a browser with
+  `AssertionError: Private IP in capture content`, so no Controller UI evidence was produced.
+- Root cause: `aeb32d4` added a privacy guard rejecting RFC 1918 addresses in capture content while
+  the simulated inventory fixture still carried `192.168.50.10/24` and `192.168.60.10/24`.
+- Fix: the fixture uses documentation addresses (`198.51.100.10/24`, `203.0.113.10/24`), identifies
+  as `Nex Core 0.1.4`, and asserts the General view shows one `Version` row and no `Agent version`.
+- Regression evidence: the harness itself; it failed at `HEAD` and passes with the fix
+  ([evidence](qa/single-nex-core-version/controller-captures.json)).
+- Avoid: fixtures with private addresses in any capture that is screened for publication.

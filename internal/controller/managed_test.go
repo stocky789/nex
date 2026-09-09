@@ -8,6 +8,7 @@ import (
 	"nex.local/nex/internal/protocol"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -126,8 +127,16 @@ func TestManagedWorkflowScopeRetryAndMedia(t *testing.T) {
 	report(true, protocol.Result{OperationID: created.Operation.ID, Status: "needs_attention", Error: "reconcile existing disk"})
 	var list []managedAppliance
 	read(t, a.call("GET", "/api/v1/vms", nil, nil, 200), &list)
-	if len(list) != 1 || list[0].ID != created.VMID || list[0].Status != "needs_attention" || list[0].State != "shut off" {
+	if len(list) != 1 || list[0].ID != created.VMID || list[0].Status != "needs_attention" || list[0].State != "shut off" || list[0].Guest != nil {
 		t.Fatalf("bad VM list %#v", list)
+	}
+	// A running VM's guest observation is passed through from the fresh host report.
+	guest := &protocol.GuestInfo{Agent: "connected", OS: "Debian GNU/Linux 13 (trixie)", Hostname: "guest1", Addresses: []protocol.GuestAddress{{Interface: "enp1s0", Address: "192.168.122.10/24"}}, Clipboard: "ready", Resize: true}
+	sequence++
+	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: sequence, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Hostname: "core", CPUCount: 8, MemoryBytes: 16 << 30, Checks: []protocol.Check{{Name: "libvirt", Status: "healthy", ObservedAt: time.Now().UTC()}}, VMs: []protocol.VM{{ID: created.VMID, Name: "guest1", State: "running", Guest: guest}}}})
+	read(t, a.call("GET", "/api/v1/vms", nil, nil, 200), &list)
+	if len(list) != 1 || list[0].State != "running" || !reflect.DeepEqual(list[0].Guest, guest) {
+		t.Fatalf("guest observation missing from VM list %#v", list[0].Guest)
 	}
 }
 func TestManagedAuthorizationAndActualBodyLimits(t *testing.T) {

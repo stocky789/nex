@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"nex.local/nex/internal/protocol"
+	"nex.local/nex/internal/vmhost"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -193,6 +194,7 @@ func NativeProbes(version string) map[string]Probe {
 			}
 			return nil, f.Close()
 		},
+		"guest": guestProbe(),
 		"libvirt": func(ctx context.Context) (any, error) {
 			ids, err := virsh(ctx, "list", "--all", "--uuid")
 			if err != nil {
@@ -222,6 +224,87 @@ func NativeProbes(version string) map[string]Probe {
 			}
 			return vms, nil
 		},
+	}
+}
+
+// Guest facts are refreshed per running VM once a minute while the agent answers, and
+// every ten seconds while its channel is attached but unanswered; channel states are
+// read from libvirt on every probe. Agent questions run after every VM was observed,
+// oldest cache first, and stop when the probe deadline is closer than one question could
+// take, so a hung guest delays other guests' facts by a tick instead of losing them.
+const (
+	guestFactsTTL    = time.Minute
+	guestFactsRetry  = 10 * time.Second
+	guestAgentBudget = 1500 * time.Millisecond
+)
+
+type guestObservation struct {
+	VMID  string
+	Guest *protocol.GuestInfo
+}
+
+// guestProbe observes the console channels and guest agent of every running VM. It is
+// separate from the libvirt probe so a slow guest never hides VM power states.
+func guestProbe() Probe {
+	// ponytail: facts are cached per VM in memory; a VM that leaves the running list is dropped.
+	type cached struct {
+		at    time.Time
+		facts *protocol.GuestInfo
+	}
+	cache := map[string]cached{}
+	return func(ctx context.Context) (any, error) {
+		ids, err := virsh(ctx, "list", "--uuid")
+		if err != nil {
+			return nil, err
+		}
+		running := strings.Fields(ids)
+		if len(running) > 256 {
+			return nil, fmt.Errorf("VM observation limit exceeded (256)")
+		}
+		seen := map[string]bool{}
+		out := make([]guestObservation, 0, len(running))
+		var due []int // indexes into out whose agent should be asked this tick
+		for _, id := range running {
+			seen[id] = true
+			g, err := vmhost.ObserveGuest(ctx, id)
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil, err
+				}
+				continue // the VM stopped between list and dumpxml; the libvirt probe reports its state
+			}
+			out = append(out, guestObservation{id, g})
+			if g.Agent != "unresponsive" { // channel not attached: nothing to ask
+				delete(cache, id)
+				continue
+			}
+			c, ok := cache[id]
+			ttl := guestFactsTTL
+			if !ok || c.facts.Agent != "connected" {
+				ttl = guestFactsRetry
+			}
+			if ok && time.Since(c.at) < ttl {
+				if c.facts.Agent == "connected" {
+					g.Agent, g.OS, g.Hostname, g.Addresses = c.facts.Agent, c.facts.OS, c.facts.Hostname, c.facts.Addresses
+				}
+				continue
+			}
+			due = append(due, len(out)-1)
+		}
+		sort.SliceStable(due, func(i, j int) bool { return cache[out[due[i]].VMID].at.Before(cache[out[due[j]].VMID].at) })
+		for _, i := range due {
+			if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < guestAgentBudget {
+				break // asked on a later tick; the VM stays unresponsive until then
+			}
+			vmhost.GuestFacts(ctx, out[i].VMID, out[i].Guest)
+			cache[out[i].VMID] = cached{time.Now(), out[i].Guest}
+		}
+		for id := range cache {
+			if !seen[id] {
+				delete(cache, id)
+			}
+		}
+		return out, nil
 	}
 }
 
@@ -321,6 +404,7 @@ func virsh(ctx context.Context, args ...string) (string, error) {
 
 func (m *Monitor) Snapshot() *protocol.Inventory {
 	out := &protocol.Inventory{}
+	var guests []guestObservation
 	for _, r := range m.Results() {
 		check := protocol.Check{Name: r.Name, Status: r.Status, ObservedAt: r.ObservedAt, Error: r.Message}
 		if !r.LastSuccess.IsZero() {
@@ -354,6 +438,19 @@ func (m *Monitor) Snapshot() *protocol.Inventory {
 			out.Disks = append(out.Disks, data...)
 		case []protocol.VM:
 			out.VMs = append([]protocol.VM(nil), data...)
+		case []guestObservation:
+			// Retained data from a failed or overdue guest probe is not attached: facts must be current.
+			if r.Status == "healthy" {
+				guests = data
+			}
+		}
+	}
+	// Guest facts describe running VMs only; a VM the libvirt probe no longer sees running keeps none.
+	for i := range out.VMs {
+		for _, g := range guests {
+			if strings.EqualFold(g.VMID, out.VMs[i].ID) && out.VMs[i].State == "running" {
+				out.VMs[i].Guest = g.Guest
+			}
 		}
 	}
 	return out

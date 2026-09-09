@@ -70,9 +70,10 @@ def initialize(config):
     STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
     STATE.chmod(0o700)
     cert, key = STATE / 'tls.crt', STATE / 'tls.key'
-    matches = cert.exists() and key.exists() and subprocess.run(
+    # OpenSSL 3.0 exits 0 for -checkip whether or not the address matches; read the verdict.
+    matches = cert.exists() and key.exists() and b' does match certificate' in subprocess.run(
         ['openssl', 'x509', '-in', str(cert), '-noout', '-checkip', config['address']],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout
     if not matches:
         subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:3072', '-nodes',
                         '-days', '365', '-subj', '/CN=Nex Core local management',

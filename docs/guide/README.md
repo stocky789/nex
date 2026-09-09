@@ -1,7 +1,7 @@
 # Nex user guide
 
-This living guide covers implemented operator workflows: **Nex Core 0.1.0-alpha1**, a
-standalone Debian-derived host, and the separate **Phase 1 Controller/agent development
+This living guide covers implemented operator workflows: **Nex Core** (development alpha; an
+installed host reports one version, `Nex Core <version>`), a standalone Debian-derived host, and the separate **Phase 1 Controller/agent development
 build**. Both are for local lab evaluation; the installer does not yet deliver agent enrollment.
 
 1. [Install Nex Core in a disposable VM](install-nex-core.md).
@@ -18,8 +18,10 @@ build**. Both are for local lab evaluation; the installer does not yet deliver a
 8. [Register resources and create a virtual machine](create-virtual-machine.md)
 9. [Control VM power](vm-power.md)
 10. [Open a VM console](vm-console.md)
-   (matching Controller/Core development builds; creates a stopped VM).
-10. [Check and apply software updates](software-updates.md)
+   (toolbar with send keys, display scaling and resize, clipboard, typing, screenshots).
+11. [Install guest tools and read guest information](guest-tools.md)
+   (QEMU guest agent and spice-vdagent; OS, hostname, addresses and clipboard readiness).
+12. [Check and apply software updates](software-updates.md)
    (Controller and host-local package updates from a configured repo).
 
 Each procedure states its prerequisites, expected outcome, troubleshooting, and verification

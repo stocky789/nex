@@ -62,10 +62,12 @@ assert 'PermitRootLogin no' in late
 assert 'nex-core-local.service' in late
 assert 'Local alpha: no Nex Controller' not in late
 assert r"Host: \n  Console: \l" in late
-assert 'CORE_LOCAL_DEB' in build and 'nex-core-local_*_amd64.deb' in build
+assert 'CORE_LOCAL_DEB' in build and 'nex-core-local_' in build
 assert "printf 'nex-core-local\\n' >>" in build
 assert 'scripts/build-source.py' in build, 'ISO builds must regenerate corresponding source'
-assert 'prepare_iso_core_local' in build, 'ISO builds must inject fresh source into nex-core-local'
+assert 'appliance/build.py' in build, 'ISO builds must rebuild the Controller appliance'
+assert 'assert_iso_artifacts_current' in build, 'ISO builds must verify Core/Controller source freshness'
+assert 'Unset CORE_LOCAL_DEB and NEX_SKIP_APPLIANCE_REBUILD' in build, 'ISO builds must reject reused packages'
 assert 'dist/nex-source.tar.gz required' in build
 assert 'cp -a installer "$source_stage/nex-source/"' in build
 assert re.search(r'tar .* -czf "\$stage/nex/nex-source\.tar\.gz" \\\s*LICENSE NOTICE docs/LICENSING\.md installer', build) is None, \
@@ -73,9 +75,10 @@ assert re.search(r'tar .* -czf "\$stage/nex/nex-source\.tar\.gz" \\\s*LICENSE NO
 # BUG-0004: raw chroot inherits the installer's stale debconf descriptors.
 assert '\nin-target /bin/sh /var/cache/nex-install/configure.sh\n' in late, 'Use Debian in-target for package configuration'
 assert '\nchroot /target ' not in late, 'Raw chroot bypasses installer setup'
-assert 'dpkg-divert --local --add --rename --divert /etc/os-release.debian /etc/os-release' in late
-assert 'ID=nex-core\nID_LIKE=debian\n' in late
-assert 'DEBIAN_CODENAME=trixie' in late
+post = Path('packaging/core-local/postinst').read_text()
+assert 'dpkg-divert --local --add --rename --divert /etc/os-release.debian /etc/os-release' in post
+assert 'ID=nex-core\nID_LIKE=debian\n' in post and "dpkg-query -W -f='${Version}' nex-core-local" in post
+assert '0.1.0-alpha1' not in build + late and 'test "$ID" = nex-core' in late, 'One Nex Core version: the package'
 assert '> /usr/lib/os-release' not in late, 'Preserve upstream release metadata'
 print('PASS: shell syntax, interactive disk/account/network contract, package inputs, offline APT scope')
 PY

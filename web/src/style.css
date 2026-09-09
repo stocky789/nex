@@ -214,6 +214,7 @@ tbody tr:hover { background: #eef4ff; }
 .details dt { color: var(--muted); }
 .details dd { margin: 0; overflow-wrap: anywhere; }
 .details dt:last-of-type, .details dd:last-of-type { border-bottom: 0; }
+ul.plain { margin: 0; padding: 0; list-style: none; }
 .check { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding: 9px 12px; border-bottom: 1px solid #e2e5e9; }
 .check:last-child { border-bottom: 0; }
 .check p { margin: 3px 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }

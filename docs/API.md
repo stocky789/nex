@@ -547,6 +547,50 @@ cover framing, socket resolution, ticket authorization (unknown VM, stale host, 
 capability, stopped VM, wrong origin, wrong host, reuse, timeout) and end-to-end relay;
 the [console QA report](qa/console/checks.md) records the disposable-lab walkthrough.
 
+Console features (2026-09-09, [plan](plans/2026-09-09-console-features.md)) use the
+**existing contract**: clipboard text, key events, display resize requests and quality
+settings are in-band RFB messages that the relay already carries unchanged. The host side is
+the VM definition: every `vm-create` now defines, next to the guest agent channel, a
+`qemu-vdagent` channel (`clipboard copypaste='yes'`, `mouse mode='server'`, target
+`com.redhat.spice.0`), which is what QEMU renders as `-chardev qemu-vdagent,clipboard=on` and
+bridges to the VNC server, plus a USB tablet and a VirtIO video model. `validateManagedDefinition`
+still compares disks, NIC, OS/CPU/boot and the single VNC display, so definitions created
+before this change remain valid; their guest observation reports `clipboard: no-channel` and
+`resize: false`. VNC power control (`powerControl`) is deliberately not enabled.
+
+## Guest tools observation
+
+API impact: **changed contract** — the report inventory member `vms[].guest` (`GuestInfo`)
+and the `guest` check are new; `GET /api/v1/vms` passes `guest` through for a VM observed
+running in a fresh, libvirt-healthy report and omits it otherwise. No route, command or
+capability changes.
+
+Core observes every running VM on each probe: the live definition gives the guest agent
+channel state (`org.qemu.guest_agent.0`), the `qemu-vdagent` channel state and the video
+model. When the agent channel is attached, Core asks the agent (`guest-get-osinfo`,
+`guest-get-host-name`, `guest-network-get-interfaces`, each with a 1-second agent timeout)
+and caches the answers per VM for one minute, retrying every ten seconds while the channel is
+attached but unanswered. Agents are asked after every VM was observed, oldest cache first, and
+only while the probe deadline leaves room for a question. Loopback and link-local addresses
+are dropped, at most 32 addresses are reported, `os` is bounded to 4096 bytes and `hostname`
+and interface names to 200; Controller refuses a report beyond those limits or with an
+unknown `agent`/`clipboard` value. `agent` is `connected`, `unresponsive`, `disconnected` or
+`no-channel`; `clipboard` is `ready`, `waiting` or `no-channel`; `resize` is true for a
+VirtIO display. The probe is separate from the libvirt state probe, so a slow guest never
+delays VM power states, and facts are dropped when the VM leaves the running list. This is
+observation, not health: a connected agent proves nothing about guest applications.
+
+Compatibility: upgrade Controller before Core. An older Controller rejects the new report
+member through strict JSON decoding (the managed-VM rule); an older Core never sends it and
+the UI shows guest tools as unknown. No pool-scoped setting is introduced.
+
+Checks: `go test ./internal/vmhost` (definition devices, observation parsing, invalid IDs and
+definitions, address filtering), `./internal/agent` (snapshot attaches facts to running VMs
+only), `./internal/controller` (VM list passes `guest` through and omits it for stopped VMs);
+`tests/test_api_contract.py` (schema parity); the
+[console features QA report](qa/console-features/checks.md) records the disposable-lab
+walkthrough with a Debian 13 guest.
+
 ## Software updates
 
 API impact: **new contract** — Controller `GET /api/v1/updates` and

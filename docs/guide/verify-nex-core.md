@@ -2,7 +2,7 @@
 
 ## Status
 
-Applies to **Nex Core 0.1.0-alpha1** after [installation](install-nex-core.md). These local
+Applies to **Nex Core** (development alpha) after [installation](install-nex-core.md). These local
 console checks inspect the standalone host, not a Nex Controller service. The eight commands
 in Steps 1–3 were exercised through a serial root console on a disposable clone of the
 historical QA3 host; see Verification for the artifact and limits. [Return to the guide](README.md).
@@ -26,7 +26,10 @@ historical QA3 host; see Verification for the artifact and limits. [Return to th
    ```
 
    The first file should identify Nex Core, with `ID=nex-core`, `ID_LIKE=debian`, and
-   `VERSION_ID=0.1.0-alpha1`. The latter files retain Debian ancestry.
+   `PRETTY_NAME="Nex Core <version>"`. Nex Core has one version: `VERSION_ID` equals the
+   installed `nex-core-local` package version (`dpkg-query -W nex-core-local`) and follows
+   [software updates](software-updates.md); there is no separate agent version. The latter
+   files retain Debian ancestry.
 2. Inspect the installed services and root SSH policy:
 
    ```sh
@@ -80,6 +83,10 @@ created by this procedure.
   selected during installation; this offline readiness check does not validate SSH login.
 
 ## Verification
+
+The [single Nex Core version checks](../qa/single-nex-core-version.md) record the package
+identity path (real `dpkg` into a temporary root, labeled simulation) and the Controller host
+page showing one **Version** row; no installed host has yet taken an update with this change.
 
 The [guide command rehearsal](../qa/guide-host-checks.md) records all eight commands in
 Steps 1–3 exiting successfully on a disposable QA3 clone. Identity, active services, root SSH

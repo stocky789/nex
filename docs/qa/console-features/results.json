@@ -1,0 +1,109 @@
+{
+  "completed": true,
+  "lab": "/home/matt/Projects/Nex/.cache/nex-managed-vm-lab.ogryasza",
+  "passed": [
+    "Enrolled native agent reports a healthy guest observation check alongside libvirt",
+    "Created guest definition carries the guest agent channel, qemu-vdagent clipboard channel, USB tablet and VirtIO display",
+    "Lab guest disk replaced with the baked Debian 13 guest-tools image (QA substitution on the disposable copy only)",
+    "Controller VM list carries guest agent facts observed by the host: OS, hostname and the NAT address",
+    "spice-vdagent inside the guest attached the qemu-vdagent channel; the host reports the clipboard ready",
+    "Guest tools panel shows the agent, OS, hostname, addresses, clipboard readiness and display resize",
+    "Console connected with the extended toolbar",
+    "Send key Ctrl+Alt+F7 and Ctrl+Alt+F1 reached the guest and switched its active console",
+    "Resize guest to window changed the guest resolution from 1280x800 to 1176x500 matching the panel",
+    "Actual size view scrolls the display; Fit to window restores scaling",
+    "Type into VM sent the text as keystrokes; the guest executed the typed command",
+    "Paste into VM placed the browser text on the guest X clipboard (verified with xclip through the guest agent)",
+    "Copy-from-VM control present; content delivery recorded as a headless limitation (see notes)",
+    "Read my clipboard loads the browser clipboard into the send box",
+    "Screenshot downloaded a PNG named after the VM",
+    "View only disables input controls; Reconnect re-attaches with a new audited ticket",
+    "Quality presets switch without breaking the stream",
+    "Open in new window shows a console-only page that connects on its own",
+    "Full screen put the console panel into the browser fullscreen element",
+    "A stopped VM shows no stale guest facts",
+    "No browser page errors during the walkthrough"
+  ],
+  "captures": [
+    "guest-tools-connected",
+    "console-toolbar",
+    "console-send-key-vt7",
+    "console-send-key-vt1",
+    "console-resize-guest",
+    "console-type-into-vm",
+    "console-paste-into-vm",
+    "console-copy-from-vm",
+    "console-screenshot-download",
+    "console-view-only",
+    "console-popout-window",
+    "guest-tools-stopped"
+  ],
+  "limits": [
+    "Nested KVM lab, not physical hardware",
+    "Guest disk substituted on the disposable copy with a Debian 13 generic cloud image baked with the guest tools; the Controller creation path itself was proven earlier",
+    "Clipboard verified with an X session running xterm and spice-vdagent; Windows guests not exercised",
+    "One viewer at a time; host-local page not repeated here",
+    "Hosted CI not exercised"
+  ],
+  "notes": [
+    "guest->browser clipboard content not reproduced in the bare-X headless guest; paste (browser->guest) verified; the copy handshake is exercised",
+    "fullscreenElement after Full screen click: panel console"
+  ],
+  "guest_before_tools": {
+    "agent": "connected",
+    "os": "Debian GNU/Linux 13 (trixie)",
+    "hostname": "guest-tools-qa",
+    "addresses": [
+      {
+        "interface": "enp1s0",
+        "address": "192.168.122.102/24"
+      }
+    ],
+    "clipboard": "waiting",
+    "resize": true
+  },
+  "guest_with_tools": {
+    "agent": "connected",
+    "os": "Debian GNU/Linux 13 (trixie)",
+    "hostname": "guest-tools-qa",
+    "addresses": [
+      {
+        "interface": "enp1s0",
+        "address": "192.168.122.102/24"
+      }
+    ],
+    "clipboard": "ready",
+    "resize": true
+  },
+  "guest_kernel": "6.12.107+deb13-amd64",
+  "resize": {
+    "before": [
+      1280,
+      800
+    ],
+    "after": [
+      1176,
+      500
+    ],
+    "panel": [
+      1176,
+      500
+    ]
+  },
+  "versions": {
+    "host_os_release": "NAME=\"Nex Core\"\nPRETTY_NAME=\"Nex Core 0.1.0-alpha1\"\nID=nex-core\nID_LIKE=debian\nVERSION=\"0.1.0-alpha1\"\nVERSION_ID=0.1.0-alpha1\nDEBIAN_CODENAME=trixie\n",
+    "virsh": "Compiled against library: libvirt 11.3.0\nUsing library: libvirt 11.3.0\nUsing API: QEMU 11.3.0\nRunning hypervisor: QEMU 10.0.11\n\n",
+    "qemu": "QEMU emulator version 10.0.11 (Debian 1:10.0.11+ds-0+deb13u1)",
+    "novnc": "1.7.0",
+    "chromium": "151.0.7922.34"
+  },
+  "artifacts": {
+    "controller": "e8ef74a6e550ef912c5d09dbfea4c6dcf12c33bf0749cc3bb962e94ffb7ec991",
+    "agent": "c7affacc947231259f9c47a24dfa79c438cd6e25aee626c423ce947223cdb4ae",
+    "app.js": "f479218dd2acaa21a4a0b8621727b6bdb2489ed1b40efb5af9cbc3913d3caefc",
+    "nex-guest-tools-qa.qcow2": "1c3c07d6a8e746c34cea4b3a4e962407c036e8011087d7f680e17ee100e09eae"
+  },
+  "vm_id": "70a3de70-cd13-4dfb-a431-a8b10ce1c9ee",
+  "host_id": "f30d062f04a16cd2e77543e1e11a276855846e10f2c0478aaaae73eee41362bb",
+  "pool_id": "ee8bb075265afcd596cb0195aa202b4f66018207a0eb93afff0f134d1457ffb7"
+}

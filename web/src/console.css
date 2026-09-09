@@ -15,3 +15,23 @@ section.console { padding: 0; overflow: hidden; margin-bottom: 12px; }
 .vm-power-actions .help { font-size: 11px; }
 .confirm-power { margin: 0; padding: 8px 10px; border-top: 1px solid #e0e3e7; background: #fffbeb; }
 .confirm-power p { margin: 0 0 8px; font-size: 12px; }
+.console-toolbar select, .console-toolbar input { font-size: 12px; }
+.console-option { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+.console-popout { font-size: 12px; margin-left: auto; }
+.console-clipboard { padding: 8px 10px; border-bottom: 1px solid #cbd0d6; background: #f8f9fa; display: grid; gap: 6px; }
+.console-clipboard label { display: grid; gap: 3px; font-size: 12px; }
+.console-clipboard textarea { width: 100%; box-sizing: border-box; font: 12px/1.4 ui-monospace, monospace; resize: vertical; }
+.console-clipboard .actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.console-screen[data-view="actual"] { overflow: auto; }
+section.console:fullscreen { display: flex; flex-direction: column; background: #fff; }
+section.console:fullscreen .console-screen { flex: 1; height: auto; min-height: 0; }
+.console-page { min-height: 100vh; display: flex; flex-direction: column; background: #f3f4f6; font-family: system-ui, sans-serif; }
+.console-page-bar { display: flex; align-items: center; gap: 12px; padding: 6px 12px; font-size: 12px; border-bottom: 1px solid #cbd0d6; background: #fff; }
+.console-page section.console { flex: 1; display: flex; flex-direction: column; margin: 0; border: 0; }
+.console-page .console-screen { flex: 1; height: auto; min-height: 240px; }
+.guest-advisory { display: block; }
+.guest-advisory p { margin: 0 0 8px; }
+.guest-advisory-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.guest-advisory h3 { margin: 0 0 4px; font-size: 13px; }
+.guest-advisory pre { margin: 0 0 6px; padding: 6px 8px; background: #fff; border: 1px solid #fcd34d; border-radius: 3px; font: 12px/1.5 ui-monospace, monospace; overflow-x: auto; color: #78350f; }
+.guest-advisory .help { margin: 0 0 6px; }

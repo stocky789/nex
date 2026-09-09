@@ -58,4 +58,5 @@ Evidence: [console QA report](../qa/console/checks.md).
 
 Central power controls, multiple-viewer policy, console session listing/termination,
 clipboard integration, serial consoles, recording, and role-scoped console permissions
-(Phase 8). Physical hardware and hosted CI execution are not claimed.
+(Phase 8). Clipboard, send keys, display resize, screenshots and guest tools observation
+followed in [console features](2026-09-09-console-features.md). Physical hardware and hosted CI execution are not claimed.

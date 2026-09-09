@@ -41,6 +41,8 @@ type VM struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	State string `json:"state"`
+	// Guest is present for running VMs on Core builds that observe guest channels.
+	Guest *GuestInfo `json:"guest,omitempty"`
 }
 
 // ManagedState lists succeeded registrations and VM definitions from the host journal.

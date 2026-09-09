@@ -1,0 +1,28 @@
+{
+  "summary": "ISO builds rebuild the Controller appliance with current source and refuse stale embedded Controller images; Updates shows Up to date when already newest.",
+  "paths": [
+    "installer/build.sh",
+    "installer/check.sh",
+    "installer/README.md",
+    "web/src/local.tsx",
+    "web/src/main.tsx",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Available label wording only; Check/Update steps unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No API contract change; UI display of update_available only.",
+    "pages": []
+  },
+  "verification": {
+    "method": "./installer/check.sh; appliance 0.1.4 rebuild; core-local 0.1.4 package; ISO extract manifest version 0.1.4; published updates.json",
+    "evidence": [
+      "dist/appliance-0.1.4/manifest.json",
+      "dist/nex-core-0.1.0-alpha1-amd64.iso"
+    ]
+  }
+}

@@ -3212,6 +3212,19 @@
         }
       }
     },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Update helper or path unit is missing on this Controller.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;update helper is missing; redeploy the Controller appliance or install the nex-controller package&quot;
+          }
+        }
+      }
+    },
     &quot;500&quot;: {
       &quot;description&quot;: &quot;Could not schedule update.&quot;,
       &quot;content&quot;: {
@@ -3572,6 +3585,17 @@
     &quot;state&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;description&quot;: &quot;Observed libvirt state; maximum 100 UTF-8 bytes.&quot;
+    },
+    &quot;guest&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/GuestInfo&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Host observation of the running guest through its virtio channels; absent for VMs that are not running and from Core builds that predate guest observation.&quot;
     }
   },
   &quot;required&quot;: [
@@ -3617,11 +3641,11 @@
     },
     &quot;os_version&quot;: {
       &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;Maximum 4096 UTF-8 bytes.&quot;
+      &quot;description&quot;: &quot;PRETTY_NAME from /etc/os-release. On Nex Core this is \&quot;Nex Core &lt;version&gt;\&quot;, the single product version (the nex-core-local package). Maximum 4096 UTF-8 bytes.&quot;
     },
     &quot;agent_version&quot;: {
       &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;Maximum 200 UTF-8 bytes.&quot;
+      &quot;description&quot;: &quot;nex-core-local package version; equals the Nex Core version on Nex Core hosts. Maximum 200 UTF-8 bytes.&quot;
     },
     &quot;nics&quot;: {
       &quot;type&quot;: [
@@ -4981,6 +5005,17 @@
     },
     &quot;error&quot;: {
       &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;guest&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/GuestInfo&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Latest host guest observation for a VM observed running in a fresh report; omitted otherwise.&quot;
     }
   },
   &quot;required&quot;: [
@@ -5724,5 +5759,77 @@
     &quot;operation&quot;
   ],
   &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="GuestAddress"><summary>GuestAddress</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;interface&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Guest interface name as reported by the guest agent; maximum 200 UTF-8 bytes.&quot;
+    },
+    &quot;address&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;IPv4 or IPv6 address in CIDR form. Loopback and link-local addresses are omitted.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;interface&quot;,
+    &quot;address&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.GuestAddress&quot;
+}</pre></details>
+<details id="GuestInfo"><summary>GuestInfo</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;agent&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;connected&quot;,
+        &quot;unresponsive&quot;,
+        &quot;disconnected&quot;,
+        &quot;no-channel&quot;
+      ],
+      &quot;description&quot;: &quot;connected: the QEMU guest agent answered; unresponsive: the org.qemu.guest_agent.0 channel is attached but the agent did not answer within 1 second; disconnected: nothing in the guest has opened the channel; no-channel: the VM definition lacks the channel.&quot;
+    },
+    &quot;os&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;guest-get-osinfo pretty name; absent unless agent is connected. Maximum 4096 UTF-8 bytes.&quot;
+    },
+    &quot;hostname&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;guest-get-host-name; absent unless agent is connected. Maximum 200 UTF-8 bytes.&quot;
+    },
+    &quot;addresses&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/GuestAddress&quot;
+      },
+      &quot;maxItems&quot;: 32,
+      &quot;description&quot;: &quot;guest-network-get-interfaces addresses without loopback or link-local entries; at most 32.&quot;
+    },
+    &quot;clipboard&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;ready&quot;,
+        &quot;waiting&quot;,
+        &quot;no-channel&quot;
+      ],
+      &quot;description&quot;: &quot;ready: the guest opened the qemu-vdagent channel (spice-vdagent is running) so the console clipboard works both ways; waiting: the channel exists but nothing in the guest opened it; no-channel: the VM was defined before console clipboard support and must be recreated to gain it.&quot;
+    },
+    &quot;resize&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;True when the VM has a VirtIO display, so the console can ask the guest to adopt the browser&#x27;s resolution (needs a virtio-gpu driver in the guest).&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;agent&quot;,
+    &quot;clipboard&quot;,
+    &quot;resize&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.GuestInfo&quot;,
+  &quot;description&quot;: &quot;Observed inside a running VM by its host through host-local virtio channels: guest agent facts and console channel states. Observation only; a connected agent is not proof of application health.&quot;
 }</pre></details>
 </section></main></html>

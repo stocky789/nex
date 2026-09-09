@@ -80,11 +80,11 @@ def capture(lab, args):
     inventory = {
         'observed_at': now, 'hostname': HOSTNAME, 'cpu_model': 'Example x86-64 processor',
         'cpu_count': 16, 'memory_bytes': 64 * 1024**3, 'virtualization': ['vmx'],
-        'os_version': 'Debian GNU/Linux 13 (trixie)', 'agent_version': 'development',
+        'os_version': 'Nex Core 0.1.4', 'agent_version': '0.1.4',
         'nics': [{'name': 'enp1s0', 'mac': '02:00:00:00:00:01',
-                  'addresses': ['192.168.50.10/24'], 'state': 'up'},
+                  'addresses': ['198.51.100.10/24'], 'state': 'up'},
                  {'name': 'enp2s0', 'mac': '02:00:00:00:00:02',
-                  'addresses': ['192.168.60.10/24'], 'state': 'up'}],
+                  'addresses': ['203.0.113.10/24'], 'state': 'up'}],
         'disks': [{'name': 'nvme0n1', 'size_bytes': 1024**4},
                   {'name': 'sda', 'size_bytes': 2 * 1024**4}],
         'vms': [],
@@ -137,6 +137,10 @@ def capture(lab, args):
             expect(page.get_by_label('Single-use enrollment token')).to_have_count(0)
             body = page.locator('body').inner_text()
             assert_public_text(body)
+            # One Nex Core version: the package version, shown once; no separate agent row.
+            assert 'Agent version' not in body, body
+            if tab == 'General':
+                assert 'Version\nNex Core 0.1.4' in body, body
             assert password.read_text() not in page.content() and token not in page.content()
             assert all(label in body for label in ['Community demo', HOSTNAME, HOSTNAME + ' · master'])
             if tab == 'General':

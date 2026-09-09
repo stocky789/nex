@@ -594,8 +594,25 @@ type managedDomain struct {
 		Disks      []diskXML     `xml:"disk"`
 		Interfaces []managedNIC  `xml:"interface"`
 		Channels   []channelXML  `xml:"channel"`
+		Inputs     []inputXML    `xml:"input"`
 		Graphics   []graphicsXML `xml:"graphics"`
+		Video      []videoXML    `xml:"video"`
 	} `xml:"devices"`
+}
+
+// consoleDevices are the guest devices behind the browser console features: the guest
+// agent channel (facts, graceful operations), the qemu-vdagent channel (bidirectional
+// clipboard once spice-vdagent runs in the guest), a USB tablet (absolute pointer in any
+// guest without drivers) and a VirtIO display (guest resolution follows the browser).
+func consoleDevices(d *managedDomain) {
+	agent := channelXML{Type: "unix", Target: targetXML{Type: "virtio", Name: "org.qemu.guest_agent.0"}}
+	vdagent := channelXML{Type: "qemu-vdagent", Source: &channelSourceXML{}, Target: targetXML{Type: "virtio", Name: "com.redhat.spice.0"}}
+	vdagent.Source.Clipboard.Copypaste = "yes"
+	vdagent.Source.Mouse.Mode = "server"
+	d.Devices.Channels = []channelXML{agent, vdagent}
+	d.Devices.Inputs = []inputXML{{Type: "tablet", Bus: "usb"}}
+	d.Devices.Video = []videoXML{{}}
+	d.Devices.Video[0].Model.Type = "virtio"
 }
 
 func managedDomainXML(v protocol.VMCreateSpec, n protocol.NetworkRegistration, disk, iso string) ([]byte, error) {
@@ -615,7 +632,7 @@ func managedDomainXML(v protocol.VMCreateSpec, n protocol.NetworkRegistration, d
 	nic.MAC.Address = mac(v.ID)
 	nic.Model.Type = "virtio"
 	d.Devices.Interfaces = []managedNIC{nic}
-	d.Devices.Channels = []channelXML{{Type: "unix", Target: targetXML{Type: "virtio", Name: "org.qemu.guest_agent.0"}}}
+	consoleDevices(&d)
 	g := graphicsXML{Type: "vnc", Autoport: "no"}
 	g.Listen.Type = "socket"
 	d.Devices.Graphics = []graphicsXML{g}

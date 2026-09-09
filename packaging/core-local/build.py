@@ -20,7 +20,7 @@ def main():
     parser.add_argument('--bundle', required=True, type=Path)
     parser.add_argument('--trusted-key', required=True, type=Path,
                         help='independently trusted raw 32-byte Ed25519 release public key')
-    parser.add_argument('--version', default='0.1.0')
+    parser.add_argument('--version', default='0.1.5~alpha1')
     parser.add_argument('--output', type=Path, default=ROOT / 'dist/core-local')
     parser.add_argument('--docker', default='docker', help='Docker executable or wrapper path')
     args = parser.parse_args()

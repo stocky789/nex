@@ -1,0 +1,26 @@
+{
+  "summary": "ISO builds always rebuild Core and Controller from current source and reject reused packages.",
+  "paths": [
+    "installer/build.sh",
+    "installer/check.sh",
+    "installer/README.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Installer build recipe only.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No API contract change.",
+    "pages": []
+  },
+  "verification": {
+    "method": "./installer/check.sh; confirm build.sh rejects CORE_LOCAL_DEB reuse and asserts matching Core/Controller source digests",
+    "evidence": [
+      "installer/check.sh",
+      "installer/build.sh"
+    ]
+  }
+}

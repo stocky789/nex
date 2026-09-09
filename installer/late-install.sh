@@ -25,28 +25,20 @@ apt_local() {
 }
 apt_local update
 apt_local install -y --no-install-recommends $(cat /var/cache/nex-install/packages.txt)
-# Preserve Debian's package-owned symlink and its upgrade path. The local
-# /etc override wins without modifying upstream /usr/lib/os-release.
-dpkg-divert --local --add --rename --divert /etc/os-release.debian /etc/os-release
-cat > /etc/os-release <<'RELEASE'
-NAME="Nex Core"
-PRETTY_NAME="Nex Core 0.1.0-alpha1"
-ID=nex-core
-ID_LIKE=debian
-VERSION="0.1.0-alpha1"
-VERSION_ID=0.1.0-alpha1
-DEBIAN_CODENAME=trixie
-RELEASE
+# nex-core-local's postinst diverts Debian's os-release symlink and writes the
+# Nex Core identity from its own package version; the console banners reuse it.
+. /etc/os-release
+test "$ID" = nex-core
 mkdir -p /etc/default/grub.d
 printf '%s\n' 'GRUB_DISTRIBUTOR="Nex Core"' > /etc/default/grub.d/nex-core.cfg
 update-grub
 mkdir -p /usr/share/nex-core /etc/ssh/sshd_config.d
 cp /var/cache/nex-install/package-manifest.tsv /usr/share/nex-core/
-printf '%s\n' 'Nex Core 0.1.0-alpha1 — Debian 13 virtualization host' > /etc/motd
+printf '%s\n' "$PRETTY_NAME — Debian 13 virtualization host" > /etc/motd
 # Static identity only; nex-core-local publishes the live web UI URL under /run/issue.d.
 # agetty expands \n (hostname) and \l (tty); keep single backslashes in this data string.
 printf '%s\n' \
-    'Nex Core 0.1.0-alpha1 (Debian 13)' \
+    "$PRETTY_NAME (Debian 13)" \
     'Host: \n  Console: \l' \
     '' > /etc/issue
 printf '%s\n' 'PermitRootLogin no' > /etc/ssh/sshd_config.d/00-nex-core.conf

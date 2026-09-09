@@ -1,0 +1,57 @@
+{
+  "summary": "Nex Core has one version, the nex-core-local package version: its postinst owns /etc/os-release and refreshes the console banners on install and update, the installer and ISO derive their labels and file name from the package, and the Controller host page shows a single Version row instead of Operating system plus Agent version. API impact: none (inventory fields os_version/agent_version unchanged; descriptions clarified). Also fixes BUG-0041 in the capture harness.",
+  "paths": [
+    "packaging/core-local/postinst",
+    "installer/late-install.sh",
+    "installer/build.sh",
+    "installer/check.sh",
+    "installer/README.md",
+    "packaging/core-local/build.py",
+    "packaging/controller/build.py",
+    ".github/workflows/installer.yml",
+    ".gitea/workflows/installer.yml",
+    "web/src/main.tsx",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "tests/test_core_local_package.py",
+    "tests/integration/iso-smoke.py",
+    "tests/integration/website_controller_captures.py",
+    "docs/guide/README.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/verify-nex-core.md",
+    "docs/guide/software-updates.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/qa/single-nex-core-version.md",
+    "docs/qa/single-nex-core-version/controller-captures.json",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators see one Nex Core version on the host page and in /etc/os-release; ISO file names and identity checks changed.",
+    "pages": [
+      "docs/guide/README.md",
+      "docs/guide/install-nex-core.md",
+      "docs/guide/verify-nex-core.md",
+      "docs/guide/software-updates.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "No contract change; the os_version and agent_version field descriptions now state that both carry the single Nex Core version.",
+    "pages": [
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "verification": {
+    "method": "python3 -m unittest discover -s tests -p 'test_*.py' (84 tests, includes the new postinst check using real dpkg-divert/dpkg-query against a temporary root); real dpkg 1.23.7 chrootless install of 0.1.5~alpha1 then upgrade to 0.1.6~alpha1 into a temporary root; ./installer/check.sh; python3 scripts/generate_api.py --check; npm run typecheck and build in web/; Playwright Controller capture harness against a real Controller with simulated inventory; python3 scripts/check_docs.py --all. Simulation: no ISO rebuild, live host, or apt update was run.",
+    "evidence": [
+      "tests/test_core_local_package.py",
+      "installer/check.sh",
+      "tests/integration/website_controller_captures.py",
+      "docs/qa/single-nex-core-version.md",
+      "docs/qa/single-nex-core-version/controller-captures.json"
+    ]
+  }
+}

@@ -963,8 +963,29 @@ type interfaceXML struct {
 	} `xml:"model"`
 }
 type channelXML struct {
-	Type   string    `xml:"type,attr"`
-	Target targetXML `xml:"target"`
+	Type   string            `xml:"type,attr"`
+	Source *channelSourceXML `xml:"source,omitempty"`
+	Target targetXML         `xml:"target"`
+}
+
+// channelSourceXML carries the qemu-vdagent options: clipboard relay between the VNC
+// client and a spice-vdagent in the guest; mouse stays with the tablet device.
+type channelSourceXML struct {
+	Clipboard struct {
+		Copypaste string `xml:"copypaste,attr"`
+	} `xml:"clipboard"`
+	Mouse struct {
+		Mode string `xml:"mode,attr"`
+	} `xml:"mouse"`
+}
+type inputXML struct {
+	Type string `xml:"type,attr"`
+	Bus  string `xml:"bus,attr"`
+}
+type videoXML struct {
+	Model struct {
+		Type string `xml:"type,attr"`
+	} `xml:"model"`
 }
 type graphicsXML struct {
 	Type     string `xml:"type,attr"`

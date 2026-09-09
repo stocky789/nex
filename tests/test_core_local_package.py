@@ -4,6 +4,8 @@ import importlib.machinery
 import importlib.util
 import json
 import hashlib
+import os
+import shutil
 import sys
 import tarfile
 from pathlib import Path
@@ -175,6 +177,49 @@ class CoreLocalPackageTests(unittest.TestCase):
                                      '--docker', str(docker)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
+
+    def test_postinst_owns_release_identity_from_package_version(self):
+        for tool in ('dpkg-divert', 'dpkg-query'):
+            if not shutil.which(tool):
+                self.skipTest(f'{tool} missing: Debian dpkg tools are required for this check')
+        with tempfile.TemporaryDirectory(prefix='nex-postinst-') as directory:
+            root = Path(directory)
+            for sub in ('usr/lib', 'etc', 'var/lib/dpkg', 'bin'):
+                (root / sub).mkdir(parents=True)
+            (root / 'usr/lib/os-release').write_text('PRETTY_NAME="Debian GNU/Linux 13 (trixie)"\nID=debian\nVERSION_CODENAME=trixie\n')
+            (root / 'etc/os-release').symlink_to('../usr/lib/os-release')
+            (root / 'etc/motd').write_text('Nex Core 0.1.0-alpha1 — Debian 13 virtualization host\n')
+            (root / 'etc/issue').write_text('Nex Core 0.1.0-alpha1 (Debian 13)\nHost: \\n  Console: \\l\n\n')
+            helper = root / 'bin/deb-systemd-helper'
+            helper.write_text('#!/bin/sh\nexit 0\n')
+            helper.chmod(0o755)
+
+            def configure(version):
+                (root / 'var/lib/dpkg/status').write_text(
+                    f'Package: nex-core-local\nStatus: install ok half-configured\nArchitecture: amd64\nVersion: {version}\n\n')
+                env = dict(os.environ, DPKG_ROOT=str(root), DPKG_ADMINDIR=str(root / 'var/lib/dpkg'),
+                           PATH=f"{root / 'bin'}:{os.environ['PATH']}")
+                subprocess.run(['sh', str(ROOT / 'packaging/core-local/postinst'), 'configure'],
+                               env=env, check=True, capture_output=True, text=True)
+                return (root / 'etc/os-release').read_text()
+
+            release = configure('1.2.3~alpha1')
+            self.assertFalse((root / 'etc/os-release').is_symlink())
+            for line in ('NAME="Nex Core"', 'PRETTY_NAME="Nex Core 1.2.3~alpha1"', 'ID=nex-core', 'ID_LIKE=debian',
+                         'VERSION="1.2.3~alpha1"', 'VERSION_ID=1.2.3~alpha1', 'DEBIAN_CODENAME=trixie'):
+                self.assertIn(line + '\n', release)
+            # Debian's symlink survives under the diverted name; upstream metadata is untouched.
+            self.assertTrue((root / 'etc/os-release.debian').is_symlink())
+            self.assertIn('ID=debian\n', (root / 'usr/lib/os-release').read_text())
+            self.assertEqual((root / 'etc/motd').read_text(), 'Nex Core 1.2.3~alpha1 — Debian 13 virtualization host\n')
+            self.assertTrue((root / 'etc/issue').read_text().startswith('Nex Core 1.2.3~alpha1 (Debian 13)\nHost: \\n  Console: \\l\n'))
+            # Upgrade: identity follows the new package version without a second diversion.
+            release = configure('1.2.4')
+            self.assertIn('PRETTY_NAME="Nex Core 1.2.4"\n', release)
+            self.assertIn('VERSION_ID=1.2.4\n', release)
+            self.assertTrue((root / 'etc/os-release.debian').is_symlink())
+            self.assertEqual((root / 'etc/motd').read_text(), 'Nex Core 1.2.4 — Debian 13 virtualization host\n')
+            self.assertEqual((root / 'etc/nex/updates.conf').read_text(), 'repo_url=https://nexvirtualization.com/apt\n')
 
     def test_removal_never_erases_guest_or_state(self):
         script = (ROOT / 'packaging/core-local/prerm').read_text()

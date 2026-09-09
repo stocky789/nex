@@ -1,7 +1,7 @@
 # Pool VLAN networks and guest tools direction
 
-Status: implemented for one-host pools on 2026-09-09; guest tools are assessed here, not
-implemented. Owner: Matt. Parent: [platform plan](2026-09-08-nex-platform.md), Phase 2 item 2
+Status: implemented for one-host pools on 2026-09-09; guest tools are assessed here, and
+slice 1 (observe) is implemented in [console features](2026-09-09-console-features.md). Owner: Matt. Parent: [platform plan](2026-09-08-nex-platform.md), Phase 2 item 2
 and Phase 4 item 4.
 
 ## Problem
