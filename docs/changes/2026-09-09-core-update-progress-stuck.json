@@ -1,0 +1,29 @@
+{
+  "summary": "Keep Core postinst from restarting mid-apply and clear stuck Installing progress when the package is already current; deploy Controller appliances with host-passthrough CPU.",
+  "paths": [
+    "packaging/core-local/postinst",
+    "internal/nexupdate/nexupdate.go",
+    "internal/nexupdate/nexupdate_test.go",
+    "internal/vmhost/engine.go",
+    "internal/vmhost/engine_test.go",
+    "docs/guide/software-updates.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Troubleshooting note for stuck Installing progress after Core apply.",
+    "pages": ["docs/guide/software-updates.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Same Updates endpoints; progress merge behavior only.",
+    "pages": []
+  },
+  "verification": {
+    "method": "go test ./internal/nexupdate ./internal/vmhost; disposable lab Check/Apply against https://nexvirtualization.com/apt",
+    "evidence": [
+      "internal/nexupdate/nexupdate_test.go TestMergeProgressStaleInstalling",
+      "internal/vmhost/engine_test.go host-passthrough assertion"
+    ]
+  }
+}

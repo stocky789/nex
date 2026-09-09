@@ -6,7 +6,11 @@ if [ "$1" = configure ]; then
         useradd --system --home /var/lib/nex-controller --shell /usr/sbin/nologin nex-controller
     fi
     install -d -m700 -o nex-controller -g nex-controller /var/lib/nex-controller
-    install -d -m700 /etc/nex-controller
+    install -d -m700 -o nex-controller -g nex-controller /etc/nex-controller
+    # Keep credentials readable by the service user across package upgrades.
+    chown -R nex-controller:nex-controller /etc/nex-controller /var/lib/nex-controller
+    find /etc/nex-controller -type f -exec chmod 600 {} +
+    find /etc/nex-controller -type d -exec chmod 700 {} +
     install -d -m755 /etc/nex
     if [ ! -f /etc/nex/updates.conf ] || grep -Eq 'repo_url=http://(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)' /etc/nex/updates.conf; then
         printf 'repo_url=https://nexvirtualization.com/apt\n' > /etc/nex/updates.conf
@@ -22,7 +26,11 @@ if [ "$1" = configure ]; then
     deb-systemd-helper enable nex-controller-update.path
     if [ -d /run/systemd/system ]; then
         systemctl daemon-reload
-        deb-systemd-invoke restart nex-controller.service || true
+        # Do not restart here during apply-update; the helper starts after dpkg.
+        # First installs and manual dpkg still need the service up.
+        if [ ! -f /var/lib/nex-controller/pending-update.json ]; then
+            deb-systemd-invoke restart nex-controller.service || true
+        fi
         deb-systemd-invoke start nex-controller-update.path || true
     fi
 fi

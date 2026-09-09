@@ -1,0 +1,25 @@
+{
+  "summary": "Publish 0.1.1 so hosts on 0.1.0+vlan1 see an available update; Available always shows the repo version.",
+  "paths": [
+    "internal/nexupdate/nexupdate_test.go",
+    "web/src/main.tsx",
+    "web/src/local.tsx",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator steps unchanged; only package version ordering and Available field display.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Update routes and schemas unchanged; published package version and UI display only.",
+    "pages": []
+  },
+  "verification": {
+    "method": "dpkg --compare-versions 0.1.0+vlan1 lt 0.1.1 succeeds; go test ./internal/nexupdate -run TestCompareVersions; https://nexvirtualization.com/apt/updates.json lists 0.1.1.",
+    "evidence": [
+      "internal/nexupdate/nexupdate_test.go"
+    ]
+  }
+}

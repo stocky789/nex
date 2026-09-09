@@ -891,9 +891,14 @@ type domainXML struct {
 	UUID     string      `xml:"uuid"`
 	Memory   memoryXML   `xml:"memory"`
 	VCPU     int         `xml:"vcpu"`
+	CPU      cpuXML      `xml:"cpu"`
 	OS       osXML       `xml:"os"`
 	Features featuresXML `xml:"features"`
 	Devices  devicesXML  `xml:"devices"`
+}
+type cpuXML struct {
+	Mode  string `xml:"mode,attr"`
+	Check string `xml:"check,attr,omitempty"`
 }
 type memoryXML struct {
 	Unit  string `xml:"unit,attr"`
@@ -972,7 +977,7 @@ type graphicsXML struct {
 }
 
 func makeDomain(j journal, s DeploySpec) domainXML {
-	d := domainXML{Type: "kvm", Name: j.Name, UUID: j.VMID, Memory: memoryXML{"MiB", s.MemoryMiB}, VCPU: s.CPUs, OS: osXML{osTypeXML{"x86_64", "q35", "hvm"}}}
+	d := domainXML{Type: "kvm", Name: j.Name, UUID: j.VMID, Memory: memoryXML{"MiB", s.MemoryMiB}, VCPU: s.CPUs, CPU: cpuXML{Mode: "host-passthrough", Check: "none"}, OS: osXML{osTypeXML{"x86_64", "q35", "hvm"}}}
 	d.Devices.Disks = []diskXML{{Type: "file", Device: "disk", Driver: driverXML{"qemu", "qcow2"}, Source: sourceXML{File: j.Disk}, Target: targetXML{Dev: "vda", Bus: "virtio"}}, {Type: "file", Device: "cdrom", Driver: driverXML{"qemu", "raw"}, Source: sourceXML{File: filepath.Join(filepath.Dir(j.Disk), "seed.iso")}, Target: targetXML{Dev: "sda", Bus: "sata"}, Readonly: &struct{}{}}}
 	nic := interfaceXML{Type: "bridge", Source: sourceXML{Bridge: j.Bridge}}
 	nic.MAC.Address = mac(j.VMID)

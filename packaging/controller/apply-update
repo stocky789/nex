@@ -8,12 +8,14 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 
 STATE = Path('/var/lib/nex-controller')
-PENDING = STATE / 'pending-update.json'
+PENDING = Path('/var/lib/nex-controller/pending-update.json')
 PROGRESS = STATE / 'update-progress.json'
 DEFAULT_REPO = 'https://nexvirtualization.com/apt'
+SERVICE = 'nex-controller.service'
 
 
 def normalize_repo(repo):
@@ -103,6 +105,41 @@ def download(repo, info, dest):
     return path
 
 
+def run(cmd, check=True):
+    return subprocess.run(cmd, check=check, text=True, capture_output=True)
+
+
+def service_active():
+    return run(['systemctl', 'is-active', '--quiet', SERVICE], check=False).returncode == 0
+
+
+def ensure_service_running():
+    run(['systemctl', 'daemon-reload'], check=False)
+    run(['systemctl', 'reset-failed', SERVICE], check=False)
+    # Credentials must stay readable by the service user after dpkg.
+    conf = Path('/etc/nex-controller')
+    state = Path('/var/lib/nex-controller')
+    if conf.is_dir():
+        run(['chown', '-R', 'nex-controller:nex-controller', str(conf)], check=False)
+    if state.is_dir():
+        run(['chown', '-R', 'nex-controller:nex-controller', str(state)], check=False)
+    started = run(['systemctl', 'start', SERVICE], check=False)
+    for _ in range(30):
+        if service_active():
+            return
+        time.sleep(0.5)
+    detail = run(['systemctl', 'status', '--no-pager', '-l', SERVICE], check=False)
+    logs = run(['journalctl', '-u', SERVICE, '-n', '40', '--no-pager'], check=False)
+    message = 'controller service failed to start'
+    if started.stderr:
+        message += ': ' + started.stderr.strip()
+    if detail.stdout:
+        message += '\n' + detail.stdout.strip()
+    if logs.stdout:
+        message += '\n' + logs.stdout.strip()
+    fail(message[:4000])
+
+
 def main():
     if os.geteuid() != 0:
         fail('root required')
@@ -116,10 +153,13 @@ def main():
     with tempfile.TemporaryDirectory(prefix='nex-controller-update-') as temporary:
         deb = download(repo, info, Path(temporary))
         write_progress('installing', 90, message='Installing package')
-        subprocess.run(['dpkg', '-i', str(deb)], check=True)
-    PENDING.unlink(missing_ok=True)
+        run(['systemctl', 'stop', SERVICE], check=False)
+        result = run(['dpkg', '-i', str(deb)], check=False)
+        if result.returncode != 0:
+            fail('dpkg failed: ' + ((result.stderr or result.stdout or '')[-2000:]))
     write_progress('restarting', 98, message='Restarting service')
-    subprocess.run(['systemctl', 'restart', 'nex-controller.service'], check=False)
+    ensure_service_running()
+    PENDING.unlink(missing_ok=True)
     write_progress('done', 100, message='Update complete')
 
 

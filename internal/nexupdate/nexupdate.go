@@ -213,6 +213,14 @@ func MergeProgress(st *Status, stateDir string) {
 	if !ok {
 		return
 	}
+	// If postinst restarted the service mid-dpkg, progress can stick on installing
+	// even though the new package is already active.
+	if (p.Phase == "downloading" || p.Phase == "installing" || p.Phase == "restarting") &&
+		!st.UpdateAvailable && st.InstalledVersion != "" && st.AvailableVersion != "" &&
+		CompareVersions(st.InstalledVersion, st.AvailableVersion) >= 0 {
+		p = Progress{Phase: "done", Percent: 100, Message: "Update complete"}
+		_ = WriteProgress(stateDir, p)
+	}
 	st.Phase = p.Phase
 	pct := p.Percent
 	st.Progress = &pct

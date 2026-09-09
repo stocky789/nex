@@ -315,7 +315,7 @@ func TestSeedAndDomainContainUniquePrivateConfiguration(t *testing.T) {
 	if err = xml.Unmarshal(b, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.UUID != id || decoded.Devices.Disks[0].Source.File != j.Disk || decoded.Devices.Graphics[0].Listen.Type != "socket" || strings.Contains(string(b), s.AdminPassword) {
+	if decoded.UUID != id || decoded.Devices.Disks[0].Source.File != j.Disk || decoded.Devices.Graphics[0].Listen.Type != "socket" || decoded.CPU.Mode != "host-passthrough" || strings.Contains(string(b), s.AdminPassword) {
 		t.Fatalf("invalid domain: %s", b)
 	}
 }

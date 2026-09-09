@@ -29,6 +29,10 @@ func TestCompareVersions(t *testing.T) {
 		{"0.1.0+apt1", "0.1.0+apt2", -1},
 		{"1:0.1.0", "0.2.0", 1},
 		{"0.9.0", "0.10.0", -1},
+		// Feature tags like +vlan1 sort after +upd3; bump the numeric version to supersede them.
+		{"0.1.0+vlan1", "0.1.0+upd3", 1},
+		{"0.1.0+vlan1", "0.1.1", -1},
+		{"0.1.0+console2", "0.1.1", -1},
 	}
 	for _, c := range cases {
 		if got := CompareVersions(c.a, c.b); got != c.want {
@@ -66,7 +70,7 @@ func TestCheckAndDownload(t *testing.T) {
 	mux.HandleFunc("/apt/nex-core-local_0.2.0_amd64.deb", func(w http.ResponseWriter, r *http.Request) {
 		w.Write(payload)
 	})
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewTLSServer(mux)
 	t.Cleanup(srv.Close)
 	prev := HTTPClient
 	HTTPClient = srv.Client()
@@ -106,7 +110,7 @@ func TestCheckAndDownload(t *testing.T) {
 	mux2.HandleFunc("/apt/bad.deb", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("tampered"))
 	})
-	srv2 := httptest.NewServer(mux2)
+	srv2 := httptest.NewTLSServer(mux2)
 	t.Cleanup(srv2.Close)
 	HTTPClient = srv2.Client()
 	if _, _, err := DownloadDeb(context.Background(), srv2.URL+"/apt", "nex-core-local", bad, nil); err == nil {
@@ -153,7 +157,7 @@ func TestDownloadProgress(t *testing.T) {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
 		w.Write(payload)
 	})
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewTLSServer(mux)
 	t.Cleanup(srv.Close)
 	prev := HTTPClient
 	HTTPClient = srv.Client()
@@ -172,8 +176,24 @@ func TestDownloadProgress(t *testing.T) {
 	}
 }
 
+func TestMergeProgressStaleInstalling(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteProgress(dir, Progress{Phase: "installing", Percent: 90, Message: "Installing package"}); err != nil {
+		t.Fatal(err)
+	}
+	st := Status{InstalledVersion: "0.1.2", AvailableVersion: "0.1.2", UpdateAvailable: false}
+	MergeProgress(&st, dir)
+	if st.Phase != "done" || st.Progress == nil || *st.Progress != 100 {
+		t.Fatalf("%+v", st)
+	}
+	prog, ok := ReadProgress(dir)
+	if !ok || prog.Phase != "done" {
+		t.Fatalf("%+v %v", prog, ok)
+	}
+}
+
 func TestCheckUnreachable(t *testing.T) {
-	st, err := Check(context.Background(), "http://127.0.0.1:1/apt", "nex-controller")
+	st, err := Check(context.Background(), "https://updates.invalid/apt", "nex-controller")
 	if err != nil {
 		t.Fatal(err)
 	}

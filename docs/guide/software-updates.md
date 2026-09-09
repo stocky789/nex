@@ -34,6 +34,8 @@ service restart; the page reports that the service is restarting.
 - Appliance images and new Core deploys include the update helper so **Update** works
   after deploy. Older Controller VMs without that helper need a redeploy (or a one-time
   `nex-controller` package install).
+- If Core shows Installing after the service is already back, refresh **Updates**; completed
+  installs clear themselves once the installed version matches available.
 
 ## Verification
 

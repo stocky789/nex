@@ -10,6 +10,13 @@ if [ "$1" = configure ]; then
     deb-systemd-helper enable nex-core-local.service
     if [ -d /run/systemd/system ]; then
         systemctl daemon-reload
-        deb-systemd-invoke restart nex-core-local.service || true
+        # In-GUI apply writes update-progress.json then runs dpkg; restarting here
+        # kills that process before it can finish and mark the update done.
+        progress=/var/lib/nex/core-local/update-progress.json
+        if [ -f "$progress" ] && grep -qE '"phase":[[:space:]]*"(downloading|installing|restarting)"' "$progress"; then
+            :
+        else
+            deb-systemd-invoke restart nex-core-local.service || true
+        fi
     fi
 fi

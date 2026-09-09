@@ -1,0 +1,26 @@
+{
+  "summary": "Fix Controller update helper to verify service start and keep TLS credentials owned by nex-controller.",
+  "paths": [
+    "packaging/controller/apply-update",
+    "packaging/controller/postinst",
+    "packaging/controller/nex-controller.service",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator Updates steps unchanged; this is packaging/helper reliability.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core API contract change; apply helper behavior only.",
+    "pages": []
+  },
+  "verification": {
+    "method": "nex-controller 0.1.3 published to https://nexvirtualization.com/apt/updates.json; live Controller recovery requires host console access.",
+    "evidence": [
+      "packaging/controller/apply-update",
+      "packaging/controller/postinst"
+    ]
+  }
+}

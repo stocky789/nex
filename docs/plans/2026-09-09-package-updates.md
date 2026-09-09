@@ -2,10 +2,11 @@
 
 Date: 2026-09-09  
 Status: APT is live at `https://nexvirtualization.com/apt/`
-(`nex-controller` and `nex-core-local` `0.1.0+upd3`). Domain default; private HTTP
+(`nex-controller` `0.1.3`, `nex-core-local` `0.1.3`). Domain default; private HTTP
 repo URLs are remapped to that default. Controller appliances ship `apply-update`
 + path unit so Updates Check/Update work after deploy. Signing key under
 `/etc/nex-apt/gnupg`; `matt` can republish with passwordless `sudo nex-apt-publish`.
+Disposable lab verified Check/Apply for both packages against the public repo.
 Host backend remains `/srv/nex-apt` on the website VM.
 
 ## Decision
