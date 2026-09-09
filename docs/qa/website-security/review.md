@@ -10,14 +10,14 @@ earlier review state; excluded firewall and SSH work was not performed.
 
 ## Scope and evidence
 
-Reviewed the private website at `172.16.4.3:8080`, its local static-site source and
+Reviewed the private website on the website host listener, its local static-site source and
 existing deployment evidence. No host configuration, packages, firewall, DNS or
 services were changed. Existing unrelated working-tree changes were preserved.
 
-At approximately 01:46–01:47 UTC, read-only TCP connections found ports 22 and 8080
-reachable from the review workstation; ports 80 and 443 refused connections. This
+At approximately 01:46–01:47 UTC, read-only TCP connections found SSH and the website
+listener reachable from the review workstation; ports 80 and 443 refused connections. This
 was a four-port check, not a complete port scan or proof of Internet isolation.
-`ssh -o BatchMode=yes -o ConnectTimeout=10 matt@172.16.4.3` initially failed with
+SSH as the authorized operator initially failed with
 `Permission denied (publickey,password)`. A subsequent SSH session as the authorized
 user succeeded, and sudo-backed read-only host checks completed. No credentials
 are retained in this report or repository files.

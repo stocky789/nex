@@ -9,8 +9,8 @@ rollout for APT sources remains separate. GUI walkthrough evidence is not yet re
 ## Prerequisites
 
 - Administrator session on Controller, or root on the host-local UI.
-- Reachable package repo serving `updates.json` and `.deb` files (default lab URL
-  `http://172.16.4.3:8080/apt`, overridable with `/etc/nex/updates.conf` or
+- Reachable package repo serving `updates.json` and `.deb` files (default
+  `https://nexvirtualization.com/apt`, overridable with `/etc/nex/updates.conf` or
   `NEX_UPDATE_REPO`).
 - Packaged `nex-controller` or `nex-core-local` installs for apply to succeed.
 
@@ -31,8 +31,9 @@ service restart; the page reports that the service is restarting.
 
 - Repo errors appear beside the version fields; fix connectivity or `repo_url` and check again.
 - Controller cannot run `apt` itself; the privileged update path unit must be enabled.
-- Appliance images built only to `/usr/local` without the update path unit need a package
-  install (or rebuild) before apply works.
+- Appliance images and new Core deploys include the update helper so **Update** works
+  after deploy. Older Controller VMs without that helper need a redeploy (or a one-time
+  `nex-controller` package install).
 
 ## Verification
 

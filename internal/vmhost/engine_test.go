@@ -234,6 +234,46 @@ func TestInterruptedRetryNeverRecreates(t *testing.T) {
 		t.Fatalf("operation duplication: %v %+v", err, ops)
 	}
 }
+func TestSeedInjectsUpdateHelperWhenPresent(t *testing.T) {
+	e := testEngine(t)
+	bundle := t.TempDir()
+	e.config.ImagePath = filepath.Join(bundle, "controller.qcow2")
+	updateDir := filepath.Join(bundle, "update")
+	if err := os.MkdirAll(updateDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"apply-update":                   "#!/usr/bin/python3\nprint('ok')\n",
+		"nex-controller-update.path":     "[Path]\n",
+		"nex-controller-update.service":  "[Service]\n",
+		"updates.conf":                   "repo_url=https://nexvirtualization.com/apt\n",
+	} {
+		if err := os.WriteFile(filepath.Join(updateDir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := validSpec(t)
+	id := "5fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d"
+	j := journal{Operation: Operation{ID: s.RequestID, VMID: id}, Name: s.Name, Disk: filepath.Join(e.config.StorageDir, id, "controller.qcow2"), Bridge: e.config.Bridge}
+	if err := os.Mkdir(filepath.Dir(j.Disk), 0711); err != nil {
+		t.Fatal(err)
+	}
+	fakeCommand(t, "genisoimage", "exit 0")
+	if err := e.seed(context.Background(), j, s); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(e.config.StateDir, id+"-seed", "user-data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(b)
+	for _, want := range []string{"/usr/local/lib/nex/apply-update", "/etc/nex/updates.conf", "nex-controller-update.path", "systemctl, enable, --now, nex-controller-update.path"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("seed missing %q in %s", want, text)
+		}
+	}
+}
+
 func TestSeedAndDomainContainUniquePrivateConfiguration(t *testing.T) {
 	e := testEngine(t)
 	s := validSpec(t)

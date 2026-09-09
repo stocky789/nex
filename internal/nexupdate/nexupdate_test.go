@@ -37,6 +37,22 @@ func TestCompareVersions(t *testing.T) {
 	}
 }
 
+func TestNormalizeRepoURL(t *testing.T) {
+	if got := NormalizeRepoURL("http://10.0.0.1:8080/apt/"); got != defaultRepoURL {
+		t.Fatalf("got %q", got)
+	}
+	if got := NormalizeRepoURL("http://127.0.0.1:8081"); got != defaultRepoURL {
+		t.Fatalf("got %q", got)
+	}
+	if got := NormalizeRepoURL("https://mirror.example/apt/"); got != "https://mirror.example/apt" {
+		t.Fatalf("got %q", got)
+	}
+	t.Setenv("NEX_UPDATE_REPO", "http://192.168.1.10/apt")
+	if got := DefaultRepoURL(); got != defaultRepoURL {
+		t.Fatalf("DefaultRepoURL=%q", got)
+	}
+}
+
 func TestCheckAndDownload(t *testing.T) {
 	payload := []byte("fake-deb-content")
 	sum := sha256.Sum256(payload)

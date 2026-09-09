@@ -1,3 +1,1 @@
-# SPDX-License-Identifier: AGPL-3.0-only
-# Example APT source for Nex packages. Enable only after installing the Nex signing key.
-# deb [signed-by=/usr/share/keyrings/nex-archive-keyring.gpg] http://172.16.4.3:8080/apt stable main
+# deb [signed-by=/usr/share/keyrings/nex-archive-keyring.gpg] https://nexvirtualization.com/apt nex main

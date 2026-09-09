@@ -18,9 +18,13 @@ func (c *Controller) updates(w http.ResponseWriter, r *http.Request, user, csrf 
 }
 
 func (c *Controller) applyUpdate(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	if err := nexupdate.ControllerApplyReady(); err != nil {
+		fail(w, 503, err.Error())
+		return
+	}
 	repo := nexupdate.DefaultRepoURL()
 	if err := nexupdate.RequestApply(c.cfg.DataDir, repo, "nex-controller"); err != nil {
-		fail(w, 500, "could not schedule update")
+		fail(w, 500, err.Error())
 		return
 	}
 	tx, err := c.db.Begin()

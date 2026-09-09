@@ -1,0 +1,41 @@
+{
+  "summary": "Point software-update defaults at https://nexvirtualization.com/apt.",
+  "paths": [
+    "internal/nexupdate/nexupdate.go",
+    "packaging/controller/apply-update",
+    "packaging/controller/build-inside.sh",
+    "packaging/core-local/build-inside.sh",
+    "packaging/core-local/nex.list.example",
+    "packaging/apt/README.md",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/software-updates.md",
+    "docs/plans/2026-09-09-package-updates.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Default package repo URL in the Updates guide now uses the public domain.",
+    "pages": [
+      "docs/guide/software-updates.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Update routes unchanged; OpenAPI description and docs/API.md now document the public default repo URL https://nexvirtualization.com/apt.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "verification": {
+    "method": "curl -fsSI https://nexvirtualization.com/apt/updates.json returns 200; published packages 0.1.0+upd2 embed repo_url=https://nexvirtualization.com/apt; go test ./internal/nexupdate.",
+    "evidence": [
+      "internal/nexupdate/nexupdate.go",
+      "packaging/controller/build-inside.sh",
+      "docs/guide/software-updates.md"
+    ]
+  }
+}

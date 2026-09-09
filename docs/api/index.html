@@ -3094,12 +3094,12 @@
   }
 }</pre></details></section>
 <section id="getUpdates"><h2>GET <code>/api/v1/updates</code></h2>
-<p>Check Controller software updates</p><p>Implemented in development product 0.1.0. Reads the configured package repo (NEX_UPDATE_REPO or /etc/nex/updates.conf, else the lab default) updates.json for package nex-controller, compares versions, and reports whether an update is available. Repo failures are returned in the error field with HTTP 200 so operators can still see the installed version. Administrator session required. Read-only; safe to retry.</p>
+<p>Check Controller software updates</p><p>Implemented in development product 0.1.0. Reads the configured package repo (NEX_UPDATE_REPO or /etc/nex/updates.conf, else https://nexvirtualization.com/apt) updates.json for package nex-controller, compares versions, and reports whether an update is available. Repo failures are returned in the error field with HTTP 200 so operators can still see the installed version. Administrator session required. Read-only; safe to retry.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;getUpdates&quot;,
   &quot;summary&quot;: &quot;Check Controller software updates&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.1.0. Reads the configured package repo (NEX_UPDATE_REPO or /etc/nex/updates.conf, else the lab default) updates.json for package nex-controller, compares versions, and reports whether an update is available. Repo failures are returned in the error field with HTTP 200 so operators can still see the installed version. Administrator session required. Read-only; safe to retry.&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0. Reads the configured package repo (NEX_UPDATE_REPO or /etc/nex/updates.conf, else https://nexvirtualization.com/apt) updates.json for package nex-controller, compares versions, and reports whether an update is available. Repo failures are returned in the error field with HTTP 200 so operators can still see the installed version. Administrator session required. Read-only; safe to retry.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -3150,12 +3150,12 @@
   &quot;x-audience&quot;: &quot;client&quot;
 }</pre></details></section>
 <section id="applyUpdates"><h2>POST <code>/api/v1/updates/apply</code></h2>
-<p>Request Controller package update</p><p>Writes pending-update.json under the Controller state directory for the privileged nex-controller-update path unit. Returns 202 scheduled; the helper downloads the deb, runs dpkg -i and restarts nex-controller. Controller cannot run apt itself (ProtectSystem=strict, NoNewPrivileges). Audits update.apply. Empty JSON body. CSRF and same-origin required.</p>
+<p>Request Controller package update</p><p>Writes pending-update.json under the Controller state directory for the privileged nex-controller-update path unit. Returns 202 scheduled; the helper downloads the deb, runs dpkg -i and restarts nex-controller. Returns 503 when apply-update or the path unit is missing. Controller cannot run apt itself (ProtectSystem=strict, NoNewPrivileges). Audits update.apply. Empty JSON body. CSRF and same-origin required.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;applyUpdates&quot;,
   &quot;summary&quot;: &quot;Request Controller package update&quot;,
-  &quot;description&quot;: &quot;Writes pending-update.json under the Controller state directory for the privileged nex-controller-update path unit. Returns 202 scheduled; the helper downloads the deb, runs dpkg -i and restarts nex-controller. Controller cannot run apt itself (ProtectSystem=strict, NoNewPrivileges). Audits update.apply. Empty JSON body. CSRF and same-origin required.&quot;,
+  &quot;description&quot;: &quot;Writes pending-update.json under the Controller state directory for the privileged nex-controller-update path unit. Returns 202 scheduled; the helper downloads the deb, runs dpkg -i and restarts nex-controller. Returns 503 when apply-update or the path unit is missing. Controller cannot run apt itself (ProtectSystem=strict, NoNewPrivileges). Audits update.apply. Empty JSON body. CSRF and same-origin required.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],

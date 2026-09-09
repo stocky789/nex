@@ -3,7 +3,7 @@
   "node": "24.20.0",
   "npm": "12.0.2",
   "chromium": "151.0.7922.34",
-  "vm": "Ubuntu 24.04.3 LTS, Python 3.12.3, 172.16.4.3:8080",
+  "vm": "Ubuntu 24.04.3 LTS, Python 3.12.3, private website listener",
   "archive_sha256": "01b7f6ad207f82750d2aab98e46a1f0946de5949cec6f6517144a43af449ccd6",
   "served_files_verified": {
     "LICENSE.txt": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",

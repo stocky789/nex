@@ -7,10 +7,17 @@ if [ "$1" = configure ]; then
     fi
     install -d -m700 -o nex-controller -g nex-controller /var/lib/nex-controller
     install -d -m700 /etc/nex-controller
+    install -d -m755 /etc/nex
+    if [ ! -f /etc/nex/updates.conf ] || grep -Eq 'repo_url=http://(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)' /etc/nex/updates.conf; then
+        printf 'repo_url=https://nexvirtualization.com/apt\n' > /etc/nex/updates.conf
+    fi
     # Prefer the packaged unit over an older appliance copy under /etc.
     if [ -f /etc/systemd/system/nex-controller.service ]; then
         rm -f /etc/systemd/system/nex-controller.service
     fi
+    # Drop interim appliance-only update units once the package owns them.
+    rm -f /etc/systemd/system/nex-controller-update.path \
+        /etc/systemd/system/nex-controller-update.service
     deb-systemd-helper enable nex-controller.service
     deb-systemd-helper enable nex-controller-update.path
     if [ -d /run/systemd/system ]; then

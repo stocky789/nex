@@ -33,6 +33,22 @@ func TestUpdatesAuthAndApply(t *testing.T) {
 	t.Cleanup(srv.Close)
 	t.Setenv("NEX_UPDATE_REPO", srv.URL+"/apt")
 
+	helper := filepath.Join(t.TempDir(), "apply-update")
+	pathUnit := filepath.Join(t.TempDir(), "nex-controller-update.path")
+	if err := os.WriteFile(helper, []byte("#!/bin/true\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pathUnit, []byte("[Path]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	prevBin, prevUnits := nexupdate.ApplyUpdateBinary, nexupdate.UpdatePathUnits
+	nexupdate.ApplyUpdateBinary = helper
+	nexupdate.UpdatePathUnits = []string{pathUnit}
+	t.Cleanup(func() {
+		nexupdate.ApplyUpdateBinary = prevBin
+		nexupdate.UpdatePathUnits = prevUnits
+	})
+
 	a := newClient(t)
 	a.cookie, a.csrf = nil, ""
 	a.call("GET", "/api/v1/updates", nil, nil, 401)

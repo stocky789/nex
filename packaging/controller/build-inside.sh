@@ -13,7 +13,7 @@ install -d "$pkg/DEBIAN" \
   "$pkg/usr/lib/systemd/system" \
   "$pkg/usr/share/doc/nex-controller" \
   "$pkg/etc/nex"
-printf 'repo_url=http://172.16.4.3:8080/apt\n' > "$pkg/etc/nex/updates.conf"
+printf 'repo_url=https://nexvirtualization.com/apt\n' > "$pkg/etc/nex/updates.conf"
 printf '/etc/nex/updates.conf\n' > "$pkg/DEBIAN/conffiles"
 install -m755 /build/nex-controller "$pkg/usr/local/lib/nex/"
 install -m755 packaging/controller/run-controller "$pkg/usr/local/lib/nex/"

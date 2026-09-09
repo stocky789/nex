@@ -36,6 +36,10 @@ below describe implemented work, not completion of the full platform roadmap.
 - Pools are now created automatically: administrators create sites only, and every enrolled Nex Core host becomes the **pool master** of its own pool, named after its hostname. Enrollment tokens are bound to a site. The **Create pool** action and its API (`POST /api/v1/pools`) are removed; existing pools gain a master on upgrade. Controller and Core must be upgraded together. Joining a member host, changing the master and ejecting remain planned.
 - Added **Add host** by address and root password: Controller shows the host's certificate fingerprint for confirmation, then enrolls the host over its local HTTPS API without storing or logging the password. The manual enrollment token remains available for hosts Controller cannot reach.
 - Added software update checks and apply flows for Controller and Core local packages, including a Debian `nex-controller` package that upgrades appliance installs in place, with download/install progress and error status in both UIs.
+- Software updates default to the public package repo at `https://nexvirtualization.com/apt`.
+- Removed private host addresses from website and update documentation.
+- Controller appliances include the update helper so Check/Update work without a manual package install; old lab repo URLs are ignored automatically.
+- New Controller deploys from Core also inject the update helper at first boot.
 - Cleaned up the Core local sidebar navigation so Overview and Updates read as quiet nav items instead of mismatched form buttons.
 
 ### Bug Fixes

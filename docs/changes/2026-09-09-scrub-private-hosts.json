@@ -1,0 +1,40 @@
+{
+  "summary": "Remove private website host addresses from docs and remap private HTTP update repos without naming a specific lab IP.",
+  "paths": [
+    "internal/nexupdate/nexupdate.go",
+    "internal/nexupdate/nexupdate_test.go",
+    "packaging/controller/apply-update",
+    "packaging/controller/postinst",
+    "packaging/core-local/postinst",
+    "tests/integration/website_controller_captures.py",
+    "docs/API.md",
+    "docs/plans/2026-09-09-package-updates.md",
+    "docs/plans/2026-09-09-public-website.md",
+    "docs/qa/website/checks.md",
+    "docs/qa/website/build.json",
+    "docs/qa/website/results.json",
+    "docs/qa/website-security/review.md",
+    "docs/qa/website-security/hardening.md",
+    "docs/changes/2026-09-09-apt-domain-default.json",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator guide already uses the public domain; this only removes private host addresses from plans/QA/API wording and internal remap logic.",
+    "pages": []
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "docs/API.md no longer names interim private repo URLs; behavior still remaps private HTTP repos to the public default.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "verification": {
+    "method": "Repository search finds no private website host address; go test ./internal/nexupdate -run TestNormalize; python3 scripts/check_docs.py --all.",
+    "evidence": [
+      "internal/nexupdate/nexupdate_test.go",
+      "docs/API.md"
+    ]
+  }
+}

@@ -1,16 +1,18 @@
 # Package repository and in-product updates
 
 Date: 2026-09-09  
-Status: Lab APT is live on the website listener at `http://172.16.4.3:8080/apt/`
-(`nex-controller` and `nex-core-local` `0.1.0+upd1`). Signing key under
-`/etc/nex-apt/gnupg`; `matt` can republish with passwordless
-`sudo nex-apt-publish`.
+Status: APT is live at `https://nexvirtualization.com/apt/`
+(`nex-controller` and `nex-core-local` `0.1.0+upd3`). Domain default; private HTTP
+repo URLs are remapped to that default. Controller appliances ship `apply-update`
++ path unit so Updates Check/Update work after deploy. Signing key under
+`/etc/nex-apt/gnupg`; `matt` can republish with passwordless `sudo nex-apt-publish`.
+Host backend remains `/srv/nex-apt` on the website VM.
 
 ## Decision
 
-Matt authorized a Nex APT repository on the existing website VM (`172.16.4.3`) and
-in-GUI update checks/apply for Nex Core (host-local UI) and Nex Controller, so
-development builds can be upgraded without full reinstall.
+Matt authorized a Nex APT repository on the website host and in-GUI update
+checks/apply for Nex Core (host-local UI) and Nex Controller, so development
+builds can be upgraded without full reinstall.
 
 This is an early development update path, not Phase 8 populated-host upgrade
 acceptance (drain, compatibility windows, rollback proof).
@@ -18,7 +20,7 @@ acceptance (drain, compatibility windows, rollback proof).
 ## Scope
 
 1. Signed (when a signing key exists) APT tree under `/srv/nex-apt`, served at
-   `http://172.16.4.3:8080/apt/` beside the static website.
+   `https://nexvirtualization.com/apt/` (nginx `/apt/` on the website host).
 2. Publish tooling for `.deb` artifacts and machine-readable `updates.json`.
 3. `nex-controller` Debian package matching appliance install paths so existing
    Controller VMs can `dpkg -i` upgrades.

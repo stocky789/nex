@@ -7,8 +7,8 @@ full-host recovery remain unverified.
 
 ## Scope and decisions
 
-Matt authorized a simple Nex website/portal on the fresh Ubuntu VM at
-172.16.4.3, with SSH as matt. He selected SvelteKit with custom CSS after
+Matt authorized a simple Nex website/portal on a fresh Ubuntu website host,
+with SSH as matt. He selected SvelteKit with custom CSS after
 considering Astro, and selected nexvirtualization.com as the future primary
 domain. He explicitly requested that the website remain private until finished.
 No public DNS, ingress, certificates, or public release publication is authorized

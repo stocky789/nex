@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 set -eu
 if [ "$1" = configure ]; then
+    install -d -m755 /etc/nex
+    if [ ! -f /etc/nex/updates.conf ] || grep -Eq 'repo_url=http://(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)' /etc/nex/updates.conf; then
+        printf 'repo_url=https://nexvirtualization.com/apt\n' > /etc/nex/updates.conf
+    fi
     # Enable in installer chroots too; native Debian policy controls starting services.
     deb-systemd-helper enable nex-core-local.service
     if [ -d /run/systemd/system ]; then

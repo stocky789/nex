@@ -10,7 +10,7 @@ cc -Wall -Wextra -Werror -O2 packaging/core-local/nex-root-auth.c -lpam -o /buil
 pkg=/build/package
 install -d "$pkg/DEBIAN" "$pkg/usr/lib/nex" "$pkg/usr/lib/systemd/system" "$pkg/usr/share/nex/core-local/web" "$pkg/usr/share/nex/appliance" "$pkg/usr/share/doc/nex-core-local"
 install -d "$pkg/etc/pam.d" "$pkg/etc/nex"
-printf 'repo_url=http://172.16.4.3:8080/apt\n' > "$pkg/etc/nex/updates.conf"
+printf 'repo_url=https://nexvirtualization.com/apt\n' > "$pkg/etc/nex/updates.conf"
 install -m644 packaging/core-local/nex.list.example "$pkg/usr/share/nex/core-local/"
 install -m644 packaging/core-local/nex-core-local.pam "$pkg/etc/pam.d/nex-core-local"
 printf '/etc/pam.d/nex-core-local\n/etc/nex/updates.conf\n' > "$pkg/DEBIAN/conffiles"
@@ -31,6 +31,11 @@ go version /build/nex-core-local > "$pkg/usr/share/doc/nex-core-local/go-version
 for artifact in controller.qcow2 manifest.json manifest.sig nex-source.tar.gz components.tsv LICENSE NOTICE build-inputs.json; do
     cp "/input/bundle/$artifact" "$pkg/usr/share/nex/appliance/"
 done
+install -d "$pkg/usr/share/nex/appliance/update"
+install -m755 packaging/controller/apply-update "$pkg/usr/share/nex/appliance/update/"
+install -m644 packaging/controller/nex-controller-update.path "$pkg/usr/share/nex/appliance/update/"
+install -m644 packaging/controller/nex-controller-update.service "$pkg/usr/share/nex/appliance/update/"
+printf 'repo_url=https://nexvirtualization.com/apt\n' > "$pkg/usr/share/nex/appliance/update/updates.conf"
 cp /input/trusted-key.raw "$pkg/usr/share/nex/appliance/release.pub"
 cat > "$pkg/DEBIAN/control" <<CONTROL
 Package: nex-core-local

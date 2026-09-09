@@ -812,7 +812,13 @@ func (e *Engine) seed(ctx context.Context, j journal, s DeploySpec) error {
 		return err
 	}
 	data, _ := json.Marshal(map[string]any{"admin_password": s.AdminPassword, "tls_certificate": s.TLSCertificate, "tls_private_key": s.TLSPrivateKey, "hostname": s.Hostname, "network_mode": s.NetworkMode, "address_cidr": s.AddressCIDR, "gateway": s.Gateway, "dns": s.DNS})
-	userData := "#cloud-config\nhostname: " + s.Hostname + "\nmanage_etc_hosts: true\nssh_pwauth: false\ndisable_root: true\nwrite_files:\n  - path: /etc/nex-controller/bootstrap.json\n    owner: root:root\n    permissions: '0600'\n    encoding: b64\n    content: " + base64.StdEncoding.EncodeToString(data) + "\n"
+	var b strings.Builder
+	b.WriteString("#cloud-config\nhostname: " + s.Hostname + "\nmanage_etc_hosts: true\nssh_pwauth: false\ndisable_root: true\nwrite_files:\n")
+	b.WriteString("  - path: /etc/nex-controller/bootstrap.json\n    owner: root:root\n    permissions: '0600'\n    encoding: b64\n    content: " + base64.StdEncoding.EncodeToString(data) + "\n")
+	if err := e.appendUpdateBootstrap(&b); err != nil {
+		return err
+	}
+	userData := b.String()
 	meta := "instance-id: " + j.VMID + "\nlocal-hostname: " + s.Hostname + "\n"
 	network := fmt.Sprintf("version: 2\nethernets:\n  management:\n    match:\n      macaddress: '%s'\n    set-name: nex0\n    dhcp4: false\n    addresses: [%s]\n    routes:\n      - to: default\n        via: %s\n    nameservers:\n      addresses: [%s]\n", mac(j.VMID), s.AddressCIDR, s.Gateway, strings.Join(s.DNS, ", "))
 	if s.NetworkMode == "dhcp" {
@@ -833,6 +839,45 @@ func (e *Engine) seed(ctx context.Context, j journal, s DeploySpec) error {
 	}
 	_, err = run(ctx, "genisoimage", "-quiet", "-output", isoPath, "-volid", "cidata", "-joliet", "-rock", filepath.Join(seedDir, "user-data"), filepath.Join(seedDir, "meta-data"), filepath.Join(seedDir, "network-config"))
 	return err
+}
+
+// appendUpdateBootstrap writes the Controller update helper into cloud-init so
+// Check/Update work on newly deployed appliances even when the qcow image predates it.
+func (e *Engine) appendUpdateBootstrap(b *strings.Builder) error {
+	dir := filepath.Join(filepath.Dir(e.config.ImagePath), "update")
+	files := []struct {
+		name string
+		dest string
+		mode string
+	}{
+		{"apply-update", "/usr/local/lib/nex/apply-update", "0755"},
+		{"nex-controller-update.path", "/etc/systemd/system/nex-controller-update.path", "0644"},
+		{"nex-controller-update.service", "/etc/systemd/system/nex-controller-update.service", "0644"},
+		{"updates.conf", "/etc/nex/updates.conf", "0644"},
+	}
+	missing := false
+	for _, f := range files {
+		if _, err := os.Stat(filepath.Join(dir, f.name)); err != nil {
+			missing = true
+			break
+		}
+	}
+	if missing {
+		return nil
+	}
+	for _, f := range files {
+		raw, err := os.ReadFile(filepath.Join(dir, f.name))
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(b, "  - path: %s\n    owner: root:root\n    permissions: '%s'\n    encoding: b64\n    content: %s\n",
+			f.dest, f.mode, base64.StdEncoding.EncodeToString(raw))
+	}
+	b.WriteString("runcmd:\n")
+	b.WriteString("  - [mkdir, -p, /etc/nex, /usr/local/lib/nex]\n")
+	b.WriteString("  - [systemctl, daemon-reload]\n")
+	b.WriteString("  - [systemctl, enable, --now, nex-controller-update.path]\n")
+	return nil
 }
 func mac(id string) string {
 	h := strings.ReplaceAll(id, "-", "")

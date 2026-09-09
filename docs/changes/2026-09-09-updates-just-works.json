@@ -1,0 +1,46 @@
+{
+  "summary": "Make Updates Check/Update work with the public domain repo and ship Controller update helper in the appliance.",
+  "paths": [
+    "internal/nexupdate/nexupdate.go",
+    "internal/nexupdate/nexupdate_test.go",
+    "internal/controller/updates.go",
+    "internal/controller/updates_test.go",
+    "internal/vmhost/engine.go",
+    "internal/vmhost/engine_test.go",
+    "packaging/controller/apply-update",
+    "packaging/controller/postinst",
+    "packaging/core-local/postinst",
+    "packaging/core-local/build-inside.sh",
+    "appliance/build-inside.sh",
+    "docs/guide/software-updates.md",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Troubleshooting now reflects appliance-included update helper and domain default.",
+    "pages": [
+      "docs/guide/software-updates.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "POST /api/v1/updates/apply returns 503 when the privileged helper/path unit is missing; docs record retired lab URL normalization.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "verification": {
+    "method": "go test ./internal/nexupdate ./internal/controller ./internal/vmhost -run 'TestUpdates|TestNormalize|TestCompare|TestSeed'; packages 0.1.0+upd3 published with appliance/update helper files.",
+    "evidence": [
+      "internal/nexupdate/nexupdate_test.go",
+      "internal/controller/updates_test.go",
+      "internal/vmhost/engine_test.go",
+      "docs/guide/software-updates.md"
+    ]
+  }
+}

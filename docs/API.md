@@ -555,7 +555,9 @@ API impact: **new contract** — Controller `GET /api/v1/updates` and
 are in the generated references.
 
 Both sides read a package repo URL from `NEX_UPDATE_REPO`, else `/etc/nex/updates.conf`
-(`repo_url=`), else `http://172.16.4.3:8080/apt`. They fetch `{repo}/updates.json`
+(`repo_url=`), else `https://nexvirtualization.com/apt`. Plain HTTP repo URLs that
+point at private or loopback addresses are treated as the public default.
+They fetch `{repo}/updates.json`
 listing package version, filename and sha256. GET compares the installed Debian
 package version (or the build-time `version.Version` fallback) and returns
 non-fatal repo errors in the JSON `error` field with HTTP 200. While an apply
@@ -565,13 +567,14 @@ runs, GET also returns `phase`, `progress` (0–100) and `message` from
 Controller apply writes `pending-update.json` under the state directory and returns
 202; the root `nex-controller-update` path unit runs `/usr/local/lib/nex/apply-update`,
 which downloads the deb (updating progress), runs `dpkg -i` and restarts the service.
+If the helper or path unit is missing, apply returns **503** instead of scheduling.
 Core apply starts the same work in the background and returns 202; the UI polls GET
 until `phase` is `done` or `failed`.
 
 Checks: `go test ./internal/nexupdate ./internal/controller ./internal/localcore`
 (update-focused cases). Operator UI is under Updates on Controller and the host-local
-page. Packaged installs use matching `/usr/local` Controller paths so appliance VMs
-can upgrade with `dpkg -i`.
+page. Packaged installs and current appliance images include the update helper so
+Controller VMs can upgrade in place.
 
 ## Source access and availability
 

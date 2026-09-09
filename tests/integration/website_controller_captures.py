@@ -32,12 +32,13 @@ VIEWS = [('General', 'Health checks', 'desktop-shell.png'),
 
 
 def assert_public_text(text):
-    forbidden = {'matt', 'matt-arch', '/home/', '172.16.4.3', 'BEGIN PRIVATE KEY',
+    forbidden = {'matt', 'matt-arch', '/home/', 'BEGIN PRIVATE KEY',
                  'BEGIN CERTIFICATE', 'single-use enrollment token'}
     local_hostname = socket.gethostname().lower()
     if local_hostname != HOSTNAME:
         forbidden.add(local_hostname)
     assert not any(value.lower() in text.lower() for value in forbidden), 'Private identity or credential in capture content'
+    assert not re.search(r'\b(?:10(?:\.\d+){3}|192\.168(?:\.\d+){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d+){2})\b', text), 'Private IP in capture content'
 
 
 def capture(lab, args):

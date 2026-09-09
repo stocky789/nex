@@ -6,8 +6,8 @@ Status: Build, private VM browser walkthrough and independent review passed.
 ## Scope and environment
 
 The [website plan](../../plans/2026-09-09-public-website.md) authorizes the SvelteKit
-static site and private preview. Actual destination: Ubuntu 24.04.3 LTS VM
-172.16.4.3, Python 3.12.3 static HTTP server bound to 172.16.4.3:8080. The future
+static site and private preview. Actual destination: Ubuntu 24.04.3 LTS website host,
+Python 3.12.3 static HTTP server on the private website listener. The future
 domain nexvirtualization.com was not connected to this VM; no DNS, router ingress,
 TLS, system package installation or public publication was performed.
 
@@ -30,7 +30,7 @@ inventory/audit reads exercise existing contracts without changing their behavio
 npm --prefix website run check
 npm --prefix website run build
 .cache/phase1-qa-venv/bin/python tests/integration/website_browser.py \
-  --url http://172.16.4.3:8080 --evidence docs/qa/website
+  --url https://nexvirtualization.com --evidence docs/qa/website
 python3 scripts/check_docs.py --all
 python3 -m unittest discover -s tests -p 'test_check_docs.py'
 git diff --check
@@ -52,7 +52,7 @@ asserts no ISO/package/appliance download links. No browser page errors occurred
 All eleven deployed files were fetched over the preview HTTP address and their
 SHA-256 values matched the local build, including CSS, artwork and license notices.
 See [build.json](build.json) for exact file and deployment archive digests. SSH
-verified the listener uses only 172.16.4.3:8080. An unknown path returned HTTP 404.
+verified the website listener was bound only to the private host address. An unknown path returned HTTP 404.
 This does not audit upstream router rules or certify Internet isolation.
 
 The primary inspected initial and final rendered desktop/mobile captures, then the

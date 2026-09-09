@@ -2955,7 +2955,7 @@
    "get": {
     "operationId": "getUpdates",
     "summary": "Check Controller software updates",
-    "description": "Implemented in development product 0.1.0. Reads the configured package repo (NEX_UPDATE_REPO or /etc/nex/updates.conf, else the lab default) updates.json for package nex-controller, compares versions, and reports whether an update is available. Repo failures are returned in the error field with HTTP 200 so operators can still see the installed version. Administrator session required. Read-only; safe to retry.",
+    "description": "Implemented in development product 0.1.0. Reads the configured package repo (NEX_UPDATE_REPO or /etc/nex/updates.conf, else https://nexvirtualization.com/apt) updates.json for package nex-controller, compares versions, and reports whether an update is available. Repo failures are returned in the error field with HTTP 200 so operators can still see the installed version. Administrator session required. Read-only; safe to retry.",
     "tags": [
      "Client → Controller"
     ],
@@ -3010,7 +3010,7 @@
    "post": {
     "operationId": "applyUpdates",
     "summary": "Request Controller package update",
-    "description": "Writes pending-update.json under the Controller state directory for the privileged nex-controller-update path unit. Returns 202 scheduled; the helper downloads the deb, runs dpkg -i and restarts nex-controller. Controller cannot run apt itself (ProtectSystem=strict, NoNewPrivileges). Audits update.apply. Empty JSON body. CSRF and same-origin required.",
+    "description": "Writes pending-update.json under the Controller state directory for the privileged nex-controller-update path unit. Returns 202 scheduled; the helper downloads the deb, runs dpkg -i and restarts nex-controller. Returns 503 when apply-update or the path unit is missing. Controller cannot run apt itself (ProtectSystem=strict, NoNewPrivileges). Audits update.apply. Empty JSON body. CSRF and same-origin required.",
     "tags": [
      "Client → Controller"
     ],
@@ -3063,6 +3063,19 @@
         },
         "example": {
          "error": "request rejected"
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Update helper or path unit is missing on this Controller.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "example": {
+         "error": "update helper is missing; redeploy the Controller appliance or install the nex-controller package"
         }
        }
       }

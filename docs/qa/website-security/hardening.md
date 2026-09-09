@@ -43,7 +43,7 @@ index. Complete deployed hashes will be rechecked after cutover.
 ## Deployed configuration and checks
 
 At 02:19 UTC nginx replaced the selected Python process on the same private
-`172.16.4.3:8080` listener. The process identity was checked before stopping it.
+website listener. The process identity was checked before stopping it.
 `nginx -t -c /etc/nex-website/nginx.conf` ran as `nex-website` successfully, and
 systemd verified all three units before starting the service. A fallback to the
 existing preview was prepared but was not needed. No website HTML or assets changed.

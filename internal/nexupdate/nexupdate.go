@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,7 +23,7 @@ import (
 	"nex.local/nex/internal/version"
 )
 
-const defaultRepoURL = "http://172.16.4.3:8080/apt"
+const defaultRepoURL = "https://nexvirtualization.com/apt"
 const maxDebBytes = 4 << 30 // 4 GiB
 const ProgressFileName = "update-progress.json"
 
@@ -73,25 +75,83 @@ var (
 	Command  = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, name, args...)
 	}
-	HTTPClient = &http.Client{Timeout: 60 * time.Minute}
+	HTTPClient        = &http.Client{Timeout: 60 * time.Minute}
+	ApplyUpdateBinary = "/usr/local/lib/nex/apply-update"
+	UpdatePathUnits   = []string{
+		"/usr/lib/systemd/system/nex-controller-update.path",
+		"/etc/systemd/system/nex-controller-update.path",
+	}
 )
 
 var applyMu sync.Mutex
 var applyRunning bool
 
+func NormalizeRepoURL(repoURL string) string {
+	repoURL = strings.TrimRight(strings.TrimSpace(repoURL), "/")
+	if repoURL == "" || isPrivateHTTPRepoURL(repoURL) {
+		return defaultRepoURL
+	}
+	return repoURL
+}
+
+func isPrivateHTTPRepoURL(repoURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(repoURL))
+	if err != nil || parsed.Scheme != "http" || parsed.Host == "" {
+		return false
+	}
+	host := parsed.Hostname()
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+}
+
+func rewriteUpdatesConf(repoURL string) {
+	path := "/etc/nex/updates.conf"
+	content := "repo_url=" + strings.TrimRight(repoURL, "/") + "\n"
+	tmp := path + ".tmp"
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return
+	}
+	if err := os.WriteFile(tmp, []byte(content), 0644); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, path)
+}
+
 func DefaultRepoURL() string {
 	if v := strings.TrimSpace(os.Getenv("NEX_UPDATE_REPO")); v != "" {
-		return strings.TrimRight(v, "/")
+		return NormalizeRepoURL(v)
 	}
 	if b, err := os.ReadFile("/etc/nex/updates.conf"); err == nil {
 		for _, line := range strings.Split(string(b), "\n") {
 			line = strings.TrimSpace(line)
 			if strings.HasPrefix(line, "repo_url=") {
-				return strings.TrimRight(strings.TrimSpace(strings.TrimPrefix(line, "repo_url=")), "/")
+				configured := strings.TrimSpace(strings.TrimPrefix(line, "repo_url="))
+				repo := NormalizeRepoURL(configured)
+				if isPrivateHTTPRepoURL(configured) {
+					rewriteUpdatesConf(repo)
+				}
+				return repo
 			}
 		}
 	}
 	return defaultRepoURL
+}
+
+// ControllerApplyReady reports whether the privileged Controllers update helper
+// and path unit are present so Update does not hang after scheduling.
+func ControllerApplyReady() error {
+	if _, err := os.Stat(ApplyUpdateBinary); err != nil {
+		return errors.New("update helper is missing; redeploy the Controller appliance or install the nex-controller package")
+	}
+	for _, path := range UpdatePathUnits {
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		}
+	}
+	return errors.New("update path unit is missing; redeploy the Controller appliance or install the nex-controller package")
 }
 
 func InstalledVersion(packageName string) string {
@@ -300,6 +360,7 @@ func fetchIndex(ctx context.Context, repoURL string) (updatesIndex, error) {
 }
 
 func Check(ctx context.Context, repoURL, packageName string) (Status, error) {
+	repoURL = NormalizeRepoURL(repoURL)
 	if repoURL == "" {
 		repoURL = DefaultRepoURL()
 	}
@@ -406,6 +467,7 @@ func DownloadDeb(ctx context.Context, repoURL, packageName, destDir string, onPr
 }
 
 func ApplyLocal(ctx context.Context, repoURL, packageName, stateDir string) (ApplyResult, error) {
+	repoURL = NormalizeRepoURL(repoURL)
 	if repoURL == "" {
 		repoURL = DefaultRepoURL()
 	}
@@ -480,6 +542,7 @@ func StartApplyLocal(repoURL, packageName, stateDir string) (ApplyResult, error)
 }
 
 func RequestApply(stateDir, repoURL, packageName string) error {
+	repoURL = NormalizeRepoURL(repoURL)
 	if repoURL == "" {
 		repoURL = DefaultRepoURL()
 	}
@@ -489,7 +552,7 @@ func RequestApply(stateDir, repoURL, packageName string) error {
 	_ = WriteProgress(stateDir, Progress{Phase: "downloading", Percent: 0, Message: "Update requested"})
 	pending := pendingUpdate{
 		Package:     packageName,
-		RepoURL:     strings.TrimRight(repoURL, "/"),
+		RepoURL:     repoURL,
 		RequestedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	b, err := json.Marshal(pending)
