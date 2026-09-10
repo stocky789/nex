@@ -88,7 +88,7 @@ jobs:
       - name: Prepare browser verification
         run: |
           python3 -m venv .cache/phase1-qa-venv
-          .cache/phase1-qa-venv/bin/pip install playwright==1.62.0
+          .cache/phase1-qa-venv/bin/pip install playwright==1.62.0 pillow==12.3.0
           .cache/phase1-qa-venv/bin/python -m playwright install --with-deps chromium
       - name: Capture Controller gallery with neutral demo inventory
         run: .cache/phase1-qa-venv/bin/python tests/integration/website_controller_captures.py --output .cache/website-controller-captures/images --evidence .cache/website-controller-captures/results.json
