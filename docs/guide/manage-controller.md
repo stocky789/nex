@@ -18,7 +18,11 @@ member, changing the pool master and ejecting a member are planned for a later p
 and are not available. Central power controls, consoles, backups, migration and HA
 remain later features.
 
-Use one Controller process with its SQLite database on local disk. This is a development
+Use one Controller process with its SQLite database on local disk. That database is
+authoritative only for sites, administrator accounts, audit history, enrollment tokens, the
+Controller CA and, once they exist, backup jobs; everything about pools, hosts and VMs is
+re-adopted from the hosts (see **Replace a failed Controller** under
+[Troubleshooting](#troubleshooting)). This is a development
 lab workflow, not a supported production deployment or a hardware compatibility claim.
 Use a private management network or VPN and read the current
 [web-access security behavior](secure-web-access.md); new security-build verification
@@ -269,8 +273,10 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
   in this build.
 - **Credential revoked or expired:** use the deliberate revoke/re-enroll procedure for the
   same host. Do not create a second active identity as an automatic recovery shortcut.
-- **Controller or agent state is lost:** stop and retain what remains before recovery. This
-  phase does not provide a controller backup/restore workflow or automatic identity recovery.
+- **Controller or agent state is lost:** stop and retain what remains before recovery. There is
+  no in-product Controller backup/restore workflow or automatic identity recovery; for a
+  host-deployed appliance, the Controller-scoped state (database, identity, TLS keys) is carried
+  by the [recovery export and manual restore](deploy-controller-appliance.md#troubleshooting).
   Do not run two Controllers from copied state or copy an agent identity to another host.
 - **Replace a failed Controller:** deploy or install a new Controller
   ([deploy the appliance](deploy-controller-appliance.md)), sign in, create a site, then connect
