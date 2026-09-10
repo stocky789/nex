@@ -933,6 +933,11 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
   Local headed: Bus menu stayed open (834 highlight pixels).
 - Avoid: putting `overflow: hidden` on form panels inside the desktop shell; use a
   dedicated scroll container when clipping is required.
+- Superseded: the diagnosis was wrong. The static fixture never reproduced the flicker
+  (its headed run captured a fleeting popup, not the shell's behaviour), the `.panel` rule
+  had no effect on the native popup, and the dropdowns kept flickering. See BUG-0064 for
+  the actual cause and fix; `form_select_overflow.py` was replaced by
+  `form_select_picker.py`.
 
 ## BUG-0051 — Host console listener let any local uid connect and get an unauthenticated root shell
 
@@ -1350,3 +1355,33 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 - Avoid: sharing one fail-closed reader between a mutation path and a read-only reporting path.
   Reporting must degrade entry by entry and say what it skipped; never turn one bad record into
   "the host holds nothing".
+
+## BUG-0064 — Create VM dropdowns still flickered closed: the OS popup was being dismissed
+
+- Date: 2026-09-10.
+- Symptom: after BUG-0050, every native `<select>` in Create VM (Bus, Storage, guest OS,
+  Placement host and the rest) still opened and closed at once when clicked.
+- Root cause: not the Controller. A native `<select>` picker is a separate compositor popup
+  window. On the reporting desktop (Hyprland 0.56.2, Brave 152 on Wayland) that popup is
+  dismissed as soon as the pointer moves after the click. Reproduced with a plain page that
+  contains nothing but a `<select>`; in the real Create VM form under the same browser the
+  popup stayed open for 6 s as long as the pointer was still, so no Controller code (React
+  re-render, the 10 s inventory reload, focus handling or panel overflow) closes it.
+- Fix: `select, ::picker(select) { appearance: base-select }` in `web/src/style.css` and
+  `web/src/local.css`, with picker, option, hover and checked styling. Chromium 135+ then
+  renders the picker in the page (top layer) where a compositor cannot dismiss it; browsers
+  without base-select keep their native picker. Select semantics, keyboard use and
+  `onChange` handling are unchanged.
+- Regression evidence: `tests/integration/form_select_picker.py` (replaces
+  `form_select_overflow.py`) clicks Bus under the Controller stylesheet in headless Chromium
+  and requires computed `appearance: base-select`, `:open` after the click, `:open` after a
+  controlled re-selection of the options, the picker drawn below the control in a page
+  capture, and ArrowUp + Enter choosing SATA. It fails against the previous stylesheet
+  (native picker: appearance `auto`). Both phase1 workflows run it. Real-app evidence:
+  the Create VM Bus picker in Brave 152 on Hyprland stayed open for 6 s with the pointer
+  moving across the desktop, and the picker appears in headless page captures of the built
+  bundle. See [QA record](qa/form-select/2026-09-10-base-select.md).
+- Avoid: "fixing" a native popup that the compositor closes by changing page CSS around it,
+  and reading a single early screenshot as proof that a popup stayed open. Playwright's
+  synthetic clicks do not move the real pointer, so a headed run on a Wayland desktop can
+  keep a native popup open that a real click never does; use real input or an in-page picker.

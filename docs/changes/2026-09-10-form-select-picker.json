@@ -1,0 +1,46 @@
+{
+  "summary": "BUG-0064: render select pickers in the page (appearance: base-select) so Wayland compositors cannot dismiss Create VM dropdowns; supersedes the BUG-0050 overflow diagnosis.",
+  "paths": [
+    "web/src/style.css",
+    "web/src/local.css",
+    "tests/integration/form_select_overflow.py",
+    "tests/integration/form_select_picker.py",
+    ".github/workflows/phase1.yml",
+    ".gitea/workflows/phase1.yml",
+    "docs/BUG_LEDGER.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/qa/form-select/2026-09-10-base-select.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-10-form-select-picker.json",
+    "docs/qa/form-select/brave-native-picker-pointer-still.png",
+    "docs/qa/form-select/brave-base-select-pointer-moving.png",
+    "docs/qa/form-select/plain-page-native-vs-base-select.png",
+    "docs/qa/form-select/create-vm-placement-host.png",
+    "docs/qa/form-select/create-vm-storage.png",
+    "docs/qa/form-select/create-vm-bus.png"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Create VM troubleshooting explains the in-page dropdowns, which browsers get them, and the keyboard path elsewhere.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Controller and local deploy page CSS only; no Controller/Core API or command behaviour changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Presentation-only change; no durable pool or Controller state."
+  },
+  "verification": {
+    "method": "Real-input and synthetic-click reproduction in Brave 152 on Hyprland 0.56.2 with OS-level captures, against a plain page and the real Create VM form; base-select verified in the real form and the built bundle; form_select_picker.py headless regression check fails on the old stylesheet and passes on the fix.",
+    "evidence": [
+      "docs/qa/form-select/2026-09-10-base-select.md",
+      "tests/integration/form_select_picker.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

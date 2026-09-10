@@ -307,6 +307,15 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f0f2f5; borde
 
 /* Managed VM forms reuse the compact resource panels and native controls. */
 select { font: inherit; min-width: 0; width: 100%; padding: 6px 8px; border: 1px solid #929aa4; border-radius: 1px; background: #fff; color: #202020; }
+/* Select pickers render in the page, not as an OS popup window. Native pickers are separate
+   compositor popups that some Wayland desktops dismiss on the pointer movement following the
+   click, so the menu opens and closes at once (BUG-0064). Browsers without base-select keep
+   their native picker. */
+select, ::picker(select) { appearance: base-select; }
+::picker(select) { border: 1px solid #929aa4; border-radius: 1px; padding: 2px 0; background: #fff; color: #202020; font-weight: 400; box-shadow: 0 4px 12px rgba(0, 0, 0, .18); }
+select option { padding: 5px 8px; }
+select option:hover, select option:focus-visible { background: #d4e3ff; }
+select option:checked { font-weight: 600; }
 .managed-actions { margin-bottom: 12px; }
 .vm-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .iso-drop { border: 1px dashed #7ea6cf; background: #fff; padding: 14px; min-width: 0; }
@@ -330,3 +339,10 @@ progress { width: 100%; accent-color: var(--blue); }
 .site-options [role="option"] { display: block; width: 100%; padding: 6px 8px; border: 0; background: #fff; text-align: left; overflow-wrap: anywhere; }
 .site-options [role="option"].active { background: #d4e3ff; color: #10306b; }
 .site-options [aria-selected="true"] { font-weight: 600; }
+
+/* VM editor: the details panel as a form; nested device fieldsets stay compact. */
+.vm-editor { padding: 8px 10px 12px; }
+.vm-editor > fieldset { margin: 10px 0 0; }
+.vm-editor fieldset fieldset { margin: 8px 0; }
+.vm-editor textarea { width: 100%; max-width: 660px; }
+.vm-editor > .actions { margin-top: 12px; }

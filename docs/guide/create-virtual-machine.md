@@ -13,9 +13,9 @@ network access are checked on that host; a pool registration does not make a loc
 The VM is created stopped. **Start after creation** makes the host start it once, as the last
 step of the same creation task, after it has verified the definition.
 
-Editing an existing VM and deleting a VM are not yet available in this development build:
-plan the disks, interfaces, firmware and memory before you create the VM, because changing
-them later means creating a new one. Start the VM with its [Power controls](vm-power.md),
+After creation the VM can be changed in place; see [Edit a virtual machine](edit-virtual-machine.md).
+An existing disk's storage, size and provisioning cannot be changed, and deleting a VM is not
+yet available in this development build. Start the VM with its [Power controls](vm-power.md),
 then install the guest through [Open a VM console](vm-console.md).
 An adopted Controller appliance remains visibly protected and is not recreated by this workflow.
 Use an explicitly selected disposable lab host; this is not production acceptance.
@@ -99,7 +99,7 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
    1. **Identity**
       - **VM name** — 1–63 lowercase letters, digits or internal hyphens, starting and
         ending with a letter or digit. It must be unique in the pool and becomes the libvirt
-        domain name on the host; it cannot be changed in this build.
+        domain name on the host; it can be changed later while the VM is stopped.
       - **Description** — optional, at most 4096 characters, stored with the VM definition
         on the pool master.
       - **Guest operating system** — **Linux**, **Windows** or **Other**. A record and a
@@ -251,6 +251,10 @@ the host; files are checked again when creating a VM.
 
 ## Troubleshooting
 
+- **A dropdown closes as soon as it opens:** some desktops dismiss a browser's own popup
+  menus. Nex draws its dropdowns inside the page in current Chromium-based browsers (Chrome,
+  Brave, Edge 135 or later), where this cannot happen; in other browsers use the keyboard
+  (focus the field, then Arrow keys and Enter) or a current Chromium-based browser.
 - **No selectable host or rejected capability:** reconnect the selected host, confirm it
   belongs to this pool, and install matching Core components if it predates managed-VM
   creation. Revocation and stale connectivity block new work.
