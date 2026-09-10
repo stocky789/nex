@@ -1328,34 +1328,6 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
   security-relevant script it describes; grep the guide for the changed behavior whenever
   `appliance/firstboot.py` (or any onboarding/bootstrap script) changes what it provisions.
 
-## BUG-0064 — One corrupt managed journal file emptied the host's reported pool state
-
-- Date: 2026-09-10
-- Symptom: with one unreadable or invalid file in `<agent-state>/managed-vms/`, the host's
-  report carried an empty `Inventory.managed`, so a fresh Controller adopted nothing from the
-  pool and showed empty Storage, Networking, ISO and VM tabs, with no signal why.
-- Root cause: `ManagedEngine.Applied` (`internal/vmhost/managed.go`) returned an empty state on
-  any error from `journals()`, and `journals()` aborted on the first bad file. Failing closed is
-  right for `Execute` (a mutation must not proceed over an unreadable journal) but wrong for
-  read-only reporting, where it silently discarded every other entry.
-- Fix: reporting reads through `readable()`, which skips a bad file and names it; `Applied`
-  reports every other entry and returns a `managed-journal` check that is `failed` with the
-  file names (healthy otherwise). `Execute` still fails closed through the strict `journals()`.
-  In the same change, `Applied` reports failed/needs_attention outcomes, re-observes interrupted
-  creations, flags VMs missing from libvirt, and the agent reports the appliance deploy journal;
-  Controller adoption records every entry it cannot adopt (`docs/changes/2026-09-10-adoption-completeness.json`).
-- Regression evidence: `go test ./internal/vmhost -run TestAppliedSurvivesCorruptJournalEntry`.
-  Run against the previous strict read (Applied wired back to `journals()`) it failed with
-  `corrupt file emptied the applied state: &{Storage:[] ...}`; with the fix it passes, and
-  `go test ./...` passes for every package. It runs in CI through `go test -race ./...` in both
-  `.github/workflows/phase1.yml` (line 31) and `.gitea/workflows/phase1.yml` (line 31). The
-  namespace/no-VM Controller replacement run (`tests/integration/controller_replacement.py`,
-  phase1.yml lines 80-90) now also seeds a corrupt journal file and asserts the other entries
-  are adopted and the host's `managed-journal` check is `failed` naming `corrupt.json`.
-- Avoid: sharing one fail-closed reader between a mutation path and a read-only reporting path.
-  Reporting must degrade entry by entry and say what it skipped; never turn one bad record into
-  "the host holds nothing".
-
 ## BUG-0064 — Create VM dropdowns still flickered closed: the OS popup was being dismissed
 
 - Date: 2026-09-10.
@@ -1385,3 +1357,31 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
   and reading a single early screenshot as proof that a popup stayed open. Playwright's
   synthetic clicks do not move the real pointer, so a headed run on a Wayland desktop can
   keep a native popup open that a real click never does; use real input or an in-page picker.
+
+## BUG-0065 — One corrupt managed journal file emptied the host's reported pool state
+
+- Date: 2026-09-10
+- Symptom: with one unreadable or invalid file in `<agent-state>/managed-vms/`, the host's
+  report carried an empty `Inventory.managed`, so a fresh Controller adopted nothing from the
+  pool and showed empty Storage, Networking, ISO and VM tabs, with no signal why.
+- Root cause: `ManagedEngine.Applied` (`internal/vmhost/managed.go`) returned an empty state on
+  any error from `journals()`, and `journals()` aborted on the first bad file. Failing closed is
+  right for `Execute` (a mutation must not proceed over an unreadable journal) but wrong for
+  read-only reporting, where it silently discarded every other entry.
+- Fix: reporting reads through `readable()`, which skips a bad file and names it; `Applied`
+  reports every other entry and returns a `managed-journal` check that is `failed` with the
+  file names (healthy otherwise). `Execute` still fails closed through the strict `journals()`.
+  In the same change, `Applied` reports failed/needs_attention outcomes, re-observes interrupted
+  creations, flags VMs missing from libvirt, and the agent reports the appliance deploy journal;
+  Controller adoption records every entry it cannot adopt (`docs/changes/2026-09-10-adoption-completeness.json`).
+- Regression evidence: `go test ./internal/vmhost -run TestAppliedSurvivesCorruptJournalEntry`.
+  Run against the previous strict read (Applied wired back to `journals()`) it failed with
+  `corrupt file emptied the applied state: &{Storage:[] ...}`; with the fix it passes, and
+  `go test ./...` passes for every package. It runs in CI through `go test -race ./...` in both
+  `.github/workflows/phase1.yml` (line 31) and `.gitea/workflows/phase1.yml` (line 31). The
+  namespace/no-VM Controller replacement run (`tests/integration/controller_replacement.py`,
+  phase1.yml lines 80-90) now also seeds a corrupt journal file and asserts the other entries
+  are adopted and the host's `managed-journal` check is `failed` naming `corrupt.json`.
+- Avoid: sharing one fail-closed reader between a mutation path and a read-only reporting path.
+  Reporting must degrade entry by entry and say what it skipped; never turn one bad record into
+  "the host holds nothing".
