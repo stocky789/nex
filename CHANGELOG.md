@@ -55,6 +55,7 @@ Core version. This is the version the packages currently build as (`0.1.5~alpha1
 
 ### Miscellaneous
 
+- Every push to `main` now builds the ISO and both packages at the changelog version and publishes them as the repository release for that version's tag, replacing the previous release of the same version. Releases no longer wait for a hand-pushed tag, and the build works on a runner that executes jobs inside a container.
 - ISO builds always rebuild Core and Controller together from the current source tree, and refuse a package whose embedded Controller is behind the package version, so media never reuses a stale package.
 
 ## [0.1.4-alpha1] — 2026-09-09

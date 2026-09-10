@@ -1,20 +1,31 @@
 name: Release
-# Tag-driven release. The tag, the CHANGELOG heading and the Debian package version
-# are one number in three notations; the build refuses to start unless they agree,
-# so a release can never ship stamped with a version its changelog does not describe.
+# Push-driven release. Every push to main rebuilds the ISO and both Debian packages
+# at the newest CHANGELOG version, then creates the Gitea release for tag vX.Y.Z[-preN],
+# replacing that version's previous release and moving its tag when the version was
+# already published. The CHANGELOG heading and the Debian package version are one
+# number in two notations, so a release can never ship stamped with a version its
+# changelog does not describe.
 #
-# Publishing needs three repository secrets. Without them the job still builds and
-# uploads artifacts, and skips publishing rather than failing, so a tag can be built
-# and inspected before the deploy path is wired up:
-#   NEX_DEPLOY_HOST         website host (for example 172.16.4.3)
-#   NEX_DEPLOY_KEY          private SSH key for the publishing user on that host
-#   NEX_DEPLOY_KNOWN_HOSTS  that host's public key, so the runner pins its identity
+# The ISO build runs builder containers on the runner's Docker host. On a runner that
+# executes jobs inside a container, the workspace is a Docker volume; the job finds
+# that volume's host path and scripts/ci-docker.sh rewrites every bind mount to it.
+#
+# Secrets:
+#   NEX_APPLIANCE_SIGNING_KEY   Ed25519 PEM private key that signs the Controller
+#                               appliance manifest. Without it the build signs with a
+#                               throwaway key generated for that run, and warns.
+#   NEX_DEPLOY_HOST             website publishing, optional. Without all three the
+#   NEX_DEPLOY_KEY              Gitea release is the only output:
+#   NEX_DEPLOY_KNOWN_HOSTS      host address, publishing user's SSH key, host public key.
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
+concurrency:
+  group: release
+  cancel-in-progress: true
 permissions:
-  contents: read
+  contents: write
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -25,43 +36,91 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Resolve release version from the tag and CHANGELOG
+      - name: Resolve release version and notes from CHANGELOG
         id: version
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME:?}"
-          version=$(python3 scripts/release-version.py --tag "$tag")
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          read -r tag_version version < <(python3 scripts/release-version.py --current --format both)
+          mkdir -p .cache
+          python3 scripts/release-version.py --current --notes > .cache/release-notes.md
+          echo "tag=v$tag_version" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Releasing $tag as Debian version $version"
+          echo "Releasing v$tag_version as Debian version $version"
 
-      # installer/build.sh bind-mounts the workspace into its builder images. On a
-      # runner that executes jobs inside a container, $PWD is not a Docker host path
-      # and those mounts resolve to empty directories. Fail here with the cause
-      # rather than deep inside the build. See docs/BUG_LEDGER.md BUG-0043.
-      - name: Require Docker and a workspace the build can mount
+      - name: Locate the workspace on the Docker host
+        id: host
         run: |
-          set -eu
-          docker info
-          probe=$(docker run --rm -v "$PWD:/probe" --entrypoint sh debian:trixie-slim \
-            -c 'test -f /probe/installer/build.sh && echo ok' 2>/dev/null || true)
-          if [ "$probe" != ok ]; then
-            echo "This runner cannot bind-mount the workspace: \$PWD ($PWD) is not a" >&2
-            echo 'path on the Docker host, so the ISO build would mount nothing.' >&2
-            echo 'Fix: give act_runner a host label, for example "ubuntu-latest:host".' >&2
-            exit 1
+          set -euo pipefail
+          docker info > /dev/null
+          probe() {
+            docker run --rm -v "$1:/probe:ro" --entrypoint sh debian:trixie-slim \
+              -c 'test -f /probe/installer/build.sh' 2> /dev/null
+          }
+          host=$PWD
+          if ! probe "$host"; then
+            # Jobs run inside a container: the workspace is a named volume. Read which
+            # one from our own mount table and ask the daemon where it lives on the host.
+            root=$(awk -v w="$PWD" '$5 == w { print $4 }' /proc/self/mountinfo)
+            name=$(printf '%s\n' "$root" | sed -n 's#.*/volumes/\([^/]*\)/_data.*#\1#p')
+            [ -n "$name" ] || {
+              echo "workspace $PWD is neither a Docker host path nor a Docker volume (mount root: '$root')" >&2
+              exit 1
+            }
+            host=$(docker volume inspect -f '{{.Mountpoint}}' "$name")
+            probe "$host" || {
+              echo "Docker host path $host for volume $name does not contain this workspace" >&2
+              exit 1
+            }
           fi
+          echo "workspace=$host" >> "$GITHUB_OUTPUT"
+          echo "The Docker host sees the workspace at $host"
+
+      - name: Fetch the pinned Debian cloud base image
+        run: |
+          set -euo pipefail
+          # installer/build.sh verifies this file against its pinned SHA-256 before use.
+          mkdir -p .cache/appliance
+          image=debian-13-genericcloud-amd64-20260831-2587.qcow2
+          curl -fsSL --retry 3 \
+            "https://cloud.debian.org/images/cloud/trixie/20260831-2587/$image" \
+            -o ".cache/appliance/$image.partial"
+          mv ".cache/appliance/$image.partial" ".cache/appliance/$image"
+
+      - name: Prepare the appliance signing key
+        id: signing
+        env:
+          NEX_APPLIANCE_SIGNING_KEY_PEM: ${{ secrets.NEX_APPLIANCE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          # appliance/build.py requires the key outside the repository with mode 0600.
+          key=$HOME/nex-appliance-signing.pem
+          if [ -n "${NEX_APPLIANCE_SIGNING_KEY_PEM:-}" ]; then
+            printf '%s\n' "$NEX_APPLIANCE_SIGNING_KEY_PEM" > "$key"
+          else
+            openssl genpkey -algorithm ed25519 -out "$key"
+            echo "::warning::NEX_APPLIANCE_SIGNING_KEY is not set: the Controller appliance in this release is signed with a throwaway key generated for this run."
+          fi
+          echo "key=$key" >> "$GITHUB_OUTPUT"
 
       - name: Build source archive, packages and ISO
         env:
           NEX_VERSION: ${{ steps.version.outputs.version }}
+          NEX_HOST_WORKSPACE: ${{ steps.host.outputs.workspace }}
+          NEX_APPLIANCE_SIGNING_KEY: ${{ steps.signing.outputs.key }}
         run: |
           set -euo pipefail
+          export NEX_DOCKER=$PWD/scripts/ci-docker.sh
+          # Builder containers can only mount paths under the workspace, so the
+          # temporary build inputs must live there too.
+          export TMPDIR=$PWD/.cache/tmp
+          mkdir -p "$TMPDIR"
           # build.sh rebuilds the appliance and the nex-core-local package from current
           # source, then the ISO from that package. The Controller package is separate.
           bash installer/build.sh
           python3 packaging/controller/build.py \
-            --source dist/nex-source.tar.gz --version "$NEX_VERSION" --output dist/controller
+            --source dist/nex-source.tar.gz --version "$NEX_VERSION" \
+            --output dist/controller --docker "$NEX_DOCKER"
 
       - name: Verify every artifact carries the released version
         env:
@@ -83,15 +142,20 @@ jobs:
           ( cd dist && sha256sum "nex-core-${NEX_VERSION}-amd64.iso" \
               > "nex-core-${NEX_VERSION}-amd64.iso.sha256" )
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: nex-core-${{ steps.version.outputs.version }}
-          path: |
-            dist/nex-core-*-amd64.iso
-            dist/nex-core-*-amd64.iso.sha256
-            dist/core-local/*.deb
-            dist/controller/*.deb
-          retention-days: 14
+      - name: Create or replace the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEX_VERSION: ${{ steps.version.outputs.version }}
+          NEX_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          python3 scripts/gitea-release.py \
+            --tag "$NEX_TAG" --target "$GITHUB_SHA" \
+            --name "Nex Core $NEX_VERSION" --notes .cache/release-notes.md \
+            "dist/nex-core-${NEX_VERSION}-amd64.iso" \
+            "dist/nex-core-${NEX_VERSION}-amd64.iso.sha256" \
+            "dist/core-local/nex-core-local_${NEX_VERSION}_amd64.deb" \
+            "dist/controller/nex-controller_${NEX_VERSION}_amd64.deb"
 
       - name: Check for deploy credentials
         id: deploy
@@ -104,9 +168,8 @@ jobs:
             echo 'enabled=true' >> "$GITHUB_OUTPUT"
           else
             echo 'enabled=false' >> "$GITHUB_OUTPUT"
-            echo 'Deploy secrets are not set: built and uploaded artifacts, published nothing.'
+            echo 'Deploy secrets are not set: the release is published on Gitea only, not on the website.'
           fi
-
       - name: Publish to the website host
         if: steps.deploy.outputs.enabled == 'true'
         env:

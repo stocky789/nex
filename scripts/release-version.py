@@ -101,6 +101,25 @@ def current(text):
     return versions[0], debian_version(versions[0])
 
 
+def notes(text, version):
+    """The CHANGELOG body of one version heading, for use as release notes."""
+    lines = text.splitlines()
+    body = []
+    inside = False
+    for line in lines:
+        match = HEADING.match(line)
+        if match:
+            if inside:
+                break
+            inside = match.group("version").strip() == version
+            continue
+        if inside:
+            body.append(line)
+    if not inside:
+        raise ReleaseVersionError(f"CHANGELOG.md has no '## [{version}]' section")
+    return "\n".join(body).strip() + "\n"
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -110,6 +129,8 @@ def main(argv=None):
     parser.add_argument("--changelog", default=str(ROOT / "CHANGELOG.md"))
     parser.add_argument("--format", choices=("debian", "tag", "both"), default="debian",
                         help="debian prints 0.1.6~alpha1; tag prints 0.1.6-alpha1")
+    parser.add_argument("--notes", action="store_true",
+                        help="print the version's CHANGELOG section instead of the version")
     args = parser.parse_args(argv)
     try:
         text = Path(args.changelog).read_text()
@@ -121,7 +142,9 @@ def main(argv=None):
     except ReleaseVersionError as error:
         print(f"release-version: {error}", file=sys.stderr)
         return 1
-    if args.format == "debian":
+    if args.notes:
+        print(notes(text, tag_version), end="")
+    elif args.format == "debian":
         print(deb)
     elif args.format == "tag":
         print(tag_version)

@@ -91,8 +91,8 @@ assert_iso_artifacts_current() {
 if [[ ${1:-} != --inside ]]; then
     mkdir -p .cache/nex-iso dist
     # One version identifies a release. Default to the newest CHANGELOG heading so an
-    # untagged local build is not stamped with a stale constant; the release workflow
-    # sets NEX_VERSION from the tag after checking the two agree.
+    # local build is not stamped with a stale constant; the release workflow passes
+    # the same value explicitly.
     version=${NEX_VERSION:-$(python3 "$(dirname "$0")/../scripts/release-version.py" --current)}
     [[ -n $version ]] || { echo 'could not resolve a build version' >&2; exit 1; }
     docker_bin=${NEX_DOCKER:-docker}

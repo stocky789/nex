@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-only
+"""Create or replace the Gitea release for one version and attach its artifacts.
+
+A release is keyed by its tag. An existing release with that tag is deleted first,
+and a tag that points at another commit is moved, so every push of the same
+CHANGELOG version republishes that version instead of failing or piling up
+duplicates. Assets stream from disk: a multi-gigabyte ISO is never read into memory.
+
+Reads GITHUB_API_URL, GITHUB_REPOSITORY and GITHUB_TOKEN as the runner sets them.
+"""
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+
+class GiteaError(RuntimeError):
+    pass
+
+
+class Repo:
+    def __init__(self, api_url, repository, token):
+        self.base = f"{api_url.rstrip('/')}/repos/{repository}"
+        self.token = token
+
+    def request(self, method, path, body=None, headers=None):
+        merged = {"Authorization": f"token {self.token}", "Accept": "application/json"}
+        merged.update(headers or {})
+        request = urllib.request.Request(self.base + path, data=body, method=method, headers=merged)
+        try:
+            with urllib.request.urlopen(request) as response:
+                status, text = response.status, response.read()
+        except urllib.error.HTTPError as error:
+            status, text = error.code, error.read()
+        if status == 404 and method == "GET":
+            return None
+        if status not in (200, 201, 204):
+            raise GiteaError(f"{method} {path}: HTTP {status} {text[:300].decode(errors='replace')}")
+        return json.loads(text) if text else None
+
+    def json(self, method, path, payload):
+        return self.request(method, path, json.dumps(payload).encode(),
+                            {"Content-Type": "application/json"})
+
+
+def publish(repo, tag, target, name, notes, assets):
+    existing = repo.request("GET", f"/releases/tags/{tag}")
+    if existing:
+        repo.request("DELETE", f"/releases/{existing['id']}")
+    tag_info = repo.request("GET", f"/tags/{tag}")
+    if tag_info and tag_info["commit"]["sha"] != target:
+        repo.request("DELETE", f"/tags/{tag}")
+    release = repo.json("POST", "/releases", {
+        "tag_name": tag, "target_commitish": target, "name": name, "body": notes,
+        "draft": False, "prerelease": "-" in tag})
+    for asset in assets:
+        with asset.open("rb") as stream:
+            repo.request("POST", f"/releases/{release['id']}/assets?name={urllib.parse.quote(asset.name)}",
+                         stream, {"Content-Type": "application/octet-stream",
+                                  "Content-Length": str(asset.stat().st_size)})
+    return release
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tag", required=True, help="release tag, e.g. v0.1.6-alpha1")
+    parser.add_argument("--target", required=True, help="commit SHA the tag must point at")
+    parser.add_argument("--name", required=True)
+    parser.add_argument("--notes", type=Path, required=True, help="Markdown file used as the release body")
+    parser.add_argument("--api-url", default=os.environ.get("GITHUB_API_URL"))
+    parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
+    parser.add_argument("assets", nargs="+", type=Path)
+    args = parser.parse_args(argv)
+    token = os.environ.get("GITHUB_TOKEN")
+    if not (args.api_url and args.repository and token):
+        print("gitea-release: GITHUB_API_URL, GITHUB_REPOSITORY and GITHUB_TOKEN are required", file=sys.stderr)
+        return 1
+    for asset in args.assets:
+        if not asset.is_file():
+            print(f"gitea-release: missing asset {asset}", file=sys.stderr)
+            return 1
+    try:
+        release = publish(Repo(args.api_url, args.repository, token), args.tag, args.target,
+                          args.name, args.notes.read_text(), args.assets)
+    except GiteaError as error:
+        print(f"gitea-release: {error}", file=sys.stderr)
+        return 1
+    print(release.get("html_url") or release["id"])
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

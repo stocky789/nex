@@ -20,6 +20,8 @@ name: Installer
 # directory, so editing only this copy changes nothing.
 on:
   push:
+    branches:
+      - '**'
   pull_request:
 permissions:
   contents: read

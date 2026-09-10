@@ -21,6 +21,8 @@ name: Installer
 # the version here.
 on:
   push:
+    branches:
+      - '**'
   pull_request:
 permissions:
   contents: read

@@ -1,0 +1,49 @@
+{
+  "summary": "Push-driven release: every push to main resolves the newest CHANGELOG version, builds the ISO and both Debian packages at that version, and creates or replaces the Gitea release for tag vX.Y.Z[-preN], moving the tag to the built commit. Previously the workflow fired only on a hand-pushed tag, none had ever been pushed, and the runner could not bind-mount the workspace (BUG-0043) so no ISO could be built in CI; scripts/ci-docker.sh now rewrites builder bind mounts to the workspace volume's path on the Docker host, which the job discovers from its own mount table. Branch workflows are restricted to branch pushes so the tag the release creates does not re-run them. API impact: none — release tooling and CI only; no Controller/Core interface, command, event, stream or client-facing endpoint changes.",
+  "paths": [
+    ".gitea/workflows/release.yml",
+    ".github/workflows/release.yml",
+    ".gitea/workflows/documentation.yml",
+    ".gitea/workflows/installer.yml",
+    ".gitea/workflows/phase1.yml",
+    ".github/workflows/documentation.yml",
+    ".github/workflows/installer.yml",
+    ".github/workflows/phase1.yml",
+    "scripts/ci-docker.sh",
+    "scripts/gitea-release.py",
+    "scripts/release-version.py",
+    "installer/build.sh",
+    "tests/test_ci_docker.py",
+    "tests/test_gitea_release.py",
+    "docs/guide/publish-a-release.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-10-push-driven-release.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The release procedure changed from tagging by hand to pushing main; the guide's status, prerequisites, steps, expected result, troubleshooting and verification were rewritten for the push-driven flow and the Gitea release output.",
+    "pages": [
+      "docs/guide/publish-a-release.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "CI workflows, build tooling and a release-publishing script only. No Controller operation, agent command, event, stream, observed-state flow or client-facing endpoint is added, removed or changed.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Release artifacts and tags live in the Git repository and its Gitea releases; no pool or Controller runtime state is involved.",
+    "record": ""
+  },
+  "verification": {
+    "method": "python3 -m unittest tests.test_ci_docker tests.test_gitea_release tests.test_release_version tests.test_ci_security: 16 tests pass — the wrapper rewrites workspace bind mounts to the host path, leaves named volumes and non-mount arguments alone and refuses absolute paths outside the workspace; the release script deletes an existing release, moves a tag pointing elsewhere, creates the release as a pre-release at the target commit, streams the exact asset bytes as application/octet-stream, skips deletes when the tag already points at the target, and surfaces HTTP errors. Simulated container runner: the workflow's locate step (extracted from the YAML) and the wrapper were run inside docker.gitea.com/runner-images:ubuntu-latest with the checkout on a named volume and the host Docker socket; the step resolved /var/lib/docker/volumes/<name>/_data, and a builder container launched through the wrapper read a file from a TMPDIR input directory and wrote dist/from-builder.txt back into the workspace. Live Gitea 1.26.2: raw-body release asset uploads named .iso and .deb returned 201, including a 150 MB file, on a draft release that was then deleted. All eight workflow files parse with PyYAML; the two release copies are byte-identical; the branch workflows carry push.branches ['**'] and release carries ['main']. NOT yet verified at the time of writing: the full appliance, package and ISO build on the real runner and the resulting release; see the appended run evidence below once the first push completes.",
+    "evidence": [
+      "tests/test_ci_docker.py",
+      "tests/test_gitea_release.py",
+      "scripts/ci-docker.sh",
+      "scripts/gitea-release.py",
+      ".gitea/workflows/release.yml"
+    ]
+  }
+}

@@ -1,6 +1,8 @@
 name: Controller foundation
 on:
   push:
+    branches:
+      - '**'
   pull_request:
   schedule:
     - cron: "30 3 * * 1"
