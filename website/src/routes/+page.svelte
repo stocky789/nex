@@ -226,7 +226,7 @@
           Development<br />status.
         </h2>
         <p>
-          The next step is a development build the community can test.
+          Development builds are available to approved testers.
         </p>
       </div>
     </div>
@@ -238,16 +238,16 @@
         <h3>The foundation<br />is taking shape.</h3>
         <p>
           The installer and early Controller have been tested in a disposable environment.
-          VM workflows, recovery and updates still need work before a release.
+          These are alpha builds for disposable evaluation; VM recovery and updates
+          remain under active testing.
         </p>
       </div>
       <div class="release-details">
         <div>
-          <span class="release-kicker">Public downloads</span
-          ><strong>Not available yet</strong>
+          <span class="release-kicker">Development download</span
+          ><strong><a href="https://nexvirtualization.com/downloads/latest/">Latest Nex Core build</a></strong>
           <p>
-            Images and packages will be shared when testing and
-            redistribution requirements are met.
+            Available through this approved private site for disposable evaluation.
           </p>
         </div>
         <div>
@@ -259,7 +259,7 @@
           </p>
         </div>
         <div class="release-footnote">
-          A release date has not been set.
+          This is not a supported production release.
         </div>
       </div>
     </div>
@@ -302,8 +302,9 @@
           Can I download or use Nex today?<span aria-hidden="true">+</span>
         </summary>
         <p>
-          Public downloads are not available yet. Installation, upgrades and
-          recovery are being tested before the first release.
+          Approved testers can use the latest development build from this private
+          site. Use it only in disposable environments; installation, upgrades and
+          recovery are still being tested.
         </p>
       </details>
       <details>

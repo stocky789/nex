@@ -2,7 +2,8 @@
 
 Date: 2026-09-09  
 Status: APT is live at `https://nexvirtualization.com/apt/`
-(`nex-controller` `0.1.3`, `nex-core-local` `0.1.3`). Domain default; private HTTP
+(`nex-controller` `0.1.3`, `nex-core-local` `0.1.4` at the last verified publication).
+The next release must publish a version newer than `0.1.5~alpha1`; domain default; private HTTP
 repo URLs are remapped to that default. Controller appliances ship `apply-update`
 + path unit so Updates Check/Update work after deploy. Signing key under
 `/etc/nex-apt/gnupg`; `matt` can republish with passwordless `sudo nex-apt-publish`.
@@ -29,7 +30,7 @@ acceptance (drain, compatibility windows, rollback proof).
 4. Existing `nex-core-local` package remains the Core update unit (still embeds the
    appliance bundle until a later packaging split).
 5. Authenticated update APIs and compact Updates UI in both web GUIs.
-6. Controller apply uses a root systemd path unit (service is unprivileged);
+6. Controller check uses a signed per-service APT cache (service is unprivileged) and apply uses a root systemd path unit;
    Core apply runs as root and schedules a service restart.
 
 ## Out of scope

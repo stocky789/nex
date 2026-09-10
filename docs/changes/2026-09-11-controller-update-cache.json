@@ -1,0 +1,35 @@
+{
+  "summary": "Fix Controller appliance update checks by shipping the signed Nex APT source/keyring and using a Controller-owned APT index cache; the existing Updates contract returns a real refresh error rather than a misleading unavailable-package result. API impact: changed contract semantics, same operations and schemas.",
+  "paths": [
+    "internal/nexupdate/nexupdate.go",
+    "internal/nexupdate/nexupdate_test.go",
+    "internal/controller/updates.go",
+    "appliance/build-inside.sh",
+    "packaging/apt/nginx-downloads.inc",
+    "CHANGELOG.md",
+    "website/src/routes/+page.svelte",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/software-updates.md",
+    "docs/plans/2026-09-09-package-updates.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The Updates error and the private website's development-download status are operator-visible.",
+    "pages": ["docs/guide/software-updates.md"]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "GET /api/v1/updates keeps its endpoint and schema but now returns an explicit APT refresh error and Controller uses a service-owned signed index cache.",
+    "pages": ["docs/API.md", "docs/api/openapi.json"]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The Controller APT cache is a replaceable package index, not product or pool state; package configuration remains host-local."
+  },
+  "verification": {
+    "method": "go test ./internal/nexupdate ./internal/controller; python3 tests/test_api_contract.py; npm run check and npm run build in website/. Built Core, Controller and ISO 0.1.6~alpha1, then published both packages to the signed live archive and the ISO to the private website download tree. HTTPS checks returned 200 for the archive, packages, ISO, latest ISO link and checksum; website content and nginx configuration were inspected. Existing keyless appliances were not updated because no Controller host target was supplied.",
+    "evidence": ["internal/nexupdate/nexupdate_test.go", "internal/controller/updates_test.go", "tests/test_api_contract.py", "packaging/apt/nginx-downloads.inc"]
+  }
+}

@@ -13,8 +13,9 @@ cp /input/base.qcow2 /output/controller.qcow2
 qemu-img resize /output/controller.qcow2 32G
 export LIBGUESTFS_MEMSIZE=2048
 printf 'repo_url=https://nexvirtualization.com/apt\n' > /build/updates.conf
+printf 'Types: deb\nURIs: https://nexvirtualization.com/apt\nSuites: nex\nComponents: main\nArchitectures: amd64\nSigned-By: /usr/share/keyrings/nex-archive-keyring.gpg\n' > /build/nex.sources
 virt-customize -a /output/controller.qcow2 --install cloud-init,qemu-guest-agent,python3,ca-certificates \
- --mkdir /usr/local/lib/nex --mkdir /usr/local/share/nex --mkdir /etc/nex-controller --mkdir /etc/nex \
+ --mkdir /usr/local/lib/nex --mkdir /usr/local/share/nex --mkdir /usr/share/keyrings --mkdir /etc/nex-controller --mkdir /etc/nex \
  --upload /build/nex-controller:/usr/local/lib/nex/nex-controller \
  --upload /usr/local/go/LICENSE:/usr/local/share/nex/go-LICENSE \
  --copy-in /build/web/dist:/usr/local/share/nex \
@@ -23,7 +24,9 @@ virt-customize -a /output/controller.qcow2 --install cloud-init,qemu-guest-agent
  --upload /build/appliance/firstboot.py:/usr/local/lib/nex/appliance-firstboot \
  --upload /build/appliance/run-controller.sh:/usr/local/lib/nex/run-controller \
  --upload /build/packaging/controller/apply-update:/usr/local/lib/nex/apply-update \
+ --upload /build/packaging/core-local/nex-archive-keyring.gpg:/usr/share/keyrings/nex-archive-keyring.gpg \
  --upload /build/updates.conf:/etc/nex/updates.conf \
+ --upload /build/nex.sources:/etc/apt/sources.list.d/nex.sources \
  --upload /build/appliance/nex-controller.service:/etc/systemd/system/nex-controller.service \
  --upload /build/appliance/nex-appliance-init.service:/etc/systemd/system/nex-appliance-init.service \
  --upload /build/packaging/controller/nex-controller-update.path:/etc/systemd/system/nex-controller-update.path \

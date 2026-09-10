@@ -6,7 +6,9 @@
 # the version they want; the tree holds only ISOs and checksums.
 location /downloads/ {
     alias /srv/nex-downloads/;
-    disable_symlinks off if_not_owner;
+    # `latest` is an atomically switched release symlink owned by the publishing
+    # account, so this location must permit that one controlled indirection.
+    disable_symlinks off;
     autoindex on;
     autoindex_exact_size off;
     absolute_redirect off;

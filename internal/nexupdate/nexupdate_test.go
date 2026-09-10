@@ -181,6 +181,22 @@ func TestCheckCandidateNone(t *testing.T) {
 	}
 }
 
+func TestCheckWithCacheUsesServiceOwnedAptLists(t *testing.T) {
+	calls := fakeCommands(t, func(line string) (string, int) {
+		if strings.HasPrefix(line, "apt-cache policy nex-controller") {
+			return "Candidate: 0.2.0\n", 0
+		}
+		return "", 0
+	})
+	st, err := CheckWithCache(context.Background(), "https://mirror.example/apt", "nex-controller", t.TempDir())
+	if err != nil || st.Error != "" || !st.UpdateAvailable || st.AvailableVersion != "0.2.0" {
+		t.Fatalf("%v %+v", err, st)
+	}
+	if !strings.Contains(joined(calls), "Dir::State::lists=") || !strings.Contains(joined(calls), "Dir::Etc::sourceparts=") {
+		t.Fatalf("Controller cache paths missing:\n%s", joined(calls))
+	}
+}
+
 // The index refresh is rate limited because the UI polls Check while an update runs.
 func TestRefreshIndexHonoursStamp(t *testing.T) {
 	isolatePaths(t)

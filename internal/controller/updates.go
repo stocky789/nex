@@ -3,12 +3,13 @@ package controller
 
 import (
 	"net/http"
+	"path/filepath"
 
 	"nex.local/nex/internal/nexupdate"
 )
 
 func (c *Controller) updates(w http.ResponseWriter, r *http.Request, user, csrf string) {
-	st, err := nexupdate.Check(r.Context(), nexupdate.DefaultRepoURL(), "nex-controller")
+	st, err := nexupdate.CheckWithCache(r.Context(), nexupdate.DefaultRepoURL(), "nex-controller", filepath.Join(c.cfg.DataDir, "apt"))
 	if err != nil {
 		fail(w, 500, "update check failed")
 		return

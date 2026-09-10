@@ -964,10 +964,12 @@ Both sides read a package repo URL from `NEX_UPDATE_REPO`, else `/etc/nex/update
 point at private or loopback addresses are treated as the public default. That URL is
 written to `/etc/apt/sources.list.d/nex.sources` with
 `Signed-By: /usr/share/keyrings/nex-archive-keyring.gpg`, which both packages ship, so
-a repo changed after install takes effect without reinstalling. GET refreshes the
-package index at most once every 5 minutes (stamped at `/var/lib/nex/apt-refresh.stamp`,
-because the UI polls GET while an apply runs) and compares the installed Debian package
-version against apt's candidate. A package no configured source offers is returned in
+a repo changed after install takes effect without reinstalling. Core refreshes its system
+APT index at most once every five minutes. Controller runs unprivileged, so it keeps the
+same signed source and a five-minute APT index cache under its own state directory; the
+root apply helper still uses the system source to install. A failed refresh is returned in
+the JSON `error` field instead of being presented as an unavailable package. A package no
+configured source offers is returned in
 the JSON `error` field with HTTP 200. While an apply runs, GET also returns `phase`,
 `progress` and `message` from `update-progress.json` in the service state directory.
 `progress` reports fixed steps rather than download percentage.

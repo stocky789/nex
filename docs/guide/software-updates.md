@@ -40,7 +40,7 @@ Controller host page **Version** field; that package version is the only Nex Cor
 
 ## Troubleshooting
 
-- Repo errors appear beside the version fields; fix connectivity or `repo_url` and check again.
+- Repo errors appear beside the version fields; a failed package-index refresh now says so directly. Fix connectivity or `repo_url` and check again.
 - "Package not available from …" means no configured APT source offers the package.
   Check `repo_url`, then `apt policy nex-core-local` on the host.
 - "No newer … available" means apt found nothing to upgrade; the installed version is

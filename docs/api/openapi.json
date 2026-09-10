@@ -2954,7 +2954,7 @@
       "get": {
         "operationId": "getUpdates",
         "summary": "Check Controller software updates",
-        "description": "Implemented in development product 0.1.0. Refreshes the apt package index (at most every 5 minutes) and reports apt's candidate version for nex-controller against the installed version. The signed Nex archive source is written from the configured repo URL (NEX_UPDATE_REPO or /etc/nex/updates.conf, else https://nexvirtualization.com/apt) and verified with the packaged archive keyring. A package no configured source offers is returned in the error field with HTTP 200 so operators can still see the installed version. Administrator session required. Read-only; safe to retry.",
+        "description": "Implemented in development product 0.1.0. Refreshes a signed Controller-owned APT index cache at most every 5 minutes and reports apt's candidate version for nex-controller against the installed version. The configured repo URL (NEX_UPDATE_REPO or /etc/nex/updates.conf, else https://nexvirtualization.com/apt) is written to that cache and verified with the packaged archive keyring; this keeps the unprivileged Controller service out of the system APT state. A refresh failure or package no configured source offers is returned in the error field with HTTP 200 so operators can still see the installed version. Administrator session required. Read-only; safe to retry.",
         "tags": [
           "Client → Controller"
         ],

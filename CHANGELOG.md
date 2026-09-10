@@ -13,6 +13,14 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
 
+## [0.1.6-alpha1] — 2026-09-11
+
+### Bug Fixes
+
+- Fixed Controller software-update checks in appliance deployments. The appliance now includes
+  the signed Nex archive configuration and keyring, and its unprivileged service uses its own
+  signed APT index cache instead of failing to write the system package cache.
+
 ## [0.1.5-alpha1] — 2026-09-09
 
 Console quality-of-life features, guest tools observation, and the collapse to a single Nex

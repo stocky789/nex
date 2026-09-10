@@ -421,6 +421,71 @@ func AptCandidate(ctx context.Context, packageName string) string {
 	return ""
 }
 
+// CheckWithCache is for an unprivileged Controller service.  Apt's normal lists
+// live under /var/lib/apt and need root, so the Controller keeps only its signed
+// package-index cache under its own state directory.  The install still runs as
+// root through apply-update and uses the system APT configuration.
+func CheckWithCache(ctx context.Context, repoURL, packageName, cacheDir string) (Status, error) {
+	repoURL = NormalizeRepoURL(repoURL)
+	if repoURL == "" {
+		repoURL = DefaultRepoURL()
+	}
+	repoURL = strings.TrimRight(repoURL, "/")
+	sourceDir := filepath.Join(cacheDir, "sources.list.d")
+	listsDir := filepath.Join(cacheDir, "lists")
+	if err := os.MkdirAll(filepath.Join(listsDir, "partial"), 0700); err != nil {
+		return Status{}, err
+	}
+	content := "Types: deb\nURIs: " + repoURL +
+		"\nSuites: nex\nComponents: main\nArchitectures: amd64\nSigned-By: " + aptKeyringPath + "\n"
+	if err := os.MkdirAll(sourceDir, 0700); err != nil {
+		return Status{}, err
+	}
+	sourcePath := filepath.Join(sourceDir, "nex.sources")
+	changed := true
+	if old, err := os.ReadFile(sourcePath); err == nil && string(old) == content {
+		changed = false
+	}
+	if err := os.WriteFile(sourcePath, []byte(content), 0600); err != nil {
+		return Status{}, err
+	}
+	st := Status{Package: packageName, InstalledVersion: InstalledVersion(packageName), RepoURL: repoURL}
+	extra := []string{"-o", "Dir::Etc::sourcelist=/dev/null", "-o", "Dir::Etc::sourceparts=" + sourceDir, "-o", "Dir::State::lists=" + listsDir}
+	stamp := filepath.Join(cacheDir, "apt-refresh.stamp")
+	if changed {
+		_ = os.Remove(stamp)
+	}
+	if fi, err := os.Stat(stamp); err != nil || time.Since(fi.ModTime()) >= indexMaxAge {
+		if out, err := apt(ctx, append([]string{"update"}, extra...)...).CombinedOutput(); err != nil {
+			st.Error = "could not refresh package index: " + strings.TrimSpace(string(out))
+			return st, nil
+		}
+		if err := os.WriteFile(stamp, nil, 0600); err != nil {
+			return Status{}, err
+		}
+	}
+	cmd := Command(ctx, "apt-cache", append([]string{"policy", packageName}, extra...)...)
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	out, err := cmd.Output()
+	if err != nil {
+		st.Error = "could not read package index"
+		return st, nil
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "Candidate:")
+		if !ok {
+			continue
+		}
+		if candidate := strings.TrimSpace(rest); candidate != "" && candidate != "(none)" {
+			st.AvailableVersion = candidate
+			st.UpdateAvailable = CompareVersions(st.InstalledVersion, candidate) < 0
+			return st, nil
+		}
+	}
+	st.Error = "package not available from " + repoURL
+	return st, nil
+}
+
 func Check(ctx context.Context, repoURL, packageName string) (Status, error) {
 	repoURL = NormalizeRepoURL(repoURL)
 	if repoURL == "" {
