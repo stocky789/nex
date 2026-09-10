@@ -107,7 +107,7 @@ def path_list(root, values, label, exists=False):
     return set(values)
 
 
-def check_record(root, file, changed=None):
+def check_record(root, file, changed=None, new=True):
     data = json.loads(file.read_text())
     if not isinstance(data, dict):
         raise ValueError(f'{file}: object required')
@@ -120,12 +120,22 @@ def check_record(root, file, changed=None):
         if not isinstance(decision, dict) or decision.get('impact') not in ('updated', 'none'):
             raise ValueError(f'{file}: {kind}.impact must be updated or none')
         nonempty(decision.get('reason'), f'{kind}.reason')
-        pages = path_list(root, decision.get('pages'), f'{kind}.pages', exists=changed is not None)
+        # An absent pages key reads as "no pages", which is what impact none means.
+        # Requiring the empty list added nothing but a confusing "list required" error.
+        pages = path_list(root, decision.get('pages') or [], f'{kind}.pages', exists=changed is not None)
         allowed = lambda p: (p.startswith('docs/guide/') and p.endswith('.md')) if kind == 'guide' else (p == 'docs/API.md' or p.startswith('docs/api/'))
         if any(not allowed(p) for p in pages):
             raise ValueError(f'{file}: {kind}.pages outside reference area')
         if decision['impact'] == 'updated':
-            if not pages or (changed is not None and not pages <= changed):
+            if not pages:
+                raise ValueError(f'{file}: {kind} updated requires at least one page')
+            # Only a record introduced by this range has to prove its pages changed
+            # alongside it. A record added earlier already did so in the push that
+            # introduced it; re-checking it against a later diff would demand editing
+            # pages that have nothing to do with the later change, so any edit to a
+            # merged record - fixing a reason, adding a missed path - would fail until
+            # its pages were touched again for no reason.
+            if new and changed is not None and not pages <= changed:
                 raise ValueError(f'{file}: {kind} updated requires pages changed in this range')
         elif pages:
             raise ValueError(f'{file}: {kind} none requires empty pages')
@@ -159,17 +169,52 @@ def changed_paths(root, base, head, merge_base=False):
         if merge_base:
             base = git(root, 'merge-base', base, head).decode().strip()
     # Disable rename detection: both removed and added paths need assessment.
-    return set(filter(None, git(root, 'diff', '--no-renames', '--name-only', '-z', base, head).decode().split('\0')))
+    return name_status(git(root, 'diff', '--no-renames', '--name-status', '-z', base, head).decode())
 
 
-def check(root, changed=None):
+def name_status(output):
+    """Split a -z --name-status diff into (all paths, paths this range adds)."""
+    fields = [field for field in output.split('\0') if field]
+    changed, added = set(), set()
+    for status, path in zip(fields[::2], fields[1::2]):
+        changed.add(path)
+        if status.startswith('A'):
+            added.add(path)
+    return changed, added
+
+
+def worktree_paths(root):
+    """Uncommitted and untracked paths, so the same gate can run before committing.
+
+    CI can only check a pushed range, which is far too late to be useful: the first
+    signal that a change lacks its assessment is a red build. This runs the identical
+    coverage check against work in progress.
+    """
+    output = git(root, 'status', '--porcelain', '-z', '--untracked-files=all',
+                 '--no-renames').decode()
+    changed, added = set(), set()
+    for entry in filter(None, output.split('\0')):
+        status, path = entry[:2], entry[3:]
+        if not path:
+            continue
+        changed.add(path)
+        # Untracked, or added to the index: not present in the last commit.
+        if status == '??' or status.startswith('A'):
+            added.add(path)
+    return changed, added
+
+
+def check(root, changed=None, added=None):
     check_guide(root)
     record_paths = set() if changed is None else {p for p in changed if re.fullmatch(r'docs/changes/[^/]+\.json', p)}
     records = sorted((root / 'docs/changes').glob('*.json')) if changed is None else [
         root / p for p in sorted(record_paths) if (root / p).is_file()]
     covered = set()
     for record in records:
-        covered |= check_record(root, record, changed)
+        relative = record.relative_to(root).as_posix()
+        # added=None means the caller could not tell new records from edited ones.
+        # Treat every record as new, so an unknown caller gets the strict check.
+        covered |= check_record(root, record, changed, new=added is None or relative in added)
     if changed is not None:
         missing = changed - record_paths - covered
         if missing:
@@ -179,21 +224,40 @@ def check(root, changed=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--all', action='store_true', help='validate current tree; does not check change coverage')
+    parser.add_argument('--worktree', action='store_true',
+                        help='check uncommitted and untracked work; run this before committing')
     parser.add_argument('--base')
     parser.add_argument('--head')
     parser.add_argument('--merge-base', action='store_true', help='compare PR head with its common ancestor with base')
     args = parser.parse_args()
-    if args.all and (args.base or args.head or args.merge_base) or not args.all and not (args.base and args.head):
-        parser.error('use --all OR --base SHA --head SHA [--merge-base]')
+    selected = sum((args.all, args.worktree, bool(args.base or args.head)))
+    if selected != 1:
+        parser.error('use exactly one of --all, --worktree, or --base SHA --head SHA [--merge-base]')
+    if (args.base or args.head) and not (args.base and args.head):
+        parser.error('--base and --head are both required')
+    if args.merge_base and not args.base:
+        parser.error('--merge-base applies to --base/--head')
     try:
         root = Path.cwd().resolve()
-        changed = None if args.all else changed_paths(root, args.base, args.head, args.merge_base)
-        check(root, changed)
+        added = frozenset()
+        if args.all:
+            changed = None
+        elif args.worktree:
+            changed, added = worktree_paths(root)
+        else:
+            changed, added = changed_paths(root, args.base, args.head, args.merge_base)
+        check(root, changed, added)
     except (ValueError, OSError, subprocess.CalledProcessError) as error:
         print(f'Documentation check failed: {error}', file=sys.stderr)
         return 1
-    print('Documentation structure passed; historical references not resolved and diff coverage NOT checked (--all).' if args.all else
-          f'Documentation structure and impact records passed for {len(changed)} changed paths; semantic review still required.')
+    if args.all:
+        print('Documentation structure passed; historical references not resolved and diff coverage NOT checked (--all).')
+    elif not changed:
+        print('No uncommitted or untracked changes to assess.')
+    else:
+        scope = 'uncommitted' if args.worktree else 'changed'
+        print(f'Documentation structure and impact records passed for {len(changed)} {scope} paths; '
+              'semantic review still required.')
     return 0
 
 

@@ -1,0 +1,30 @@
+{
+  "summary": "The documentation gate failed three times this session on causes that were the gate's own design rather than real documentation debt, so it is changed rather than worked around. A record's impact:updated page requirement now applies only when the record is added, not every time it is later edited; an absent pages key reads as no pages instead of a confusing type error; and a new --worktree mode applies the full coverage check to uncommitted and untracked work so a missing assessment is caught before committing instead of as a red build. API impact: none — contributor tooling and process documentation only.",
+  "paths": [
+    "scripts/check_docs.py",
+    "tests/test_check_docs.py",
+    "AGENTS.md",
+    "docs/DOCUMENTATION.md",
+    "docs/guide/publish-a-release.md",
+    "docs/changes/2026-09-10-docs-gate-usability.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "A maintainer publishing a release needs to know that the AGPL corresponding-source archive embedded in the released package was incomplete until BUG-0045, that its completeness is now checked automatically, and that no package has yet been built from the corrected archive. That is release-artifact correctness and belongs in the release procedure's verification limits.",
+    "pages": [
+      "docs/guide/publish-a-release.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller operation, agent command, event, stream, observed-state flow or client-facing endpoint is added, removed or changed. The change is to the documentation gate script, its tests, and contributor process text.",
+    "pages": []
+  },
+  "verification": {
+    "method": "python3 -m unittest discover -s tests -p 'test_check_docs.py' — 19 cases pass, 6 of them new: that editing a merged record no longer demands its pages change again while adding one still does; that an unknown added-set falls back to the strict check so the gate fails closed; that impact:updated still requires at least one page; that an absent pages key reads as no pages while a non-list value is still rejected; that changed_paths reports which records a range adds; and that --worktree sees uncommitted edits and untracked records. The three real pushes that failed the gate this session (9611fc7..3f9fbf2, 6cef94e..41cb970, f61bb3a..6cef94e) were replayed against the fixed checker using their actual git diffs and all three now pass. The existing 13 cases were updated for the changed changed_paths signature and still pass, including the coverage, reason, evidence, navigation, merge-base and clean-worktree cases, so the gate was not weakened. python3 scripts/check_docs.py --worktree was run against this change and correctly reported the uncovered paths before this record existed. NOT verified: no CI run has executed with the new checker.",
+    "evidence": [
+      "tests/test_check_docs.py",
+      "scripts/check_docs.py"
+    ]
+  }
+}

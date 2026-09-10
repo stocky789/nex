@@ -118,3 +118,10 @@ and the `bootstrap.sh` changes have not been applied to the live host.
 Known blocker: the workflow cannot currently reach its build step on this runner, so none of the
 build, publish or reachability checks above have executed even once. Treat every claim in this
 page as untested until a tag has run green.
+
+The released package embeds the AGPL corresponding-source archive, and that archive was found to
+be missing a packaging file ([BUG-0045](../BUG_LEDGER.md)). `tests/test_build_source.py` now
+cross-checks every packaging path a package builder installs against the archive's allowlist, so
+a future omission fails a check rather than a release. No package has yet been built from the
+corrected archive, because no runner can build one; verify the archive contents of the first
+package a release actually produces before distributing it.

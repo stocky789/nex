@@ -149,7 +149,9 @@ when blocked; do not repeatedly ask permission for already authorized work.
   rewrite later. Do not expose contributor implementation details in operator workflows.
 - Add a scoped `docs/changes/*.json` assessment covering changed paths. Applicable guide/API changes
   must name updated documentation and verification evidence; `none` requires a reviewable reason.
-  Run the documentation checker and relevant behavior checks. Follow the documented CI procedure.
+  Run `python3 scripts/check_docs.py --worktree` before committing: it applies the same gate CI
+  applies, to uncommitted and untracked work, so a missing assessment is caught locally instead of
+  as a red build. Then run the relevant behavior checks and follow the documented CI procedure.
 - Independent review and every phase gate check guide/API applicability, documentation accuracy,
   and actual walkthrough evidence. Automated structural checks cannot judge semantic completeness
   or prove that a walkthrough ran. No applicable documentation work is deferred to project end.

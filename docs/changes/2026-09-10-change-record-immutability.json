@@ -1,0 +1,27 @@
+{
+  "summary": "The documentation gate failed three times in a row on the same self-inflicted cause: a merged change record was edited in a later push, so it was re-validated against a diff that no longer contained the guide pages it declares, giving 'guide updated requires pages changed in this range'. docs/DOCUMENTATION.md now states that a merged record is closed and follow-up work gets its own record. The release guide records that the corresponding-source archive shipped inside the package was incomplete until BUG-0045 and is still unverified by a real build. API impact: none — documentation process and guide text only.",
+  "paths": [
+    "docs/DOCUMENTATION.md",
+    "docs/guide/publish-a-release.md",
+    "docs/changes/2026-09-10-change-record-immutability.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "A maintainer publishing a release needs to know that the AGPL corresponding-source archive embedded in the released package was incomplete until BUG-0045, that its completeness is now checked automatically, and that no package has yet been built from the corrected archive. That is release-artifact correctness, so it belongs in the release procedure's verification limits rather than only in the bug ledger.",
+    "pages": [
+      "docs/guide/publish-a-release.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller operation, agent command, event, stream, observed-state flow or client-facing endpoint is added, removed or changed. No product source file is touched; this change is contributor process documentation plus guide prose.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Root cause read from CI job 4355: 'docs/changes/2026-09-10-ci-runner-capability.json: guide updated requires pages changed in this range' for push 9611fc7..3f9fbf2, which edited that record but not docs/guide/publish-a-release.md. The same rule produced the failure in run 3784's predecessor, and was previously worked around by editing the guide again, which re-armed it. This push deliberately does not touch that record, so it is not re-validated. The next push's documentation gate was simulated locally by replaying check_docs' own coverage computation over the working tree: MISSING is empty, and every changed path is covered. python3 -m unittest discover -s tests -p 'test_check_docs.py' passes. NOT verified: no run has executed since these edits.",
+    "evidence": [
+      "docs/DOCUMENTATION.md",
+      "docs/guide/publish-a-release.md"
+    ]
+  }
+}

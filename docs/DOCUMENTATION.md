@@ -84,6 +84,12 @@ The API field concerns documentation impact; retain the more specific runtime AP
 from [AGENTS.md](../AGENTS.md#required-api-impact-check) in the summary/plan. An existing contract
 whose behavior changes can still require updated documentation. Explain any `none` honestly.
 
+The `impact: updated` requirement that listed pages change in the same diff applies when a record
+is **added**, which is when it has to prove the pages were updated with it. Correcting a merged
+record afterwards - fixing a reason, adding a path that was missed - does not ask you to edit its
+pages again. Prefer a new record for follow-up work regardless: records are a history of changes,
+not living documents.
+
 Evidence paths in new or updated assessments must exist. Historical records retain their original
 paths when files are later moved or deleted; inspect the recorded revision to resolve those paths.
 A test source is a runnable check, not proof it passed: the verification
@@ -96,13 +102,20 @@ Removed features update navigation and surviving guidance, including availabilit
 Run from the repository root:
 
 ```sh
+# Run this BEFORE committing. It applies the full gate, including changed-file
+# coverage, to uncommitted and untracked work, so a missing assessment is caught
+# here instead of as a red build after the push.
+python3 scripts/check_docs.py --worktree
+
 python3 scripts/check_docs.py --all
 python3 -m unittest discover -s tests -p 'test_check_docs.py'
 # After committing the change locally, compare its actual Git range:
 python3 scripts/check_docs.py --base <full-base-sha> --head "$(git rev-parse HEAD)"
 ```
 
-`--all` checks the current guide structure/links and assessment schemas; it does not resolve historical
+`--worktree` is the one to reach for while working: it runs the same coverage check CI runs, over
+`git status` rather than a pushed range, and treats untracked records as newly added. `--all` checks
+the current guide structure/links and assessment schemas; it does not resolve historical
 assessment references or establish changed-file coverage. Range checking verifies new/updated record
 references and uses the specified Git commits; uncommitted files are not part of their diff.
 Range mode requires a clean checkout at the specified head, so uncommitted documentation cannot

@@ -77,6 +77,73 @@ class DocumentationGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'evidence: file does not exist'):
             docs.check(self.root, {'app.py', file})
 
+    def test_editing_a_merged_record_does_not_demand_its_pages_change_again(self):
+        """The trap: a record's pages requirement must apply when it is added, not forever.
+
+        A record claiming an updated guide page proved that in the push that added it.
+        Re-checking it against a later diff would force an unrelated edit to that page
+        before any correction to the record could land.
+        """
+        guide = {'impact': 'updated', 'reason': 'New workflow', 'pages': ['docs/guide/install.md']}
+        record = self.record(['app.py', 'docs/guide/install.md'], guide=guide)
+        # Added in this range: the page must be here too.
+        docs.check(self.root, {'app.py', 'docs/guide/install.md', record}, added={record})
+        with self.assertRaisesRegex(ValueError, 'guide updated requires pages changed'):
+            docs.check(self.root, {'app.py', record}, added={record})
+        # Edited later, page untouched: previously failed, must now pass.
+        docs.check(self.root, {'app.py', record}, added=set())
+
+    def test_unknown_added_set_keeps_the_strict_check(self):
+        guide = {'impact': 'updated', 'reason': 'New workflow', 'pages': ['docs/guide/install.md']}
+        record = self.record(['app.py'], guide=guide)
+        with self.assertRaisesRegex(ValueError, 'guide updated requires pages changed'):
+            docs.check(self.root, {'app.py', record})
+
+    def test_updated_impact_still_needs_at_least_one_page(self):
+        record = self.record(['app.py'], guide={'impact': 'updated', 'reason': 'Why', 'pages': []})
+        with self.assertRaisesRegex(ValueError, 'guide updated requires at least one page'):
+            docs.check(self.root, {'app.py', record}, added={record})
+
+    def test_absent_pages_key_reads_as_no_pages(self):
+        record = self.record(['app.py'])
+        data = json.loads((self.root / record).read_text())
+        del data['guide']['pages']
+        del data['api']['pages']
+        self.write(record, json.dumps(data))
+        docs.check(self.root, {'app.py', record}, added={record})
+        # A non-list value is still rejected rather than silently ignored.
+        data['guide']['pages'] = 'docs/guide/install.md'
+        self.write(record, json.dumps(data))
+        with self.assertRaisesRegex(ValueError, 'guide.pages: list required'):
+            docs.check(self.root, {'app.py', record}, added={record})
+
+    def test_range_reports_which_records_are_new(self):
+        base = self.init()
+        record = self.record(['app.py', 'docs/guide/install.md'],
+                             guide={'impact': 'updated', 'reason': 'New workflow',
+                                    'pages': ['docs/guide/install.md']})
+        self.write('docs/guide/install.md', (self.root / 'docs/guide/install.md').read_text() + '\nMore.\n')
+        self.write('app.py', 'print("second")\n')
+        head = self.commit()
+        changed, added = docs.changed_paths(self.root, base, head)
+        self.assertIn(record, added)
+        self.assertIn('app.py', changed)
+        self.assertNotIn('app.py', added, 'app.py existed before this range')
+        docs.check(self.root, changed, added)
+
+    def test_worktree_mode_checks_uncommitted_work_before_committing(self):
+        self.init()
+        self.write('app.py', 'print("uncommitted")\n')
+        changed, added = docs.worktree_paths(self.root)
+        self.assertIn('app.py', changed)
+        self.assertNotIn('app.py', added, 'a tracked edit is not an addition')
+        with self.assertRaisesRegex(ValueError, 'missing documentation assessment'):
+            docs.check(self.root, changed, added)
+        record = self.record(['app.py'])
+        changed, added = docs.worktree_paths(self.root)
+        self.assertIn(record, added, 'an untracked record counts as added')
+        docs.check(self.root, changed, added)
+
     def test_structure_navigation_links_and_anchors(self):
         page = self.root / 'docs/guide/install.md'
         original = page.read_text()
@@ -114,17 +181,17 @@ class DocumentationGateTests(unittest.TestCase):
         initial = [str(p.relative_to(self.root)) for p in self.root.rglob('*') if p.is_file()]
         self.record(initial, 'initial')
         base = self.init()
-        docs.check(self.root, docs.changed_paths(self.root, '0' * 40, base))
+        docs.check(self.root, *docs.changed_paths(self.root, '0' * 40, base))
         self.write('app.py', 'print("second")\n')
         self.commit()
         self.record(['app.py'])
         head = self.commit()
-        docs.check(self.root, docs.changed_paths(self.root, base, head))
+        docs.check(self.root, *docs.changed_paths(self.root, base, head))
         # A later unrelated record must not hide an uncovered change in the range.
         self.write('new.py', 'print("new")\n')
         head = self.commit()
         with self.assertRaisesRegex(ValueError, 'new.py'):
-            docs.check(self.root, docs.changed_paths(self.root, base, head))
+            docs.check(self.root, *docs.changed_paths(self.root, base, head))
 
     def test_pr_merge_base_ignores_base_branch_only_change(self):
         base = self.init()
@@ -137,9 +204,9 @@ class DocumentationGateTests(unittest.TestCase):
         self.write('target-only.txt', 'not part of PR\n')
         target = self.commit()
         self.git('checkout', '-q', 'feature')
-        changed = docs.changed_paths(self.root, target, head, merge_base=True)
+        changed, added = docs.changed_paths(self.root, target, head, merge_base=True)
         self.assertNotIn('target-only.txt', changed)
-        docs.check(self.root, changed)
+        docs.check(self.root, changed, added)
 
     def test_workflow_new_branch_checks_divergence_not_historical_records(self):
         self.record(['old.py'], 'historical', guide={'impact': 'updated', 'reason': 'Old feature removed', 'pages': ['docs/guide/removed.md']})
