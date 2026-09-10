@@ -17,11 +17,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
+- Fixed the VM CPU model list so it only shows named models this host can actually run, and
+  named models start under KVM instead of failing on common baselines such as qemu64.
 - Fixed Controller software-update checks in appliance deployments. The appliance now includes
   the signed Nex archive configuration and keyring, and its unprivileged service uses its own
   signed APT index cache instead of failing to write the system package cache.
-
-## [0.1.5-alpha1] — 2026-09-09
 
 Console quality-of-life features, guest tools observation, and the collapse to a single Nex
 Core version. This is the version the packages currently build as (`0.1.5~alpha1`).

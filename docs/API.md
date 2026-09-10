@@ -581,10 +581,13 @@ MAC uniqueness and host capacity stay with their owners.
   cores, one thread — instead of libvirt's own default; otherwise each must be at least 1 and
   sockets × cores × threads must equal `count`. `model` is `host-passthrough` (the default),
   `host-model`, or a model from the assigned host's read-only `Inventory.cpu_models` list. Core
-  obtains that list from its own libvirt/QEMU, rechecks the selected named model immediately
-  before defining the VM, and writes it as an exact custom model with fallback forbidden.
-  `max` uses libvirt's maximum CPU mode. Host passthrough is tied to that host's CPU; use a
-  common baseline reported by every destination before planning a migration.
+  obtains that list from libvirt domain capabilities (`usable=yes` named models on the
+  host's default q35 machine), rechecks the selected named model immediately before
+  defining the VM, and writes it as an exact custom model with partial feature checking
+  and fallback forbidden. `check=full` is not used: KVM always exposes extras beyond a
+  named baseline, which made even usable models refuse to start. `max` uses libvirt's
+  maximum CPU mode. Host passthrough is tied to that host's CPU; use a common baseline
+  reported by every destination before planning a migration.
 - **`memory`.** `size_mib` at least 512, capped by Controller at 262144, is the ceiling in both
   modes. `dedicated` reserves it: `<memory>`/`<currentMemory>` at the ceiling, no balloon device,
   and the whole amount counted against host capacity and never handed to another VM. `maximum`

@@ -127,9 +127,10 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
       - **CPU model** — **Host passthrough** (the default) gives the guest this host's exact
         processor and the best instruction-set coverage. **Host model** presents a common
         processor instead. The remaining choices are the named QEMU CPU models that Nex Core
-        has read from the selected host; Core checks the choice again before it defines the VM.
-        Use a baseline that every intended destination reports before planning a migration.
-        The choice is part of the definition and can only be changed while the VM is stopped.
+        reports as usable on the selected host (models that cannot run here are omitted).
+        Core checks the choice again before it defines the VM. Use a baseline that every
+        intended destination reports before planning a migration. The choice is part of the
+        definition and can only be changed while the VM is stopped.
       - **Memory mode** — **Dedicated** or **Maximum**; see [Memory modes](#memory-modes).
       - **Memory (MiB)** — 512 to 262144, and no more than the host's total memory. The page
         shows the host's reported CPU and memory capacity underneath. This size is the

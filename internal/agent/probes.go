@@ -180,11 +180,13 @@ func NativeProbes(version string) map[string]Probe {
 	return map[string]Probe{
 		"inventory": func(ctx context.Context) (any, error) { return readInventory(version) },
 		"cpu-models": func(ctx context.Context) (any, error) {
-			models, err := virsh(ctx, "cpu-models", "x86_64")
+			// Domain capabilities mark which named models can actually run here;
+			// virsh cpu-models lists every QEMU name, including unusable baselines.
+			caps, err := virsh(ctx, "domcapabilities", "--virttype", "kvm", "--arch", "x86_64", "--machine", "q35")
 			if err != nil {
 				return nil, err
 			}
-			return cpuModels(models)
+			return vmhost.UsableCPUModels([]byte(caps))
 		},
 		"block-disks": func(ctx context.Context) (any, error) { return readBlockDisks(ctx, "/sys/block") },
 		"disk": func(ctx context.Context) (any, error) {

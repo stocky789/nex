@@ -4148,7 +4148,7 @@
         &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$&quot;
       },
       &quot;maxItems&quot;: 256,
-      &quot;description&quot;: &quot;QEMU CPU models observed from this Core host&#x27;s libvirt. This is an availability list, not durable configuration.&quot;
+      &quot;description&quot;: &quot;Named QEMU CPU models libvirt marks usable=yes on this Core host&#x27;s default q35 machine. Availability list only, not durable configuration; unusable baselines are omitted.&quot;
     },
     &quot;cpu_count&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
@@ -5927,7 +5927,7 @@
     &quot;model&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;pattern&quot;: &quot;^(host-passthrough|host-model|[A-Za-z0-9][A-Za-z0-9._-]{0,63})$&quot;,
-      &quot;description&quot;: &quot;host-passthrough (the default) gives the guest the host CPU; host-model describes it for later migration. Any other value must appear in the assigned host&#x27;s current Inventory.cpu_models and Core refuses it otherwise; named values use libvirt custom/exact mode with fallback forbidden.&quot;
+      &quot;description&quot;: &quot;host-passthrough (the default) gives the guest the host CPU; host-model describes it for later migration. Any other value must appear in the assigned host&#x27;s current Inventory.cpu_models (usable named models only) and Core refuses it otherwise; named values use libvirt custom/exact mode with partial feature checking and fallback forbidden.&quot;
     }
   },
   &quot;required&quot;: [

@@ -542,8 +542,8 @@ func TestManagedDomainXMLMemoryModesAndTopology(t *testing.T) {
 	}
 	v.CPU.Model = "Skylake-Server"
 	b, _ = testDomainXML(v, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, []string{"/disk-0.qcow2"}, "")
-	if xml.Unmarshal(b, &d) != nil || d.CPU.Mode != "custom" || d.CPU.Match != "exact" || d.CPU.Check != "full" || d.CPU.Model == nil || *d.CPU.Model != (cpuModelXML{Fallback: "forbid", Value: "Skylake-Server"}) {
-		t.Fatalf("named CPU model is not exact and forbidden from fallback: %s", b)
+	if xml.Unmarshal(b, &d) != nil || d.CPU.Mode != "custom" || d.CPU.Match != "exact" || d.CPU.Check != "partial" || d.CPU.Model == nil || *d.CPU.Model != (cpuModelXML{Fallback: "forbid", Value: "Skylake-Server"}) {
+		t.Fatalf("named CPU model is not exact/partial with forbidden fallback: %s", b)
 	}
 }
 
@@ -609,15 +609,19 @@ func TestManagedCapacityUsesTheMemoryCeiling(t *testing.T) {
 	}
 }
 
-func TestAvailableCPUModelUsesCoreLibvirtList(t *testing.T) {
+func TestAvailableCPUModelUsesUsableDomainCapabilities(t *testing.T) {
 	query := func(_ context.Context, args ...string) ([]byte, error) {
-		if !reflect.DeepEqual(args, []string{"cpu-models", "x86_64"}) {
+		if !reflect.DeepEqual(args, []string{"domcapabilities", "--virttype", "kvm", "--arch", "x86_64", "--machine", "q35"}) {
 			t.Fatalf("query=%q", args)
 		}
-		return []byte("qemu64\nSkylake-Server\n"), nil
+		return []byte(`<domainCapabilities><cpu><mode name="custom">
+			<model usable="yes">Skylake-Server</model>
+			<model usable="no">EPYC-Genoa</model>
+			<model usable="yes">qemu64</model>
+		</mode></cpu></domainCapabilities>`), nil
 	}
 	if !availableCPUModel(context.Background(), "Skylake-Server", query) || availableCPUModel(context.Background(), "EPYC-Genoa", query) {
-		t.Fatal("CPU model availability did not follow libvirt")
+		t.Fatal("CPU model availability did not follow usable domain capabilities")
 	}
 }
 

@@ -1089,7 +1089,9 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 	if v.CPU.Model == "max" {
 		d.CPU.Mode = "maximum"
 	} else if v.CPU.Model != "host-passthrough" && v.CPU.Model != "host-model" {
-		d.CPU = managedCPU{Mode: "custom", Match: "exact", Check: "full", Model: &cpuModelXML{Fallback: "forbid", Value: v.CPU.Model}, Topology: &managedTopology{sockets, cores, threads}}
+		// check=partial: KVM always exposes extras (hypervisor, x2apic, …) beyond a
+		// named baseline, so check=full refuses even models libvirt marks usable=yes.
+		d.CPU = managedCPU{Mode: "custom", Match: "exact", Check: "partial", Model: &cpuModelXML{Fallback: "forbid", Value: v.CPU.Model}, Topology: &managedTopology{sockets, cores, threads}}
 	}
 	scsi := false
 	for i, disk := range v.Disks {
@@ -1225,14 +1227,14 @@ func managedCapacity(ctx context.Context, v protocol.VMCreateSpec, js []managedJ
 	if !dedicatedFits(total, dedicatedCommitted(js, v.ID), v.Memory) {
 		return errors.New("dedicated memory exceeds what this host has left to promise; free a dedicated VM or use the maximum memory mode")
 	}
-	if v.CPU.Model != "host-passthrough" && v.CPU.Model != "host-model" {
-		if !availableCPUModel(ctx, v.CPU.Model, managedVirsh) {
-			return fmt.Errorf("CPU model %s is not available on this host", v.CPU.Model)
-		}
-	}
 	b, err := managedVirsh(ctx, "domcapabilities", "--virttype", "kvm", "--arch", "x86_64", "--machine", managedMachine(v))
 	if err != nil {
 		return errors.New("cannot verify KVM capabilities for this machine type")
+	}
+	if v.CPU.Model != "host-passthrough" && v.CPU.Model != "host-model" {
+		if models, e := UsableCPUModels(b); e != nil || !slices.Contains(models, v.CPU.Model) {
+			return fmt.Errorf("CPU model %s is not available on this host", v.CPU.Model)
+		}
 	}
 	var caps struct {
 		Domain string `xml:"domain"`
@@ -1264,9 +1266,15 @@ func managedCapacity(ctx context.Context, v protocol.VMCreateSpec, js []managedJ
 	return nil
 }
 
+// availableCPUModel reports whether model is marked usable on this host for the
+// default q35 machine. Tests inject query; production uses managedVirsh.
 func availableCPUModel(ctx context.Context, model string, query func(context.Context, ...string) ([]byte, error)) bool {
-	models, err := query(ctx, "cpu-models", "x86_64")
-	return err == nil && slices.Contains(strings.Fields(string(models)), model)
+	b, err := query(ctx, "domcapabilities", "--virttype", "kvm", "--arch", "x86_64", "--machine", "q35")
+	if err != nil {
+		return false
+	}
+	models, err := UsableCPUModels(b)
+	return err == nil && slices.Contains(models, model)
 }
 func (e *ManagedEngine) create(ctx context.Context, j *managedJournal, js []managedJournal) error {
 	v := *j.Command.VM

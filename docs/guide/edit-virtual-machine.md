@@ -29,9 +29,9 @@ available in this build. Verification is recorded under [Verification](#verifica
    - **Name**, **Virtual CPUs**, **Sockets / Cores / Threads**, **CPU model**, **Memory mode**,
      **Memory (MiB)**, **Firmware**, **Machine type** and every **Boot order** field are only
      editable while the VM is stopped.
-     The CPU selector contains the host's current QEMU model list; choose a baseline reported by
-     every intended destination before migration. Nex Core checks that named model again before
-     applying the edit.
+     The CPU selector contains the named models this host can run, plus Host passthrough and
+     Host model; choose a baseline reported by every intended destination before migration.
+     Nex Core checks that named model again before applying the edit.
    - **Description**, **Guest operating system** and **Start automatically when the host boots**
      can be changed at any time.
    - **Disks**: select **Add disk** to add one; choose its storage, name, size, bus and
