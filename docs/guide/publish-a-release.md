@@ -8,7 +8,13 @@ to the signed APT archive, the ISO to the download tree. One version identifies 
 the build refuses to start unless the tag and `CHANGELOG.md` agree.
 
 The workflow has not yet run a real release; it is written against the existing manual steps
-and the artifacts they produce. Current verification and outstanding limits are below.
+and the artifacts they produce.
+
+**Releases are blocked today.** The runner executes jobs inside an unprivileged container, so
+the ISO build cannot bind-mount the workspace and fails immediately. No workflow builds an ISO
+at present: the installer job was scoped to source-level checks for the same reason. Until the
+runner gets a host label, a release must be built and published by hand. See
+[BUG-0043](../BUG_LEDGER.md). Current verification and outstanding limits are below.
 [Return to the guide](README.md).
 
 ## Prerequisites
@@ -108,3 +114,7 @@ workflow YAML was parsed and its step gating checked.
 Not yet verified: no tag has been pushed, so the workflow has never run end to end; no ISO has
 been published to the live host; the runner's network route to the website host is unconfirmed;
 and the `bootstrap.sh` changes have not been applied to the live host.
+
+Known blocker: the workflow cannot currently reach its build step on this runner, so none of the
+build, publish or reachability checks above have executed even once. Treat every claim in this
+page as untested until a tag has run green.

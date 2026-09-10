@@ -770,7 +770,16 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
   no `${{ }}` interpolation appears inside any `run:` block. CI configuration otherwise carries no
   automated regression test: a workflow file establishes no coverage by itself. The real check is
   the next pushed run.
+- Second cause, found after two failed attempts to fix the first: **Gitea on git.stockhome.com.au
+  executes `.github/workflows/`, not `.gitea/workflows/`.** Two pushes that scoped
+  `.gitea/workflows/installer.yml` changed nothing, because the job kept running the `.github`
+  copy; the executed step names matched that file exactly, in order. `.gitea/workflows/release.yml`
+  had no `.github` counterpart at all, so the tag-driven release workflow would never have fired.
+  Both installer files are now identical and `release.yml` exists in both, with a header in each
+  naming which directory actually runs.
 - Avoid: putting a step that needs host privileges ahead of cheap unconditional checks. A single
   environment failure then hides the entire suite, and the job looks uniformly broken when almost
   all of it would have passed. Equally, do not read the resulting green as full coverage: the
-  namespace checks are skipped, not passing, until the runner can create namespaces.
+  namespace checks are skipped, not passing, until the runner can create namespaces. And never
+  assume which of the two workflow directories a forge executes — confirm it against the step
+  names in a real run before concluding a workflow edit had any effect.

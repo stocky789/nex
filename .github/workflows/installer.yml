@@ -1,11 +1,24 @@
 name: Installer
-# Deliberately diverges from .gitea/workflows/installer.yml, which is scoped down to
-# source-level checks. GitHub-hosted runners are virtual machines with the privileges
-# and real filesystem paths this job needs, so the full matrix is kept here: ISO build,
-# initramfs completeness, native bridge and DHCP verification, and the wizard review.
-# The Gitea runner executes jobs in an unprivileged container and cannot do any of it.
-# See docs/BUG_LEDGER.md BUG-0043. Keep the two in sync again once that runner is
-# switched to a host label.
+# SCOPED TO AN UNPRIVILEGED CONTAINER RUNNER — this job does NOT verify the ISO.
+#
+# The Gitea runner executes jobs inside an unprivileged container, so $PWD is not a
+# path on the Docker host (bind mounts into the builder image resolve to an empty
+# directory) and CAP_NET_ADMIN is unavailable (ip link cannot create interfaces).
+# Four checks were removed for that reason, not because they stopped mattering:
+#
+#   * management bridge verification with native Debian networking (needs ip link)
+#   * DHCP preview verification (bind-mounts the workspace into a container)
+#   * ISO build and installer initramfs completeness (bind-mounts the workspace)
+#   * native wizard review, disk confirmation and installer progress (needs the ISO)
+#
+# Nothing here establishes that a bootable, correct ISO can be produced. Restore the
+# removed steps by giving act_runner a host label ("ubuntu-latest:host" in its
+# config.yaml) and reverting this file. See docs/BUG_LEDGER.md BUG-0043.
+#
+# KEEP THIS FILE AND .gitea/workflows/installer.yml IDENTICAL. Gitea on
+# git.stockhome.com.au executes the workflows in THIS directory, not .gitea/workflows,
+# so editing only the .gitea copy changes nothing and the job silently keeps running
+# the version here.
 on:
   push:
   pull_request:
@@ -14,58 +27,44 @@ permissions:
 jobs:
   installer:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: Require Docker and build installer toolchain
+
+      # Printed on every run so a green result is never mistaken for ISO coverage.
+      - name: State what this job does not cover
+        run: |
+          echo '::warning::Installer job is scoped to source-level checks on this runner. The ISO is NOT built, and the management bridge, DHCP preview, initramfs completeness and wizard/progress checks DID NOT RUN. A pass here does not mean the ISO is buildable or correct. See docs/BUG_LEDGER.md BUG-0043.'
+
+      # The checks below used to run inside the builder image purely to get a toolchain.
+      # They read and compile source and need no privileges, so run them directly.
+      - name: Install source-check dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends gcc pkg-config libglib2.0-dev python3
+
+      - name: Check installer source contract
+        run: bash installer/check.sh
+
+      - name: Run installer regressions
+        run: |
+          set -eu
+          python3 tests/integration/installer-shell.py
+          cc -Wall -Wextra -Werror tests/integration/installer-network.c installer/gui/nex-network.c $(pkg-config --cflags --libs glib-2.0) -o /tmp/nex-network-test
+          /tmp/nex-network-test
+          python3 tests/integration/installer-handoff.py
+          python3 tests/integration/installer-keyboard.py
+          python3 tests/integration/installer-qol.py
+          python3 tests/integration/installer-hostname.py
+          python3 tests/integration/installer-link.py
+          python3 tests/integration/installer-disk.py
+
+      # Building the image needs no bind mount, so this still catches a broken
+      # Dockerfile or a build dependency that vanished from Debian trixie. It does
+      # not exercise the image; nothing is run inside it.
+      - name: Verify the installer toolchain image still builds
         run: |
           docker info
           docker build -t nex-iso-builder -f installer/Dockerfile installer
-
-      # Every step below bind-mounts the workspace into the builder image. When the
-      # runner itself executes jobs inside a container, $PWD names a path that exists
-      # only in the job container: Docker then creates it empty on the host and mounts
-      # nothing, and the build fails later with a bare "No such file or directory".
-      # Fail here instead, naming the cause and the fix.
-      - name: Verify the workspace reaches the builder image
-        run: |
-          set -eu
-          if ! docker run --rm -v "$PWD:/work" --entrypoint test nex-iso-builder -f /work/installer/check.sh; then
-            echo 'The workspace did not reach the builder container.' >&2
-            echo "\$PWD ($PWD) is not a path on the Docker host, so -v mounted an empty" >&2
-            echo 'directory. This runner executes jobs inside a container.' >&2
-            echo 'Fix: give act_runner a host label, for example "ubuntu-latest:host" in' >&2
-            echo 'its config.yaml labels, so jobs run on the host and bind mounts resolve.' >&2
-            exit 1
-          fi
-      - name: Run installer regressions
-        run: |
-          docker run --rm --platform linux/amd64 -v "$PWD:/work" --entrypoint bash nex-iso-builder -ec '
-            bash installer/check.sh
-            python3 tests/integration/installer-shell.py
-            cc -Wall -Wextra -Werror tests/integration/installer-network.c installer/gui/nex-network.c $(pkg-config --cflags --libs glib-2.0) -o /tmp/nex-network-test
-            /tmp/nex-network-test
-            python3 tests/integration/installer-handoff.py
-            python3 tests/integration/installer-keyboard.py
-            python3 tests/integration/installer-qol.py
-            python3 tests/integration/installer-hostname.py
-            python3 tests/integration/installer-link.py
-            python3 tests/integration/installer-disk.py
-          '
-      - name: Verify management bridge with native Debian networking
-        run: bash tests/integration/installer-bridge.sh
-      - name: Verify DHCP preview with native Debian networking
-        run: bash tests/integration/installer-dhcp.sh
-      - name: Build ISO and verify complete installer initramfs
-        run: |
-          docker run --rm --platform linux/amd64 -v "$PWD:/work" -e BUILD_UID="$(id -u)" -e BUILD_GID="$(id -g)" nex-iso-builder
-          python3 tests/integration/installer-logo.py .cache/nex-iso/stage/install.amd/gtk/initrd.gz
-      - name: Exercise native wizard review and disk confirmation
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 python3-pil
-          python3 tests/integration/wizard-review.py dist/nex-core-*-amd64.iso --kernel .cache/nex-iso/stage/install.amd/vmlinuz --initrd .cache/nex-iso/stage/install.amd/gtk/initrd.gz --output /tmp/nex-wizard-review
-          python3 tests/integration/wizard-review.py dist/nex-core-*-amd64.iso --kernel .cache/nex-iso/stage/install.amd/vmlinuz --initrd .cache/nex-iso/stage/install.amd/gtk/initrd.gz --output /tmp/nex-wizard-review-large --resolution 1024x768 --nics 2
-          python3 tests/integration/installer-progress.py dist/nex-core-*-amd64.iso --kernel .cache/nex-iso/stage/install.amd/vmlinuz --initrd .cache/nex-iso/stage/install.amd/gtk/initrd.gz --output /tmp/nex-installer-progress
