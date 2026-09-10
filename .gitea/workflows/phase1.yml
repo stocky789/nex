@@ -27,18 +27,9 @@ jobs:
           sudo apt-get install --yes --no-install-recommends nginx-core dpkg-dev gnupg
       - name: Test Go services and recovery
         run: go test -race ./...
-      - name: Verify guest VLAN bridge creation in a disposable network namespace
-        run: |
-          mkdir -p .cache
-          go test -c -o .cache/vmhost.test ./internal/vmhost
-          sudo unshare -nm sh -c 'mount -t sysfs none /sys && NEX_NETNS_TEST=1 .cache/vmhost.test -test.run TestGuestVLANNetns -test.v'
-      - name: Verify Controller replacement with real processes in a disposable network namespace
-        run: |
-          mkdir -p .cache/replacement-bin
-          go build -o .cache/replacement-bin/nex-controller ./cmd/nex-controller
-          go build -o .cache/replacement-bin/nex-core-agent ./cmd/nex-core-agent
-          python3 scripts/build-source.py --output .cache/replacement-bin/nex-source.tar.gz
-          sudo NEX_BIN="$PWD/.cache/replacement-bin" unshare -nm sh -c 'mount -t sysfs none /sys && ip link set lo up && ip link add nexqa type bridge && ip link set nexqa up && python3 tests/integration/controller_replacement.py --bridge nexqa --storage-root /var/lib/nexqa-replacement --evidence .cache/controller-replacement'
+      # The checks that need no privileges run first. They used to sit behind the
+      # namespace steps below, so a runner that cannot unshare skipped all of them
+      # and the job reported nothing about tests, contracts or the UI.
       - name: Check contracts and contributor tools
         run: |
           python3 scripts/generate_api.py --check
@@ -53,6 +44,34 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
           govulncheck ./...
           npm --prefix web audit --audit-level=low
+      # Creating network namespaces needs CAP_SYS_ADMIN, which a job running inside
+      # an unprivileged runner container does not have. Detect it once so the two
+      # steps below report honestly as not-run instead of failing the whole job.
+      # This is missing coverage, not passing coverage: the warning says so.
+      - name: Check whether this runner can create namespaces
+        id: netns
+        run: |
+          set -eu
+          if sudo unshare -nm true 2>/dev/null; then
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'available=false' >> "$GITHUB_OUTPUT"
+            echo '::warning::Runner cannot create network namespaces, so the guest VLAN and Controller replacement network checks DID NOT RUN. That coverage is missing from this run. Give act_runner a host label (for example "ubuntu-latest:host") to restore it.'
+          fi
+      - name: Verify guest VLAN bridge creation in a disposable network namespace
+        if: steps.netns.outputs.available == 'true'
+        run: |
+          mkdir -p .cache
+          go test -c -o .cache/vmhost.test ./internal/vmhost
+          sudo unshare -nm sh -c 'mount -t sysfs none /sys && NEX_NETNS_TEST=1 .cache/vmhost.test -test.run TestGuestVLANNetns -test.v'
+      - name: Verify Controller replacement with real processes in a disposable network namespace
+        if: steps.netns.outputs.available == 'true'
+        run: |
+          mkdir -p .cache/replacement-bin
+          go build -o .cache/replacement-bin/nex-controller ./cmd/nex-controller
+          go build -o .cache/replacement-bin/nex-core-agent ./cmd/nex-core-agent
+          python3 scripts/build-source.py --output .cache/replacement-bin/nex-source.tar.gz
+          sudo NEX_BIN="$PWD/.cache/replacement-bin" unshare -nm sh -c 'mount -t sysfs none /sys && ip link set lo up && ip link add nexqa type bridge && ip link set nexqa up && python3 tests/integration/controller_replacement.py --bridge nexqa --storage-root /var/lib/nexqa-replacement --evidence .cache/controller-replacement'
       - name: Prepare browser verification
         run: |
           python3 -m venv .cache/phase1-qa-venv

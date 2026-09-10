@@ -1,0 +1,28 @@
+{
+  "summary": "BUG-0043: phase1 and installer had failed on every Gitea run since 2026-09-08 because the runner executes jobs in an unprivileged container. phase1 stopped at an unshare step that ran sixth, skipping the 18 checks after it; installer bind-mounted a path that does not exist on the Docker host. phase1 now runs every unprivileged check first and gates the namespace steps on a detected capability with a loud warning naming the missing coverage; installer fails fast with the cause and the runner-side fix. API impact: none — CI configuration only, no product code, interface or contract is touched.",
+  "paths": [
+    ".gitea/workflows/phase1.yml",
+    ".gitea/workflows/installer.yml",
+    ".github/workflows/phase1.yml",
+    ".github/workflows/installer.yml",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor CI configuration only. No operator-facing behavior, GUI workflow, CLI, installer output, configuration, permission or error message changes; nothing an operator does with Nex Core or Controller is different. The user guide documents operator procedures, not runner capabilities.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Workflow step ordering and gating only. No Controller operation, agent command, event, stream, observed-state flow or client-facing endpoint is added, removed or changed, and no product source file is touched by this change.",
+    "pages": []
+  },
+  "verification": {
+    "method": "All seven workflow files parsed with PyYAML; the resulting phase1 step order confirmed as go test, contract/unit checks, UI build, advisories, then the capability probe followed by the two gated namespace steps; the two gated steps confirmed to carry if: steps.netns.outputs.available == 'true'. Audited every run: block across .gitea and .github for ${{ }} interpolation and found none, so no workflow-injection surface was introduced. Root cause read directly from the failing run: job 4335 log shows 'bash: installer/check.sh: No such file or directory' after a -v \"$PWD:/work\" mount, and job 4336 shows 'unshare: unshare failed: Operation not permitted' with go test -race ./... having already passed and 18 later steps skipped; the run header shows the job executing inside docker.gitea.com/runner-images:ubuntu-latest. Run history over the Gitea API confirms phase1 and installer failed on every run from 2026-09-08 onward, predating the change under test. NOT verified: no workflow run was triggered, so the reordered pipeline has not executed; full namespace and ISO-build coverage still requires a host-mode runner label and remains outstanding, not restored by this change.",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      ".gitea/workflows/phase1.yml",
+      ".gitea/workflows/installer.yml"
+    ]
+  }
+}

@@ -735,3 +735,34 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
   `python3 -m unittest discover -s tests -p 'test_*.py'` in both the GitHub and Gitea `phase1`
   workflows.
 - Avoid: shipping required out-of-box configuration as an `.example` that must be copied by hand.
+
+## BUG-0043 — CI reported nothing for 18 of 23 checks because one privileged step failed first
+
+- Date: 2026-09-10.
+- Symptom: every `phase1` and `installer` run on the Gitea runner had failed since 2026-09-08;
+  only `documentation` ever passed. `phase1` stopped at *Verify guest VLAN bridge creation in a
+  disposable network namespace* with `unshare: unshare failed: Operation not permitted`, and the
+  18 steps after it — unit tests, `generate_api --check`, the UI typecheck and build, dependency
+  advisories and every browser workflow — were skipped, so the job reported nothing about them.
+  `installer` failed at *Run installer regressions* with `bash: installer/check.sh: No such file
+  or directory`.
+- Root cause: the runner (`act_runner` v1.0.6) executes jobs inside an unprivileged container
+  (`docker.gitea.com/runner-images:ubuntu-latest`). Two consequences. Creating network namespaces
+  needs `CAP_SYS_ADMIN`, which that container does not have. And `docker run -v "$PWD:/work"`
+  names a path that exists only inside the job container, so Docker created it empty on the host
+  and the builder image mounted nothing. Neither is a defect in the checks themselves; both were
+  masked because the privileged step ran sixth, ahead of everything cheap and unconditional.
+- Fix: reordered `phase1` so every unprivileged check runs before the namespace steps, and gated
+  those two steps on a detected capability that emits a loud `::warning::` naming the missing
+  coverage when it is absent. `installer` now verifies the workspace actually reached the builder
+  image and fails with the cause and the runner-side fix instead of a bare "No such file or
+  directory". Full coverage still requires a host-mode runner label.
+- Regression evidence: none automated — this is CI configuration, and a workflow file establishes
+  no coverage by itself. Verified by parsing all seven workflow files, confirming the resulting
+  step order and `if` gating, and confirming no `${{ }}` interpolation appears inside any `run:`
+  block. The real check is the next pushed run: `phase1` must report results for the unit tests,
+  contract check and UI build rather than skipping them.
+- Avoid: putting a step that needs host privileges ahead of cheap unconditional checks. A single
+  environment failure then hides the entire suite, and the job looks uniformly broken when almost
+  all of it would have passed. Equally, do not read the resulting green as full coverage: the
+  namespace checks are skipped, not passing, until the runner can create namespaces.

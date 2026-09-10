@@ -16,6 +16,23 @@ jobs:
         run: |
           docker info
           docker build -t nex-iso-builder -f installer/Dockerfile installer
+
+      # Every step below bind-mounts the workspace into the builder image. When the
+      # runner itself executes jobs inside a container, $PWD names a path that exists
+      # only in the job container: Docker then creates it empty on the host and mounts
+      # nothing, and the build fails later with a bare "No such file or directory".
+      # Fail here instead, naming the cause and the fix.
+      - name: Verify the workspace reaches the builder image
+        run: |
+          set -eu
+          if ! docker run --rm -v "$PWD:/work" --entrypoint test nex-iso-builder -f /work/installer/check.sh; then
+            echo 'The workspace did not reach the builder container.' >&2
+            echo "\$PWD ($PWD) is not a path on the Docker host, so -v mounted an empty" >&2
+            echo 'directory. This runner executes jobs inside a container.' >&2
+            echo 'Fix: give act_runner a host label, for example "ubuntu-latest:host" in' >&2
+            echo 'its config.yaml labels, so jobs run on the host and bind mounts resolve.' >&2
+            exit 1
+          fi
       - name: Run installer regressions
         run: |
           docker run --rm --platform linux/amd64 -v "$PWD:/work" --entrypoint bash nex-iso-builder -ec '
