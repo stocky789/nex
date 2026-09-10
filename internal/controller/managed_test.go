@@ -765,3 +765,41 @@ func TestAdoptionRebuildsApplianceOutcomesAndAttention(t *testing.T) {
 		t.Fatalf("appliance did not follow the re-enrolled host: %+v", vms)
 	}
 }
+
+// An adopted needs_attention outcome closes once the host stops reporting it: the host settled
+// the entry (an interrupted edit re-observed, or a pending command the restarted agent finished).
+func TestAdoptedOutcomeClosesWhenHostSettlesIt(t *testing.T) {
+	a := newClient(t)
+	host := a.enroll(a.token(a.site(), ""), csr(t))
+	cert := certificate(t, host.CertificatePEM)
+	now := time.Now().UTC()
+	managed := &protocol.ManagedState{Outcomes: []protocol.ManagedOutcome{
+		{OperationID: "op-stuck", Kind: "vm-update", ID: "12345678-1234-4234-8234-123456789014", Name: "stuck", Status: "needs_attention", Error: "interrupted before completion; retry from a new request"},
+		{OperationID: "op-failed", Kind: "storage-register", ID: "stor-x", Name: "Broken", Status: "failed", Error: "storage is not writable"},
+	}}
+	inv := &protocol.Inventory{ObservedAt: now, Hostname: "core", CPUCount: 8, MemoryBytes: 16 << 30, Managed: managed,
+		Checks: []protocol.Check{{Name: "libvirt", Status: "healthy", ObservedAt: now}}}
+	status := func() map[string]protocol.Operation {
+		var ops []protocol.Operation
+		read(t, a.call("GET", "/api/v1/operations", nil, nil, 200), &ops)
+		out := map[string]protocol.Operation{}
+		for _, op := range ops {
+			out[op.RequestID] = op
+		}
+		return out
+	}
+	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: inv})
+	if op := status()["adopt-outcome:"+host.HostID+":op-stuck"]; op.Status != "needs_attention" {
+		t.Fatalf("outcome not adopted: %+v", op)
+	}
+	managed.Outcomes = managed.Outcomes[1:]
+	inv.ObservedAt = now.Add(time.Second)
+	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 2, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: inv})
+	ops := status()
+	if op := ops["adopt-outcome:"+host.HostID+":op-stuck"]; op.Status != "succeeded" || op.Error != "" {
+		t.Fatalf("settled outcome still needs attention: %+v", op)
+	}
+	if op := ops["adopt-outcome:"+host.HostID+":op-failed"]; op.Status != "failed" {
+		t.Fatalf("reported failure was closed: %+v", op)
+	}
+}

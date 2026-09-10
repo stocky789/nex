@@ -541,6 +541,15 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		}
 		rows.Close()
 	}
+	// An adopted needs_attention outcome the host no longer reports was settled there (an
+	// interrupted entry re-observed, or a pending command the restarted agent finished).
+	settled := []any{stamp(), host, "adopt-outcome:" + host + ":%"}
+	for _, o := range m.Outcomes {
+		settled = append(settled, "adopt-outcome:"+host+":"+o.OperationID)
+	}
+	if _, err := tx.Exec("UPDATE operations SET status='succeeded',error='',updated_at=? WHERE host_id=? AND status='needs_attention' AND request_id LIKE ? AND request_id NOT IN ("+strings.TrimSuffix(strings.Repeat("?,", len(m.Outcomes)), ",")+")", settled...); err != nil {
+		return err
+	}
 	for _, o := range m.Outcomes {
 		// A creation's automatic start reports as <operation>:start.
 		if !identifierValid(strings.TrimSuffix(o.OperationID, ":start")) || !managedKind(o.Kind) || (o.Status != "failed" && o.Status != "needs_attention") {
