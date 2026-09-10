@@ -783,3 +783,26 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
   namespace checks are skipped, not passing, until the runner can create namespaces. And never
   assume which of the two workflow directories a forge executes — confirm it against the step
   names in a real run before concluding a workflow edit had any effect.
+
+## BUG-0044 — Website hosting test asserted against 404s instead of the serving policy
+
+- Date: 2026-09-10.
+- Symptom: `test_website_hosting.WebsiteHosting.test_serving_policy_and_headers` failed every
+  assertion with `404 != 200`, `404 != 403` and `404 != 301` once the unit tests were reachable
+  in CI again.
+- Root cause: the fixture directory came from `tempfile`, which creates it mode 0700. The nginx
+  master starts as root but drops its workers to an unprivileged user, and that user cannot
+  traverse a 0700 directory. `try_files` treats the resulting `EACCES` as "not found" and falls
+  through to `=404`, so every path answered 404 and none of the serving policy, header or
+  redirect behaviour under test was ever exercised.
+- Fix: the fixture is made traversable (`0755` directories, `0644` files) before nginx starts,
+  matching production, where `/srv/nex-website/current` is root-owned but readable by the same
+  unprivileged worker. Fixed in `4da27f2`.
+- Regression evidence: `python3 -m unittest discover -s tests -p 'test_*.py'`, run by the
+  `Check contracts and contributor tools` step of both phase1 workflows. That step had been
+  skipped on every run since 2026-09-08 because of BUG-0043, which is why this surfaced only
+  after the step ordering was fixed; it has not yet been confirmed green in CI.
+- Avoid: asserting only on status codes when the server can answer 404 for reasons unrelated to
+  the policy under test. A permission error that `try_files` renders as "not found" makes the
+  whole suite vacuous rather than failing loudly, so a fixture that nginx cannot read looks the
+  same as a policy that does not match.

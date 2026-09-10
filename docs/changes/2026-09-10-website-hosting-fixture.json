@@ -1,0 +1,25 @@
+{
+  "summary": "BUG-0044: test_website_hosting served every fixture path as 404, so none of the serving policy, header or redirect behaviour it asserts was exercised. The fixture came from tempfile at mode 0700, which the unprivileged nginx worker cannot traverse; try_files renders that EACCES as \"not found\" and falls through to =404. The fixture is now made traversable before nginx starts, matching production. Fixed in commit 4da27f2, which shipped without the required assessment; this record completes it and adds the ledger entry. API impact: none — a test fixture permission change, no product code.",
+  "paths": [
+    "tests/test_website_hosting.py",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-10-website-hosting-fixture.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "A test fixture permission change. No operator-facing behaviour, GUI workflow, CLI, installer output, configuration, permission or error message changes; the nginx configuration under test is unmodified, and production already serves a root-owned, world-traversable /srv/nex-website/current.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No product source file is touched. No Controller operation, agent command, event, stream, observed-state flow or client-facing endpoint is added, removed or changed; only the permissions of a temporary directory created inside a test.",
+    "pages": []
+  },
+  "verification": {
+    "method": "Root cause read directly from CI job 4348, where the step reports FAIL: test_serving_policy_and_headers with AssertionError 404 != 200 for path='/', 404 != 200 for '/gallery/', 404 != 403 for '/_app/' and 404 != 301, i.e. every assertion collapsing to 404 rather than the policy under test. That step had been skipped on every run since 2026-09-08 because of BUG-0043, so the failure surfaced only once the phase1 step ordering was corrected. The fix in 4da27f2 chmods the fixture to 0755 directories and 0644 files before nginx starts. NOT verified here: this workstation has no nginx, so the test skips locally with 'nginx is required; CI installs nginx-core' and the fix has not been confirmed green — phase1 run 3786 on 4da27f2 was still in progress. The regression check is python3 -m unittest discover -s tests -p 'test_*.py', run by the Check contracts and contributor tools step of both phase1 workflows.",
+    "evidence": [
+      "tests/test_website_hosting.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}
