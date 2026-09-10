@@ -120,9 +120,11 @@ through the wrapper read a file from a temporary input directory and wrote a fil
 Raw-body asset uploads named `.iso` and `.deb` were accepted by the live Gitea instance,
 including a 150 MB file, and the probe draft release was deleted afterwards.
 
-Evidence for the first end-to-end run is recorded in the change record for this workflow
-(`docs/changes/2026-09-10-push-driven-release.json`); until a run is green, treat the build
-and publish steps as untested. Website publishing has still never run: no ISO has been
+The first end-to-end run (Gitea run 3818, 2026-09-10) built and published `v0.1.5-alpha1` in
+21 minutes on the container runner: a 1.7 GB ISO with its checksum sidecar, a 707 MB
+`nex-core-local` package and a 131 MB `nex-controller` package, signed with the operator key
+from the secret, and the tag's creation triggered no other workflow. Installing from that
+ISO has not been re-verified. Website publishing has still never run: no ISO has been
 published to the live host, the runner's route to it is unconfirmed, and `bootstrap.sh` has
 not been applied there.
 
