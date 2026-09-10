@@ -38,6 +38,7 @@ Core version. This is the version the packages currently build as (`0.1.5~alpha1
 
 ### Bug Fixes
 
+- Fixed local Core service shutdown so the embedded agent stops before the process exits, which had left CI TempDir cleanup racing agent state writes.
 - Shortened the notice after a VM power request so it no longer tells you to follow the task for the next host report.
 - Fixed a fresh Nex Core install having no Nex package repository: the host now ships the Nex archive signing key and configures `/etc/apt/sources.list.d/nex.sources`, so `apt update` lists the Nex repo out of the box (BUG-0042).
 - Fixed the continuous-integration update tests so they reach the public APT repo, an OpenSSL 3.0 TLS-match check, and a private-IP fixture in the Controller capture harness (BUG-0040, BUG-0041).

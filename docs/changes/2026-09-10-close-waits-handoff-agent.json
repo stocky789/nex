@@ -1,0 +1,33 @@
+{
+  "summary": "BUG-0046: Service.Close waits for the embedded enrollment agent so TempDir cleanup no longer races agent state writes on CI.",
+  "paths": [
+    "internal/localcore/service.go",
+    "internal/localcore/handoff.go",
+    "internal/localcore/enroll_test.go",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-10-close-waits-handoff-agent.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Service shutdown ordering only; operator enrollment and host steps are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core HTTP contract change; Close now waits for an existing in-process agent goroutine.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Test and process lifetime fix; durable enrollment state on disk is unchanged.",
+    "record": ""
+  },
+  "verification": {
+    "method": "go test -race -count=10 ./internal/localcore -run TestEnrollmentWithReplacementControllerSucceeds and go test -race -count=1 ./internal/localcore both pass. Root cause read from Gitea job 4366 TempDir cleanup failure after enrollment assertions succeeded.",
+    "evidence": [
+      "internal/localcore/enroll_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

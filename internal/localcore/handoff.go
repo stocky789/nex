@@ -161,6 +161,42 @@ func getHandoffAgent(dir string) (*runningAgent, error) {
 	handoffAgents.entries[key] = a
 	return a, nil
 }
+
+// releaseHandoffAgent stops the embedded agent for dir (after the service context
+// is cancelled), waits for its goroutine, and closes any leftover store so the
+// state directory can be removed. Safe to call when nothing is registered.
+func releaseHandoffAgent(dir string) {
+	if dir == "" {
+		return
+	}
+	key, err := filepath.Abs(dir)
+	if err != nil {
+		return
+	}
+	for {
+		handoffAgents.Lock()
+		a := handoffAgents.entries[key]
+		if a == nil {
+			handoffAgents.Unlock()
+			return
+		}
+		if a.started {
+			stop, done := a.stop, a.done
+			handoffAgents.Unlock()
+			if stop != nil {
+				stop()
+			}
+			if done != nil {
+				<-done
+			}
+			continue
+		}
+		_ = a.store.Close()
+		delete(handoffAgents.entries, key)
+		handoffAgents.Unlock()
+		return
+	}
+}
 // startHandoffAgent runs the embedded agent under a context derived from ctx (the
 // service lifetime), so a.stop can pause this one agent — e.g. so a live
 // re-enrollment can safely mutate its store — without tearing down the registry

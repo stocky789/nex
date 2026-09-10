@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -262,7 +263,7 @@ func TestEnrollmentControllerRejectionLeavesHostUnenrolled(t *testing.T) {
 // Add host from a replacement Controller succeeds on an already enrolled host; only the
 // same Controller is refused with 409.
 func TestEnrollmentWithReplacementControllerSucceeds(t *testing.T) {
-	s, _ := testService(t)
+	s, cfg := testService(t)
 	cookie, csrf := loginLocal(t, s)
 	first, firstTrust := fakeController(t, func(protocol.EnrollRequest) (int, protocol.EnrollResponse) {
 		return http.StatusOK, protocol.EnrollResponse{HostID: "host-1"}
@@ -286,5 +287,12 @@ func TestEnrollmentWithReplacementControllerSucceeds(t *testing.T) {
 	w = callLocal(s, "POST", "/api/local/v1/enrollment", body, cookie, csrf, "https://core.test")
 	if w.Code != 409 {
 		t.Fatalf("same-Controller re-enrollment accepted: %d %s", w.Code, w.Body)
+	}
+	// Close must stop the embedded agent before TempDir cleanup (BUG-0046).
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(cfg.AgentStateDir); err != nil {
+		t.Fatalf("agent state still busy after Close: %v", err)
 	}
 }

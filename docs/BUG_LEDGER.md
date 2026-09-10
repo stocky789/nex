@@ -841,3 +841,22 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 - Avoid: adding a file to a package builder without adding it to the source archive that builder
   is itself built from. Neither an ISO build nor a package build was runnable in CI when this
   landed, so nothing would have caught it before a release attempt.
+
+## BUG-0046 — Local service Close left the enrollment agent racing TempDir cleanup
+
+- Date: 2026-09-10.
+- Symptom: Gitea `phase1` failed `TestEnrollmentWithReplacementControllerSucceeds` with
+  `TempDir RemoveAll cleanup: unlinkat …/agent: directory not empty` even though the enrollment
+  assertions had already passed (run 3801 job 4366).
+- Root cause: `Service.Close` cancelled the service context and waited on `s.wg`, but the embedded
+  handoff agent goroutine is not on that WaitGroup. The agent could still be writing `state.json`
+  when `testing.T.TempDir` deleted the tree, so RemoveAll failed on the busy agent directory.
+- Fix: `Close` now calls `releaseHandoffAgent`, which waits for the agent goroutine (or closes a
+  leftover store that was never started) before returning. The replacement-enrollment test removes
+  the agent directory immediately after `Close` so a regression fails the test instead of only CI
+  TempDir cleanup.
+- Regression evidence: `go test -race -count=10 ./internal/localcore -run TestEnrollmentWithReplacementControllerSucceeds`
+  and `go test -race -count=1 ./internal/localcore` pass. Both GitHub and Gitea phase1 workflows
+  already run `go test -race ./...` on push/PR.
+- Avoid: treating testing.TempDir cleanup failures as flakes when a background goroutine still owns
+  files under that tree; shut the owner down in Close (or an explicit stop) before returning.

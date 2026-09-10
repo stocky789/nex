@@ -111,7 +111,14 @@ func Open(cfg Config) (*Service, error) {
 	ok = true
 	return s, nil
 }
-func (s *Service) Close() error { s.cancel(); s.wg.Wait(); return s.lock.Close() }
+func (s *Service) Close() error {
+	s.cancel()
+	s.wg.Wait()
+	// The embedded enrollment agent is not on s.wg; wait for it so callers (and
+	// testing.T.TempDir cleanup) can remove AgentStateDir without racing Save().
+	releaseHandoffAgent(s.cfg.AgentStateDir)
+	return s.lock.Close()
+}
 
 // HTTP/1.1 is preferred so the console WebSocket can upgrade; HTTP/2 cannot be hijacked.
 func (s *Service) TLSConfig() *tls.Config {
