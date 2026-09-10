@@ -24,6 +24,7 @@ Core version. This is the version the packages currently build as (`0.1.5~alpha1
 
 ### Minor Feature
 
+- Added VM editing in place on the VM's General tab: name, description, guest OS, CPU, memory, disks and network interfaces (add and remove), firmware, machine type, boot order, install ISO and autostart. Changes a running guest can take — adding or removing VirtIO/SCSI disks and network interfaces, swapping or ejecting the ISO, description, guest OS and autostart — apply while it runs; the rest waits for a stop and the form says so per field. Every VM now has a CD drive (empty without an ISO), removed disks are kept on the host rather than deleted, and the host journal keeps every revision of a VM's definition.
 - Hosts have a **Console** tab that uses the same browser console as VMs (a root shell on the host).
 - From a VM console you can insert or eject an ISO on the CD/DVD tray without leaving the console.
 
@@ -41,6 +42,8 @@ Core version. This is the version the packages currently build as (`0.1.5~alpha1
 - Nex Core reports one version: the host page shows `Nex Core <version>` with no separate agent version, and the installed identity, console banner and ISO name follow the Nex Core package version through updates.
 
 ### Bug Fixes
+
+- Dropdown menus in the Controller and the host deploy page now open inside the page instead of as a separate desktop popup, so they no longer close by themselves on desktops that dismiss such popups (Wayland compositors such as Hyprland with Chromium-based browsers). Browsers without this capability keep their usual menus (BUG-0064).
 
 - Hardened the host console: it no longer opens a local socket that any process on the host could reach, idle consoles no longer stream full frames continuously, Ctrl+C/D/Z and arrow keys work, tab stops render correctly, and a Controller refuses the host console on an older Nex Core immediately instead of hanging.
 - Fixed VM media changes: an interrupted insert no longer reports the ISO as inserted with an empty tray, eject keeps the boot order the host actually holds and an ejected VM still re-adopts into a replacement Controller, ejecting an already-empty tray succeeds, and a media change no longer breaks idempotent replay of the original create request.

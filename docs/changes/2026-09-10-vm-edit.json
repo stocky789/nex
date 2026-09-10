@@ -1,0 +1,73 @@
+{
+  "summary": "Edit an existing VM in place on its General tab: PUT /api/v1/vms/{id} queues a vm-update command with the full definition at revision current + 1; Core applies live what a running guest can take and redefines a stopped one; every VM has a CD drive; the journal keeps revisions and reports the current definition. API impact: new contract (updateVM, vm-update, vm-update-v1) and changed contract (VMCreateSpec.revision, effective MACs in the VM list, media boot order without media, current definitions in Inventory.managed.vms).",
+  "paths": [
+    "internal/protocol/managed.go",
+    "internal/protocol/managed_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/managed_update_test.go",
+    "internal/vmhost/vlan_test.go",
+    "internal/agent/managed.go",
+    "internal/agent/run.go",
+    "internal/controller/controller.go",
+    "internal/controller/appliance.go",
+    "internal/controller/managed.go",
+    "internal/controller/managed_test.go",
+    "internal/controller/power.go",
+    "internal/controller/update_test.go",
+    "web/src/managed.tsx",
+    "web/src/vm-edit.tsx",
+    "web/src/main.tsx",
+    "web/src/style.css",
+    "tests/integration/managed_vm_browser.py",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/API.md",
+    "docs/guide/README.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/vm-power.md",
+    "docs/plans/2026-09-10-vm-edit.md",
+    "docs/qa/vm-edit/checks.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-10-vm-edit.json",
+    "tests/integration/vm_edit_browser.py",
+    ".gitea/workflows/phase1.yml",
+    ".github/workflows/phase1.yml",
+    "internal/controller/vmmedia.go",
+    "tests/integration/vm_edit_lab.py",
+    "docs/qa/vm-edit/lab-results.json",
+    "internal/vmhost/engine.go"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "New operator workflow for editing a VM; creation and power pages no longer say editing is unavailable. The create page's status paragraph was updated too; it was swept into commit 96d3288 by a concurrent session before this record landed.",
+    "pages": [
+      "docs/guide/edit-virtual-machine.md",
+      "docs/guide/vm-power.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "New updateVM operation, vm-update command and vm-update-v1 capability; VMCreateSpec.revision, effective MACs in the VM list, media boot order without media, current definitions in Inventory.managed.vms.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Every revision of a VM's definition is a vm-update journal entry on the pool master's Nex Core; the Controller mirrors the current one.",
+    "record": "Managed journal entries under the agent state directory managed-vms/<operation>.json of kind vm-update (full VMCreateSpec with revision, disk paths, targets, retained files, expected XML); Inventory.managed.vms reports the highest succeeded revision per VM, which a fresh Controller adopts as the VM's definition and an existing one refreshes its mirror from."
+  },
+  "verification": {
+    "method": "go test -race ./... ; python3 -m unittest tests.test_api_contract (21 OK); python3 scripts/generate_api.py --check; npm run typecheck && npm run build; python3 scripts/check_docs.py --worktree; tests/integration/vm_edit_browser.py against the simulated host (3 checks, 5 captures inspected); tests/integration/vm_edit_lab.py against a disposable copy of the nested-KVM lab host with real libvirt (all six steps passed; see docs/qa/vm-edit/checks.md and lab-results.json).",
+    "evidence": [
+      "docs/qa/vm-edit/checks.md",
+      "internal/vmhost/managed_update_test.go",
+      "internal/controller/update_test.go"
+    ]
+  }
+}

@@ -253,7 +253,13 @@ func (c *Controller) appliances(w http.ResponseWriter, r *http.Request, user, cs
 		v.HostID = cmd.VM.HostID
 		v.Name = cmd.VM.Name
 		v.Role = "guest"
-		v.Spec = cmd.VM
+		// Interfaces are reported with their effective addresses so an edit can name them.
+		spec := *cmd.VM
+		spec.NICs = append([]protocol.VMNIC{}, spec.NICs...)
+		for i := range spec.NICs {
+			spec.NICs[i].MAC = protocol.NICMAC(spec.ID, i, spec.NICs[i])
+		}
+		v.Spec = &spec
 		v.OperationID = cmd.OperationID
 		v.State, v.Freshness, v.Guest = c.observeVM(v.HostID, v.ID, revoked, raw)
 		out = append(out, v)

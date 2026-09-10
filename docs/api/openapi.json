@@ -18,7 +18,7 @@
         "summary": "Get administrator session",
         "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Returns CSRF token for same-origin mutations. All authenticated administrator operations have controller-wide scope. Does not extend the idle deadline. A 401 requires sign-in again; session JSON fields are unchanged and contain no expiry timestamps.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -58,7 +58,7 @@
         "summary": "Sign in as administrator",
         "description": "Validates existing administrator credentials and browser origin. Sets __Host-nex_session with Secure, HttpOnly, SameSite=Strict, Path=/ and no Domain. Each login creates a new session; at most 64 active sessions per service. Sessions expire after 30 minutes without an authenticated mutation and eight hours absolutely; GET/HEAD polling does not renew them. Legacy unprefixed cookies are not accepted; sign in again after upgrade. Existing password hashes remain valid; new administrator bootstrap passwords must be nonempty valid UTF-8, at most 1024 UTF-8 bytes, without CR, LF or NUL; there is no minimum length or complexity rule. Login admission permits at most five valid-length attempts per one-minute actual peer-IP window, two concurrent password checks per service, and 4096 tracked peers. Forwarded client-IP headers are ignored. Login returns 429 when rate/concurrency/table or 64-session capacity is exhausted; bounded retries must not create an unbounded loop.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [],
         "responses": {
@@ -153,7 +153,7 @@
         "summary": "End administrator session",
         "description": "Implemented in development product 0.1.0, protocol v1. Invalidates the current session and clears its cookie. Repeated calls after logout require reauthentication.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -219,7 +219,7 @@
         "summary": "List sites",
         "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -275,7 +275,7 @@
         "summary": "Create a site",
         "description": "Implemented in development product 0.1.0, protocol v1. Creates desired configuration immediately. No agent command. Not idempotent: inspect sites after an ambiguous response before creating again.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -377,7 +377,7 @@
         "summary": "List pools",
         "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Pools are never created by administrators: each enrolling Core host becomes the master of a new pool named after its hostname (master_host_id). Joining a member host to an existing pool, changing the master and ejecting a member are planned for Phase 4 and are not available. Results represent persisted controller state.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -435,7 +435,7 @@
         "summary": "List hosts",
         "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -493,7 +493,7 @@
         "summary": "List operations",
         "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped. Returns at most 1000 records, newest first; no pagination in this development version.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -551,7 +551,7 @@
         "summary": "List audit",
         "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped. Returns at most 1000 records, newest first; no pagination in this development version.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -609,7 +609,7 @@
         "summary": "Issue a site-bound enrollment token",
         "description": "Implemented in development product 0.1.0, protocol v1. Creates a short-lived single-use secret bound to a site; the enrolling host becomes the master of a new pool in that site. Unknown site_id returns 400. Optional host_id binds re-enrollment to an existing revoked host whose pool belongs to this site (409 otherwise). Keep the returned token out of logs. Token issuance is immediate; never retry enrollment blindly after an ambiguous outcome. Token expires after ten minutes.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -724,7 +724,7 @@
         "summary": "Probe a host's local API TLS certificate",
         "description": "Implemented in development product 0.1.0, protocol v1. Performs an insecure TLS 1.3 handshake to the given address (default port 9443) purely to capture the leaf certificate nex-core-local presents; it establishes no trust and stores nothing. The operator compares the returned fingerprint, subject and expiry against the physical host before confirming add-host. This never contacts the Controller-to-Core enrollment contract; it only inspects the host's existing local API listener.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -824,9 +824,9 @@
       "post": {
         "operationId": "addSiteHost",
         "summary": "Add a host by address and root password",
-        "description": "Implemented in development product 0.1.0, protocol v1. Replaces manual token enrollment for a reachable host: the operator first confirms the certificate fingerprint returned by probeHost, then submits it here alongside the host's root password. The Controller re-verifies that same fingerprint with a constant-time comparison during its own outbound TLS handshake to the host \u2014 a mismatch fails the handshake and returns 502 before the password is ever sent. On a verified connection the Controller signs in to the host's local API (POST /api/local/v1/session), mints a fresh site-bound enrollment token (the same token contract createEnrollmentToken uses), and pushes it to the host's local enrollment endpoint together with the Controller's own served HTTPS certificate (the -tls-cert file, not the host-identity CA) as the trust the host pins for its Controller connection; the host then enrolls with this Controller through the existing agent-enrollment contract and becomes the master of a new pool in this site. The root password is used once for that single sign-in and is never stored, logged, or echoed back, including in error messages. Unknown site_id returns 400. Optional host_id re-enrolls a revoked host whose pool belongs to this site (409 otherwise, checked before any network attempt). A wrong password returns 401; a login rate limit returns 429 with the host's own message. If the host reports it is already enrolled under a different identity, this returns 409 with that host_id \u2014 retrying the same add-host call after a lost response is safe and resolves the same way: fetch inventory to see the enrolled host. Any other host-side failure returns 502 naming the controller_url the host was asked to reach, and any token minted for the attempt is deleted. If the Controller process has no served certificate configured, 503 is returned before any host contact; use manual enrollment.",
+        "description": "Implemented in development product 0.1.0, protocol v1. Replaces manual token enrollment for a reachable host: the operator first confirms the certificate fingerprint returned by probeHost, then submits it here alongside the host's root password. The Controller re-verifies that same fingerprint with a constant-time comparison during its own outbound TLS handshake to the host — a mismatch fails the handshake and returns 502 before the password is ever sent. On a verified connection the Controller signs in to the host's local API (POST /api/local/v1/session), mints a fresh site-bound enrollment token (the same token contract createEnrollmentToken uses), and pushes it to the host's local enrollment endpoint together with the Controller's own served HTTPS certificate (the -tls-cert file, not the host-identity CA) as the trust the host pins for its Controller connection; the host then enrolls with this Controller through the existing agent-enrollment contract and becomes the master of a new pool in this site. The root password is used once for that single sign-in and is never stored, logged, or echoed back, including in error messages. Unknown site_id returns 400. Optional host_id re-enrolls a revoked host whose pool belongs to this site (409 otherwise, checked before any network attempt). A wrong password returns 401; a login rate limit returns 429 with the host's own message. If the host reports it is already enrolled under a different identity, this returns 409 with that host_id — retrying the same add-host call after a lost response is safe and resolves the same way: fetch inventory to see the enrolled host. Any other host-side failure returns 502 naming the controller_url the host was asked to reach, and any token minted for the attempt is deleted. If the Controller process has no served certificate configured, 503 is returned before any host contact; use manual enrollment.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -977,7 +977,7 @@
         "summary": "Revoke host credentials",
         "description": "Implemented in development product 0.1.0, protocol v1. Immediately prevents host authentication. Does not stop guests, erase state, or remove local recovery. Re-enrollment requires a new token bound to this host.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -1078,7 +1078,7 @@
         "summary": "Request fresh host inventory",
         "description": "Implemented in development product 0.1.0, protocol v1. The only supported command is read-only refresh-inventory. Persist a stable request_id before sending; retry the same host/kind/request_id to recover the same durable operation. Poll operations for completion. Conflicting active work is serialized. Delivery may repeat after disconnect; agent persists completed results and reports them until acknowledged. This route remains inventory-only; managed creation uses its separate resource endpoints. No cancellation or central power operation exists.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -1225,7 +1225,7 @@
         "summary": "Enroll a Core host",
         "description": "Implemented in development product 0.1.0, protocol v1. Outbound HTTPS; agent must verify Controller identity before transmitting its site-bound token. Provide a signed PEM ECDSA P-256 CSR and nonblank hostname (maximum 200 UTF-8 bytes, no CR/LF/NUL). Identity is host-owned: the host presents the host_id it generated and, as its pool's master, the pool_id and pool_name it keeps, and the Controller adopts them unchanged, so a replacement Controller recovers the pool with its original ID and name. host_id and pool_id must be canonical lowercase UUIDs (or the 64-hex form issued to hosts enrolled before host-owned identity) and pool_name a valid name, else 400. A fresh enrollment creates the pool in the token site with this host as its master, then records the host in that pool in the same transaction (audit pool.create and host.enroll); older agents that present no identity get Controller-minted IDs and a pool named after the hostname, which the response reports for the host to keep. A presented host_id already on record, or a pool_id already held by another master host, is 409: only a token bound to a revoked host may re-issue that host, and it must present that host and its pool (409 otherwise); multi-host pools are not available. The same key is the same host: a request whose CSR matches a recorded active credential (a retry after a lost response, even with a new token) returns that credential unchanged. Issues a 90-day host-specific client certificate and CA. The token binds to its first CSR; an identical token/CSR retry before token expiry returns the same identity without duplicate enrollment. A different CSR returns 409. After expiry or revocation obtain a new site-bound token; replacement requires explicit revoked host selection. Enrollment has no VM side effects. Compatibility: an older Controller rejects the new fields with 400 (unknown field); upgrade Controller and Core together.",
         "tags": [
-          "Core agent \u2192 Controller"
+          "Core agent → Controller"
         ],
         "security": [],
         "responses": {
@@ -1312,7 +1312,7 @@
         "summary": "Report observations and reconcile commands",
         "description": "Implemented in development product 0.1.0, protocol v1. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Version must be 1. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409, foreign/unknown operation IDs return 400. Terminal results are acknowledged without rewriting the original outcome. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects. Upgrade Controller before Core because older Controllers reject the new fields.",
         "tags": [
-          "Core agent \u2192 Controller"
+          "Core agent → Controller"
         ],
         "security": [
           {
@@ -1403,7 +1403,7 @@
         "summary": "Rotate a host certificate",
         "description": "Implemented in development product 0.1.0, protocol v1. Outbound mutual TLS requires the current valid, unrevoked host certificate. CSR binds the next certificate to the same host. Persist identity atomically; retain recovery access on an ambiguous response. No VM side effects. Requires signed PEM ECDSA P-256 CSR. The new certificate lasts 90 days; previous certificates overlap for at most ten minutes. Repeating the same CSR while authenticated returns the existing unexpired certificate. After the overlap expires, use persisted new identity or explicitly revoke and re-enroll.",
         "tags": [
-          "Core agent \u2192 Controller"
+          "Core agent → Controller"
         ],
         "security": [
           {
@@ -2663,7 +2663,7 @@
         "summary": "Issue a single-use console ticket for a running VM",
         "description": "Implemented in development product 0.1.0, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token, and an empty JSON object body. The VM must be an adopted appliance or a successfully created guest, its assigned host must be freshly connected, unrevoked and report capability console-v1, and the VM must be observed running in fresh libvirt inventory. The ticket is bound to the requesting session user and VM, lives 60 seconds in Controller memory only, is delivered once to the host in its next report response and is consumed by the first matching WebSocket. The action is audited as console.open. No power operation is implied; a Controller restart ends open consoles without affecting the guest.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -2785,7 +2785,7 @@
         "summary": "Open the browser console WebSocket",
         "description": "Implemented in development product 0.1.0. WebSocket upgrade (RFC 6455, binary frames carrying raw RFB/VNC bytes for noVNC) authenticated by the administrator session cookie; the Origin header must equal the Controller origin and the ticket must be unconsumed, unexpired and issued to this session user for this VM. Controller waits up to 20 seconds for the host's outbound tunnel, then relays bytes both ways until either side closes. HTTP/1.1 is negotiated for this route; no other transport is offered. The ticket is consumed on first use.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -2890,7 +2890,7 @@
         "summary": "Attach the host's outbound console tunnel",
         "description": "Implemented in development product 0.1.0, protocol v1. Core sends this over its enrolled, hostname-verified mTLS connection with Connection: Upgrade and Upgrade: nex-console after receiving a console request in a report response and dialing the running VM's local VNC UNIX socket. The token must name an unexpired session for this exact host that has no tunnel yet. The response is 101 and the connection then carries raw VNC bytes both ways until the browser or VM side closes. Other hosts, unknown or expired tokens and duplicate tunnels receive 404. No browser session or CSRF token is used on this agent route; Core never listens for inbound console connections.",
         "tags": [
-          "Core \u2192 Controller"
+          "Core → Controller"
         ],
         "security": [
           {
@@ -2956,7 +2956,7 @@
         "summary": "Check Controller software updates",
         "description": "Implemented in development product 0.1.0. Refreshes the apt package index (at most every 5 minutes) and reports apt's candidate version for nex-controller against the installed version. The signed Nex archive source is written from the configured repo URL (NEX_UPDATE_REPO or /etc/nex/updates.conf, else https://nexvirtualization.com/apt) and verified with the packaged archive keyring. A package no configured source offers is returned in the error field with HTTP 200 so operators can still see the installed version. Administrator session required. Read-only; safe to retry.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -3011,7 +3011,7 @@
         "summary": "Request Controller package update",
         "description": "Writes pending-update.json under the Controller state directory for the privileged nex-controller-update path unit. Returns 202 scheduled; the helper runs apt-get update then apt-get install --only-upgrade nex-controller, so dependencies resolve and the package signature is verified, and restarts nex-controller. A failed upgrade restarts the service before reporting. Returns 503 when apply-update or the path unit is missing. Controller cannot run apt itself (ProtectSystem=strict, NoNewPrivileges). Audits update.apply. Empty JSON body. CSRF and same-origin required.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -3103,7 +3103,7 @@
         "summary": "Request a VM power action on its assigned host",
         "description": "Implemented in development product 0.1.0, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different action under the same id is 409. The VM must be an adopted appliance or a successfully created guest; its assigned host must be freshly connected, unrevoked and report managed-vm-v1 and vm-power-v1, and at most one power request per VM may be queued or dispatched. The request is audited as vm-power and delivered to the host in its next report; poll operations for the result. A succeeded shutdown or reboot means the ACPI request was issued, not that the guest honored it: the VM's observed state is the truth. Controller outage never stops a guest.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -3223,7 +3223,7 @@
         "summary": "Issue a single-use console ticket for a host",
         "description": "Requires an administrator session, same Origin and X-CSRF-Token, and an empty JSON object body. The host must be freshly connected, unrevoked and report capability host-console-v1 (distinct from console-v1, which only ever covers VM consoles; an agent without host-console-v1 gets 409 rather than a ticket it can never fulfil). The ticket is bound to the requesting session user and host, lives 60 seconds in Controller memory only, is delivered once to the host in its next report response with an empty vm_id (host console), and is consumed by the first matching WebSocket. Audited as host.console.open.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -3345,7 +3345,7 @@
         "summary": "Browser WebSocket for a host console ticket",
         "description": "Upgrades to a WebSocket that relays raw RFB for the host console. Requires the same session user, matching host id, unconsumed ticket and same-origin Origin. Pairs with the agent nex-console tunnel.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -3450,7 +3450,7 @@
         "summary": "Insert or eject ISO media on a VM CDROM",
         "description": "Queues a durable vm-media command on the VM assigned host. Requires administrator session, CSRF, stable request_id, action insert|eject, and media_id for insert of a verified ISO on that host. Host must report vm-media-v1. Audited; operation appears in the operations list.",
         "tags": [
-          "Client \u2192 Controller"
+          "Client → Controller"
         ],
         "security": [
           {
@@ -3565,6 +3565,126 @@
           },
           "409": {
             "description": "Host not fresh, revoked, outside the pool or without vm-power-v1; request_id reused with different input; or another power request for this VM is pending.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller persistence or internal failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vms/{id}": {
+      "put": {
+        "operationId": "updateVM",
+        "summary": "Replace a VM's definition on its assigned host",
+        "description": "Implemented in development product 0.1.0, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different body under the same id is 409. The body is the complete desired definition (the same shape as creation); Controller validates its shape and references like creation, refuses immutable changes (an existing disk's storage, size or provisioning), and, when the VM is observed running, changes that need it stopped (name, CPU, memory, firmware, machine type, any boot order, an existing disk's bus, an existing interface's network, model, MAC or MTU, or adding a SATA disk); it freezes every automatic MAC into the definition, then queues a vm-update command at revision current + 1 for the host's next report. Name and MAC uniqueness against other VMs and dedicated-memory admission are checked by the host against its journal and libvirt, as for creation. Core applies live what a running guest can take (adding or removing VirtIO/SCSI disks and interfaces, inserting, swapping or ejecting the ISO, description, guest OS hint and autostart) and redefines a shut-off guest from the regenerated XML; removed disks are detached and their files retained, never deleted. The host reports the new definition as current and Controller refreshes its mirror from that report; poll operations for the result. One vm-update, vm-power or vm-media request per VM may be in flight.",
+        "tags": [
+          "Client → Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "VM UUID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateVMRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Edit queued for the VM's host.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateVMResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Replay of an existing request_id with the same body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateVMResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON, unknown field, invalid request_id, name or definition (the shared bounds), start_after_create set, an id or pool/host that does not match the VM, or an existing disk's storage, size or provisioning changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authorization, origin, or CSRF validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "VM not found as a successfully created guest, or a disk storage, network or ISO reference is not verified on the VM's host and pool.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The Controller appliance; host not fresh, revoked, outside the pool or without vm-update-v1; request_id reused with different input; another edit, power or media request for this VM pending; the VM observed running with a change that needs it stopped; ISO not on one of the VM's storage targets; or capacity above the host's observed CPU or memory.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4140,6 +4260,7 @@
               "network-register",
               "iso-import",
               "vm-create",
+              "vm-update",
               "vm-power",
               "vm-media"
             ]
@@ -4182,7 +4303,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "The full VM definition for vm-create (revision 0) and vm-update (revision current + 1)."
           },
           "power": {
             "anyOf": [
@@ -4590,6 +4712,82 @@
                 ]
               }
             }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "vm-update"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "required": [
+                "vm"
+              ],
+              "properties": {
+                "vm": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
+              },
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "storage"
+                    ],
+                    "properties": {
+                      "storage": {
+                        "not": {
+                          "type": "null"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "required": [
+                      "network"
+                    ],
+                    "properties": {
+                      "network": {
+                        "not": {
+                          "type": "null"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "required": [
+                      "media"
+                    ],
+                    "properties": {
+                      "media": {
+                        "not": {
+                          "type": "null"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "required": [
+                      "power"
+                    ],
+                    "properties": {
+                      "power": {
+                        "not": {
+                          "type": "null"
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
           }
         ]
       },
@@ -4756,6 +4954,7 @@
               "network-register",
               "iso-import",
               "vm-create",
+              "vm-update",
               "vm-power",
               "vm-media"
             ]
@@ -5556,7 +5755,7 @@
           "model"
         ],
         "x-go-type": "protocol.VMCPU",
-        "description": "vCPU count, optional topology and CPU model. Sockets, cores and threads all 0 select the default topology of one socket, count cores and one thread; otherwise each must be at least 1 and sockets \u00d7 cores \u00d7 threads must equal count. JSON Schema cannot express that product, so Controller and Core both enforce it in protocol.ValidateVMSpec."
+        "description": "vCPU count, optional topology and CPU model. Sockets, cores and threads all 0 select the default topology of one socket, count cores and one thread; otherwise each must be at least 1 and sockets × cores × threads must equal count. JSON Schema cannot express that product, so Controller and Core both enforce it in protocol.ValidateVMSpec."
       },
       "VMMemory": {
         "type": "object",
@@ -5653,7 +5852,7 @@
           "mac": {
             "type": "string",
             "pattern": "^(([0-9a-f][02468ace])(:[0-9a-f]{2}){5})?$",
-            "description": "Empty derives a stable MAC from the VM ID and the interface index (protocol.DerivedMAC: the 52:54:00 locally administered prefix, two octets of sha256(id) and the index), which never collides across a VM's at most 8 interfaces. A manual address must be six octets in canonical lower-case colon form and unicast; the pattern encodes the cleared multicast bit as an even second hex digit. All-zero addresses are refused, addresses are unique within the VM, and Controller additionally enforces uniqueness across the pool by plain string comparison."
+            "description": "Empty derives a stable MAC from the VM ID and the interface index (protocol.DerivedMAC: the 52:54:00 locally administered prefix, two octets of sha256(id) and the index), which never collides across a VM's at most 8 interfaces. A manual address must be six octets in canonical lower-case colon form and unicast; the pattern encodes the cleared multicast bit as an even second hex digit. All-zero addresses are refused, addresses are unique within the VM, and Controller additionally enforces uniqueness across the pool by plain string comparison. The VM list reports the effective address, and an edit freezes every automatic address into the definition (drawn from the VM's derived range at the first index the VM does not use), so interfaces keep their identity across later edits."
           },
           "mtu": {
             "type": "integer",
@@ -5689,7 +5888,7 @@
           "media_boot_order": {
             "type": "integer",
             "minimum": 0,
-            "description": "0 keeps the install ISO out of the boot order; any other value must be unique among the disks' orders and requires media_id."
+            "description": "0 keeps the CD drive out of the boot order; any other value joins the disks' contiguous 1..N numbering. Every VM has the drive, so the order is kept while it is empty and an ISO can be ejected from a running guest."
           }
         },
         "required": [
@@ -5771,11 +5970,16 @@
           },
           "start_after_create": {
             "type": "boolean",
-            "description": "Honoured by the host inside the creation, after the definition is verified, so the creation itself has succeeded whether or not the flag is set: Core starts the guest exactly once and records the outcome in the journal entry's start field. A failed automatic start leaves the VM defined and stopped as a normal managed VM (power, console and media work; a replacement Controller adopts it) and is reported by the host as its own outcome with ID <operation-id>:start, kind vm-power, status failed and error 'VM created but not started: <reason>', which Controller records in Task history. A creation interrupted at the start step reconciles by observing libvirt: running means started, otherwise that outcome reads 'interrupted before the automatic start completed'. A failed or uncertain creation never boots. Controller issues no follow-on power request."
+            "description": "Honoured by the host inside the creation, after the definition is verified, so the creation itself has succeeded whether or not the flag is set: Core starts the guest exactly once and records the outcome in the journal entry's start field. A failed automatic start leaves the VM defined and stopped as a normal managed VM (power, console and media work; a replacement Controller adopts it) and is reported by the host as its own outcome with ID <operation-id>:start, kind vm-power, status failed and error 'VM created but not started: <reason>', which Controller records in Task history. A creation interrupted at the start step reconciles by observing libvirt: running means started, otherwise that outcome reads 'interrupted before the automatic start completed'. A failed or uncertain creation never boots. Controller issues no follow-on power request. Must be false in an edit."
           },
           "autostart": {
             "type": "boolean",
             "description": "libvirt autostart, set while the stopped guest is defined so the host starts this VM on boot. It is not a start."
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Definition revision: 0 at creation, current + 1 for each edit. Core refuses any other value, so a stale edit after Controller replacement fails instead of applying an old definition. Reported back in Inventory.managed.vms with the current definition."
           }
         },
         "required": [
@@ -5792,7 +5996,8 @@
           "boot",
           "media_id",
           "start_after_create",
-          "autostart"
+          "autostart",
+          "revision"
         ],
         "x-go-type": "protocol.VMCreateSpec",
         "description": "The complete VM specification: Controller-assigned UUID and pool membership with separate host assignment, identity, CPU, memory, every disk and network interface, boot and install media, and the two lifecycle switches. Creation defines a stopped VM and never boots it. Dependencies must have succeeded on this host and pool. Both sides validate the shared bounds through protocol.ValidateVMSpec; Controller owns identity, reference existence, pool-wide MAC uniqueness and capacity."
@@ -5977,6 +6182,11 @@
           },
           "request_id": {
             "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "const": 0,
+            "description": "Omit or 0; creation is revision 0."
           }
         },
         "required": [
@@ -6058,7 +6268,7 @@
               "$ref": "#/components/schemas/VMCreateSpec"
             },
             "maxItems": 10000,
-            "description": "Succeeded VM definitions from the host journal: the full specification of every VM this host created, which is what a replaced Controller re-adopts by resource ID."
+            "description": "Current VM definitions from the host journal: for each VM this host holds, the highest succeeded revision (creation is revision 0, each vm-update one more, and vm-media changes update the current entry), which is what a replaced Controller re-adopts by resource ID and what an existing Controller refreshes its mirror from on every report."
           },
           "missing_vms": {
             "type": [
@@ -6460,6 +6670,7 @@
               "network-register",
               "iso-import",
               "vm-create",
+              "vm-update",
               "vm-power",
               "vm-media"
             ]
@@ -6490,6 +6701,113 @@
         ],
         "x-go-type": "protocol.ManagedOutcome",
         "description": "A managed journal entry that did not succeed: one that ended failed or needs_attention, a vm-create entry's failed automatic start (operation_id <operation-id>:start, kind vm-power, status failed), or a pending entry the host is no longer executing (status needs_attention, error 'interrupted before completion; retry from a new request')."
+      },
+      "UpdateVMRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Omit, or the VM UUID from the path."
+          },
+          "pool_id": {
+            "type": "string",
+            "description": "Must equal the VM's pool; editing never moves a VM."
+          },
+          "host_id": {
+            "type": "string",
+            "description": "Must equal the VM's assigned host; editing never moves a VM."
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+            "description": "Unique within the pool and reserved before dispatch; failed or uncertain creations keep their reservation."
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 4096,
+            "description": "Free-text operator note, at most 4096 characters."
+          },
+          "guest_os": {
+            "type": "string",
+            "enum": [
+              "",
+              "linux",
+              "windows",
+              "other"
+            ],
+            "description": "Guest OS hint recorded for display and guest-tools advice; empty leaves it unset. It installs nothing and does not change the VM devices: disk bus and NIC model are chosen per device."
+          },
+          "cpu": {
+            "$ref": "#/components/schemas/VMCPU"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/VMMemory"
+          },
+          "disks": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/VMDisk"
+            },
+            "minItems": 1,
+            "maxItems": 8,
+            "description": "One to eight disks; names unique within the VM."
+          },
+          "nics": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/VMNIC"
+            },
+            "maxItems": 8,
+            "description": "Zero to eight network interfaces."
+          },
+          "boot": {
+            "$ref": "#/components/schemas/VMBoot"
+          },
+          "media_id": {
+            "type": "string",
+            "description": "Install ISO (Media.id), empty for none. The ISO must reside on a storage target this VM uses, and is required when boot.media_boot_order is non-zero."
+          },
+          "start_after_create": {
+            "type": "boolean",
+            "const": false,
+            "description": "Must be false; use the power controls to start a VM."
+          },
+          "autostart": {
+            "type": "boolean",
+            "description": "libvirt autostart, set while the stopped guest is defined so the host starts this VM on boot. It is not a start."
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "description": "Ignored; Controller assigns current + 1."
+          }
+        },
+        "required": [
+          "pool_id",
+          "host_id",
+          "name",
+          "description",
+          "guest_os",
+          "cpu",
+          "memory",
+          "disks",
+          "nics",
+          "boot",
+          "media_id",
+          "start_after_create",
+          "autostart",
+          "request_id"
+        ],
+        "additionalProperties": false,
+        "description": "The complete desired definition of an existing VM plus a stable request_id. Disks are matched to the current definition by name (storage, size and provisioning of an existing disk cannot change); interfaces by MAC, so send existing interfaces with the address the VM list reports and leave mac empty only for new ones."
       }
     }
   },
@@ -6569,6 +6887,17 @@
         "$ref": "#/components/schemas/Result"
       },
       "semantics": "Insert a verified ISO into, or eject media from, the named VM's CD drive on this host with one libvirt change-media (live and persistent). Insert attaches an empty CD drive first when the domain has none; eject on a drive that is already empty (checked against the live definition of a running VM) succeeds without any libvirt call and never attaches a drive. The resolved media path and the changing-media stage are journaled in one write immediately before the change, so an interruption before that write is simply re-applied and one after it is reconciled by observing the domain: succeeded when the drive holds the requested media (or none, for eject), otherwise needs_attention. Core records only media_id in the VM's journaled specification; boot order values are never rewritten because change-media leaves every device's bootindex as it is."
+    },
+    "vm-update": {
+      "transport": "POST /api/v1/agent/report response.commands",
+      "capability": "vm-update-v1",
+      "payload": {
+        "$ref": "#/components/schemas/VMCreateSpec"
+      },
+      "result": {
+        "$ref": "#/components/schemas/Result"
+      },
+      "semantics": "Apply one revision of an existing VM's definition; refuse a revision other than current + 1. Classify the difference from the journal's current definition (NeedsStop): a shut-off guest is redefined after any new disks are allocated and a rename (domrename), with the same capacity, name and MAC conflict checks as creation; a running guest takes only device additions, removals and media changes, applied with attach-device/detach-device --persistent and change-media --live --config, and is refused before any effect for anything else. Disks are matched by name and keep their journaled target names; interfaces by MAC. Removed disk files are retained and listed in the journal. The persistent definition and per-disk ownership are then observed against the regenerated XML by device identity; an interruption is reconciled by observation only. The journal reports the highest succeeded revision as the VM's current definition."
     }
   }
 }

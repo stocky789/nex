@@ -69,6 +69,13 @@ type managedJournal struct {
 	// Start records the outcome of start_after_create: "started", or why it did not start.
 	// It is recorded in the same entry so a retried or reconciled creation never starts twice.
 	Start string `json:"start,omitempty"`
+	// Targets are the disks' libvirt target names, positional with Disks; they are assigned
+	// once and kept across edits so a guest never sees its disks renamed. MediaTarget is the
+	// CD drive every VM carries.
+	Targets     []string `json:"targets,omitempty"`
+	MediaTarget string   `json:"media_target,omitempty"`
+	// Retained lists disk files an edit detached from the VM; edits never delete data.
+	Retained []string `json:"retained,omitempty"`
 }
 
 func (e *ManagedEngine) save(j managedJournal) error {
@@ -218,7 +225,7 @@ func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch f
 		j.Result.Error = ""
 	} else {
 		j.Result.Status = "failed"
-		if j.Stage == "allocating" || j.Stage == "defining" || j.Stage == "starting" {
+		if j.Stage == "allocating" || j.Stage == "defining" || j.Stage == "starting" || j.Stage == "attaching" {
 			j.Result.Status = "needs_attention"
 		}
 		j.Result.Error = err.Error()
@@ -235,6 +242,8 @@ func managedResourceID(c protocol.Command) string {
 		return "media:" + c.Media.ID
 	case "vm-create":
 		return "vm:" + c.VM.ID
+	case "vm-update":
+		return fmt.Sprintf("vm-update:%s:%d", c.VM.ID, c.VM.Revision)
 	case "vm-power":
 		return "power:" + c.OperationID
 	case "vm-media":
@@ -292,7 +301,7 @@ func validateManaged(c protocol.Command) error {
 		if !identifier.MatchString(m.StorageID) || m.SizeBytes < 32774 || err != nil || len(h) != 32 || strings.ToLower(m.SHA256) != m.SHA256 {
 			return errors.New("invalid ISO storage, size or SHA-256")
 		}
-	case "vm-create":
+	case "vm-create", "vm-update":
 		if c.VM == nil {
 			return errors.New("VM payload required")
 		}
@@ -300,6 +309,10 @@ func validateManaged(c protocol.Command) error {
 		id, pool, host = v.ID, v.PoolID, v.HostID
 		if !uuidPattern.MatchString(id) || !hostname.MatchString(v.Name) || v.CPU.Count > 64 || v.Memory.SizeMiB > 262144 {
 			return errors.New("invalid VM identity, vCPU count or memory")
+		}
+		// Creation is revision 0; an edit names the revision it produces and never starts a guest.
+		if (c.Kind == "vm-create" && v.Revision != 0) || (c.Kind == "vm-update" && (v.Revision < 1 || v.StartAfterCreate)) {
+			return errors.New("invalid VM definition revision")
 		}
 		// Shape and bounds come from the specification both sides enforce; only host-side
 		// reference syntax is checked here.
@@ -542,8 +555,21 @@ func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []
 			m := *c.Media
 			m.OperationID, m.Status, m.Error = "", "", ""
 			out.Media = append(out.Media, m)
-		case "vm-create":
-			out.VMs = append(out.VMs, *c.VM)
+		case "vm-create", "vm-update":
+			// The current definition is the highest succeeded revision; the create entry is
+			// revision 0.
+			replaced := false
+			for i, existing := range out.VMs {
+				if existing.ID == c.VM.ID {
+					replaced = true
+					if c.VM.Revision > existing.Revision {
+						out.VMs[i] = *c.VM
+					}
+				}
+			}
+			if !replaced {
+				out.VMs = append(out.VMs, *c.VM)
+			}
 		}
 	}
 	now := time.Now().UTC()
@@ -578,7 +604,7 @@ func managedIdentity(c protocol.Command) (string, string) {
 		return c.Network.ID, c.Network.Name
 	case "iso-import":
 		return c.Media.ID, c.Media.Name
-	case "vm-create":
+	case "vm-create", "vm-update":
 		return c.VM.ID, c.VM.Name
 	case "vm-power":
 		return c.Power.VMID, ""
@@ -775,6 +801,8 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 		return receiveISO(ctx, j.MediaPath, *m, body)
 	case "vm-create":
 		return e.create(ctx, j, js)
+	case "vm-update":
+		return e.update(ctx, j, js)
 	}
 	return errors.New("unsupported managed command")
 }
@@ -877,10 +905,11 @@ type managedBootOrder struct {
 	Order int `xml:"order,attr"`
 }
 type managedDisk struct {
+	XMLName   xml.Name          `xml:"disk"`
 	Type      string            `xml:"type,attr"`
 	Device    string            `xml:"device,attr"`
 	Driver    driverXML         `xml:"driver"`
-	Source    sourceXML         `xml:"source"`
+	Source    *sourceXML        `xml:"source,omitempty"`
 	Target    targetXML         `xml:"target"`
 	Readonly  *struct{}         `xml:"readonly,omitempty"`
 	Shareable *struct{}         `xml:"shareable,omitempty"`
@@ -888,7 +917,7 @@ type managedDisk struct {
 }
 type managedController struct {
 	Type  string `xml:"type,attr"`
-	Index int    `xml:"index,attr"`
+	Index *int   `xml:"index,attr,omitempty"`
 	Model string `xml:"model,attr,omitempty"`
 }
 type managedTopology struct {
@@ -908,8 +937,9 @@ type managedBalloon struct {
 	FreePageReporting string `xml:"freePageReporting,attr,omitempty"`
 }
 type managedNIC struct {
-	Type   string `xml:"type,attr"`
-	Source struct {
+	XMLName xml.Name `xml:"interface"`
+	Type    string   `xml:"type,attr"`
+	Source  struct {
 		Bridge  string `xml:"bridge,attr,omitempty"`
 		Network string `xml:"network,attr,omitempty"`
 	} `xml:"source"`
@@ -971,10 +1001,45 @@ func managedMachine(v protocol.VMCreateSpec) string {
 	return v.Boot.Machine
 }
 
-// managedDomainXML builds the persistent definition. nets and disks are positional: nets[i]
-// carries NICs[i]'s registration and disks[i] the path allocated for Disks[i].
-func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistration, disks []string, iso string) ([]byte, error) {
-	if len(nets) != len(v.NICs) || len(disks) != len(v.Disks) {
+// nextTarget assigns the first free libvirt target name for a bus: virtio disks take vdX;
+// SATA and SCSI disks share sdX with the CD drive.
+func nextTarget(bus string, used map[string]bool) (string, error) {
+	prefix := "sd"
+	if bus == "virtio" {
+		prefix = "vd"
+	}
+	for letter := 'a'; letter <= 'z'; letter++ {
+		dev := prefix + string(letter)
+		if !used[dev] {
+			used[dev] = true
+			return dev, nil
+		}
+	}
+	return "", errors.New("no free disk target names remain on this bus")
+}
+
+// managedTargets assigns creation-time target names positionally, plus the CD drive's.
+func managedTargets(v protocol.VMCreateSpec) ([]string, string) {
+	used := map[string]bool{}
+	targets := make([]string, len(v.Disks))
+	for i, d := range v.Disks {
+		targets[i], _ = nextTarget(d.Bus, used)
+	}
+	media, _ := nextTarget("sata", used)
+	return targets, media
+}
+
+// q35Machine reports whether a machine type is the PCIe q35 family, which takes root ports.
+func q35Machine(machine string) bool {
+	return machine == "q35" || strings.HasPrefix(machine, "pc-q35-")
+}
+
+// managedDomainXML builds the persistent definition. nets, disks and targets are positional:
+// nets[i] carries NICs[i]'s registration, disks[i] the path allocated for Disks[i] and
+// targets[i] its libvirt target. Every VM carries one SATA CD drive at mediaTarget so an ISO
+// can be inserted or ejected later without hot-plugging a SATA device; it is empty when iso is.
+func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistration, disks, targets []string, mediaTarget, iso string) ([]byte, error) {
+	if len(nets) != len(v.NICs) || len(disks) != len(v.Disks) || len(targets) != len(v.Disks) || mediaTarget == "" {
 		return nil, errors.New("domain devices do not match the requested VM")
 	}
 	d := managedDomain{Type: "kvm", Name: v.Name, UUID: v.ID, Memory: memoryXML{"MiB", v.Memory.SizeMiB}, VCPU: v.CPU.Count, OS: managedOS{Type: osTypeXML{"x86_64", managedMachine(v), "hvm"}}}
@@ -992,18 +1057,9 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 	}
 	sockets, cores, threads := v.CPU.Topology()
 	d.CPU = managedCPU{Mode: v.CPU.Model, Topology: &managedTopology{sockets, cores, threads}}
-	// virtio disks take vdX; SATA and SCSI disks share the sdX namespace with the install ISO.
-	virtio, scsi, sd := 0, false, 0
-	dev := func(bus string) string {
-		if bus == "virtio" {
-			virtio++
-			return "vd" + string(rune('a'+virtio-1))
-		}
-		sd++
-		return "sd" + string(rune('a'+sd-1))
-	}
+	scsi := false
 	for i, disk := range v.Disks {
-		x := managedDisk{Type: "file", Device: "disk", Driver: driverXML{"qemu", "qcow2"}, Source: sourceXML{File: disks[i]}, Target: targetXML{Dev: dev(disk.Bus), Bus: disk.Bus}}
+		x := managedDisk{Type: "file", Device: "disk", Driver: driverXML{"qemu", "qcow2"}, Source: &sourceXML{File: disks[i]}, Target: targetXML{Dev: targets[i], Bus: disk.Bus}}
 		if disk.BootOrder > 0 {
 			x.Boot = &managedBootOrder{disk.BootOrder}
 		}
@@ -1013,13 +1069,34 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 	if scsi {
 		d.Devices.Controllers = []managedController{{Type: "scsi", Model: "virtio-scsi"}}
 	}
-	if iso != "" {
-		cdrom := managedDisk{Type: "file", Device: "cdrom", Driver: driverXML{"qemu", "raw"}, Source: sourceXML{File: iso}, Target: targetXML{Dev: dev("sata"), Bus: "sata"}, Readonly: &struct{}{}}
-		if v.Boot.MediaBootOrder > 0 {
-			cdrom.Boot = &managedBootOrder{v.Boot.MediaBootOrder}
+	// Explicit PCIe root ports are consumed by the defined devices first, and libvirt adds no
+	// spare beside them (observed: "No more available PCI slots" on hot-plug with four listed
+	// ports), so enough are defined for every PCIe device plus four free ones for hot-plug.
+	// Only the q35 family has root ports, and once any PCI controller is listed libvirt
+	// requires the first (index 0) to be the pcie-root itself.
+	if q35Machine(managedMachine(v)) {
+		ports := 4 + len(v.NICs) + 3 // video, virtio-serial and balloon
+		for _, disk := range v.Disks {
+			if disk.Bus == "virtio" {
+				ports++
+			}
 		}
-		d.Devices.Disks = append(d.Devices.Disks, cdrom)
+		if scsi {
+			ports++
+		}
+		d.Devices.Controllers = append(d.Devices.Controllers, managedController{Type: "pci", Model: "pcie-root"})
+		for range ports {
+			d.Devices.Controllers = append(d.Devices.Controllers, managedController{Type: "pci", Model: "pcie-root-port"})
+		}
 	}
+	cdrom := managedDisk{Type: "file", Device: "cdrom", Driver: driverXML{"qemu", "raw"}, Target: targetXML{Dev: mediaTarget, Bus: "sata"}, Readonly: &struct{}{}}
+	if iso != "" {
+		cdrom.Source = &sourceXML{File: iso}
+	}
+	if v.Boot.MediaBootOrder > 0 {
+		cdrom.Boot = &managedBootOrder{v.Boot.MediaBootOrder}
+	}
+	d.Devices.Disks = append(d.Devices.Disks, cdrom)
 	for i, requested := range v.NICs {
 		nic := managedNIC{Type: "bridge"}
 		if nets[i].Kind == "network" {
@@ -1056,12 +1133,28 @@ func managedMemoryFits(availableKiB uint64, m protocol.VMMemory) bool {
 // stopped dedicated VM consumes nothing yet and MemAvailable proves nothing about it.
 func dedicatedCommitted(js []managedJournal, except string) int {
 	total := 0
-	for _, j := range js {
-		if j.Command.Kind == "vm-create" && j.Command.VM != nil && j.Command.VM.ID != except && j.Result.Status != "failed" && j.Command.VM.Memory.Mode == "dedicated" {
-			total += j.Command.VM.Memory.SizeMiB
+	for _, v := range currentDefinitions(js) {
+		if v.ID != except && v.Memory.Mode == "dedicated" {
+			total += v.Memory.SizeMiB
 		}
 	}
 	return total
+}
+
+// currentDefinitions is every VM's current definition the journal still holds: the highest
+// revision among its non-failed vm-create and vm-update entries, pending and uncertain ones
+// included, because what is promised or reserved does not wait for a result.
+func currentDefinitions(js []managedJournal) map[string]protocol.VMCreateSpec {
+	out := map[string]protocol.VMCreateSpec{}
+	for _, j := range js {
+		if (j.Command.Kind != "vm-create" && j.Command.Kind != "vm-update") || j.Command.VM == nil || j.Result.Status == "failed" {
+			continue
+		}
+		if cur, ok := out[j.Command.VM.ID]; !ok || j.Command.VM.Revision > cur.Revision {
+			out[j.Command.VM.ID] = *j.Command.VM
+		}
+	}
+	return out
 }
 
 // dedicatedFits admission-controls a dedicated VM against total host memory: what is already
@@ -1219,8 +1312,9 @@ func (e *ManagedEngine) create(ctx context.Context, j *managedJournal, js []mana
 		}
 	}
 	j.Disks = disks
+	j.Targets, j.MediaTarget = managedTargets(v)
 	j.MediaPath = mediaPath
-	j.Domain, err = managedDomainXML(v, nets, disks, mediaPath)
+	j.Domain, err = managedDomainXML(v, nets, disks, j.Targets, j.MediaTarget, mediaPath)
 	if err != nil {
 		return err
 	}
@@ -1343,24 +1437,31 @@ func vmMACs(v protocol.VMCreateSpec) []string {
 // still holds; a failed creation holds nothing. libvirt's own domains are checked separately.
 func vmConflict(js []managedJournal, v protocol.VMCreateSpec) error {
 	macs := vmMACs(v)
-	for _, old := range js {
-		if old.Command.Kind != "vm-create" || old.Command.VM == nil || old.Command.VM.ID == v.ID || old.Result.Status == "failed" {
+	for id, old := range currentDefinitions(js) {
+		if id == v.ID {
 			continue
 		}
-		if old.Command.VM.Name == v.Name {
+		if old.Name == v.Name {
 			return errors.New("VM name " + v.Name + " is already used on this host")
 		}
-		for _, mac := range vmMACs(*old.Command.VM) {
+		for _, mac := range vmMACs(old) {
 			if slices.Contains(macs, mac) {
-				return errors.New("MAC address " + mac + " is already used by VM " + old.Command.VM.Name + " on this host")
+				return errors.New("MAC address " + mac + " is already used by VM " + old.Name + " on this host")
 			}
 		}
 	}
 	return nil
 }
 func (e *ManagedEngine) observeCreated(ctx context.Context, j managedJournal) error {
+	return e.observeDefinition(ctx, j, "shut off")
+}
+
+// observeDefinition proves a creation or edit landed: every disk is exclusively owned and the
+// right size, autostart matches, the persistent definition matches the expected one and the VM
+// is in the state the operation left it (an edit of a running guest keeps it running).
+func (e *ManagedEngine) observeDefinition(ctx context.Context, j managedJournal, state string) error {
 	if j.Command.VM == nil || len(j.Domain) == 0 || len(j.Disks) != len(j.Command.VM.Disks) {
-		return errors.New("VM creation evidence unavailable")
+		return errors.New("VM definition evidence unavailable")
 	}
 	// Ownership is observed once per disk: exclusiveDisk rescans every domain each call, so this
 	// costs disks × domains virsh calls. Batch it there if hosts ever carry many domains.
@@ -1396,11 +1497,9 @@ func (e *ManagedEngine) observeCreated(ctx context.Context, j managedJournal) er
 			return err
 		}
 	}
-	if j.Command.VM.Autostart {
-		info, err := managedVirsh(ctx, "dominfo", j.Command.VM.ID)
-		if err != nil || !autostartEnabled(info) {
-			return errors.New("VM autostart is not confirmed enabled")
-		}
+	info, err := managedVirsh(ctx, "dominfo", j.Command.VM.ID)
+	if err != nil || autostartEnabled(info) != j.Command.VM.Autostart {
+		return errors.New("VM autostart is not confirmed as requested")
 	}
 	b, err := managedVirsh(ctx, "dumpxml", j.Command.VM.ID, "--inactive")
 	if err != nil {
@@ -1409,9 +1508,9 @@ func (e *ManagedEngine) observeCreated(ctx context.Context, j managedJournal) er
 	if err = validateManagedDefinition(b, j.Domain); err != nil {
 		return err
 	}
-	state, err := managedVirsh(ctx, "domstate", j.Command.VM.ID)
-	if err != nil || strings.TrimSpace(string(state)) != "shut off" {
-		return errors.New("VM state is not confirmed stopped; no effects replayed")
+	observed, err := managedVirsh(ctx, "domstate", j.Command.VM.ID)
+	if err != nil || strings.TrimSpace(string(observed)) != state {
+		return errors.New("VM state is not confirmed " + state + "; no effects replayed")
 	}
 	return nil
 }
@@ -1443,9 +1542,18 @@ func validateManagedDefinition(b, expected []byte) error {
 	if got.UUID != want.UUID || got.Name != want.Name || got.Type != "kvm" || got.VCPU != want.VCPU || memory != want.Memory.Value || len(got.Devices.Disks) != len(want.Devices.Disks) || len(got.Devices.Interfaces) != len(want.Devices.Interfaces) {
 		return errors.New("VM definition differs from requested ownership or resources")
 	}
-	for i, disk := range got.Devices.Disks {
-		expected := want.Devices.Disks[i]
-		if disk.Type != expected.Type || disk.Device != expected.Device || disk.Source.File != expected.Source.File || disk.Driver.Type != expected.Driver.Type || (disk.Readonly != nil) != (expected.Readonly != nil) || disk.Shareable != nil || disk.Source.Dev != "" || disk.Source.Protocol != "" || disk.Target != expected.Target || bootOrder(disk.Boot) != bootOrder(expected.Boot) {
+	// Devices are matched by identity (disk target, interface MAC), not position: libvirt
+	// orders hot-plugged devices itself, and a renamed target or address is a real change.
+	disks := map[string]managedDisk{}
+	for _, disk := range got.Devices.Disks {
+		if _, dup := disks[disk.Target.Dev]; dup {
+			return errors.New("VM definition repeats a disk target")
+		}
+		disks[disk.Target.Dev] = disk
+	}
+	for _, expected := range want.Devices.Disks {
+		disk, ok := disks[expected.Target.Dev]
+		if !ok || disk.Type != expected.Type || disk.Device != expected.Device || diskFile(disk) != diskFile(expected) || disk.Driver.Type != expected.Driver.Type || (disk.Readonly != nil) != (expected.Readonly != nil) || disk.Shareable != nil || (disk.Source != nil && (disk.Source.Dev != "" || disk.Source.Protocol != "")) || disk.Target != expected.Target || bootOrder(disk.Boot) != bootOrder(expected.Boot) {
 			return errors.New("VM disk assignment or boot order differs from requested ownership")
 		}
 	}
@@ -1472,15 +1580,30 @@ func validateManagedDefinition(b, expected []byte) error {
 	if xml.Unmarshal(b, &devices) != nil || len(devices.Devices.Hostdev) != 0 || len(devices.Devices.Filesystems) != 0 || len(got.Devices.Graphics) != 1 || got.Devices.Graphics[0].Type != "vnc" || got.Devices.Graphics[0].Listen.Type != "socket" {
 		return errors.New("unsupported VM devices or exposed graphics")
 	}
-	for i, nic := range got.Devices.Interfaces {
+	nics := map[string]managedNIC{}
+	for _, nic := range got.Devices.Interfaces {
+		if _, dup := nics[nic.MAC.Address]; dup {
+			return errors.New("VM definition repeats a MAC address")
+		}
+		nics[nic.MAC.Address] = nic
+	}
+	for _, w := range want.Devices.Interfaces {
 		// Compared field by field rather than as whole structs: MTU is a pointer, so struct
 		// equality would compare addresses and reject every adapter that carries one.
-		w := want.Devices.Interfaces[i]
-		if nic.Type != w.Type || nic.Source != w.Source || nic.MAC != w.MAC || nic.Model != w.Model || !sameMTU(nic.MTU, w.MTU) {
+		nic, ok := nics[w.MAC.Address]
+		if !ok || nic.Type != w.Type || nic.Source != w.Source || nic.Model != w.Model || !sameMTU(nic.MTU, w.MTU) {
 			return errors.New("VM network assignment changed")
 		}
 	}
 	return nil
+}
+
+// diskFile is a disk's backing file, empty for an empty CD drive.
+func diskFile(d managedDisk) string {
+	if d.Source == nil {
+		return ""
+	}
+	return d.Source.File
 }
 
 // sameMTU enforces a requested size and tolerates one we did not request, matching how the
@@ -1512,7 +1635,22 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protoc
 				return j.Result, err
 			}
 		}
-	} else if j.Command.Kind == "vm-create" && (j.Stage == "starting" || j.Stage == "started") {
+	}
+	// An interrupted edit is proven the same way, in whichever state it was applied.
+	if j.Command.Kind == "vm-update" && (j.Stage == "defining" || j.Stage == "attaching" || j.Stage == "defined") {
+		state := "shut off"
+		if j.Stage == "attaching" {
+			state = "running"
+		}
+		if err := e.observeDefinition(ctx, j, state); err == nil {
+			j.Result.Status = "succeeded"
+			j.Result.Error = ""
+			j.Stage = "defined"
+		} else {
+			j.Result.Error = "interrupted edit: " + err.Error() + "; inspect the VM on its host, then stop it and submit the edit again"
+		}
+	}
+	if j.Command.Kind == "vm-create" && (j.Stage == "starting" || j.Stage == "started") {
 		// The start request was issued or interrupted; libvirt's state says which, and a
 		// recorded outcome stands. Either way the creation succeeded.
 		if err := settleStart(ctx, &j); err == nil {
@@ -1746,9 +1884,11 @@ func cdromSource(ctx context.Context, id string, running bool) (source, dev stri
 	}
 	for _, disk := range d.Devices.Disks {
 		if disk.Device == "cdrom" {
-			src := disk.Source.File
+			src := diskFile(disk)
 			if src == "" {
-				src = disk.Source.Dev
+				if disk.Source != nil {
+					src = disk.Source.Dev
+				}
 			}
 			return src, disk.Target.Dev, nil
 		}
@@ -1797,29 +1937,48 @@ func ensureCDROM(ctx context.Context, stateDir, id string, running bool) (string
 }
 
 func managedVM(js []managedJournal, id string) (protocol.VMCreateSpec, error) {
-	for _, j := range js {
-		if j.Result.Status == "succeeded" && j.Command.Kind == "vm-create" && j.Command.VM != nil && j.Command.VM.ID == id {
-			return *j.Command.VM, nil
-		}
+	cur, err := managedCurrent(js, id)
+	if err != nil {
+		return protocol.VMCreateSpec{}, err
 	}
-	return protocol.VMCreateSpec{}, errors.New("VM is not defined on this host")
+	return *cur.Command.VM, nil
 }
 
-// recordVMMedia updates the durable vm-create journal so Applied reports the current media.
+// managedCurrent returns a VM's current definition and the journal entry carrying its disk
+// layout: the highest succeeded revision, where creation is revision 0.
+func managedCurrent(js []managedJournal, id string) (managedJournal, error) {
+	var cur managedJournal
+	found := false
+	for _, j := range js {
+		if j.Result.Status != "succeeded" || j.Command.VM == nil || j.Command.VM.ID != id || (j.Command.Kind != "vm-create" && j.Command.Kind != "vm-update") {
+			continue
+		}
+		if !found || j.Command.VM.Revision > cur.Command.VM.Revision {
+			cur, found = j, true
+		}
+	}
+	if !found {
+		return cur, errors.New("VM is not defined on this host")
+	}
+	if len(cur.Targets) != len(cur.Command.VM.Disks) || cur.MediaTarget == "" {
+		cur.Targets, cur.MediaTarget = managedTargets(*cur.Command.VM)
+	}
+	return cur, nil
+}
+
+// recordVMMedia updates the VM's current journal entry so Applied reports the current media.
 func (e *ManagedEngine) recordVMMedia(req protocol.VMMediaRequest) error {
 	js, err := e.journals()
 	if err != nil {
 		return err
 	}
-	for _, j := range js {
-		if j.Result.Status != "succeeded" || j.Command.Kind != "vm-create" || j.Command.VM == nil || j.Command.VM.ID != req.VMID {
-			continue
-		}
-		v := protocol.ApplyVMMedia(*j.Command.VM, req.Action, req.MediaID)
-		j.Command.VM = &v
-		return e.save(j)
+	cur, err := managedCurrent(js, req.VMID)
+	if err != nil {
+		return err
 	}
-	return errors.New("VM is not defined on this host")
+	v := protocol.ApplyVMMedia(*cur.Command.VM, req.Action, req.MediaID)
+	cur.Command.VM = &v
+	return e.save(cur)
 }
 
 // mediaObserved reconciles an interrupted media change by observing the CD drive. The journal
@@ -1910,6 +2069,358 @@ func (e *ManagedEngine) RegisterDefaults(ctx context.Context, pool, host string,
 	for _, c := range commands {
 		if _, err := e.Execute(ctx, c, nil); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// managedLayout is an edit's resolved device plan: the path and target of every disk in the
+// new definition (existing disks keep theirs, matched by name), the disks to allocate, the
+// files of removed disks to retain, and the space each storage target must provide.
+type managedLayout struct {
+	Disks, Targets []string
+	MediaTarget    string
+	New            []int
+	Retained       []string
+	Targets_       []managedTarget
+}
+
+// managedUpdateLayout keeps every existing disk where it is and places each new disk in the
+// VM's directory on its storage target at the first unused disk-<n>.qcow2, so a retained or
+// half-allocated file is never reused. Target names come from the journal; new disks take the
+// next free letter on their bus.
+func managedUpdateLayout(js []managedJournal, cur managedJournal, v protocol.VMCreateSpec) (managedLayout, error) {
+	l := managedLayout{Disks: make([]string, len(v.Disks)), Targets: make([]string, len(v.Disks)), MediaTarget: cur.MediaTarget}
+	known := map[string]int{}
+	used := map[string]bool{cur.MediaTarget: true}
+	for i, d := range cur.Command.VM.Disks {
+		known[d.Name] = i
+		used[cur.Targets[i]] = true
+	}
+	kept := map[string]bool{}
+	at := map[string]int{}
+	for i, d := range v.Disks {
+		if old, ok := known[d.Name]; ok {
+			l.Disks[i], l.Targets[i] = cur.Disks[old], cur.Targets[old]
+			kept[d.Name] = true
+			continue
+		}
+		s, err := managedStorage(js, d.StorageID)
+		if err != nil {
+			return l, err
+		}
+		index, ok := at[d.StorageID]
+		if !ok {
+			index = len(l.Targets_)
+			at[d.StorageID] = index
+			l.Targets_ = append(l.Targets_, managedTarget{ID: d.StorageID, Path: s.Path, Dir: filepath.Join(s.Path, "nex-vms", v.ID), Bytes: 4 << 30})
+		}
+		l.Targets_[index].Bytes += uint64(d.SizeGiB) << 30
+		dir := l.Targets_[index].Dir
+		taken := map[string]bool{}
+		for _, path := range append(append([]string{}, cur.Disks...), l.Disks...) {
+			taken[path] = true
+		}
+		path := ""
+		for n := 0; n < 64 && path == ""; n++ {
+			candidate := filepath.Join(dir, fmt.Sprintf("disk-%d.qcow2", n))
+			if _, err := os.Lstat(candidate); errors.Is(err, os.ErrNotExist) && !taken[candidate] {
+				path = candidate
+			}
+		}
+		if path == "" {
+			return l, errors.New("the VM directory holds too many retained disk files; clean it up on the host first")
+		}
+		target, err := nextTarget(d.Bus, used)
+		if err != nil {
+			return l, err
+		}
+		l.Disks[i], l.Targets[i] = path, target
+		l.New = append(l.New, i)
+	}
+	for i, d := range cur.Command.VM.Disks {
+		if !kept[d.Name] {
+			l.Retained = append(l.Retained, cur.Disks[i])
+		}
+	}
+	return l, nil
+}
+
+// update applies one revision of a VM's definition. A shut-off guest is redefined from the
+// regenerated XML after any new disks exist and a rename; a running guest only takes the
+// device additions, removals and media changes NeedsStop allows, applied live and persisted.
+// Either way the persistent definition is then observed against the expected one.
+func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []managedJournal) error {
+	v := *j.Command.VM
+	cur, err := managedCurrent(js, v.ID)
+	if err != nil {
+		return err
+	}
+	if v.Revision != cur.Command.VM.Revision+1 {
+		return fmt.Errorf("VM definition revision %d is not current; refresh the VM and edit again", v.Revision)
+	}
+	stops, err := protocol.NeedsStop(*cur.Command.VM, v)
+	if err != nil {
+		return err
+	}
+	state, err := managedVirsh(ctx, "domstate", v.ID)
+	if err != nil {
+		return errors.New("VM not found or its state cannot be established on this host")
+	}
+	observed := strings.TrimSpace(string(state))
+	if observed != "running" && observed != "shut off" {
+		return errors.New("VM is " + observed + "; resolve that state before editing it")
+	}
+	running := observed == "running"
+	if running && len(stops) > 0 {
+		names := make([]string, len(stops))
+		for i, s := range stops {
+			names[i] = string(s)
+		}
+		return errors.New("stop the VM first to change " + strings.Join(names, ", "))
+	}
+	if v.Name != cur.Command.VM.Name {
+		names, err := managedVirsh(ctx, "list", "--all", "--name")
+		if err != nil {
+			return err
+		}
+		for _, name := range strings.Split(strings.TrimSpace(string(names)), "\n") {
+			if name == v.Name {
+				return errors.New("VM name already exists")
+			}
+		}
+	}
+	layout, err := managedUpdateLayout(js, cur, v)
+	if err != nil {
+		return err
+	}
+	for _, t := range layout.Targets_ {
+		if err = localStorage(t.Path, t.Bytes); err != nil {
+			return err
+		}
+	}
+	nets := make([]protocol.NetworkRegistration, len(v.NICs))
+	for i, requested := range v.NICs {
+		if nets[i], err = managedNetwork(js, requested.NetworkID); err != nil {
+			return err
+		}
+		if err = verifyNetwork(ctx, nets[i]); err != nil {
+			return err
+		}
+	}
+	mediaPath := ""
+	if v.MediaID != "" {
+		m, path, err := managedMedia(js, v.MediaID)
+		if err != nil {
+			return err
+		}
+		on := ""
+		for _, d := range v.Disks {
+			if d.StorageID == m.StorageID {
+				if s, err := managedStorage(js, d.StorageID); err == nil {
+					on = s.Path
+				}
+			}
+		}
+		if on == "" || path != filepath.Join(on, "nex-media", m.ID+".iso") {
+			return errors.New("the install ISO must be published on one of the VM's storage targets")
+		}
+		if err = verifyISO(path, m); err != nil {
+			return err
+		}
+		mediaPath = path
+	}
+	if !running {
+		if err = managedCapacity(ctx, v, js); err != nil {
+			return err
+		}
+	}
+	j.Disks, j.Targets, j.MediaTarget, j.MediaPath, j.Retained = layout.Disks, layout.Targets, layout.MediaTarget, mediaPath, layout.Retained
+	if j.Domain, err = managedDomainXML(v, nets, j.Disks, j.Targets, j.MediaTarget, mediaPath); err != nil {
+		return err
+	}
+	j.Stage = "allocating"
+	if err = e.save(*j); err != nil {
+		return err
+	}
+	for _, t := range layout.Targets_ {
+		if err = managedSubdir(filepath.Join(t.Path, "nex-vms")); err != nil {
+			return err
+		}
+		if err = managedSubdir(t.Dir); err != nil {
+			return err
+		}
+	}
+	for _, i := range layout.New {
+		if err = allocateDisk(ctx, j.Disks[i], v.Disks[i]); err != nil {
+			return err
+		}
+	}
+	for _, t := range layout.Targets_ {
+		if err = syncManagedDir(t.Dir); err != nil {
+			return err
+		}
+	}
+	if running {
+		j.Stage = "attaching"
+		if err = e.save(*j); err != nil {
+			return err
+		}
+		if err = e.applyLive(ctx, v.ID, j.Domain, mediaPath); err != nil {
+			return err
+		}
+	} else {
+		if v.Name != cur.Command.VM.Name {
+			if _, err = managedVirsh(ctx, "domrename", v.ID, v.Name); err != nil {
+				return fmt.Errorf("libvirt refused the rename (%v); inspect the VM on its host", err)
+			}
+		}
+		domainPath := filepath.Join(e.stateDir, j.Command.OperationID+".xml")
+		if err = atomicWrite(domainPath, j.Domain); err != nil {
+			return err
+		}
+		j.Stage = "defining"
+		if err = e.save(*j); err != nil {
+			return err
+		}
+		if _, err = managedVirsh(ctx, "define", domainPath); err != nil {
+			return errors.New("VM redefinition outcome uncertain; observation required before recovery")
+		}
+	}
+	if err = setAutostart(ctx, v); err != nil {
+		return err
+	}
+	if err = e.observeDefinition(ctx, *j, observed); err != nil {
+		return err
+	}
+	j.Stage = "defined"
+	return nil
+}
+
+// allocateDisk creates one new qcow2 the way creation does and proves it before use.
+func allocateDisk(ctx context.Context, path string, d protocol.VMDisk) error {
+	if _, err := run(ctx, "qemu-img", qemuCreateArgs(path, d)...); err != nil {
+		return errors.New("disk allocation outcome uncertain; inspect retained VM directory")
+	}
+	if err := checkImage(ctx, path); err != nil {
+		return err
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		return err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	err = f.Sync()
+	f.Close()
+	return err
+}
+
+// setAutostart makes libvirt's autostart flag match the definition; it never starts a guest.
+func setAutostart(ctx context.Context, v protocol.VMCreateSpec) error {
+	args := []string{"autostart", v.ID}
+	if !v.Autostart {
+		args = []string{"autostart", "--disable", v.ID}
+	}
+	if _, err := managedVirsh(ctx, args...); err != nil {
+		return errors.New("VM autostart could not be set; inspect the VM on its host")
+	}
+	return nil
+}
+
+// applyLive reconciles a running guest's persistent definition towards the expected one with
+// device operations only: attach the disks and interfaces it lacks, detach the ones it should
+// not have, and change the CD drive's media. Comparing against what libvirt actually holds,
+// rather than the journal, makes a re-submitted edit after an interruption converge.
+func (e *ManagedEngine) applyLive(ctx context.Context, id string, expected []byte, mediaPath string) error {
+	b, err := managedVirsh(ctx, "dumpxml", id, "--inactive")
+	if err != nil {
+		return errors.New("cannot read the VM's persistent definition")
+	}
+	var got, want managedDomain
+	if xml.Unmarshal(b, &got) != nil || xml.Unmarshal(expected, &want) != nil {
+		return errors.New("invalid persistent VM definition")
+	}
+	device := func(v any) (string, error) {
+		fragment, err := xml.Marshal(v)
+		if err != nil {
+			return "", err
+		}
+		path := filepath.Join(e.stateDir, id+".device.xml")
+		return path, atomicWrite(path, fragment)
+	}
+	op := func(action string, v any) error {
+		path, err := device(v)
+		if err != nil {
+			return err
+		}
+		defer os.Remove(path)
+		if _, err = managedVirsh(ctx, action, id, path, "--persistent"); err != nil {
+			return fmt.Errorf("libvirt refused to %s a device on the running VM (%v); the guest may need to release it, or stop the VM and edit again", strings.TrimSuffix(action, "-device"), err)
+		}
+		return nil
+	}
+	have := map[string]managedDisk{}
+	var cdrom *managedDisk
+	for i, d := range got.Devices.Disks {
+		if d.Device == "cdrom" {
+			cdrom = &got.Devices.Disks[i]
+			continue
+		}
+		have[d.Target.Dev] = d
+	}
+	wantDisks := map[string]bool{}
+	for _, d := range want.Devices.Disks {
+		if d.Device == "cdrom" {
+			continue
+		}
+		wantDisks[d.Target.Dev] = true
+		if _, ok := have[d.Target.Dev]; !ok {
+			if err = op("attach-device", d); err != nil {
+				return err
+			}
+		}
+	}
+	for dev, d := range have {
+		if !wantDisks[dev] {
+			if err = op("detach-device", d); err != nil {
+				return err
+			}
+		}
+	}
+	nics := map[string]managedNIC{}
+	for _, n := range got.Devices.Interfaces {
+		nics[n.MAC.Address] = n
+	}
+	wantNICs := map[string]bool{}
+	for _, n := range want.Devices.Interfaces {
+		wantNICs[n.MAC.Address] = true
+		if _, ok := nics[n.MAC.Address]; !ok {
+			if err = op("attach-device", n); err != nil {
+				return err
+			}
+		}
+	}
+	for mac, n := range nics {
+		if !wantNICs[mac] {
+			if err = op("detach-device", n); err != nil {
+				return err
+			}
+		}
+	}
+	if cdrom == nil {
+		return errors.New("the VM has no CD drive; stop it and edit again to add one")
+	}
+	if diskFile(*cdrom) != mediaPath {
+		args := []string{"change-media", id, cdrom.Target.Dev, "--live", "--config", "--force"}
+		if mediaPath == "" {
+			args = append(args, "--eject")
+		} else {
+			args = append(args, mediaPath, "--update")
+		}
+		if _, err = managedVirsh(ctx, args...); err != nil {
+			return fmt.Errorf("libvirt refused the media change on the running VM (%v); inspect the VM on its host", err)
 		}
 	}
 	return nil

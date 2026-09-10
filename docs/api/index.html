@@ -45,6 +45,7 @@
 <li><a href="#openHostConsole">POST /api/v1/hosts/{id}/console</a></li>
 <li><a href="#hostConsoleStream">GET /api/v1/hosts/{id}/console/{ticket}</a></li>
 <li><a href="#mediaVM">POST /api/v1/vms/{id}/media</a></li>
+<li><a href="#updateVM">PUT /api/v1/vms/{id}</a></li>
 </ul></nav>
 <section><h2>storage-register</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -111,6 +112,17 @@
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
   &quot;semantics&quot;: &quot;Insert a verified ISO into, or eject media from, the named VM&#x27;s CD drive on this host with one libvirt change-media (live and persistent). Insert attaches an empty CD drive first when the domain has none; eject on a drive that is already empty (checked against the live definition of a running VM) succeeds without any libvirt call and never attaches a drive. The resolved media path and the changing-media stage are journaled in one write immediately before the change, so an interruption before that write is simply re-applied and one after it is reconciled by observing the domain: succeeded when the drive holds the requested media (or none, for eject), otherwise needs_attention. Core records only media_id in the VM&#x27;s journaled specification; boot order values are never rewritten because change-media leaves every device&#x27;s bootindex as it is.&quot;
+}</pre></section>
+<section><h2>vm-update</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;capability&quot;: &quot;vm-update-v1&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/VMCreateSpec&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Apply one revision of an existing VM&#x27;s definition; refuse a revision other than current + 1. Classify the difference from the journal&#x27;s current definition (NeedsStop): a shut-off guest is redefined after any new disks are allocated and a rename (domrename), with the same capacity, name and MAC conflict checks as creation; a running guest takes only device additions, removals and media changes, applied with attach-device/detach-device --persistent and change-media --live --config, and is refused before any effect for anything else. Disks are matched by name and keep their journaled target names; interfaces by MAC. Removed disk files are retained and listed in the journal. The persistent definition and per-disk ownership are then observed against the regenerated XML by device identity; an interruption is reconciled by observation only. The journal reports the highest succeeded revision as the VM&#x27;s current definition.&quot;
 }</pre></section>
 <section><h2>GET /appliance-ready.json</h2><pre>{
   &quot;description&quot;: &quot;Appliance-only public JSON file served by the existing Controller UI file handler, not a separately registered API route. First boot atomically publishes it after initialization, verified local HTTPS UI HTTP 200, and guest bootstrap-secret cleanup. It must be absent from a pristine appliance image and may return 404 before preparation or on non-appliance deployments. A persisted marker records first-boot completion; it is not continuous health or successful host enrollment/adoption.&quot;,
@@ -3748,6 +3760,127 @@
     }
   }
 }</pre></details></section>
+<section id="updateVM"><h2>PUT <code>/api/v1/vms/{id}</code></h2>
+<p>Replace a VM&#x27;s definition on its assigned host</p><p>Implemented in development product 0.1.0, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different body under the same id is 409. The body is the complete desired definition (the same shape as creation); Controller validates its shape and references like creation, refuses immutable changes (an existing disk&#x27;s storage, size or provisioning), and, when the VM is observed running, changes that need it stopped (name, CPU, memory, firmware, machine type, any boot order, an existing disk&#x27;s bus, an existing interface&#x27;s network, model, MAC or MTU, or adding a SATA disk); it freezes every automatic MAC into the definition, then queues a vm-update command at revision current + 1 for the host&#x27;s next report. Name and MAC uniqueness against other VMs and dedicated-memory admission are checked by the host against its journal and libvirt, as for creation. Core applies live what a running guest can take (adding or removing VirtIO/SCSI disks and interfaces, inserting, swapping or ejecting the ISO, description, guest OS hint and autostart) and redefines a shut-off guest from the regenerated XML; removed disks are detached and their files retained, never deleted. The host reports the new definition as current and Controller refreshes its mirror from that report; poll operations for the result. One vm-update, vm-power or vm-media request per VM may be in flight.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;updateVM&quot;,
+  &quot;summary&quot;: &quot;Replace a VM&#x27;s definition on its assigned host&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different body under the same id is 409. The body is the complete desired definition (the same shape as creation); Controller validates its shape and references like creation, refuses immutable changes (an existing disk&#x27;s storage, size or provisioning), and, when the VM is observed running, changes that need it stopped (name, CPU, memory, firmware, machine type, any boot order, an existing disk&#x27;s bus, an existing interface&#x27;s network, model, MAC or MTU, or adding a SATA disk); it freezes every automatic MAC into the definition, then queues a vm-update command at revision current + 1 for the host&#x27;s next report. Name and MAC uniqueness against other VMs and dedicated-memory admission are checked by the host against its journal and libvirt, as for creation. Core applies live what a running guest can take (adding or removing VirtIO/SCSI disks and interfaces, inserting, swapping or ejecting the ISO, description, guest OS hint and autostart) and redefines a shut-off guest from the regenerated XML; removed disks are detached and their files retained, never deleted. The host reports the new definition as current and Controller refreshes its mirror from that report; poll operations for the result. One vm-update, vm-power or vm-media request per VM may be in flight.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;VM UUID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/UpdateVMRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Edit queued for the VM&#x27;s host.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/CreateVMResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Replay of an existing request_id with the same body.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/CreateVMResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed JSON, unknown field, invalid request_id, name or definition (the shared bounds), start_after_create set, an id or pool/host that does not match the VM, or an existing disk&#x27;s storage, size or provisioning changed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;VM not found as a successfully created guest, or a disk storage, network or ISO reference is not verified on the VM&#x27;s host and pool.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;The Controller appliance; host not fresh, revoked, outside the pool or without vm-update-v1; request_id reused with different input; another edit, power or media request for this VM pending; the VM observed running with a change that needs it stopped; ISO not on one of the VM&#x27;s storage targets; or capacity above the host&#x27;s observed CPU or memory.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller persistence or internal failure.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
 <section id="schemas"><h2>Schemas and authentication</h2>
 <h3>securitySchemes</h3>
 <details id="AdminSession"><summary>AdminSession</summary><pre>{
@@ -4300,6 +4433,7 @@
         &quot;network-register&quot;,
         &quot;iso-import&quot;,
         &quot;vm-create&quot;,
+        &quot;vm-update&quot;,
         &quot;vm-power&quot;,
         &quot;vm-media&quot;
       ]
@@ -4342,7 +4476,8 @@
         {
           &quot;type&quot;: &quot;null&quot;
         }
-      ]
+      ],
+      &quot;description&quot;: &quot;The full VM definition for vm-create (revision 0) and vm-update (revision current + 1).&quot;
     },
     &quot;power&quot;: {
       &quot;anyOf&quot;: [
@@ -4750,6 +4885,82 @@
           ]
         }
       }
+    },
+    {
+      &quot;if&quot;: {
+        &quot;properties&quot;: {
+          &quot;kind&quot;: {
+            &quot;const&quot;: &quot;vm-update&quot;
+          }
+        },
+        &quot;required&quot;: [
+          &quot;kind&quot;
+        ]
+      },
+      &quot;then&quot;: {
+        &quot;required&quot;: [
+          &quot;vm&quot;
+        ],
+        &quot;properties&quot;: {
+          &quot;vm&quot;: {
+            &quot;not&quot;: {
+              &quot;type&quot;: &quot;null&quot;
+            }
+          }
+        },
+        &quot;not&quot;: {
+          &quot;anyOf&quot;: [
+            {
+              &quot;required&quot;: [
+                &quot;storage&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;storage&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;network&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;network&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;media&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;media&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;power&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;power&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
     }
   ]
 }</pre></details>
@@ -4916,6 +5127,7 @@
         &quot;network-register&quot;,
         &quot;iso-import&quot;,
         &quot;vm-create&quot;,
+        &quot;vm-update&quot;,
         &quot;vm-power&quot;,
         &quot;vm-media&quot;
       ]
@@ -5813,7 +6025,7 @@
     &quot;mac&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;pattern&quot;: &quot;^(([0-9a-f][02468ace])(:[0-9a-f]{2}){5})?$&quot;,
-      &quot;description&quot;: &quot;Empty derives a stable MAC from the VM ID and the interface index (protocol.DerivedMAC: the 52:54:00 locally administered prefix, two octets of sha256(id) and the index), which never collides across a VM&#x27;s at most 8 interfaces. A manual address must be six octets in canonical lower-case colon form and unicast; the pattern encodes the cleared multicast bit as an even second hex digit. All-zero addresses are refused, addresses are unique within the VM, and Controller additionally enforces uniqueness across the pool by plain string comparison.&quot;
+      &quot;description&quot;: &quot;Empty derives a stable MAC from the VM ID and the interface index (protocol.DerivedMAC: the 52:54:00 locally administered prefix, two octets of sha256(id) and the index), which never collides across a VM&#x27;s at most 8 interfaces. A manual address must be six octets in canonical lower-case colon form and unicast; the pattern encodes the cleared multicast bit as an even second hex digit. All-zero addresses are refused, addresses are unique within the VM, and Controller additionally enforces uniqueness across the pool by plain string comparison. The VM list reports the effective address, and an edit freezes every automatic address into the definition (drawn from the VM&#x27;s derived range at the first index the VM does not use), so interfaces keep their identity across later edits.&quot;
     },
     &quot;mtu&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
@@ -5849,7 +6061,7 @@
     &quot;media_boot_order&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
       &quot;minimum&quot;: 0,
-      &quot;description&quot;: &quot;0 keeps the install ISO out of the boot order; any other value must be unique among the disks&#x27; orders and requires media_id.&quot;
+      &quot;description&quot;: &quot;0 keeps the CD drive out of the boot order; any other value joins the disks&#x27; contiguous 1..N numbering. Every VM has the drive, so the order is kept while it is empty and an ISO can be ejected from a running guest.&quot;
     }
   },
   &quot;required&quot;: [
@@ -5931,11 +6143,16 @@
     },
     &quot;start_after_create&quot;: {
       &quot;type&quot;: &quot;boolean&quot;,
-      &quot;description&quot;: &quot;Honoured by the host inside the creation, after the definition is verified, so the creation itself has succeeded whether or not the flag is set: Core starts the guest exactly once and records the outcome in the journal entry&#x27;s start field. A failed automatic start leaves the VM defined and stopped as a normal managed VM (power, console and media work; a replacement Controller adopts it) and is reported by the host as its own outcome with ID &lt;operation-id&gt;:start, kind vm-power, status failed and error &#x27;VM created but not started: &lt;reason&gt;&#x27;, which Controller records in Task history. A creation interrupted at the start step reconciles by observing libvirt: running means started, otherwise that outcome reads &#x27;interrupted before the automatic start completed&#x27;. A failed or uncertain creation never boots. Controller issues no follow-on power request.&quot;
+      &quot;description&quot;: &quot;Honoured by the host inside the creation, after the definition is verified, so the creation itself has succeeded whether or not the flag is set: Core starts the guest exactly once and records the outcome in the journal entry&#x27;s start field. A failed automatic start leaves the VM defined and stopped as a normal managed VM (power, console and media work; a replacement Controller adopts it) and is reported by the host as its own outcome with ID &lt;operation-id&gt;:start, kind vm-power, status failed and error &#x27;VM created but not started: &lt;reason&gt;&#x27;, which Controller records in Task history. A creation interrupted at the start step reconciles by observing libvirt: running means started, otherwise that outcome reads &#x27;interrupted before the automatic start completed&#x27;. A failed or uncertain creation never boots. Controller issues no follow-on power request. Must be false in an edit.&quot;
     },
     &quot;autostart&quot;: {
       &quot;type&quot;: &quot;boolean&quot;,
       &quot;description&quot;: &quot;libvirt autostart, set while the stopped guest is defined so the host starts this VM on boot. It is not a start.&quot;
+    },
+    &quot;revision&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;Definition revision: 0 at creation, current + 1 for each edit. Core refuses any other value, so a stale edit after Controller replacement fails instead of applying an old definition. Reported back in Inventory.managed.vms with the current definition.&quot;
     }
   },
   &quot;required&quot;: [
@@ -5952,7 +6169,8 @@
     &quot;boot&quot;,
     &quot;media_id&quot;,
     &quot;start_after_create&quot;,
-    &quot;autostart&quot;
+    &quot;autostart&quot;,
+    &quot;revision&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.VMCreateSpec&quot;,
   &quot;description&quot;: &quot;The complete VM specification: Controller-assigned UUID and pool membership with separate host assignment, identity, CPU, memory, every disk and network interface, boot and install media, and the two lifecycle switches. Creation defines a stopped VM and never boots it. Dependencies must have succeeded on this host and pool. Both sides validate the shared bounds through protocol.ValidateVMSpec; Controller owns identity, reference existence, pool-wide MAC uniqueness and capacity.&quot;
@@ -6137,6 +6355,11 @@
     },
     &quot;request_id&quot;: {
       &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;revision&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;const&quot;: 0,
+      &quot;description&quot;: &quot;Omit or 0; creation is revision 0.&quot;
     }
   },
   &quot;required&quot;: [
@@ -6218,7 +6441,7 @@
         &quot;$ref&quot;: &quot;#/components/schemas/VMCreateSpec&quot;
       },
       &quot;maxItems&quot;: 10000,
-      &quot;description&quot;: &quot;Succeeded VM definitions from the host journal: the full specification of every VM this host created, which is what a replaced Controller re-adopts by resource ID.&quot;
+      &quot;description&quot;: &quot;Current VM definitions from the host journal: for each VM this host holds, the highest succeeded revision (creation is revision 0, each vm-update one more, and vm-media changes update the current entry), which is what a replaced Controller re-adopts by resource ID and what an existing Controller refreshes its mirror from on every report.&quot;
     },
     &quot;missing_vms&quot;: {
       &quot;type&quot;: [
@@ -6620,6 +6843,7 @@
         &quot;network-register&quot;,
         &quot;iso-import&quot;,
         &quot;vm-create&quot;,
+        &quot;vm-update&quot;,
         &quot;vm-power&quot;,
         &quot;vm-media&quot;
       ]
@@ -6650,5 +6874,112 @@
   ],
   &quot;x-go-type&quot;: &quot;protocol.ManagedOutcome&quot;,
   &quot;description&quot;: &quot;A managed journal entry that did not succeed: one that ended failed or needs_attention, a vm-create entry&#x27;s failed automatic start (operation_id &lt;operation-id&gt;:start, kind vm-power, status failed), or a pending entry the host is no longer executing (status needs_attention, error &#x27;interrupted before completion; retry from a new request&#x27;).&quot;
+}</pre></details>
+<details id="UpdateVMRequest"><summary>UpdateVMRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Omit, or the VM UUID from the path.&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Must equal the VM&#x27;s pool; editing never moves a VM.&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Must equal the VM&#x27;s assigned host; editing never moves a VM.&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$&quot;,
+      &quot;description&quot;: &quot;Unique within the pool and reserved before dispatch; failed or uncertain creations keep their reservation.&quot;
+    },
+    &quot;description&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 4096,
+      &quot;description&quot;: &quot;Free-text operator note, at most 4096 characters.&quot;
+    },
+    &quot;guest_os&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;&quot;,
+        &quot;linux&quot;,
+        &quot;windows&quot;,
+        &quot;other&quot;
+      ],
+      &quot;description&quot;: &quot;Guest OS hint recorded for display and guest-tools advice; empty leaves it unset. It installs nothing and does not change the VM devices: disk bus and NIC model are chosen per device.&quot;
+    },
+    &quot;cpu&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/VMCPU&quot;
+    },
+    &quot;memory&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/VMMemory&quot;
+    },
+    &quot;disks&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/VMDisk&quot;
+      },
+      &quot;minItems&quot;: 1,
+      &quot;maxItems&quot;: 8,
+      &quot;description&quot;: &quot;One to eight disks; names unique within the VM.&quot;
+    },
+    &quot;nics&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/VMNIC&quot;
+      },
+      &quot;maxItems&quot;: 8,
+      &quot;description&quot;: &quot;Zero to eight network interfaces.&quot;
+    },
+    &quot;boot&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/VMBoot&quot;
+    },
+    &quot;media_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Install ISO (Media.id), empty for none. The ISO must reside on a storage target this VM uses, and is required when boot.media_boot_order is non-zero.&quot;
+    },
+    &quot;start_after_create&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;const&quot;: false,
+      &quot;description&quot;: &quot;Must be false; use the power controls to start a VM.&quot;
+    },
+    &quot;autostart&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;libvirt autostart, set while the stopped guest is defined so the host starts this VM on boot. It is not a start.&quot;
+    },
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;revision&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;description&quot;: &quot;Ignored; Controller assigns current + 1.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;name&quot;,
+    &quot;description&quot;,
+    &quot;guest_os&quot;,
+    &quot;cpu&quot;,
+    &quot;memory&quot;,
+    &quot;disks&quot;,
+    &quot;nics&quot;,
+    &quot;boot&quot;,
+    &quot;media_id&quot;,
+    &quot;start_after_create&quot;,
+    &quot;autostart&quot;,
+    &quot;request_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;The complete desired definition of an existing VM plus a stable request_id. Disks are matched to the current definition by name (storage, size and provisioning of an existing disk cannot change); interfaces by MAC, so send existing interfaces with the address the VM list reports and leave mac empty only for new ones.&quot;
 }</pre></details>
 </section></main></html>

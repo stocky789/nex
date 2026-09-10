@@ -276,10 +276,15 @@ func run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	cmd.WaitDelay = time.Second
-	var out cappedOutput
+	var out, stderr cappedOutput
 	cmd.Stdout = &out
-	cmd.Stderr = io.Discard
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		// The last stderr line is the reason (libvirt prints "error: ..."); it carries no secrets.
+		lines := strings.Split(strings.TrimSpace(stderr.String()), "\n")
+		if reason := strings.TrimSpace(lines[len(lines)-1]); reason != "" {
+			return nil, fmt.Errorf("%s failed: %w: %s", name, err, reason)
+		}
 		return nil, fmt.Errorf("%s failed: %w", name, err)
 	}
 	return out.Bytes(), nil

@@ -9,6 +9,7 @@ import (
 	"nex.local/nex/internal/protocol"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -459,6 +460,10 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 			if err != nil {
 				return err
 			}
+			// Held: the host's current definition is the truth, so the mirror follows it.
+			if err = c.refreshVM(tx, pool, host, s); err != nil {
+				return err
+			}
 			continue
 		}
 		reason := ""
@@ -629,7 +634,7 @@ func (c *Controller) adoptAppliances(tx *sql.Tx, host, pool string, inv *protoco
 
 func managedKind(kind string) bool {
 	switch kind {
-	case "storage-register", "network-register", "iso-import", "vm-create", "vm-power", "vm-media":
+	case "storage-register", "network-register", "iso-import", "vm-create", "vm-update", "vm-power", "vm-media":
 		return true
 	}
 	return false
@@ -772,6 +777,227 @@ func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf
 	spec.ID = fmt.Sprintf("%s-%s-4%s-a%s-%s", b[:8], b[8:12], b[13:16], b[17:20], b[20:])
 	cmd := protocol.Command{OperationID: random(), Kind: "vm-create", VM: &spec}
 	op, err := c.saveResource(tx, user, v.RequestID, v.PoolID, v.HostID, v.Name, spec.ID, cmd, v)
+	if err != nil || tx.Commit() != nil {
+		fail(w, 500, "VM operation storage failed")
+		return
+	}
+	write(w, 202, resourceResponse(cmd, op))
+}
+
+// refreshVM makes the Controller's mirror of a VM it already holds match the definition its
+// host reports as current, so an edit's result is the host's word and a Controller that missed
+// it converges on the next report. The row's payload keeps the original request for replay.
+func (c *Controller) refreshVM(tx *sql.Tx, pool, host string, reported protocol.VMCreateSpec) error {
+	if !vmName.MatchString(reported.Name) || protocol.ValidateVMSpec(reported) != nil {
+		return nil
+	}
+	var raw string
+	err := tx.QueryRow("SELECT r.command FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind='vm-create' AND r.id=? AND r.pool_id=? AND r.host_id=? AND o.status='succeeded'", reported.ID, pool, host).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var cmd protocol.Command
+	if json.Unmarshal([]byte(raw), &cmd) != nil || cmd.VM == nil {
+		return nil
+	}
+	next := reported
+	next.PoolID, next.HostID, next.StartAfterCreate = pool, host, false
+	held := *cmd.VM
+	held.StartAfterCreate = false
+	a, _ := json.Marshal(held)
+	b, _ := json.Marshal(next)
+	if string(a) == string(b) {
+		return nil
+	}
+	cmd.VM = &next
+	command, err := json.Marshal(cmd)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec("UPDATE managed_resources SET command=?,name=? WHERE id=? AND kind='vm-create'", string(command), next.Name, next.ID)
+	return err
+}
+
+type updateVMRequest struct {
+	RequestID string `json:"request_id"`
+	protocol.VMCreateSpec
+}
+
+// vmDefinition returns the mirrored current definition of a successfully created guest VM.
+func vmDefinition(tx *sql.Tx, id string) (protocol.VMCreateSpec, error) {
+	var raw string
+	var cmd protocol.Command
+	err := tx.QueryRow("SELECT r.command FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind='vm-create' AND r.id=? AND o.status='succeeded'", id).Scan(&raw)
+	if err != nil {
+		return protocol.VMCreateSpec{}, err
+	}
+	if json.Unmarshal([]byte(raw), &cmd) != nil || cmd.VM == nil {
+		return protocol.VMCreateSpec{}, fmt.Errorf("VM definition invalid")
+	}
+	return *cmd.VM, nil
+}
+
+// updateVM queues one revision of a VM's definition for its assigned host. It validates the
+// shape the way creation does, refuses what no edit may change and what the observed state
+// cannot take (so the operator hears it before a task is queued), and freezes every automatic
+// MAC into the definition so interfaces keep their identity across later edits. Name and MAC
+// uniqueness against other VMs and dedicated-memory admission are the host's, as for creation;
+// Core's own observation of the guest remains the authority on what applies live.
+func (c *Controller) updateVM(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	var v updateVMRequest
+	if !decode(w, r, &v) {
+		return
+	}
+	id := r.PathValue("id")
+	if (v.ID != "" && v.ID != id) || !nameValid(v.RequestID) || !vmName.MatchString(v.Name) {
+		fail(w, 400, "valid name and stable request_id required; id must match the path or be omitted")
+		return
+	}
+	if v.StartAfterCreate {
+		fail(w, 400, "start_after_create applies to creation only; use the power controls")
+		return
+	}
+	if err := protocol.ValidateVMSpec(v.VMCreateSpec); err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	if v.CPU.Count > 64 || v.Memory.SizeMiB > 262144 {
+		fail(w, 400, "a VM allows at most 64 vCPUs and 262144 MiB of memory")
+		return
+	}
+	payload := v
+	tx, err := c.db.Begin()
+	if err != nil {
+		fail(w, 500, "storage unavailable")
+		return
+	}
+	defer tx.Rollback()
+	if c.replayResource(w, tx, v.RequestID, "vm-update", payload) {
+		return
+	}
+	var appliance int
+	if tx.QueryRow("SELECT count(*) FROM appliances WHERE id=?", id).Scan(&appliance) == nil && appliance > 0 {
+		fail(w, 409, "the Controller appliance is managed from its host's local page, not edited here")
+		return
+	}
+	cur, err := vmDefinition(tx, id)
+	if err != nil {
+		fail(w, 404, "VM not found")
+		return
+	}
+	if v.PoolID != cur.PoolID || v.HostID != cur.HostID {
+		fail(w, 400, "editing does not move a VM to another pool or host")
+		return
+	}
+	spec := v.VMCreateSpec
+	// Frozen addresses go into the dispatched definition, never into the replay payload.
+	spec.NICs = append([]protocol.VMNIC{}, spec.NICs...)
+	spec.ID, spec.Revision = id, cur.Revision+1
+	stops, err := protocol.NeedsStop(cur, spec)
+	if err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	if err = c.managedHost(tx, cur.PoolID, cur.HostID); err != nil {
+		fail(w, 409, err.Error())
+		return
+	}
+	var raw string
+	var caps []string
+	tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", cur.HostID).Scan(&raw)
+	json.Unmarshal([]byte(raw), &caps)
+	if !slices.Contains(caps, protocol.UpdateCapability) {
+		fail(w, 409, "the VM's host agent does not support editing VMs; upgrade Nex Core")
+		return
+	}
+	var pending int
+	if err = tx.QueryRow("SELECT count(*) FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind IN ('vm-update','vm-power','vm-media') AND r.name=? AND o.status IN ('queued','dispatched')", id).Scan(&pending); err != nil {
+		fail(w, 500, "pending request lookup failed")
+		return
+	}
+	if pending > 0 {
+		fail(w, 409, "a change, power or media request for this VM is still pending; wait for its task")
+		return
+	}
+	var revoked bool
+	var inventory sql.NullString
+	if tx.QueryRow("SELECT revoked,inventory FROM hosts WHERE id=?", cur.HostID).Scan(&revoked, &inventory) == nil {
+		if state, _, _ := c.observeVM(cur.HostID, id, revoked, inventory); state == "running" && len(stops) > 0 {
+			names := make([]string, len(stops))
+			for i, s := range stops {
+				names[i] = string(s)
+			}
+			fail(w, 409, "stop the VM first to change "+strings.Join(names, ", "))
+			return
+		}
+	}
+	resolve := func(id, kind, what string) (protocol.Command, bool) {
+		cmd, e := readyResource(tx, id, kind, cur.PoolID, cur.HostID)
+		if e != nil {
+			fail(w, 404, what+" is not registered and verified on the VM's host and pool")
+		}
+		return cmd, e == nil
+	}
+	for _, d := range spec.Disks {
+		if _, ok := resolve(d.StorageID, "storage-register", "the disk storage target"); !ok {
+			return
+		}
+	}
+	for _, nic := range spec.NICs {
+		if _, ok := resolve(nic.NetworkID, "network-register", "the selected network"); !ok {
+			return
+		}
+	}
+	if spec.MediaID != "" {
+		media, ok := resolve(spec.MediaID, "iso-import", "the install ISO")
+		if !ok {
+			return
+		}
+		on := false
+		for _, d := range spec.Disks {
+			on = on || (media.Media != nil && media.Media.StorageID == d.StorageID)
+		}
+		if !on {
+			fail(w, 409, "the install ISO must be on one of the VM's disk storage targets")
+			return
+		}
+	}
+	inv, err := hostInventory(tx, cur.HostID)
+	if err != nil {
+		fail(w, 500, "inventory unavailable")
+		return
+	}
+	if spec.CPU.Count > inv.CPUCount || uint64(spec.Memory.SizeMiB)*1024*1024 > inv.MemoryBytes {
+		fail(w, 409, "requested CPU or RAM exceeds observed host capacity")
+		return
+	}
+	// Interfaces keep their identity by address: every automatic MAC is frozen into the
+	// definition here, drawn from the VM's derived range at the first index this VM does not
+	// already use. Uniqueness against other VMs is the host's check.
+	taken := map[string]bool{}
+	for _, nic := range spec.NICs {
+		taken[nic.MAC] = true
+	}
+	for i := range spec.NICs {
+		if spec.NICs[i].MAC != "" {
+			continue
+		}
+		for k := 0; k < 8; k++ {
+			if mac := protocol.DerivedMAC(id, k); !taken[mac] {
+				spec.NICs[i].MAC, taken[mac] = mac, true
+				break
+			}
+		}
+		if spec.NICs[i].MAC == "" {
+			fail(w, 409, "could not derive a free MAC address for this VM; set it manually")
+			return
+		}
+	}
+	cmd := protocol.Command{OperationID: random(), Kind: "vm-update", VM: &spec}
+	op, err := c.saveResource(tx, user, v.RequestID, cur.PoolID, cur.HostID, id, random(), cmd, payload)
 	if err != nil || tx.Commit() != nil {
 		fail(w, 500, "VM operation storage failed")
 		return

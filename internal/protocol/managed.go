@@ -113,11 +113,16 @@ const (
 	MaxNICMTU = 9216
 )
 
+// VMBoot's MediaBootOrder is the CD drive's place in the boot order. Every VM has the drive,
+// so the order is kept while it is empty and an ISO can be ejected from a running guest.
 type VMBoot struct {
 	Firmware       string `json:"firmware"`
 	Machine        string `json:"machine"`
 	MediaBootOrder int    `json:"media_boot_order"`
 }
+
+// VMCreateSpec is a VM's complete definition. It is the vm-create payload and, at a later
+// Revision, the vm-update payload; the host journals every revision and reports the current one.
 type VMCreateSpec struct {
 	ID               string   `json:"id"`
 	PoolID           string   `json:"pool_id"`
@@ -133,6 +138,73 @@ type VMCreateSpec struct {
 	MediaID          string   `json:"media_id"`
 	StartAfterCreate bool     `json:"start_after_create"`
 	Autostart        bool     `json:"autostart"`
+	// Revision is 0 at creation and current + 1 for each edit; Core refuses any other value.
+	Revision int `json:"revision"`
+}
+
+// UpdateCapability is reported by agents that apply vm-update commands.
+const UpdateCapability = "vm-update-v1"
+
+// VMChange names one difference between two revisions that a running guest cannot take;
+// Core refuses the whole edit before any effect, and the form disables the field while running.
+func (c VMChange) Error() string { return "stop the VM first to change " + string(c) }
+
+type VMChange string
+
+// NeedsStop lists what changing cur into next requires the VM to be shut off for, and refuses
+// what no edit may change. Disks match by name and interfaces by MAC (derived ones resolved
+// from the VM identity), so a reordered list is not a change. Additions and removals of disks
+// (except a SATA disk, which QEMU cannot hot-plug) and interfaces, the install media, the
+// description, the guest OS hint and autostart apply to a running guest.
+func NeedsStop(cur, next VMCreateSpec) ([]VMChange, error) {
+	var out []VMChange
+	add := func(changed bool, what string) {
+		if changed {
+			out = append(out, VMChange(what))
+		}
+	}
+	add(cur.Name != next.Name, "the name")
+	add(cur.CPU != next.CPU, "the CPU configuration")
+	add(cur.Memory != next.Memory, "the memory")
+	add(cur.Boot.Firmware != next.Boot.Firmware || cur.Boot.Machine != next.Boot.Machine, "the firmware or machine type")
+	add(cur.Boot.MediaBootOrder != next.Boot.MediaBootOrder, "the boot order")
+	before := map[string]VMDisk{}
+	for _, d := range cur.Disks {
+		before[d.Name] = d
+	}
+	for _, d := range next.Disks {
+		old, known := before[d.Name]
+		if !known {
+			add(d.Bus == "sata", "a SATA disk cannot be added while the VM runs: use VirtIO or SCSI, or stop the VM")
+			continue
+		}
+		if old.StorageID != d.StorageID || old.SizeGiB != d.SizeGiB || old.Thin != d.Thin {
+			return nil, fmt.Errorf("disk %s: storage, size and provisioning cannot be changed after creation", d.Name)
+		}
+		add(old.Bus != d.Bus, "disk "+d.Name+"'s bus")
+		add(old.BootOrder != d.BootOrder, "the boot order")
+	}
+	macs := map[string]VMNIC{}
+	for i, n := range cur.NICs {
+		macs[NICMAC(cur.ID, i, n)] = n
+	}
+	for i, n := range next.NICs {
+		mac := NICMAC(next.ID, i, n)
+		old, known := macs[mac]
+		if known && (old.NetworkID != n.NetworkID || old.Model != n.Model || old.MTU != n.MTU) {
+			add(true, "network interface "+mac)
+		}
+	}
+	return out, nil
+}
+
+// NICMAC is an interface's effective address: the manual one, or the one derived from the VM
+// identity and interface index.
+func NICMAC(vmID string, index int, n VMNIC) string {
+	if n.MAC != "" {
+		return n.MAC
+	}
+	return DerivedMAC(vmID, index)
 }
 
 var diskName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
@@ -228,9 +300,6 @@ func ValidateVMSpec(v VMCreateSpec) error {
 		if err := boot(d.BootOrder); err != nil {
 			return err
 		}
-	}
-	if v.MediaID == "" && v.Boot.MediaBootOrder != 0 {
-		return errors.New("an install media boot order needs an install ISO")
 	}
 	if err := boot(v.Boot.MediaBootOrder); err != nil {
 		return err
