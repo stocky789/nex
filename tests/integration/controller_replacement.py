@@ -107,6 +107,30 @@ def settled(lab, path, item_id):
     return item
 
 
+def vm_spec(scope, name, storage_id, network_id, media_id):
+    """A specification exercising the whole shape: two disks on one target with different
+    buses and provisioning, a derived and a manual MAC, and the ISO in the boot order."""
+    return {**scope, 'name': name, 'description': 'Controller replacement acceptance guest', 'guest_os': 'linux',
+            'cpu': {'count': 2, 'sockets': 2, 'cores': 1, 'threads': 1, 'model': 'host-model'},
+            'memory': {'mode': 'maximum', 'size_mib': 512},
+            'disks': [{'storage_id': storage_id, 'name': 'system', 'size_gib': 1, 'bus': 'virtio', 'thin': True, 'boot_order': 1},
+                      {'storage_id': storage_id, 'name': 'data', 'size_gib': 1, 'bus': 'sata', 'thin': False, 'boot_order': 0}],
+            'nics': [{'network_id': network_id, 'model': 'virtio', 'mac': ''},
+                     {'network_id': network_id, 'model': 'e1000e', 'mac': '52:54:00:ab:cd:ef'}],
+            'boot': {'firmware': 'bios', 'machine': '', 'media_boot_order': 2},
+            'media_id': media_id, 'start_after_create': False, 'autostart': False}
+
+
+def same_spec(item, sent):
+    """Every requested field must come back unchanged. pool_id/host_id are rewritten to the
+    Controller currently holding the host, and id is asserted separately against the VM."""
+    ignored = ('id', 'pool_id', 'host_id', 'request_id')
+    got = {k: v for k, v in item['spec'].items() if k not in ignored}
+    want = {k: v for k, v in sent.items() if k not in ignored}
+    assert got == want, (got, want)
+    return True
+
+
 def fresh_host(lab):
     hosts = lab.api('/api/v1/hosts')
     return hosts[0] if hosts and hosts[0]['connection'] == 'fresh' and 'managed-vm-v1' in (hosts[0].get('capabilities') or []) else None
@@ -152,11 +176,11 @@ def main():
         assert (storage_dir / 'nex-media' / (media['id'] + '.iso')).is_file(), 'agent did not store the transferred ISO'
         vm = None
         if args.vm:
-            spec = {**scope, 'request_id': str(uuid.uuid4()), 'name': 'replacement-guest', 'storage_id': storage['id'], 'network_id': network['id'],
-                    'media_id': media['id'], 'cpus': 1, 'memory_mib': 512, 'disk_gib': 1, 'firmware': 'bios'}
-            created = lab.api('/api/v1/vms', spec, expected=202)
+            spec = vm_spec(scope, 'replacement-guest', storage['id'], network['id'], media['id'])
+            created = lab.api('/api/v1/vms', {**spec, 'request_id': str(uuid.uuid4())}, expected=202)
             vm = settled(lab, '/api/v1/vms', created['vm_id'])
             assert vm['id'] in virsh('list', '--all', '--uuid'), 'VM not defined in libvirt'
+            assert same_spec(vm, spec) and vm['spec']['id'] == vm['id'], vm['spec']
         old_identity = json.loads((state / 'state.json').read_text())
         evidence['steps'].append({'controller': 'A', 'url': lab.url, **scope, 'storage': storage, 'network': applied, 'media': media, 'vm': vm})
         lab.passed('Controller A enrolled the real agent; the agent verified local storage, applied a pool network, transferred an uploaded ISO' + (' and defined a stopped VM in libvirt' if vm else ''))
@@ -193,7 +217,9 @@ def main():
         if vm:
             item = eventually(lambda: next((x for x in lab.api('/api/v1/vms') if x['id'] == vm['id']), None), 'VM adopted by Controller B', timeout=30)
             assert item['name'] == vm['name'] and item['status'] == 'succeeded' and item['host_id'] == host_b['id'] and item['pool_id'] == host_b['pool_id'], item
-            assert item['spec']['storage_id'] == storage['id'] and item['spec']['network_id'] == network['id'] and item['spec']['media_id'] == media['id'], item
+            # The whole specification, not just the references, must survive the replacement.
+            assert item['spec']['id'] == vm['id'] and same_spec(item, spec), item['spec']
+            assert item['spec']['pool_id'] == host_b['pool_id'] and item['spec']['host_id'] == host_b['id'], item['spec']
             item = eventually(lambda: next((x for x in lab.api('/api/v1/vms') if x['id'] == vm['id'] and x['state'] == 'shut off' and x['freshness'] == 'fresh'), None),
                               'adopted VM observed shut off by libvirt on Controller B', timeout=30)
             adopted['vm'] = item
@@ -213,9 +239,11 @@ def main():
         assert (storage_dir / 'nex-media' / (second['id'] + '.iso')).is_file()
         second_vm = None
         if vm:
-            created = lab.api('/api/v1/vms', {'pool_id': host_b['pool_id'], 'host_id': host_b['id'], 'request_id': str(uuid.uuid4()), 'name': 'after-replacement-guest',
-                                              'storage_id': storage['id'], 'network_id': network['id'], 'media_id': second['id'], 'cpus': 1, 'memory_mib': 512, 'disk_gib': 1, 'firmware': 'bios'}, expected=202)
+            after = vm_spec({'pool_id': host_b['pool_id'], 'host_id': host_b['id']}, 'after-replacement-guest', storage['id'], network['id'], second['id'])
+            after['nics'][1]['mac'] = '52:54:00:ab:cd:f0'  # pool-wide MAC uniqueness is enforced
+            created = lab.api('/api/v1/vms', {**after, 'request_id': str(uuid.uuid4())}, expected=202)
             second_vm = settled(lab, '/api/v1/vms', created['vm_id'])
+            assert same_spec(second_vm, after), second_vm['spec']
             assert second_vm['id'] in virsh('list', '--all', '--uuid') and vm['id'] in virsh('list', '--all', '--uuid')
             adopted['vm_after_replacement'] = second_vm
         evidence['steps'].append({'controller': 'B', 'url': lab.url, 'host_id': host_b['id'], 'pool_id': host_b['pool_id'], 'adopted': adopted,

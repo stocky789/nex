@@ -1,21 +1,30 @@
 #!/usr/bin/python3
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Root helper: apply a pending nex-controller package update."""
-import hashlib
+"""Root helper: apply a pending nex-controller package update.
+
+Runs outside nex-controller.service, so apt is never killed part-way through a dpkg
+transaction by the service restart its own postinst triggers. apt owns the download,
+GPG verification and dependency resolution against the signed Nex archive that the
+package configured at install time; this helper only sequences the upgrade and
+reports progress back to the web UI.
+"""
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
-import tempfile
 import time
-import urllib.request
 
 STATE = Path('/var/lib/nex-controller')
 PENDING = Path('/var/lib/nex-controller/pending-update.json')
 PROGRESS = STATE / 'update-progress.json'
 DEFAULT_REPO = 'https://nexvirtualization.com/apt'
 SERVICE = 'nex-controller.service'
+APT_SOURCE = Path('/etc/apt/sources.list.d/nex.sources')
+APT_KEYRING = '/usr/share/keyrings/nex-archive-keyring.gpg'
+APT = ['apt-get', '-q', '-o', 'Dpkg::Options::=--force-confold',
+       '-o', 'DPkg::Lock::Timeout=60']
+APT_ENV = {**os.environ, 'DEBIAN_FRONTEND': 'noninteractive', 'LC_ALL': 'C'}
 
 
 def normalize_repo(repo):
@@ -41,6 +50,12 @@ def fail(message):
     write_progress('failed', 0, error=message)
     print(message, file=sys.stderr)
     sys.exit(1)
+
+
+def restart_then_fail(message):
+    """A failed upgrade must not leave the management plane stopped."""
+    run(['systemctl', 'start', SERVICE], check=False)
+    fail(message)
 
 
 def write_progress(phase, percent, message='', error=''):
@@ -71,42 +86,33 @@ def load_pending():
     return package, repo
 
 
-def fetch_index(repo):
-    with urllib.request.urlopen(repo + '/updates.json', timeout=60) as response:
-        return json.load(response)
-
-
-def download(repo, info, dest):
-    filename = info['filename']
-    url = repo + '/' + filename.lstrip('/')
-    path = dest / Path(filename).name
-    expected = int(info.get('size') or 0)
-    req = urllib.request.Request(url)
-    with urllib.request.urlopen(req, timeout=3600) as response, path.open('wb') as out:
-        total = int(response.headers.get('Content-Length') or expected or 0)
-        digest = hashlib.sha256()
-        read = 0
-        last = -1
-        while True:
-            chunk = response.read(1024 * 1024)
-            if not chunk:
-                break
-            out.write(chunk)
-            digest.update(chunk)
-            read += len(chunk)
-            if total > 0:
-                pct = min(100, int(read * 100 / total))
-                if pct != last:
-                    last = pct
-                    write_progress('downloading', pct, message='Downloading package')
-    if digest.hexdigest().lower() != info['sha256'].lower():
-        fail('sha256 mismatch')
-    write_progress('downloading', 100, message='Downloading package')
-    return path
+def write_apt_source(repo):
+    """Keep the archive source aligned with a repo URL changed since install."""
+    content = ('Types: deb\n'
+               f'URIs: {repo.rstrip("/")}\n'
+               'Suites: nex\n'
+               'Components: main\n'
+               'Architectures: amd64\n'
+               f'Signed-By: {APT_KEYRING}\n')
+    try:
+        if APT_SOURCE.is_file() and APT_SOURCE.read_text() == content:
+            return
+        APT_SOURCE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = APT_SOURCE.with_suffix('.tmp')
+        tmp.write_text(content)
+        os.chmod(tmp, 0o644)
+        tmp.replace(APT_SOURCE)
+    except OSError as error:
+        fail(f'could not write {APT_SOURCE}: {error}')
 
 
 def run(cmd, check=True):
     return subprocess.run(cmd, check=check, text=True, capture_output=True)
+
+
+def installed_version(package):
+    result = run(['dpkg-query', '-W', '-f=${Version}', package], check=False)
+    return result.stdout.strip()
 
 
 def service_active():
@@ -145,18 +151,25 @@ def main():
         fail('root required')
     STATE.mkdir(mode=0o700, exist_ok=True)
     package, repo = load_pending()
-    write_progress('downloading', 0, message='Downloading package')
-    index = fetch_index(repo)
-    info = (index.get('packages') or {}).get(package)
-    if not info or not info.get('filename') or not info.get('sha256'):
-        fail('package missing from updates index')
-    with tempfile.TemporaryDirectory(prefix='nex-controller-update-') as temporary:
-        deb = download(repo, info, Path(temporary))
-        write_progress('installing', 90, message='Installing package')
-        run(['systemctl', 'stop', SERVICE], check=False)
-        result = run(['dpkg', '-i', str(deb)], check=False)
-        if result.returncode != 0:
-            fail('dpkg failed: ' + ((result.stderr or result.stdout or '')[-2000:]))
+    write_apt_source(repo)
+    before = installed_version(package)
+
+    write_progress('downloading', 10, message='Refreshing package index')
+    # A partly failing refresh still leaves usable lists; the install below is the
+    # authority on whether a newer version was actually available.
+    subprocess.run(APT + ['update'], env=APT_ENV, check=False, capture_output=True, text=True)
+
+    write_progress('installing', 50, message='Installing package')
+    run(['systemctl', 'stop', SERVICE], check=False)
+    result = subprocess.run(APT + ['install', '-y', '--only-upgrade', package],
+                            env=APT_ENV, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        restart_then_fail('apt failed: ' + ((result.stderr or result.stdout or '')[-2000:]))
+    # apt exits 0 when the installed version is already the candidate, so compare
+    # rather than trusting the exit status to mean an upgrade happened.
+    if installed_version(package) == before:
+        restart_then_fail(f'no newer {package} available from {repo}')
+
     write_progress('restarting', 98, message='Restarting service')
     ensure_service_running()
     PENDING.unlink(missing_ok=True)

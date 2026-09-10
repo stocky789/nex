@@ -12,9 +12,14 @@ install -d "$pkg/DEBIAN" \
   "$pkg/usr/local/share/nex" \
   "$pkg/usr/lib/systemd/system" \
   "$pkg/usr/share/doc/nex-controller" \
+  "$pkg/usr/share/keyrings" \
   "$pkg/etc/nex"
 printf 'repo_url=https://nexvirtualization.com/apt\n' > "$pkg/etc/nex/updates.conf"
 printf '/etc/nex/updates.conf\n' > "$pkg/DEBIAN/conffiles"
+# The Nex APT archive public key; postinst writes the matching signed apt source so
+# apply-update can upgrade through apt with dependency resolution and signature
+# verification instead of installing a bare .deb.
+install -m644 packaging/core-local/nex-archive-keyring.gpg "$pkg/usr/share/keyrings/nex-archive-keyring.gpg"
 install -m755 /build/nex-controller "$pkg/usr/local/lib/nex/"
 install -m755 packaging/controller/run-controller "$pkg/usr/local/lib/nex/"
 install -m755 packaging/controller/apply-update "$pkg/usr/local/lib/nex/"

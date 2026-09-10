@@ -18,8 +18,16 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Console quality-of-life features, guest tools observation, and the collapse to a single Nex
 Core version. This is the version the packages currently build as (`0.1.5~alpha1`).
 
+### Major Feature
+
+- Replaced VM creation with the full specification: a six-step wizard covering name, description and guest OS; vCPU count, sockets/cores/threads and CPU model; a dedicated or maximum memory mode; **multiple disks** with their own storage, name, size, bus and thin/thick provisioning; **multiple network interfaces** with adapter model and automatic or manual MAC; firmware, machine type, install ISO and a per-device boot order you can reorder; and start-after-creation and autostart. VM details now show every disk and interface. Creation still never starts a guest: **Start after creation** issues a separate start task once creation succeeds. Existing lab VMs must be recreated — this alpha has no upgrade path for the old single-disk shape.
+
 ### Minor Feature
 
+- **Check** and **Update** now use the system package manager against the signed Nex repository, instead of downloading a single package file and installing it directly. Updates that need a new supporting component now install cleanly rather than failing part-way, and every package is signature-checked. Progress is reported in steps rather than as a download percentage, and the available-version check refreshes at most once every five minutes.
+- Nex Core is now installed only from its own ISO. Installing the Nex package onto an ordinary Debian system is refused with an explanation: Nex Core is a distribution, and the installer establishes the storage, networking, console identity and recovery paths that a supported host depends on. Existing hosts continue to update normally.
+- The Controller appliance now carries the Nex repository signing key and repository entry, which it previously lacked entirely.
+- Releases are now made by tagging. Pushing a version tag builds the ISO and both packages at that version and publishes them to the website automatically, and refuses to build at all if the tag and the changelog disagree. ISO downloads keep the newest three releases.
 - Controller deploy password now also signs in to the appliance VM console as **admin** (same credentials as the web UI).
 - Every enrolled host gets a default local storage registration named **ISO** at `/var/lib/libvirt/images` (created on install), so ISO upload and VM disks work without manually registering storage.
 - Extended the VM console: send key combinations, fit/actual/resize-to-window display modes, quality presets, view-only mode, screenshots, reconnect, full screen with the toolbar and a console-only browser window.

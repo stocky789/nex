@@ -23,6 +23,11 @@ apt_local() {
     apt-get -o Dir::Etc::sourcelist=/var/cache/nex-install/offline.list \
         -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 "$@"
 }
+# Stamp the system as Nex Core before installing anything: nex-core-local's preinst
+# refuses a fresh install without it, so the package cannot turn an arbitrary Debian
+# system into something that resembles a Nex Core host.
+mkdir -p /etc/nex
+printf 'NEX_CORE=1\nINSTALLED_BY=nex-core-iso\n' > /etc/nex/core-release
 apt_local update
 apt_local install -y --no-install-recommends $(cat /var/cache/nex-install/packages.txt)
 # nex-core-local's postinst diverts Debian's os-release symlink and writes the

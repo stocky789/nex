@@ -23,6 +23,8 @@ build**. Both are for local lab evaluation; the installer does not yet deliver a
    (QEMU guest agent and spice-vdagent; OS, hostname, addresses and clipboard readiness).
 12. [Check and apply software updates](software-updates.md)
    (Controller and host-local package updates from a configured repo).
+13. [Publish a Nex Core release](publish-a-release.md)
+   (authorized maintainers; tag-driven ISO and package build, and website publication).
 
 Each procedure states its prerequisites, expected outcome, troubleshooting, and verification
 limits. A documented procedure is not automatically a tested procedure: check its Verification
@@ -35,8 +37,9 @@ Pools are created automatically: each enrolled host becomes the pool master of i
 own pool, so there is no pool-creation step.
 The separate appliance slice adds local deployment and restricted VM power recovery.
 The managed-VM creation slice adds pool-owned local storage, VLAN or existing guest networks,
-ISO upload and creation of a stopped VM, with separate verification evidence.
-Central VM power/edit/delete controls, consoles, managed snapshots/backups/restores,
+ISO upload and creation of a stopped VM with multiple disks and network interfaces, either
+memory mode, an explicit boot order and optional autostart, with separate verification evidence.
+Editing and deleting a VM, managed snapshots/backups/restores,
 migrations, HA, and Docker Container Services remain **planned and unavailable**.
 Their intended behavior belongs in the
 [roadmap](../plans/2026-09-08-nex-platform.md).

@@ -9,6 +9,7 @@ import (
 	"nex.local/nex/internal/protocol"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -310,14 +311,22 @@ func (c *Controller) registerResource(w http.ResponseWriter, r *http.Request, us
 const (
 	defaultLocalStorageName = "ISO"
 	defaultLocalStoragePath = "/var/lib/libvirt/images"
+	// hostMemoryReserveMiB is kept for the host itself, matching the reserve the agent applies
+	// in its own capacity preflight.
+	hostMemoryReserveMiB = 2048
 )
 
-// adoptManaged mirrors the pool-scoped configuration the host reports as applied from its
-// journal, so a replaced Controller recovers a pool by connecting its master. Entries keep
-// their IDs and names, get the current pool/host, and are recorded as succeeded without a
-// command: re-running them on the host would fail as already registered. Entries that are
-// invalid, already held, or whose references do not resolve are skipped.
+// adoptManaged is the managed step of a host report, run inside the report transaction after
+// its results have been applied. It first issues the follow-on starts finished creations asked
+// for, then mirrors the pool-scoped configuration the host reports as applied from its journal,
+// so a replaced Controller recovers a pool by connecting its master. Adopted entries keep their
+// IDs and names, get the current pool/host, and are recorded as succeeded without a command:
+// re-running them on the host would fail as already registered. Entries that are invalid,
+// already held, or whose references do not resolve are skipped.
 func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Inventory) error {
+	if err := c.startAfterCreate(tx, host); err != nil {
+		return err
+	}
 	m := inv.Managed
 	if m == nil {
 		return nil
@@ -398,13 +407,22 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		}
 	}
 	for _, s := range m.VMs {
-		if !vmName.MatchString(s.Name) || s.CPUs < 1 || s.CPUs > 64 || s.MemoryMiB < 512 || s.MemoryMiB > 262144 || s.DiskGiB < 1 || s.DiskGiB > 2048 || (s.Firmware != "bios" && s.Firmware != "uefi") {
+		if !vmName.MatchString(s.Name) || protocol.ValidateVMSpec(s) != nil || s.CPU.Count > 64 || s.Memory.SizeMiB > 262144 {
 			continue
 		}
 		ready := true
-		for _, dep := range []struct{ id, kind string }{{s.StorageID, "storage-register"}, {s.NetworkID, "network-register"}, {s.MediaID, "iso-import"}} {
-			cmd, e := readyResource(tx, dep.id, dep.kind, pool, host)
-			if e != nil || (cmd.Media != nil && cmd.Media.StorageID != s.StorageID) {
+		for _, d := range s.Disks {
+			if _, e := readyResource(tx, d.StorageID, "storage-register", pool, host); e != nil {
+				ready = false
+			}
+		}
+		for _, n := range s.NICs {
+			if _, e := readyResource(tx, n.NetworkID, "network-register", pool, host); e != nil {
+				ready = false
+			}
+		}
+		if s.MediaID != "" {
+			if _, e := readyResource(tx, s.MediaID, "iso-import", pool, host); e != nil {
 				ready = false
 			}
 		}
@@ -413,6 +431,9 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		}
 		spec := s
 		spec.PoolID, spec.HostID = pool, host
+		// Start after creation is a one-shot creation action, not part of the VM definition:
+		// the creation it belonged to already finished, so a new Controller never repeats it.
+		spec.StartAfterCreate = false
 		payload := spec
 		payload.ID = ""
 		v := createVMRequest{RequestID: "adopt-vm:" + host + ":" + s.ID, VMCreateSpec: payload}
@@ -550,13 +571,99 @@ type createVMRequest struct {
 	protocol.VMCreateSpec
 }
 
+// vmMACs lists a VM's effective interface addresses: the supplied MAC, or the one derived
+// from the VM identity and interface index.
+func vmMACs(v protocol.VMCreateSpec) []string {
+	out := make([]string, len(v.NICs))
+	for i, n := range v.NICs {
+		out[i] = n.MAC
+		if n.MAC == "" {
+			out[i] = protocol.DerivedMAC(v.ID, i)
+		}
+	}
+	return out
+}
+
+// poolMACs collects the addresses the pool's other VMs hold, supplied or derived. A failed
+// creation holds none, matching how a failed registration releases its host resource.
+func poolMACs(tx *sql.Tx, pool string) (map[string]bool, error) {
+	rows, err := tx.Query("SELECT r.command FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind='vm-create' AND r.pool_id=? AND o.status!='failed'", pool)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var raw string
+		if err = rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var cmd protocol.Command
+		if json.Unmarshal([]byte(raw), &cmd) != nil || cmd.VM == nil {
+			continue
+		}
+		for _, mac := range vmMACs(*cmd.VM) {
+			out[mac] = true
+		}
+	}
+	return out, rows.Err()
+}
+
+// hostMemory sums what this host has already promised, in MiB. Dedicated VMs are counted at
+// their full size because that memory is never handed to another VM; maximum VMs are counted
+// separately because they reserve nothing and are allowed to oversubscribe. A VM being created
+// counts from the moment it is accepted: creation leaves it stopped, so observed host memory
+// proves nothing about what is already committed.
+func hostMemory(tx *sql.Tx, host string) (dedicated, ceilings int, err error) {
+	rows, err := tx.Query("SELECT r.command FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind='vm-create' AND r.host_id=? AND o.status!='failed'", host)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var raw string
+		if err = rows.Scan(&raw); err != nil {
+			return 0, 0, err
+		}
+		var cmd protocol.Command
+		if json.Unmarshal([]byte(raw), &cmd) != nil || cmd.VM == nil {
+			continue
+		}
+		ceilings += cmd.VM.Memory.SizeMiB
+		if cmd.VM.Memory.Mode == "dedicated" {
+			dedicated += cmd.VM.Memory.SizeMiB
+		}
+	}
+	return dedicated, ceilings, rows.Err()
+}
+
+// macsFree reports whether every address is free in the pool and distinct within the VM.
+func macsFree(macs []string, used map[string]bool) bool {
+	seen := map[string]bool{}
+	for _, mac := range macs {
+		if used[mac] || seen[mac] {
+			return false
+		}
+		seen[mac] = true
+	}
+	return true
+}
+
 func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf string) {
 	var v createVMRequest
 	if !decode(w, r, &v) {
 		return
 	}
-	if v.ID != "" || !nameValid(v.RequestID) || !vmName.MatchString(v.Name) || v.CPUs < 1 || v.CPUs > 64 || v.MemoryMiB < 512 || v.MemoryMiB > 262144 || v.DiskGiB < 1 || v.DiskGiB > 2048 || (v.Firmware != "bios" && v.Firmware != "uefi") {
-		fail(w, 400, "valid name, stable request_id, CPU (1–64), RAM (512–262144 MiB), disk (1–2048 GiB) and bios/uefi required")
+	if v.ID != "" || !nameValid(v.RequestID) || !vmName.MatchString(v.Name) {
+		fail(w, 400, "valid name and stable request_id required; the Controller assigns the VM identity")
+		return
+	}
+	if err := protocol.ValidateVMSpec(v.VMCreateSpec); err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	if v.CPU.Count > 64 || v.Memory.SizeMiB > 262144 {
+		fail(w, 400, "a VM allows at most 64 vCPUs and 262144 MiB of memory")
 		return
 	}
 	tx, err := c.db.Begin()
@@ -572,14 +679,36 @@ func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf
 		fail(w, 409, err.Error())
 		return
 	}
-	for _, dep := range []struct{ id, kind string }{{v.StorageID, "storage-register"}, {v.NetworkID, "network-register"}, {v.MediaID, "iso-import"}} {
-		cmd, e := readyResource(tx, dep.id, dep.kind, v.PoolID, v.HostID)
+	// Every reference must name a registration this host has verified in this pool.
+	resolve := func(id, kind, what string) (protocol.Command, bool) {
+		cmd, e := readyResource(tx, id, kind, v.PoolID, v.HostID)
 		if e != nil {
-			fail(w, 409, e.Error())
+			fail(w, 404, what+" is not registered and verified on the selected host and pool")
+		}
+		return cmd, e == nil
+	}
+	for _, d := range v.Disks {
+		if _, ok := resolve(d.StorageID, "storage-register", "the disk storage target"); !ok {
 			return
 		}
-		if cmd.Media != nil && cmd.Media.StorageID != v.StorageID {
-			fail(w, 409, "ISO must be on the selected storage")
+	}
+	for _, nic := range v.NICs {
+		if _, ok := resolve(nic.NetworkID, "network-register", "the selected network"); !ok {
+			return
+		}
+	}
+	if v.MediaID != "" {
+		media, ok := resolve(v.MediaID, "iso-import", "the install ISO")
+		if !ok {
+			return
+		}
+		// Nex Core attaches the ISO from one of the VM's own storage targets.
+		on := false
+		for _, d := range v.Disks {
+			on = on || (media.Media != nil && media.Media.StorageID == d.StorageID)
+		}
+		if !on {
+			fail(w, 409, "the install ISO must be on one of the VM's disk storage targets")
 			return
 		}
 	}
@@ -588,10 +717,27 @@ func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf
 		fail(w, 500, "inventory unavailable")
 		return
 	}
-	if v.CPUs > inv.CPUCount || uint64(v.MemoryMiB)*1024*1024 > inv.MemoryBytes {
+	// The memory ceiling is what the host must be able to meet, in both memory modes.
+	if v.CPU.Count > inv.CPUCount || uint64(v.Memory.SizeMiB)*1024*1024 > inv.MemoryBytes {
 		fail(w, 409, "requested CPU or RAM exceeds observed host capacity")
 		return
 	}
+	// Dedicated memory is a promise, so it is admission-controlled against what this host has
+	// already promised rather than against its total RAM alone. Maximum reserves nothing and is
+	// allowed to oversubscribe; the operator is told when it does.
+	dedicated, ceilings, err := hostMemory(tx, v.HostID)
+	if err != nil {
+		fail(w, 500, "host memory commitment lookup failed")
+		return
+	}
+	hostMiB := int(inv.MemoryBytes / (1024 * 1024))
+	if v.Memory.Mode == "dedicated" && dedicated+v.Memory.SizeMiB+hostMemoryReserveMiB > hostMiB {
+		fail(w, 409, "dedicated memory exceeds what this host has left to promise; free a dedicated VM or use the maximum memory mode")
+		return
+	}
+	// Maximum-mode ceilings may exceed host RAM; the wizard warns from the VM list it already
+	// holds, so the operator sees it while choosing rather than after the VM exists.
+	_ = ceilings
 	var n int
 	if tx.QueryRow("SELECT count(*) FROM managed_resources WHERE kind='vm-create' AND pool_id=? AND name=?", v.PoolID, v.Name).Scan(&n) != nil {
 		fail(w, 500, "VM lookup failed")
@@ -601,9 +747,31 @@ func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf
 		fail(w, 409, "VM name already reserved in pool")
 		return
 	}
+	used, err := poolMACs(tx, v.PoolID)
+	if err != nil {
+		fail(w, 500, "MAC lookup failed")
+		return
+	}
+	for _, nic := range v.NICs {
+		if nic.MAC != "" && used[nic.MAC] {
+			fail(w, 409, "MAC address "+nic.MAC+" is already used by another VM in this pool")
+			return
+		}
+	}
 	spec := v.VMCreateSpec
-	b := random()[:32]
-	spec.ID = fmt.Sprintf("%s-%s-4%s-a%s-%s", b[:8], b[8:12], b[13:16], b[17:20], b[20:])
+	// Derived MACs come from the VM identity, so an identity whose derived addresses would
+	// collide in the pool, or with a supplied one, is simply drawn again.
+	for attempt := 0; ; attempt++ {
+		b := random()[:32]
+		spec.ID = fmt.Sprintf("%s-%s-4%s-a%s-%s", b[:8], b[8:12], b[13:16], b[17:20], b[20:])
+		if macsFree(vmMACs(spec), used) {
+			break
+		}
+		if attempt == 8 {
+			fail(w, 409, "could not derive free MAC addresses for this VM; set them manually")
+			return
+		}
+	}
 	cmd := protocol.Command{OperationID: random(), Kind: "vm-create", VM: &spec}
 	op, err := c.saveResource(tx, user, v.RequestID, v.PoolID, v.HostID, v.Name, spec.ID, cmd, v)
 	if err != nil || tx.Commit() != nil {
@@ -611,4 +779,60 @@ func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf
 		return
 	}
 	write(w, 202, resourceResponse(cmd, op))
+}
+
+// startAfterCreate issues the existing vm-power start for the host's VMs whose creation has
+// succeeded and asked for one; the managed create engine itself never starts a guest. A
+// creation that failed or needs attention is never started, and the stable request_id makes
+// the start a single durable attempt. A host that cannot accept central power requests records
+// the start as not performed with its reason instead, so the VM is still created, the operator
+// sees why it is not running, and the Controller does not retry on every report.
+func (c *Controller) startAfterCreate(tx *sql.Tx, host string) error {
+	rows, err := tx.Query("SELECT r.id,r.pool_id,r.command FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind='vm-create' AND r.host_id=? AND o.status='succeeded' AND NOT EXISTS(SELECT 1 FROM managed_resources p WHERE p.request_id='start-after-create:'||r.id)", host)
+	if err != nil {
+		return err
+	}
+	type pending struct{ vm, pool string }
+	var starts []pending
+	for rows.Next() {
+		var id, pool, raw string
+		if err = rows.Scan(&id, &pool, &raw); err != nil {
+			rows.Close()
+			return err
+		}
+		var cmd protocol.Command
+		if json.Unmarshal([]byte(raw), &cmd) == nil && cmd.VM != nil && cmd.VM.StartAfterCreate {
+			starts = append(starts, pending{id, pool})
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil || len(starts) == 0 {
+		return err
+	}
+	var raw string
+	var caps []string
+	tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", host).Scan(&raw)
+	json.Unmarshal([]byte(raw), &caps)
+	powered := slices.Contains(caps, protocol.PowerCapability)
+	for _, s := range starts {
+		request, opID, status := "start-after-create:"+s.vm, random(), "queued"
+		if !powered {
+			status = "failed"
+		}
+		// The same shape powerVM queues, including the VM id as the row name, so one
+		// in-flight power request per VM keeps being enforced.
+		cmd := protocol.Command{OperationID: opID, Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: s.vm, PoolID: s.pool, HostID: host, Action: "start"}}
+		payload := map[string]string{"vm_id": s.vm, "request_id": request, "action": "start"}
+		op, err := c.saveResourceStatus(tx, "system", request, s.pool, host, s.vm, opID, status, cmd, payload)
+		if err != nil {
+			return err
+		}
+		if !powered {
+			if _, err = tx.Exec("UPDATE operations SET error=? WHERE id=?", "start after creation was not performed: the VM's host agent does not support central power requests; upgrade Nex Core and start the VM manually", op.ID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

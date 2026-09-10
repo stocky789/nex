@@ -1,0 +1,63 @@
+{
+  "summary": "Full VM creation system replacing the flat single-disk shape. protocol.VMCreateSpec now carries identity/description/guest OS, CPU count with optional topology and model, a dedicated or maximum memory mode, 1-8 disks, 0-8 NICs with derived or manual MACs, firmware/machine/per-device boot order, install media, autostart and start-after-creation; shared bounds live in internal/protocol and are enforced identically by Controller and Core. Core builds one <disk> and one <interface> per entry with per-device <boot order>, allocates every disk under its own storage target with per-target free-space checks and exclusive ownership, and sets the libvirt autostart property; the managed create engine still never starts a guest. Controller resolves every reference, enforces pool-wide MAC uniqueness and capacity against the memory ceiling in both modes, and issues the existing vm-power start only after creation succeeds. The wizard moves out of web/src/managed.tsx into a new six-step web/src/vm-create.tsx. API impact: changed contract. Affected operations: createVM (POST /api/v1/vms) request body, listManagedAppliances (GET /api/v1/vms) VM inventory shape, and the Controller-to-Core vm-create command payload under the existing managed-vm-v1 capability. powerVM (POST /api/v1/vms/{id}/power) and the vm-power command are the existing contract and are unchanged; they are now also issued as the follow-on start. Authentication, authorization, CSRF, operation persistence, request_id replay and audit attribution are unchanged, and protocol version 1 and the managed-vm-v1/vm-power-v1 capability names are unchanged. No compatibility shim: Nex is unreleased and existing lab VMs and journal entries are recreated (decision recorded in docs/plans/2026-09-10-vm-creation-system.md).",
+  "paths": [
+    "internal/protocol/managed.go",
+    "internal/protocol/managed_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/vlan_test.go",
+    "internal/controller/managed.go",
+    "internal/controller/managed_test.go",
+    "internal/controller/power_test.go",
+    "internal/agent/managed_test.go",
+    "web/src/vm-create.tsx",
+    "web/src/managed.tsx",
+    "tests/test_api_contract.py",
+    "tests/integration/managed_vm.py",
+    "tests/integration/managed_vm_browser.py",
+    "tests/integration/controller_replacement.py",
+    "tests/integration/fresh_install_browser.py",
+    "tests/integration/console_lab.py",
+    "tests/integration/console_features_lab.py",
+    "tests/integration/vlan_lab.py",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/guest-tools.md",
+    "docs/plans/2026-09-10-vm-creation-system.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "CHANGELOG.md",
+    "docs/guide/README.md",
+    "docs/qa/vm-creation/checks.md",
+    "docs/changes/2026-09-10-vm-creation-system.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The creation workflow is materially different for operators: six wizard pages instead of four, repeatable disks and network interfaces, two memory modes with their real limits, automatic or manual MAC addresses, an editable per-device boot order, autostart, and a start-after-creation that shows two tasks because creation still never boots a guest. Create a virtual machine documents the six pages, adds a Memory modes section, and adds the new refusal cases (impossible CPU topology, duplicate disk name, non-unicast or pool-duplicate MAC, ISO not on a storage target this VM uses, follow-on start failing on a host without central power support). Install guest tools gains the balloon-driver dependency that Maximum-mode reclaim actually needs and links to the memory modes section. The two other changed files under docs/changes/ are change records, which the documentation gate exempts from recursive assessment.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/guest-tools.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "The createVM request body, the listManagedAppliances VM inventory and the vm-create command payload all carry the new specification, so docs/API.md documents every field, the bounds enforced identically on both sides, the createVM refusal order and status codes, the follow-on vm-power start including the failed power operation on a host without vm-power-v1, and the managed-journal record a replaced Controller re-adopts. New VMCPU, VMMemory, VMDisk, VMNIC and VMBoot schemas plus the rewritten VMCreateSpec/CreateVMRequest are in docs/api/openapi.json, and docs/api/index.html is the regenerated reference.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "verification": {
+    "method": "Actually run on this workstation (Arch Linux, go1.26, uncommitted working tree) with the results recorded here. go build ./... exit 0. go vet ./... exit 0. go test -count=1 ./... exit 0 with no FAIL lines; internal/protocol, internal/vmhost, internal/controller, internal/agent, internal/localcore, internal/nexupdate, internal/websecurity and internal/wsock all reported ok, covering shared bounds and topology validation, domain XML for multiple disks and NICs, per-device boot order, both memory modes and their balloon devices, both firmware paths, derived and manual MACs, per-target disk planning with capacity preflight, and the Controller specification/reference/scope/MAC/capacity refusals plus start-after-create dispatch. npm run typecheck exit 0 and npm run build exit 0 in web/, covering the new web/src/vm-create.tsx. python3 -m unittest tests.test_api_contract -v ran 21 tests, OK, including ManagedVMContractTests.test_managed_request_fields_and_command_payloads_match_runtime and the generated-reference currency checks. python3 scripts/generate_api.py --check exit 0, reporting index.html is current and local.html is current. python3 scripts/check_docs.py --all passed. The full python suite (python3 -m unittest discover -s tests -p 'test_*.py') ran 86 tests with 1 error and 6 skips, none of them in this change's scope: test_website_hosting errors because nginx is not installed here (CI installs nginx-core), 4 test_apt_publish tests skip without dpkg-deb/dpkg-scanpackages and 2 test_core_local_package tests skip without dpkg-divert. NOT RUN and therefore OUTSTANDING: no browser walkthrough of the six-page wizard was executed for this change. docs/qa/managed-vm/browser-simulated-results.json is unmodified and still records a four-stage creation flow with the old flat single-disk spec, so it is evidence for the previous shape only and its stated limits carry over; no docs/qa report and no .cache/managed-vm-browser evidence directory exist for the new wizard. Also outstanding because they need disposable lab hosts with libvirt/KVM that are unavailable here: tests/integration/managed_vm_browser.py, tests/integration/managed_vm.py, tests/integration/controller_replacement.py --vm, fresh_install_browser.py, console_lab.py, console_features_lab.py and vlan_lab.py were updated for the new shape but not executed, so real per-disk allocation, thick preallocation, exclusive ownership per disk, the libvirt autostart property, the freePageReporting balloon in a running guest, the follow-on start against a real host and the journal round-trip through a replaced Controller are unverified. The Phase 2 acceptance gate (real guest installation from an uploaded ISO, reboot data survival, Controller-outage survival and reconnect reconciliation) is likewise not exercised by this change and remains open in docs/plans/2026-09-10-vm-creation-system.md.",
+    "evidence": [
+      "internal/protocol/managed_test.go",
+      "internal/vmhost/managed_test.go",
+      "internal/controller/managed_test.go",
+      "internal/agent/managed_test.go",
+      "tests/test_api_contract.py",
+      "docs/qa/managed-vm/browser-simulated-results.json"
+    ]
+  }
+}

@@ -15,6 +15,20 @@ if [ "$1" = configure ]; then
     if [ ! -f /etc/nex/updates.conf ] || grep -Eq 'repo_url=http://(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)' /etc/nex/updates.conf; then
         printf 'repo_url=https://nexvirtualization.com/apt\n' > /etc/nex/updates.conf
     fi
+    # Configure the Nex APT source so apply-update can upgrade through apt, signed by
+    # the packaged archive key. The base URL follows repo_url; suite/component are the
+    # repo's. apply-update rewrites this if the repo URL changes later.
+    repo=$(sed -n 's/^repo_url=//p' /etc/nex/updates.conf | head -1)
+    [ -n "$repo" ] || repo=https://nexvirtualization.com/apt
+    install -d -m755 /etc/apt/sources.list.d
+    cat > /etc/apt/sources.list.d/nex.sources <<APT
+Types: deb
+URIs: $repo
+Suites: nex
+Components: main
+Architectures: amd64
+Signed-By: /usr/share/keyrings/nex-archive-keyring.gpg
+APT
     # Prefer the packaged unit over an older appliance copy under /etc.
     if [ -f /etc/systemd/system/nex-controller.service ]; then
         rm -f /etc/systemd/system/nex-controller.service

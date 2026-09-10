@@ -1,0 +1,62 @@
+{
+  "summary": "Nex Core and Controller updates run through apt against the signed Nex archive instead of downloading a .deb and running dpkg -i, so dependencies resolve and package signatures are verified; clients no longer read the duplicate updates.json index, though the publisher keeps writing it so hosts released before this change can still discover the release that moves them onto apt. nex-core-local additionally refuses a fresh install on a system the Nex Core installer did not create, making the distribution boundary explicit. API impact: changed contract \u2014 same endpoints and schemas, changed update semantics and error text; Status.progress now reports fixed steps.",
+  "paths": [
+    "internal/nexupdate/nexupdate.go",
+    "internal/nexupdate/nexupdate_test.go",
+    "internal/localcore/updates_test.go",
+    "internal/controller/updates_test.go",
+    "packaging/controller/apply-update",
+    "packaging/controller/build-inside.sh",
+    "packaging/controller/postinst",
+    "packaging/controller/prerm",
+    "packaging/core-local/preinst",
+    "packaging/core-local/postinst",
+    "packaging/core-local/build-inside.sh",
+    "web/src/main.tsx",
+    "web/src/local.tsx",
+    "installer/late-install.sh",
+    "scripts/apt-publish.py",
+    "tests/test_apt_publish.py",
+    "tests/test_distribution_packaging.py",
+    "tests/test_core_local_package.py",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/local-openapi.json",
+    "docs/api/index.html",
+    "docs/api/local.html",
+    "docs/guide/software-updates.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/plans/2026-09-09-package-updates.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operator-visible behavior changed. Check now refreshes an APT index at most every five minutes rather than fetching a live index, progress moves in steps rather than by download percentage, and failures surface apt's own message with two new errors. The documented path for installing nex-core-local onto an existing Debian host no longer exists and is refused by the package, so the appliance deployment steps and the install page state the distribution boundary. Both Updates panels now show the step the server reports rather than a hardcoded \"Downloading\u2026 N%\", since progress is stepped.",
+    "pages": [
+      "docs/guide/software-updates.md",
+      "docs/guide/install-nex-core.md",
+      "docs/guide/deploy-controller-appliance.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Contract decision: changed contract. GET /api/v1/updates, POST /api/v1/updates/apply, GET /api/local/v1/updates and POST /api/local/v1/updates/apply keep their paths, methods, auth, status codes and UpdateStatus/UpdateApplyResult schemas. Their semantics change: available_version is apt's candidate rather than a version read from {repo}/updates.json, clients stop reading {repo}/updates.json (the publisher still writes it as a compatibility shim for pre-apt hosts), error text for an unavailable package changed, apply fails when the installed version did not advance, and progress reports fixed steps instead of download percentage. Both sides implemented together; the Controller helper and the Core service change in the same slice. No new pool-scoped setting: the repo URL remains host-side in /etc/nex/updates.conf and is now mirrored into /etc/apt/sources.list.d/nex.sources on the same host, so a rebuilt Controller re-adopts nothing new.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/local-openapi.json"
+    ]
+  },
+  "verification": {
+    "method": "go test -race ./internal/nexupdate ./internal/localcore ./internal/controller \u2014 passing, including new cases asserting apply invokes apt-get install --only-upgrade and never dpkg -i, that a failing apt run surfaces its own output, that an apply which did not advance the version is reported failed, that the index refresh is rate limited and does not stamp success on failure, and that the apt source pins the packaged keyring. python3 -m unittest discover -s tests -p 'test_distribution_packaging.py' \u2014 11 passing cases covering fresh-install refusal, stamped install, upgrade/reinstall/abort without a stamp, installer stamp ordering, and that both packages use apt rather than dpkg -i and ship the archive keyring and source. python3 scripts/generate_api.py --check \u2014 passing. npm run typecheck and npm run build in web/ \u2014 passing. sh -n on every changed maintainer script and python3 -m py_compile on apply-update \u2014 passing. NOT executed: an on-host upgrade against a live archive, an upgrade that pulls a genuinely new dependency, a Controller appliance apply through the path unit, and any ISO build or install; tests/test_apt_publish.py and the three dpkg-dependent tests in tests/test_core_local_package.py (including the new core-release stamp cases) skip on this workstation for lack of Debian dpkg tools and run in CI on Ubuntu; the postinst stamp branch was additionally exercised by hand against stubbed dpkg-divert/dpkg-query, confirming backfill when absent and no overwrite of the installer's provenance. Live repo checked read-only over HTTPS: /apt/updates.json, dists/nex/Release, InRelease, Release.gpg, pubkey.gpg and the binary-amd64 Packages index all return 200, and both indexes agree on nex-core-local 0.1.4 and nex-controller 0.1.3. NOT done: nothing was published or deployed to the website host.",
+    "evidence": [
+      "internal/nexupdate/nexupdate_test.go",
+      "internal/localcore/updates_test.go",
+      "internal/controller/updates_test.go",
+      "tests/test_distribution_packaging.py",
+      "tests/test_apt_publish.py",
+      "tests/test_core_local_package.py"
+    ]
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "summary": "Tag-driven release pipeline: pushing vX.Y.Z on Gitea resolves the version from the tag and CHANGELOG (refusing to build if they disagree), builds the ISO and both Debian packages at that version, publishes packages through the existing nex-apt-publish and the ISO into a new /srv/nex-downloads tree with three-release retention, then verifies over HTTPS that the release is actually served. Build version defaults now derive from CHANGELOG instead of hardcoded constants. API impact: none — release tooling and CI only; no Controller/Core interface, command, event or stream is added or changed, and no client-facing endpoint is touched.",
+  "paths": [
+    "scripts/release-version.py",
+    "scripts/release-publish.py",
+    "tests/test_release_version.py",
+    "tests/test_release_publish.py",
+    ".gitea/workflows/release.yml",
+    "packaging/apt/nginx-downloads.inc",
+    "packaging/apt/bootstrap.sh",
+    "packaging/controller/build.py",
+    "installer/build.sh",
+    "docs/guide/publish-a-release.md",
+    "docs/guide/README.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "A new maintainer workflow exists that did not before: releasing is now tagging rather than running two publish commands by hand. The new page documents the prerequisites, the host bootstrap, the three repository secrets, each refusal message the version gate can produce, and the disk-pressure limit from retaining every package version. It is listed in the guide index.",
+    "pages": [
+      "docs/guide/publish-a-release.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Release tooling and CI only. No Controller operation, agent command, observed-state flow or client-facing endpoint is added or changed; the packages this publishes are the same artifacts produced by the same build scripts. The update APIs that consume the published archive are unchanged by this slice and are covered separately by 2026-09-10-apt-native-updates.json. No new pool-scoped setting, so nothing new needs host-side persistence or Controller re-adoption.",
+    "pages": []
+  },
+  "verification": {
+    "method": "python3 -m unittest discover -s tests -p 'test_release_version.py' — 10 cases (1 skipped without dpkg): resolves the newest tag to a Debian pre-release, refuses a malformed tag, a tag absent from the changelog, an older-than-newest tag and a non-empty [Unreleased], treats the maintainer blockquote as guidance rather than an entry, parses the real CHANGELOG, and prints no version when it refuses. python3 -m unittest discover -s tests -p 'test_release_publish.py' — 10 cases (1 skipped without dpkg): writes a sidecar that verifies with sha256sum -c, keeps the newest three in dpkg order, replaces a republished version cleanly, refuses a symlinked or misnamed ISO, refuses keep<1, and leaves no partial release directory when a publish fails. Both suites run in CI on GitHub and Gitea via the existing test_*.py discovery in phase1.yml. Workflow YAML parsed and step gating inspected; the deploy steps correctly gate on a computed output rather than a same-step env reference. bash -n on bootstrap.sh and installer/build.sh; the nginx include insertion was exercised against a copy of the live server block and correctly skips the regex location. Version defaults confirmed to resolve to 0.1.5~alpha1 from CHANGELOG in both installer/build.sh and packaging/controller/build.py. Live repo inspected read-only over HTTPS and SSH: /apt/ serves InRelease, Release.gpg, pubkey.gpg and the Packages index; the publishing user already has passwordless sudo for exactly nex-apt-publish; /srv/nex-apt is 5.5 GB of 147 GB. NOT executed: no tag was pushed, so the workflow has never run; no ISO was built or published; bootstrap.sh changes were not applied to the live host; the runner's network route to the website host is unconfirmed; nothing was deployed or changed on live infrastructure.",
+    "evidence": [
+      "tests/test_release_version.py",
+      "tests/test_release_publish.py",
+      ".gitea/workflows/release.yml",
+      "docs/guide/publish-a-release.md"
+    ]
+  }
+}

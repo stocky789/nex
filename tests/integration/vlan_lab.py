@@ -170,8 +170,11 @@ def main():
 
         storage = next(s for s in api('/api/v1/storage') if s['status'] == 'succeeded' and s['host_id'] == host_id)
         media = next(m for m in api('/api/v1/media') if m['status'] == 'succeeded' and m['storage_id'] == storage['id'])
-        created = api('/api/v1/vms', {'request_id': str(uuid.uuid4()), 'pool_id': pool_id, 'host_id': host_id, 'name': VM, 'storage_id': storage['id'],
-                                      'network_id': network['id'], 'media_id': media['id'], 'cpus': 1, 'memory_mib': 1024, 'disk_gib': 2, 'firmware': 'bios'}, 202)
+        created = api('/api/v1/vms', {'request_id': str(uuid.uuid4()), 'pool_id': pool_id, 'host_id': host_id, 'name': VM, 'media_id': media['id'],
+                                      'cpu': {'count': 1, 'model': 'host-passthrough'}, 'memory': {'mode': 'dedicated', 'size_mib': 1024},
+                                      'disks': [{'storage_id': storage['id'], 'name': 'system', 'size_gib': 2, 'bus': 'virtio', 'thin': True, 'boot_order': 2}],
+                                      'nics': [{'network_id': network['id'], 'model': 'virtio'}],
+                                      'boot': {'firmware': 'bios', 'media_boot_order': 1}}, 202)
         vm_id = created['vm_id']
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:

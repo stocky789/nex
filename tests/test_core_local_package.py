@@ -225,6 +225,34 @@ class CoreLocalPackageTests(unittest.TestCase):
             for line in ('Types: deb', 'URIs: https://nexvirtualization.com/apt', 'Suites: nex',
                          'Components: main', 'Signed-By: /usr/share/keyrings/nex-archive-keyring.gpg'):
                 self.assertIn(line + '\n', sources)
+            # Hosts provisioned before the install guard shipped get the system stamp
+            # backfilled, so their next upgrade is not refused by preinst.
+            self.assertEqual((root / 'etc/nex/core-release').read_text(),
+                             'NEX_CORE=1\nINSTALLED_BY=package-upgrade\n')
+
+    def test_postinst_keeps_the_installer_provenance_stamp(self):
+        for tool in ('dpkg-divert', 'dpkg-query'):
+            if not shutil.which(tool):
+                self.skipTest(f'{tool} missing: Debian dpkg tools are required for this check')
+        with tempfile.TemporaryDirectory(prefix='nex-stamp-') as directory:
+            root = Path(directory)
+            for sub in ('usr/lib', 'etc/nex', 'var/lib/dpkg', 'bin'):
+                (root / sub).mkdir(parents=True)
+            (root / 'usr/lib/os-release').write_text('ID=debian\nVERSION_CODENAME=trixie\n')
+            (root / 'etc/os-release').symlink_to('../usr/lib/os-release')
+            # An ISO-installed host records that provenance; postinst must not rewrite it.
+            (root / 'etc/nex/core-release').write_text('NEX_CORE=1\nINSTALLED_BY=nex-core-iso\n')
+            helper = root / 'bin/deb-systemd-helper'
+            helper.write_text('#!/bin/sh\nexit 0\n')
+            helper.chmod(0o755)
+            (root / 'var/lib/dpkg/status').write_text(
+                'Package: nex-core-local\nStatus: install ok half-configured\nArchitecture: amd64\nVersion: 0.1.5~alpha1\n\n')
+            env = dict(os.environ, DPKG_ROOT=str(root), DPKG_ADMINDIR=str(root / 'var/lib/dpkg'),
+                       PATH=f"{root / 'bin'}:{os.environ['PATH']}")
+            subprocess.run(['sh', str(ROOT / 'packaging/core-local/postinst'), 'configure'],
+                           env=env, check=True, capture_output=True, text=True)
+            self.assertEqual((root / 'etc/nex/core-release').read_text(),
+                             'NEX_CORE=1\nINSTALLED_BY=nex-core-iso\n')
 
     def test_apt_source_uri_follows_configured_repo_url(self):
         for tool in ('dpkg-divert', 'dpkg-query'):

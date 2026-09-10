@@ -268,13 +268,28 @@ class ManagedVMContractTests(unittest.TestCase):
         self.assertTrue(vm['allOf'][0]['then']['properties']['protected']['const'])
         self.assertFalse(vm['allOf'][0]['else']['properties']['protected']['const'])
         engine = (ROOT / 'internal/vmhost/managed.go').read_text()
-        for field, member in [('cpus', 'CPUs'), ('memory_mib', 'MemoryMiB'), ('disk_gib', 'DiskGiB')]:
+        shared = (ROOT / 'internal/protocol/managed.go').read_text()
+        # Minimums and per-disk size come from the shared validator; the ceilings on vCPUs and
+        # memory are the Controller's and are enforced identically by the host-side engine.
+        for schema, field, pattern, body in [
+                ('VMCPU', 'count', r'v\.CPU\.Count < (\d+)', shared),
+                ('VMMemory', 'size_mib', r'v\.Memory\.SizeMiB < (\d+)', shared),
+                ('VMDisk', 'size_gib', r'd\.SizeGiB < (\d+)', shared)]:
+            self.assertEqual(schemas[schema]['properties'][field]['minimum'],
+                             int(re.search(pattern, body)[1]))
+        self.assertEqual(schemas['VMDisk']['properties']['size_gib']['maximum'],
+                         int(re.search(r'd\.SizeGiB > (\d+)', shared)[1]))
+        for schema, field, pattern in [('VMCPU', 'count', r'CPU\.Count > (\d+)'),
+                                       ('VMMemory', 'size_mib', r'Memory\.SizeMiB > (\d+)')]:
             for body in (source, engine):
-                lower = int(re.search(r'v\.' + member + r' < (\d+)', body)[1])
-                upper = int(re.search(r'v\.' + member + r' > (\d+)', body)[1])
-                for name in ('VMCreateSpec', 'CreateVMRequest'):
-                    self.assertEqual(schemas[name]['properties'][field]['minimum'], lower)
-                    self.assertEqual(schemas[name]['properties'][field]['maximum'], upper)
+                self.assertEqual({int(m) for m in re.findall(pattern, body)},
+                                 {schemas[schema]['properties'][field]['maximum']})
+        for field, member in [('disks', 'Disks'), ('nics', 'NICs')]:
+            upper = int(re.search(r'len\(v\.' + member + r'\)[^\n]*> (\d+)', shared)[1])
+            for name in ('VMCreateSpec', 'CreateVMRequest'):
+                self.assertEqual(schemas[name]['properties'][field]['maxItems'], upper)
+        self.assertEqual(schemas['VMCreateSpec']['properties']['disks']['minItems'],
+                         int(re.search(r'len\(v\.Disks\) < (\d+)', shared)[1]))
 
 
 if __name__ == '__main__':

@@ -164,15 +164,17 @@ def main():
             vm = next(v for v in before['vms'] if v['name'] == 'fresh-install-guest')
             payload = {**vm['spec'], 'name': vm['name'], 'pool_id': vm['pool_id'], 'host_id': vm['host_id']}
             payload.pop('id', None)
-            wrong = {**payload, 'request_id': str(uuid.uuid4()), 'name': 'rejected-scope', 'network_id': 'nonexistent-network'}
-            assert page.request.post(url + '/api/v1/vms', data=wrong, headers=headers).status == 409
+            wrong = {**payload, 'request_id': str(uuid.uuid4()), 'name': 'rejected-scope',
+                     'nics': [{**payload['nics'][0], 'network_id': 'nonexistent-network'}]}
+            assert page.request.post(url + '/api/v1/vms', data=wrong, headers=headers).status == 404
             operation = next(o for o in api('/api/v1/operations') if o['id'] == vm['operation_id'])
             replay = page.request.post(url + '/api/v1/vms', data={**payload, 'request_id': operation['request_id']}, headers=headers)
             assert replay.status == 200 and replay.json()['vm_id'] == vm['id']
-            assert page.request.post(url + '/api/v1/vms', data={**payload, 'request_id': operation['request_id'], 'cpus': 1}, headers=headers).status == 409
+            changed = {**payload, 'request_id': operation['request_id'], 'cpu': {**payload['cpu'], 'count': 1}}
+            assert page.request.post(url + '/api/v1/vms', data=changed, headers=headers).status == 409
             after = {kind: api('/api/v1/' + kind) for kind in before}
             assert {kind: {r['id'] for r in rows} for kind, rows in before.items()} == {kind: {r['id'] for r in rows} for kind, rows in after.items()}
-            passed('Native packaged API rejects anonymous access401, missing CSRF403, invalid create/ISO400 and nonexistent network409; invalid media publishes nothing; exact create replay preserves UUID and changed replay409')
+            passed('Native packaged API rejects anonymous access401, missing CSRF403, invalid create/ISO400 and nonexistent network404; invalid media publishes nothing; exact create replay preserves UUID and changed replay409')
             result = {'resource_counts': {kind: len(rows) for kind, rows in after.items()}, 'replayed_vm_id': vm['id']}
         else:
             assert args.iso and args.iso.is_file(), 'managed stage requires actual guest ISO'
@@ -222,17 +224,23 @@ def main():
             page.get_by_label('Placement host').select_option(host_id)
             page.get_by_role('button', name='Next', exact=True).focus()
             page.keyboard.press('Enter')
-            expect(page.get_by_role('heading', name='Create VM · 2 of 4:', exact=False)).to_be_focused()
-            page.get_by_label('Install ISO').select_option(label=args.iso.name)
+            expect(page.get_by_role('heading', name='Create VM · 2 of 6:', exact=False)).to_be_focused()
             page.get_by_label('Virtual CPUs', exact=True).fill('2')
             page.get_by_label('Memory (MiB)', exact=True).fill('1024')
             page.get_by_role('button', name='Next', exact=True).click()
-            page.get_by_label('VM storage').select_option(index=1)
-            page.get_by_label('Disk size (GiB)').fill('4')
-            page.get_by_label('Guest network').select_option(index=1)
-            page.get_by_label('Firmware').select_option('uefi')
+            disk = page.get_by_role('group', name='Disk 1', exact=True)
+            disk.get_by_label('Storage').select_option(index=1)
+            disk.get_by_label('Size (GiB)', exact=True).fill('4')
             page.get_by_role('button', name='Next', exact=True).click()
-            expect(page.get_by_text('The VM will be created stopped', exact=False)).to_be_visible()
+            page.get_by_role('group', name='Network interface 1', exact=True).get_by_label('Network').select_option(index=1)
+            page.get_by_role('button', name='Next', exact=True).click()
+            page.get_by_label('Firmware').select_option('uefi')
+            page.get_by_label('Install ISO').select_option(label=args.iso.name)
+            boot = page.get_by_role('group', name='Boot order', exact=True)
+            boot.locator('li').filter(has_text='Install media').get_by_role('button').first.click()
+            expect(boot.locator('li').first).to_contain_text('Install media')
+            page.get_by_role('button', name='Next', exact=True).click()
+            expect(page.get_by_text('created stopped', exact=False)).to_be_visible()
             capture('review-desktop')
             page.set_viewport_size({'width': 360, 'height': 800})
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
@@ -242,7 +250,7 @@ def main():
             expect(page.get_by_role('heading', name='VM details', exact=True)).to_be_visible()
             expect(page.locator('.details')).to_contain_text('succeeded', timeout=180000)
             expect(page.locator('.details')).to_contain_text('shut off', timeout=30000)
-            for label, value in [('Virtual CPUs', '2'), ('Memory', '1024 MiB'), ('Disk', '4 GiB'), ('Firmware', 'UEFI')]:
+            for label, value in [('Virtual CPUs', '2'), ('Memory', '1024 MiB'), ('Disks', '4 GiB'), ('Install ISO', args.iso.name), ('Firmware', 'UEFI')]:
                 expect(page.locator('dt').filter(has_text=label).locator('xpath=following-sibling::dd[1]')).to_contain_text(value)
             capture('created-desktop')
             page.set_viewport_size({'width': 360, 'height': 800})

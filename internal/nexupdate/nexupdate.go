@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+
+// Package nexupdate applies Nex Core and Nex Controller package updates from the
+// signed Nex archive. Nex Core is a distribution rather than a set of add-on
+// packages, so apt owns download, GPG verification and dependency resolution
+// against the archive its own installer configured; this package only decides
+// when to run apt and reports progress to the UI.
 package nexupdate
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -24,8 +26,18 @@ import (
 )
 
 const defaultRepoURL = "https://nexvirtualization.com/apt"
-const maxDebBytes = 4 << 30 // 4 GiB
 const ProgressFileName = "update-progress.json"
+
+// The archive source and its keyring. nex-core-local's postinst writes the source
+// at install time; Check and ApplyLocal rewrite it so a repo URL changed after
+// install takes effect without reinstalling the package.
+const aptSourcePath = "/etc/apt/sources.list.d/nex.sources"
+const aptKeyringPath = "/usr/share/keyrings/nex-archive-keyring.gpg"
+
+// indexMaxAge bounds how often Check refreshes the package index. The UI polls
+// Check while an update applies, so refreshing on every call would re-fetch the
+// index for nothing and contend with the running install for the archive lock.
+const indexMaxAge = 5 * time.Minute
 
 type Status struct {
 	Package          string `json:"package"`
@@ -52,17 +64,6 @@ type Progress struct {
 	Error   string `json:"error,omitempty"`
 }
 
-type packageInfo struct {
-	Version  string `json:"version"`
-	Filename string `json:"filename"`
-	SHA256   string `json:"sha256"`
-	Size     int64  `json:"size,omitempty"`
-}
-
-type updatesIndex struct {
-	Packages map[string]packageInfo `json:"packages"`
-}
-
 type pendingUpdate struct {
 	Package     string `json:"package"`
 	RepoURL     string `json:"repo_url"`
@@ -75,12 +76,15 @@ var (
 	Command  = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, name, args...)
 	}
-	HTTPClient        = &http.Client{Timeout: 60 * time.Minute}
 	ApplyUpdateBinary = "/usr/local/lib/nex/apply-update"
 	UpdatePathUnits   = []string{
 		"/usr/lib/systemd/system/nex-controller-update.path",
 		"/etc/systemd/system/nex-controller-update.path",
 	}
+	// AptSourcePath and IndexStampPath are variables so tests can redirect them
+	// away from the real system paths.
+	AptSourcePath  = aptSourcePath
+	IndexStampPath = "/var/lib/nex/apt-refresh.stamp"
 )
 
 var applyMu sync.Mutex
@@ -342,29 +346,79 @@ func takeDigits(s string) (int, string) {
 	return n, s[i:]
 }
 
-func fetchIndex(ctx context.Context, repoURL string) (updatesIndex, error) {
-	base := strings.TrimRight(repoURL, "/")
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/updates.json", nil)
+// apt runs apt-get non-interactively, keeping existing config files on upgrade and
+// waiting briefly for the archive lock so a concurrent apt-daily run does not fail
+// an operator-initiated update. LC_ALL is pinned because callers parse the output.
+func apt(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := Command(ctx, "apt-get", append([]string{
+		"-q",
+		"-o", "Dpkg::Options::=--force-confold",
+		"-o", "DPkg::Lock::Timeout=60",
+	}, args...)...)
+	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive", "LC_ALL=C")
+	return cmd
+}
+
+// writeAptSource keeps the signed Nex archive source aligned with the configured
+// repo URL. nex-core-local's postinst writes the same file at install time; keeping
+// it current here makes a repo change take effect without reinstalling the package.
+func writeAptSource(repoURL string) {
+	content := "Types: deb\nURIs: " + strings.TrimRight(repoURL, "/") +
+		"\nSuites: nex\nComponents: main\nArchitectures: amd64\n" +
+		"Signed-By: " + aptKeyringPath + "\n"
+	if b, err := os.ReadFile(AptSourcePath); err == nil && string(b) == content {
+		return
+	}
+	if os.MkdirAll(filepath.Dir(AptSourcePath), 0755) != nil {
+		return
+	}
+	tmp := AptSourcePath + ".tmp"
+	if os.WriteFile(tmp, []byte(content), 0644) != nil {
+		return
+	}
+	_ = os.Rename(tmp, AptSourcePath)
+}
+
+// refreshIndex updates the package lists at most once per indexMaxAge. A failure is
+// not fatal: apt keeps the previous lists, so a check still reports the last known
+// candidate instead of nothing.
+func refreshIndex(ctx context.Context) {
+	if fi, err := os.Stat(IndexStampPath); err == nil && time.Since(fi.ModTime()) < indexMaxAge {
+		return
+	}
+	if _, err := apt(ctx, "update").CombinedOutput(); err != nil {
+		return
+	}
+	if os.MkdirAll(filepath.Dir(IndexStampPath), 0755) != nil {
+		return
+	}
+	if f, err := os.OpenFile(IndexStampPath, os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+		_ = f.Close()
+	}
+	now := time.Now()
+	_ = os.Chtimes(IndexStampPath, now, now)
+}
+
+// AptCandidate reports the version apt would install for packageName, or "" when no
+// configured source offers it.
+func AptCandidate(ctx context.Context, packageName string) string {
+	cmd := Command(ctx, "apt-cache", "policy", packageName)
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	out, err := cmd.Output()
 	if err != nil {
-		return updatesIndex{}, err
+		return ""
 	}
-	resp, err := HTTPClient.Do(req)
-	if err != nil {
-		return updatesIndex{}, err
+	for _, line := range strings.Split(string(out), "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "Candidate:")
+		if !ok {
+			continue
+		}
+		if v := strings.TrimSpace(rest); v != "" && v != "(none)" {
+			return v
+		}
+		return ""
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return updatesIndex{}, fmt.Errorf("updates index HTTP %d", resp.StatusCode)
-	}
-	var idx updatesIndex
-	dec := json.NewDecoder(io.LimitReader(resp.Body, 1<<20))
-	if err := dec.Decode(&idx); err != nil {
-		return updatesIndex{}, err
-	}
-	if idx.Packages == nil {
-		idx.Packages = map[string]packageInfo{}
-	}
-	return idx, nil
+	return ""
 }
 
 func Check(ctx context.Context, repoURL, packageName string) (Status, error) {
@@ -373,136 +427,58 @@ func Check(ctx context.Context, repoURL, packageName string) (Status, error) {
 		repoURL = DefaultRepoURL()
 	}
 	repoURL = strings.TrimRight(repoURL, "/")
+	writeAptSource(repoURL)
+	refreshIndex(ctx)
 	st := Status{
 		Package:          packageName,
 		InstalledVersion: InstalledVersion(packageName),
 		RepoURL:          repoURL,
 	}
-	idx, err := fetchIndex(ctx, repoURL)
-	if err != nil {
-		st.Error = err.Error()
+	candidate := AptCandidate(ctx, packageName)
+	if candidate == "" {
+		st.Error = "package not available from " + repoURL
 		return st, nil
 	}
-	info, ok := idx.Packages[packageName]
-	if !ok || info.Version == "" {
-		st.Error = "package not listed in updates index"
-		return st, nil
-	}
-	st.AvailableVersion = info.Version
-	st.UpdateAvailable = CompareVersions(st.InstalledVersion, info.Version) < 0
+	st.AvailableVersion = candidate
+	st.UpdateAvailable = CompareVersions(st.InstalledVersion, candidate) < 0
 	return st, nil
 }
 
-type progressWriter struct {
-	w       io.Writer
-	total   int64
-	written int64
-	last    int
-	onPct   func(int)
-}
-
-func (p *progressWriter) Write(b []byte) (int, error) {
-	n, err := p.w.Write(b)
-	p.written += int64(n)
-	if p.onPct != nil && p.total > 0 {
-		pct := int(p.written * 100 / p.total)
-		if pct > 100 {
-			pct = 100
-		}
-		if pct != p.last {
-			p.last = pct
-			p.onPct(pct)
-		}
-	}
-	return n, err
-}
-
-func DownloadDeb(ctx context.Context, repoURL, packageName, destDir string, onProgress func(int)) (debPath, ver string, err error) {
-	repoURL = strings.TrimRight(repoURL, "/")
-	idx, err := fetchIndex(ctx, repoURL)
-	if err != nil {
-		return "", "", err
-	}
-	info, ok := idx.Packages[packageName]
-	if !ok || info.Filename == "" || info.SHA256 == "" || info.Version == "" {
-		return "", "", errors.New("package metadata incomplete in updates index")
-	}
-	if err := os.MkdirAll(destDir, 0700); err != nil {
-		return "", "", err
-	}
-	url := repoURL + "/" + strings.TrimPrefix(info.Filename, "/")
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return "", "", err
-	}
-	resp, err := HTTPClient.Do(req)
-	if err != nil {
-		return "", "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("download HTTP %d", resp.StatusCode)
-	}
-	total := resp.ContentLength
-	if total <= 0 && info.Size > 0 {
-		total = info.Size
-	}
-	path := filepath.Join(destDir, filepath.Base(info.Filename))
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|os.O_EXCL, 0600)
-	if err != nil {
-		return "", "", err
-	}
-	h := sha256.New()
-	pw := &progressWriter{w: io.MultiWriter(f, h), total: total, onPct: onProgress}
-	if _, err := io.Copy(pw, io.LimitReader(resp.Body, maxDebBytes)); err != nil {
-		f.Close()
-		os.Remove(path)
-		return "", "", err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(path)
-		return "", "", err
-	}
-	sum := hex.EncodeToString(h.Sum(nil))
-	if !strings.EqualFold(sum, info.SHA256) {
-		os.Remove(path)
-		return "", "", fmt.Errorf("sha256 mismatch: got %s want %s", sum, info.SHA256)
-	}
-	if onProgress != nil {
-		onProgress(100)
-	}
-	return path, info.Version, nil
-}
-
+// ApplyLocal upgrades packageName from the signed Nex archive. apt resolves the
+// package's dependencies against the host's configured sources, so a release that
+// adds a dependency installs cleanly instead of leaving dpkg half-configured.
+//
+// ponytail: progress is reported in fixed steps. apt can emit machine-readable
+// download progress via -o APT::Status-Fd=N if a real percentage is wanted back.
 func ApplyLocal(ctx context.Context, repoURL, packageName, stateDir string) (ApplyResult, error) {
 	repoURL = NormalizeRepoURL(repoURL)
 	if repoURL == "" {
 		repoURL = DefaultRepoURL()
 	}
-	_ = WriteProgress(stateDir, Progress{Phase: "downloading", Percent: 0, Message: "Downloading package"})
-	dir, err := os.MkdirTemp("", "nex-update-*")
-	if err != nil {
-		_ = WriteProgress(stateDir, Progress{Phase: "failed", Percent: 0, Error: err.Error()})
-		return ApplyResult{Status: "failed", Message: err.Error()}, err
-	}
-	defer os.RemoveAll(dir)
-	deb, _, err := DownloadDeb(ctx, repoURL, packageName, dir, func(pct int) {
-		_ = WriteProgress(stateDir, Progress{Phase: "downloading", Percent: pct, Message: "Downloading package"})
-	})
-	if err != nil {
-		_ = WriteProgress(stateDir, Progress{Phase: "failed", Percent: 0, Error: err.Error()})
-		return ApplyResult{Status: "failed", Message: err.Error()}, err
-	}
-	_ = WriteProgress(stateDir, Progress{Phase: "installing", Percent: 90, Message: "Installing package"})
-	cmd := Command(ctx, "dpkg", "-i", deb)
-	out, err := cmd.CombinedOutput()
+	writeAptSource(repoURL)
+	before := InstalledVersion(packageName)
+
+	_ = WriteProgress(stateDir, Progress{Phase: "downloading", Percent: 10, Message: "Refreshing package index"})
+	// A partially failing refresh still leaves usable lists; the install below is
+	// the authority on whether a newer version was actually available.
+	_, _ = apt(ctx, "update").CombinedOutput()
+
+	_ = WriteProgress(stateDir, Progress{Phase: "installing", Percent: 50, Message: "Installing package"})
+	out, err := apt(ctx, "install", "-y", "--only-upgrade", packageName).CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {
 			msg = err.Error()
 		}
-		_ = WriteProgress(stateDir, Progress{Phase: "failed", Percent: 90, Error: msg})
+		_ = WriteProgress(stateDir, Progress{Phase: "failed", Percent: 50, Error: msg})
 		return ApplyResult{Status: "failed", Message: msg}, err
+	}
+	// apt exits 0 when the installed version is already the candidate, so compare
+	// rather than trusting the exit status to mean an upgrade happened.
+	if CompareVersions(before, InstalledVersion(packageName)) >= 0 {
+		msg := "no newer " + packageName + " available from " + repoURL
+		_ = WriteProgress(stateDir, Progress{Phase: "failed", Percent: 50, Error: msg})
+		return ApplyResult{Status: "failed", Message: msg}, errors.New(msg)
 	}
 	unit := "nex-core-local.service"
 	if packageName == "nex-controller" {

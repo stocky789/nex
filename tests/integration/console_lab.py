@@ -121,8 +121,11 @@ def main():
         conn.close()
         operation(media['operation_id'])
         vm_name = 'console-qa-' + suffix.lower().replace('_', '')
-        created = lab.api('/api/v1/vms', {**common, 'request_id': 'console-create', 'name': vm_name, 'storage_id': storage['id'],
-            'network_id': network['id'], 'media_id': media['id'], 'cpus': 2, 'memory_mib': 1024, 'disk_gib': 2, 'firmware': 'bios'}, expected=202)
+        created = lab.api('/api/v1/vms', {**common, 'request_id': 'console-create', 'name': vm_name, 'media_id': media['id'],
+            'cpu': {'count': 2, 'model': 'host-passthrough'}, 'memory': {'mode': 'dedicated', 'size_mib': 1024},
+            'disks': [{'storage_id': storage['id'], 'name': 'system', 'size_gib': 2, 'bus': 'virtio', 'thin': True, 'boot_order': 2}],
+            'nics': [{'network_id': network['id'], 'model': 'virtio'}],
+            'boot': {'firmware': 'bios', 'media_boot_order': 1}}, expected=202)
         operation(created['operation']['id'])
         vm_id = created['vm_id']
         lab.passed('Stopped guest created through the managed-VM API with the Debian ISO attached')

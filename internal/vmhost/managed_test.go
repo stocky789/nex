@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -166,8 +167,9 @@ func TestManagedReferencesAndXML(t *testing.T) {
 	}
 	for _, kind := range []string{"bridge", "network"} {
 		for _, firmware := range []string{"bios", "uefi"} {
-			v := protocol.VMCreateSpec{ID: "12345678-1234-4234-8234-123456789012", Name: "guest", CPUs: 2, MemoryMiB: 2048, Firmware: firmware}
-			b, err := managedDomainXML(v, protocol.NetworkRegistration{Kind: kind, Source: "guest-net"}, "/disk&name", "/guest.iso")
+			v := managedTestVM()
+			v.Boot.Firmware = firmware
+			b, err := managedDomainXML(v, []protocol.NetworkRegistration{{Kind: kind, Source: "guest-net"}}, []string{"/disk&name"}, "/guest.iso")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -178,8 +180,8 @@ func TestManagedReferencesAndXML(t *testing.T) {
 			if d.UUID != v.ID || d.Devices.Disks[0].Source.File != "/disk&name" || d.Devices.Disks[1].Readonly == nil || d.Devices.Graphics[0].Listen.Type != "socket" || d.Devices.Graphics[0].Autoport != "no" || d.CPU.Mode != "host-passthrough" {
 				t.Fatalf("unsafe domain: %s", b)
 			}
-			if (d.OS.Firmware == "efi") != (firmware == "uefi") || d.OS.Boot[0].Dev != "cdrom" {
-				t.Fatal("firmware/boot mismatch")
+			if (d.OS.Firmware == "efi") != (firmware == "uefi") || len(d.OS.Boot) != 0 || bootOrder(d.Devices.Disks[1].Boot) != 1 {
+				t.Fatalf("firmware/boot mismatch: %s", b)
 			}
 			// Console features: guest agent, clipboard channel, absolute pointer and a resizable display.
 			text := string(b)
@@ -237,7 +239,7 @@ func TestManagedMediaInterruptedReconciliation(t *testing.T) {
 }
 func TestManagedVMInterruptedAllocationNeverReplays(t *testing.T) {
 	e := NewManaged(t.TempDir())
-	v := protocol.VMCreateSpec{ID: "12345678-1234-4234-8234-123456789012", PoolID: "p", HostID: "h", Name: "guest", CPUs: 1, MemoryMiB: 512, DiskGiB: 1, Firmware: "bios", StorageID: "s", NetworkID: "n", MediaID: "m"}
+	v := managedTestVM()
 	c := protocol.Command{OperationID: "create", Kind: "vm-create", VM: &v}
 	j := managedJournal{Command: c, Result: protocol.Result{OperationID: "create", Status: "pending"}, Stage: "allocating"}
 	if err := e.save(j); err != nil {
@@ -265,8 +267,13 @@ func TestManagedVMInterruptedAllocationNeverReplays(t *testing.T) {
 }
 
 func TestManagedDefinitionTampering(t *testing.T) {
-	v := protocol.VMCreateSpec{ID: "12345678-1234-4234-8234-123456789012", Name: "guest", CPUs: 2, MemoryMiB: 2048, Firmware: "uefi"}
-	wanted, err := managedDomainXML(v, protocol.NetworkRegistration{Kind: "network", Source: "default"}, "/disk", "/iso")
+	v := managedTestVM()
+	v.Memory = protocol.VMMemory{Mode: "maximum", SizeMiB: 2048}
+	v.CPU = protocol.VMCPU{Count: 4, Sockets: 2, Cores: 2, Threads: 1, Model: "host-passthrough"}
+	v.Disks = append(v.Disks, protocol.VMDisk{StorageID: "s", Name: "data", SizeGiB: 10, Bus: "scsi", BootOrder: 3})
+	v.NICs = append(v.NICs, protocol.VMNIC{NetworkID: "n2", Model: "e1000e", MAC: "52:54:00:aa:bb:cc"})
+	nets := []protocol.NetworkRegistration{{Kind: "network", Source: "default"}, {Kind: "bridge", Source: "br0"}}
+	wanted, err := managedDomainXML(v, nets, []string{"/disk-0", "/disk-1"}, "/iso")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +281,15 @@ func TestManagedDefinitionTampering(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct{ name, old, new string }{
-		{"firmware", `firmware="efi"`, `firmware="bios"`}, {"CPU", `mode="host-passthrough"`, `mode="host-model"`}, {"boot", `dev="cdrom"`, `dev="network"`}, {"disk bus", `bus="virtio"`, `bus="sata"`}, {"disk target", `dev="vda"`, `dev="vdb"`}, {"disk ownership", `file="/disk"`, `file="/other"`}, {"network", `network="default"`, `network="other"`}, {"VNC", `type="socket"`, `type="address"`},
+		{"firmware", `firmware="efi"`, `firmware="bios"`}, {"CPU", `mode="host-passthrough"`, `mode="host-model"`}, {"topology", `sockets="2"`, `sockets="4"`},
+		{"machine", `machine="q35"`, `machine="pc-i440fx-10.0"`}, {"os boot list", `</os>`, `<boot dev="hd"></boot></os>`},
+		{"first disk boot order", `order="2"`, `order="4"`}, {"second disk boot order", `order="3"`, `order="4"`}, {"media boot order", `order="1"`, `order="4"`},
+		{"disk bus", `bus="virtio"`, `bus="sata"`}, {"disk target", `dev="vda"`, `dev="vdb"`}, {"second disk target", `dev="sda"`, `dev="sdc"`},
+		{"disk ownership", `file="/disk-0"`, `file="/other"`}, {"second disk ownership", `file="/disk-1"`, `file="/other"`}, {"ISO ownership", `file="/iso"`, `file="/other"`},
+		{"network", `network="default"`, `network="other"`}, {"second network", `bridge="br0"`, `bridge="other"`}, {"second MAC", `52:54:00:aa:bb:cc`, `52:54:00:aa:bb:cd`},
+		{"balloon", `model="virtio" freePageReporting="on"`, `model="none"`}, {"free page reporting", `freePageReporting="on"`, `freePageReporting="off"`}, {"VNC", `type="socket"`, `type="address"`},
+		{"extra disk", `</devices>`, `<disk type="file" device="disk"><driver name="qemu" type="qcow2"></driver><source file="/evil"></source><target dev="vdz" bus="virtio"></target></disk></devices>`},
+		{"extra interface", `</devices>`, `<interface type="bridge"><source bridge="evil"></source><mac address="52:54:00:00:00:99"></mac><model type="virtio"></model></interface></devices>`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			changed := strings.Replace(string(wanted), tc.old, tc.new, 1)
@@ -286,10 +301,18 @@ func TestManagedDefinitionTampering(t *testing.T) {
 			}
 		})
 	}
+	// libvirt normalizes units and machine aliases, always reports currentMemory and adds its
+	// own controllers; none of that is tampering.
 	normalized := strings.Replace(string(wanted), `unit="MiB">2048`, `unit="KiB">2097152`, 1)
 	normalized = strings.Replace(normalized, `machine="q35"`, `machine="pc-q35-10.0"`, 1)
+	normalized = strings.Replace(normalized, `</memory>`, `</memory><currentMemory unit="KiB">2097152</currentMemory>`, 1)
+	normalized = strings.Replace(normalized, `</devices>`, `<controller type="usb" index="0" model="qemu-xhci"></controller></devices>`, 1)
 	if err = validateManagedDefinition([]byte(normalized), wanted); err != nil {
 		t.Fatalf("libvirt normalized definition rejected: %v", err)
+	}
+	// A libvirt that does not echo freePageReporting must not fail every "maximum" VM.
+	if err = validateManagedDefinition([]byte(strings.Replace(string(wanted), ` freePageReporting="on"`, "", 1)), wanted); err != nil {
+		t.Fatalf("absent freePageReporting rejected: %v", err)
 	}
 }
 
@@ -344,17 +367,250 @@ func TestManagedReferencesIgnorePoolAndHostIDs(t *testing.T) {
 	iso := managedJournal{Command: protocol.Command{OperationID: "m", Kind: "iso-import", Media: &protocol.Media{ID: "m", PoolID: "old-pool", HostID: "old-host", StorageID: "s"}}, Result: ok, MediaPath: "/srv/vms/nex-media/m.iso"}
 	wrongStorage := managedJournal{Command: protocol.Command{OperationID: "m2", Kind: "iso-import", Media: &protocol.Media{ID: "m2", PoolID: "new-pool", HostID: "new-host", StorageID: "s2"}}, Result: ok}
 	js := []managedJournal{old, net, iso, wrongStorage}
-	v := protocol.VMCreateSpec{ID: "12345678-1234-4234-8234-123456789012", PoolID: "new-pool", HostID: "new-host", StorageID: "s", NetworkID: "n", MediaID: "m"}
-	s, err := managedStorage(js, v.StorageID)
+	s, err := managedStorage(js, "s")
 	if err != nil || s.Path != "/srv/vms" {
 		t.Fatalf("storage under old pool/host not resolved: %+v %v", s, err)
 	}
-	n, m, path, err := managedVMRefs(js, v)
-	if err != nil || n.Source != "br0" || m.ID != "m" || path != "/srv/vms/nex-media/m.iso" {
-		t.Fatalf("references under old pool/host not resolved: %+v %+v %q %v", n, m, path, err)
+	n, err := managedNetwork(js, "n")
+	if err != nil || n.Source != "br0" {
+		t.Fatalf("network under old pool/host not resolved: %+v %v", n, err)
 	}
-	v.MediaID = "m2"
-	if _, _, _, err := managedVMRefs(js, v); err == nil {
-		t.Fatal("ISO on a different storage accepted")
+	m, path, err := managedMedia(js, "m")
+	if err != nil || m.StorageID != "s" || path != "/srv/vms/nex-media/m.iso" {
+		t.Fatalf("ISO under old pool/host not resolved: %+v %q %v", m, path, err)
+	}
+	if _, err := managedNetwork(js, "other"); err == nil {
+		t.Fatal("unknown network accepted")
+	}
+	if _, _, err := managedMedia(js, "other"); err == nil {
+		t.Fatal("unknown ISO accepted")
+	}
+}
+
+func managedTestVM() protocol.VMCreateSpec {
+	return protocol.VMCreateSpec{ID: "12345678-1234-4234-8234-123456789012", PoolID: "p", HostID: "h", Name: "guest", GuestOS: "linux",
+		CPU: protocol.VMCPU{Count: 2, Model: "host-passthrough"}, Memory: protocol.VMMemory{Mode: "dedicated", SizeMiB: 2048},
+		Disks:   []protocol.VMDisk{{StorageID: "s", Name: "system", SizeGiB: 20, Bus: "virtio", BootOrder: 2}},
+		NICs:    []protocol.VMNIC{{NetworkID: "n", Model: "virtio"}},
+		Boot:    protocol.VMBoot{Firmware: "uefi", MediaBootOrder: 1},
+		MediaID: "m"}
+}
+
+// Every disk and NIC reaches the definition on its own bus and target, and the boot order lives
+// on the devices: libvirt refuses a domain that also carries an <os> boot list.
+func TestManagedDomainXMLDevicesAndBootOrder(t *testing.T) {
+	v := managedTestVM()
+	v.Disks = []protocol.VMDisk{{StorageID: "fast", Name: "system", SizeGiB: 20, Bus: "virtio", BootOrder: 2}, {StorageID: "bulk", Name: "data", SizeGiB: 40, Bus: "sata"}, {StorageID: "fast", Name: "logs", SizeGiB: 10, Bus: "scsi", BootOrder: 3}}
+	v.NICs = []protocol.VMNIC{{NetworkID: "n", Model: "virtio"}, {NetworkID: "n2", Model: "e1000e", MAC: "52:54:00:aa:bb:cc"}, {NetworkID: "n", Model: "virtio"}}
+	nets := []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}, {Kind: "network", Source: "default"}, {Kind: "bridge", Source: "br0"}}
+	paths := []string{"/fast/disk-0.qcow2", "/bulk/disk-1.qcow2", "/fast/disk-2.qcow2"}
+	b, err := managedDomainXML(v, nets, paths, "/fast/nex-media/m.iso")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d managedDomain
+	if err = xml.Unmarshal(b, &d); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Devices.Disks) != 4 {
+		t.Fatalf("expected three disks and the install ISO: %s", b)
+	}
+	for i, want := range []struct {
+		dev, bus, file string
+		order          int
+	}{{"vda", "virtio", paths[0], 2}, {"sda", "sata", paths[1], 0}, {"sdb", "scsi", paths[2], 3}, {"sdc", "sata", "/fast/nex-media/m.iso", 1}} {
+		got := d.Devices.Disks[i]
+		if got.Target.Dev != want.dev || got.Target.Bus != want.bus || got.Source.File != want.file || bootOrder(got.Boot) != want.order {
+			t.Fatalf("disk %d is %+v, want %+v", i, got, want)
+		}
+	}
+	if d.Devices.Disks[3].Device != "cdrom" || d.Devices.Disks[3].Readonly == nil {
+		t.Fatal("install ISO must be a read-only cdrom")
+	}
+	if len(d.Devices.Controllers) != 1 || d.Devices.Controllers[0].Model != "virtio-scsi" {
+		t.Fatalf("SCSI disks need a virtio-scsi controller: %s", b)
+	}
+	if len(d.OS.Boot) != 0 || strings.Contains(string(b), "<boot dev=") {
+		t.Fatalf("per-device boot order must not be mixed with an os boot list: %s", b)
+	}
+	if len(d.Devices.Interfaces) != 3 {
+		t.Fatalf("expected three interfaces: %s", b)
+	}
+	if d.Devices.Interfaces[0].Type != "bridge" || d.Devices.Interfaces[0].Source.Bridge != "br0" || d.Devices.Interfaces[0].Model.Type != "virtio" || d.Devices.Interfaces[0].MAC.Address != protocol.DerivedMAC(v.ID, 0) {
+		t.Fatalf("derived NIC: %+v", d.Devices.Interfaces[0])
+	}
+	if d.Devices.Interfaces[1].Type != "network" || d.Devices.Interfaces[1].Source.Network != "default" || d.Devices.Interfaces[1].Model.Type != "e1000e" || d.Devices.Interfaces[1].MAC.Address != "52:54:00:aa:bb:cc" {
+		t.Fatalf("manual NIC: %+v", d.Devices.Interfaces[1])
+	}
+	// Two derived NICs on one VM must differ: the MAC comes from the VM ID and the interface index.
+	if d.Devices.Interfaces[2].MAC.Address != protocol.DerivedMAC(v.ID, 2) || d.Devices.Interfaces[2].MAC.Address == d.Devices.Interfaces[0].MAC.Address {
+		t.Fatalf("second derived NIC: %+v", d.Devices.Interfaces[2])
+	}
+	// A VM without install media has no cdrom at all.
+	v.Boot.MediaBootOrder, v.MediaID = 0, ""
+	if b, err = managedDomainXML(v, nets, paths, ""); err != nil || strings.Contains(string(b), "cdrom") {
+		t.Fatalf("media-free VM: %v\n%s", err, b)
+	}
+	if _, err = managedDomainXML(v, nets[:1], paths, ""); err == nil {
+		t.Fatal("mismatched device lists accepted")
+	}
+}
+
+func TestManagedDomainXMLMemoryModesAndTopology(t *testing.T) {
+	for _, tc := range []struct {
+		mode, model, reporting string
+		current                bool
+	}{{"dedicated", "none", "", true}, {"maximum", "virtio", "on", false}} {
+		t.Run(tc.mode, func(t *testing.T) {
+			v := managedTestVM()
+			v.Memory = protocol.VMMemory{Mode: tc.mode, SizeMiB: 4096}
+			b, err := managedDomainXML(v, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, []string{"/disk-0.qcow2"}, "/m.iso")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var d managedDomain
+			if err = xml.Unmarshal(b, &d); err != nil {
+				t.Fatal(err)
+			}
+			if d.Memory != (memoryXML{"MiB", 4096}) || (d.CurrentMemory != nil) != tc.current {
+				t.Fatalf("memory ceiling: %s", b)
+			}
+			if tc.current && *d.CurrentMemory != (memoryXML{"MiB", 4096}) {
+				t.Fatalf("dedicated memory must be held: %s", b)
+			}
+			if d.Devices.Memballoon.Model != tc.model || d.Devices.Memballoon.FreePageReporting != tc.reporting {
+				t.Fatalf("balloon %+v, want model %q reporting %q", d.Devices.Memballoon, tc.model, tc.reporting)
+			}
+		})
+	}
+	v := managedTestVM()
+	v.CPU = protocol.VMCPU{Count: 4, Model: "host-model"}
+	b, _ := managedDomainXML(v, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, []string{"/disk-0.qcow2"}, "")
+	var d managedDomain
+	if xml.Unmarshal(b, &d) != nil || d.VCPU != 4 || d.CPU.Mode != "host-model" || d.CPU.Topology == nil || *d.CPU.Topology != (managedTopology{1, 4, 1}) {
+		t.Fatalf("default topology is one socket of Count cores: %s", b)
+	}
+	v.CPU = protocol.VMCPU{Count: 4, Sockets: 2, Cores: 2, Threads: 1, Model: "host-passthrough"}
+	b, _ = managedDomainXML(v, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, []string{"/disk-0.qcow2"}, "")
+	if xml.Unmarshal(b, &d) != nil || d.CPU.Topology == nil || *d.CPU.Topology != (managedTopology{2, 2, 1}) {
+		t.Fatalf("requested topology: %s", b)
+	}
+}
+
+// Free space is checked once per storage target against the sum of the disks landing on it.
+func TestManagedDiskPlanSumsPerTarget(t *testing.T) {
+	ok := protocol.Result{Status: "succeeded"}
+	js := []managedJournal{
+		{Command: protocol.Command{Storage: &protocol.StorageRegistration{ID: "fast", Path: "/srv/fast"}}, Result: ok},
+		{Command: protocol.Command{Storage: &protocol.StorageRegistration{ID: "bulk", Path: "/srv/bulk"}}, Result: ok},
+	}
+	v := managedTestVM()
+	v.Disks = []protocol.VMDisk{{StorageID: "fast", Name: "system", SizeGiB: 20, Bus: "virtio", BootOrder: 2}, {StorageID: "bulk", Name: "data", SizeGiB: 100, Bus: "virtio"}, {StorageID: "fast", Name: "logs", SizeGiB: 30, Bus: "virtio"}}
+	targets, disks, err := managedDiskPlan(js, v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []managedTarget{
+		{ID: "fast", Path: "/srv/fast", Dir: "/srv/fast/nex-vms/" + v.ID, Bytes: (20 + 30 + 4) << 30},
+		{ID: "bulk", Path: "/srv/bulk", Dir: "/srv/bulk/nex-vms/" + v.ID, Bytes: (100 + 4) << 30},
+	}
+	if len(targets) != len(want) {
+		t.Fatalf("one entry per target: %+v", targets)
+	}
+	for i := range want {
+		if targets[i] != want[i] {
+			t.Fatalf("target %d is %+v, want %+v", i, targets[i], want[i])
+		}
+	}
+	if len(disks) != 3 || disks[0] != want[0].Dir+"/disk-0.qcow2" || disks[1] != want[1].Dir+"/disk-1.qcow2" || disks[2] != want[0].Dir+"/disk-2.qcow2" {
+		t.Fatalf("disks are named by index inside their own target: %q", disks)
+	}
+	v.Disks[1].StorageID = "missing"
+	if _, _, err = managedDiskPlan(js, v); err == nil {
+		t.Fatal("unregistered storage accepted")
+	}
+}
+
+func TestManagedDiskAllocationArguments(t *testing.T) {
+	thick := qemuCreateArgs("/srv/vms/disk-0.qcow2", protocol.VMDisk{SizeGiB: 20})
+	if strings.Join(thick, " ") != "create -f qcow2 -o preallocation=falloc /srv/vms/disk-0.qcow2 20G" {
+		t.Fatalf("thick disk: %q", thick)
+	}
+	thin := qemuCreateArgs("/srv/vms/disk-1.qcow2", protocol.VMDisk{SizeGiB: 40, Thin: true})
+	if strings.Join(thin, " ") != "create -f qcow2 /srv/vms/disk-1.qcow2 40G" {
+		t.Fatalf("thin disk: %q", thin)
+	}
+}
+
+// Preflight refuses a VM whose ceiling the host cannot meet, in both memory modes.
+func TestManagedCapacityUsesTheMemoryCeiling(t *testing.T) {
+	for _, mode := range []string{"dedicated", "maximum"} {
+		if !managedMemoryFits(6*1024*1024, protocol.VMMemory{Mode: mode, SizeMiB: 4096}) {
+			t.Fatalf("%s: 4 GiB refused with 6 GiB available", mode)
+		}
+		if managedMemoryFits(6*1024*1024, protocol.VMMemory{Mode: mode, SizeMiB: 5120}) {
+			t.Fatalf("%s: ceiling exceeding the 2 GiB host reserve accepted", mode)
+		}
+	}
+	v := managedTestVM()
+	v.CPU.Count = runtime.NumCPU() + 1
+	if managedCapacity(context.Background(), v) == nil {
+		t.Fatal("more vCPUs than host CPUs accepted")
+	}
+}
+
+func TestManagedAutostartObservation(t *testing.T) {
+	for _, tc := range []struct {
+		info string
+		want bool
+	}{{"Id:             -\nName:           guest\nAutostart:      enable\n", true}, {"Name:           guest\nAutostart:      disable\n", false}, {"Name:           guest\n", false}, {"", false}} {
+		if got := autostartEnabled([]byte(tc.info)); got != tc.want {
+			t.Fatalf("autostart %v for %q", got, tc.info)
+		}
+	}
+}
+
+func TestManagedVMCommandValidation(t *testing.T) {
+	v := managedTestVM()
+	c := protocol.Command{OperationID: "op", Kind: "vm-create", VM: &v}
+	if err := validateManaged(c); err != nil {
+		t.Fatalf("valid VM rejected: %v", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		change func(*protocol.VMCreateSpec)
+	}{
+		{"UUID", func(s *protocol.VMCreateSpec) { s.ID = "guest" }},
+		{"name", func(s *protocol.VMCreateSpec) { s.Name = "Guest Machine" }},
+		{"vCPUs", func(s *protocol.VMCreateSpec) { s.CPU.Count = 65 }},
+		{"memory", func(s *protocol.VMCreateSpec) { s.Memory.SizeMiB = 262145 }},
+		{"no disks", func(s *protocol.VMCreateSpec) { s.Disks = nil }},
+		{"disk storage", func(s *protocol.VMCreateSpec) { s.Disks[0].StorageID = "../escape" }},
+		{"network", func(s *protocol.VMCreateSpec) { s.NICs[0].NetworkID = "../escape" }},
+		{"media", func(s *protocol.VMCreateSpec) { s.MediaID = "../escape" }},
+		{"topology", func(s *protocol.VMCreateSpec) { s.CPU.Sockets, s.CPU.Cores, s.CPU.Threads = 3, 3, 3 }},
+		{"boot order", func(s *protocol.VMCreateSpec) { s.Disks[0].BootOrder, s.Boot.MediaBootOrder = 0, 0 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := managedTestVM()
+			bad.Disks = append([]protocol.VMDisk{}, bad.Disks...)
+			bad.NICs = append([]protocol.VMNIC{}, bad.NICs...)
+			tc.change(&bad)
+			if validateManaged(protocol.Command{OperationID: "op", Kind: "vm-create", VM: &bad}) == nil {
+				t.Fatal("invalid VM accepted")
+			}
+		})
+	}
+}
+
+// A journal that lost a disk is not evidence of a complete VM.
+func TestManagedCreationEvidenceCoversEveryDisk(t *testing.T) {
+	e := NewManaged(t.TempDir())
+	v := managedTestVM()
+	v.Disks = append(v.Disks, protocol.VMDisk{StorageID: "s", Name: "data", SizeGiB: 10, Bus: "virtio"})
+	j := managedJournal{Command: protocol.Command{OperationID: "create", Kind: "vm-create", VM: &v}, Domain: []byte("<domain/>"), Disks: []string{"/srv/vms/disk-0.qcow2"}}
+	err := e.observeCreated(context.Background(), j)
+	if err == nil || !strings.Contains(err.Error(), "evidence unavailable") {
+		t.Fatalf("incomplete disk evidence accepted: %v", err)
 	}
 }

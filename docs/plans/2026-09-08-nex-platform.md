@@ -39,6 +39,22 @@ bootstrap/adoption and the pool listing change; manual pool creation is removed.
 **Guide impact: updated** — Controller, appliance and VM-creation pages describe
 the automatic pool and pool master.
 
+**VM creation before editing, 2026-09-10:** Matt directed that the **complete VM creation system**
+is built before stopped-VM editing, so edit is written once against the final VM model instead of
+against the single-disk, single-NIC shape and then reworked. The slice adds description and guest-OS
+hint, CPU topology and model, a two-mode memory model (dedicated reservation or a maximum ceiling
+that reserves nothing), multiple disks, multiple networks with automatic or manual MACs, boot order,
+start-after-creation and autostart. Templates, clones, cloud-init, bulk creation, CPU weight/cap,
+affinity and ACLs stay deferred with their existing reasons. Because Nex is unreleased, the VM
+specification is replaced outright: no legacy fields, no capability gate, no journal migration.
+Matt also decided the **Phase 2 acceptance gate is folded into this slice** rather than run
+separately, so the new creation path is proven by a real ISO guest installation, console use,
+reboot, persisted data and a Controller outage. See [the plan](2026-09-10-vm-creation-system.md).
+**API impact: changed contract** — the VM creation request, `vm-create` command payload, VM list and
+report inventory carry the new specification; authentication, operations, replay and audit are
+unchanged. **Guide impact: updated** — the creation workflow, both memory modes and their limits,
+and the guest-tools dependency for memory reclaim.
+
 ## Build order: basics first
 
 Each milestone must work end to end before the next one expands the scope. The competitor review is a source of follow-on features, not a requirement to build three enterprise products before Nex can run a VM.

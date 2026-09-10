@@ -397,7 +397,8 @@ def debian_newer(left, right):
     return left > right
 
 
-def write_updates_json(repo_root, packages_text):
+def newest_packages(packages_text):
+    """Summarise the newest version of each published package."""
     newest = {}
     for record in parse_packages(packages_text):
         name = record.get("Package")
@@ -415,7 +416,18 @@ def write_updates_json(repo_root, packages_text):
                 "sha256": sha256,
                 "size": int(size),
             }
-    payload = {"repo": "Nex", "packages": dict(sorted(newest.items()))}
+    return {"repo": "Nex", "packages": dict(sorted(newest.items()))}
+
+
+def write_updates_json(repo_root, payload):
+    """Publish the legacy index, for hosts that predate apt-based updates.
+
+    Current hosts read the signed Packages/Release index through apt and ignore this
+    file. Hosts released before that switch poll {repo}/updates.json instead, and a
+    frozen copy would hide every later release from them — stranding them on their
+    installed version with no in-product way forward. Keep publishing it until no
+    supported host still reads it; see docs/plans/2026-09-09-package-updates.md.
+    """
     _write_text(_safe_under(repo_root, "updates.json"),
                 json.dumps(payload, indent=2, sort_keys=False) + "\n")
     return payload
@@ -457,13 +469,13 @@ def publish(repo_root, codename, component, arch, deb_paths, gpg_home):
         repo_root, codename, component, arch)
     release_path = write_release(
         repo_root, codename, component, arch, packages_path, packages_gz_path)
-    updates = write_updates_json(repo_root, packages_text)
+    published = write_updates_json(repo_root, newest_packages(packages_text))
     if gpg_has_secret(gpg_home):
         sign_and_export(repo_root, release_path, gpg_home)
     else:
         print("apt-publish: warning: no signing key in "
               f"{gpg_home}; wrote unsigned Release (lab use only)", file=sys.stderr)
-    return updates
+    return published
 
 
 def main(argv=None):

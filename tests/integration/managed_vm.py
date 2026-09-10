@@ -40,26 +40,62 @@ class ManagedLab(phase1.Lab):
         return process
 
 
+def derived_mac(vm_id, index):
+    """protocol.DerivedMAC: the QEMU prefix, two octets of sha256(id) and the interface index."""
+    digest = hashlib.sha256(vm_id.encode()).digest()
+    return '52:54:00:%02x:%02x:%02x' % (digest[0], digest[1], index)
+
+
 def verify_definition(hostlab, xml, body, storage_path, media):
     tree = ET.fromstring(xml)
     assert tree.findtext('uuid') == body['id'] and tree.findtext('name') == body['name']
-    assert int(tree.findtext('vcpu')) == body['cpus']
+    assert int(tree.findtext('vcpu')) == body['cpu']['count']
+    assert tree.find('cpu').get('mode') == body['cpu']['model']
+    topology = tree.find('cpu/topology')
+    assert all(int(topology.get(k)) == body['cpu'][k] for k in ('sockets', 'cores', 'threads')), ET.tostring(topology)
     assert tree.find('memory').get('unit') == 'KiB'
-    assert int(tree.findtext('memory')) == body['memory_mib'] * 1024
-    assert tree.find("devices/interface[@type='network']/source").get('network') == 'default'
-    assert [node.get('dev') for node in tree.findall('os/boot')] == ['cdrom', 'hd']
-    assert (tree.find('os/loader') is not None) == (body['firmware'] == 'uefi')
+    assert int(tree.findtext('memory')) == body['memory']['size_mib'] * 1024
+    # The balloon device carries the memory mode. libvirt normalises currentMemory, so only the
+    # dedicated allocation is asserted; the freePageReporting echo is recorded, not asserted.
+    balloon = tree.find('devices/memballoon')
+    if body['memory']['mode'] == 'dedicated':
+        assert balloon.get('model') == 'none' and int(tree.findtext('currentMemory')) == body['memory']['size_mib'] * 1024
+    else:
+        assert balloon.get('model') == 'virtio'
+    interfaces = tree.findall('devices/interface')
+    assert len(interfaces) == len(body['nics'])
+    for index, (node, nic) in enumerate(zip(interfaces, body['nics'])):
+        assert node.get('type') == 'network' and node.find('source').get('network') == 'default'
+        assert node.find('model').get('type') == nic['model']
+        assert node.find('mac').get('address') == (nic.get('mac') or derived_mac(body['id'], index))
+    # Per-device boot order replaces the <os><boot dev> list; libvirt forbids mixing the two.
+    assert tree.findall('os/boot') == []
+    assert (tree.find('os/loader') is not None) == (body['boot']['firmware'] == 'uefi')
     cd = tree.find("devices/disk[@device='cdrom']/source").get('file')
     assert cd == f"{storage_path}/nex-media/{media['id']}.iso"
+    assert tree.find("devices/disk[@device='cdrom']/boot").get('order') == str(body['boot']['media_boot_order'])
     assert ssh(hostlab, shlex.join(['sha256sum', cd]), text=True).stdout.split()[0] == media['sha256']
-    disk = tree.find("devices/disk[@device='disk']/source").get('file')
-    assert disk == f"{storage_path}/nex-vms/{body['id']}/disk.qcow2"
-    info = json.loads(ssh(hostlab, shlex.join(['qemu-img', 'info', '--force-share', '--output=json', disk]), text=True).stdout)
-    assert info['format'] == 'qcow2' and info['virtual-size'] == body['disk_gib'] * 1024**3
-    assert not info.get('backing-filename')
-    return {'uuid': body['id'], 'cpus': body['cpus'], 'memory_mib': body['memory_mib'],
-            'disk_gib': body['disk_gib'], 'firmware': body['firmware'], 'network': 'default',
-            'iso_sha256': media['sha256'], 'boot_order': ['cdrom', 'hd'], 'disk_backing_file': None}
+    disks = tree.findall("devices/disk[@device='disk']")
+    assert len(disks) == len(body['disks'])
+    allocated = []
+    for index, (node, wanted) in enumerate(zip(disks, body['disks'])):
+        path = node.find('source').get('file')
+        assert path == f"{storage_path}/nex-vms/{body['id']}/disk-{index}.qcow2"
+        assert node.find('target').get('bus') == wanted['bus']
+        boot = node.find('boot')
+        assert (boot.get('order') if boot is not None else 0) == (str(wanted['boot_order']) if wanted['boot_order'] else 0)
+        info = json.loads(ssh(hostlab, shlex.join(['qemu-img', 'info', '--force-share', '--output=json', path]), text=True).stdout)
+        assert info['format'] == 'qcow2' and info['virtual-size'] == wanted['size_gib'] * 1024**3
+        assert not info.get('backing-filename')
+        # A thick disk is preallocated, so the host has already claimed the bytes.
+        assert (info['actual-size'] < info['virtual-size'] / 2) == wanted['thin'], (wanted, info)
+        allocated.append({'path': path, 'bus': wanted['bus'], 'size_gib': wanted['size_gib'], 'thin': wanted['thin'],
+                          'actual_size': info['actual-size'], 'boot_order': wanted['boot_order'], 'backing_file': None})
+    return {'uuid': body['id'], 'cpu': body['cpu'], 'memory': body['memory'], 'disks': allocated,
+            'nics': [{'model': n['model'], 'mac': node.find('mac').get('address')} for node, n in zip(interfaces, body['nics'])],
+            'firmware': body['boot']['firmware'], 'machine': tree.find('os/type').get('machine'), 'network': 'default',
+            'balloon_model': balloon.get('model'), 'balloon_free_page_reporting': balloon.get('freePageReporting'),
+            'iso_sha256': media['sha256'], 'media_boot_order': body['boot']['media_boot_order'], 'os_boot_dev_list': []}
 
 
 def main():
@@ -238,14 +274,26 @@ def main():
         lab.passed('Invalid and interrupted ISO uploads publish nothing; real Debian ISO uploaded, hashed and imported through enrolled agent mTLS')
         other_request('/api/v1/agent/media/' + media['id'], expected=404)
         other_request('/api/v1/agent/report', {'version': 1, 'sequence': 2, 'inventory': host()['inventory'], 'capabilities': ['managed-vm-v1'], 'results': []})
-        body = {**common, 'request_id': 'qa-create', 'name': f'managed-vm-qa-{suffix}', 'storage_id': storage['id'],
-            'network_id': network['id'], 'media_id': media['id'], 'cpus': 2, 'memory_mib': 1024, 'disk_gib': 2, 'firmware': 'bios'}
-        lab.api('/api/v1/vms', {**body, 'cpus': 0}, expected=400)
+        # Two disks on one target with different buses and provisioning, plus a derived MAC.
+        body = {**common, 'request_id': 'qa-create', 'name': f'managed-vm-qa-{suffix}', 'media_id': media['id'],
+            'description': 'Managed VM acceptance guest', 'guest_os': 'linux',
+            'cpu': {'count': 2, 'sockets': 1, 'cores': 2, 'threads': 1, 'model': 'host-passthrough'},
+            'memory': {'mode': 'dedicated', 'size_mib': 1024},
+            'disks': [{'storage_id': storage['id'], 'name': 'system', 'size_gib': 2, 'bus': 'virtio', 'thin': True, 'boot_order': 2},
+                      {'storage_id': storage['id'], 'name': 'data', 'size_gib': 1, 'bus': 'sata', 'thin': False, 'boot_order': 0}],
+            'nics': [{'network_id': network['id'], 'model': 'virtio', 'mac': ''}],
+            'boot': {'firmware': 'bios', 'machine': '', 'media_boot_order': 1},
+            'start_after_create': False, 'autostart': False}
+        lab.api('/api/v1/vms', {**body, 'cpu': {**body['cpu'], 'count': 0}}, expected=400)
+        lab.api('/api/v1/vms', {**body, 'disks': [{**body['disks'][0], 'name': 'data'}, body['disks'][1]]}, expected=400)
+        lab.api('/api/v1/vms', {**body, 'nics': [{**body['nics'][0], 'mac': '53:54:00:11:22:33'}]}, expected=400)
         lab.api('/api/v1/vms', {**body, 'request_id': 'qa-cross-host', 'host_id': other['host_id']}, expected=409)
-        lab.passed('Valid second mTLS identity without capability cannot register; cross-host media download and create referencing first host resources rejected (second report explicitly simulated)')
-        lab.api('/api/v1/vms', {**body, 'request_id': 'qa-over-cpu', 'cpus': 32}, expected=409)
+        lab.api('/api/v1/vms', {**body, 'request_id': 'qa-absent-network', 'nics': [{**body['nics'][0], 'network_id': 'absent-network'}]}, expected=404)
+        lab.passed('Valid second mTLS identity without capability cannot register; invalid vCPU count, duplicate disk name and multicast MAC refused with 400; cross-host create refused with 409 and an unresolvable network with 404 (second report explicitly simulated)')
+        lab.api('/api/v1/vms', {**body, 'request_id': 'qa-over-cpu', 'cpu': {'count': 32, 'sockets': 0, 'cores': 0, 'threads': 0, 'model': 'host-passthrough'}}, expected=409)
         lab.api('/api/v1/vms', {**body, 'request_id': 'qa-cross-pool-create', 'pool_id': other_pool['id']}, expected=409)
-        too_large = lab.api('/api/v1/vms', {**body, 'request_id': 'qa-no-capacity', 'name': 'qa-no-capacity', 'disk_gib': 100}, expected=202)
+        too_large = lab.api('/api/v1/vms', {**body, 'request_id': 'qa-no-capacity', 'name': 'qa-no-capacity',
+            'disks': [{**body['disks'][0], 'size_gib': 100}]}, expected=202)
         assert 'insufficient free storage' in operation(too_large['operation']['id'], 'failed')['error']
         assert too_large['vm_id'] not in ssh(hostlab, 'virsh -c qemu:///system list --all --uuid', text=True).stdout
         lab.passed('Missing native directory/network fail honestly; cross-pool and excess CPU rejected; insufficient real disk capacity creates no domain')
@@ -253,7 +301,7 @@ def main():
         operation(created['operation']['id'])
         vm_id = created['vm_id']
         assert lab.api('/api/v1/vms', body)['vm_id'] == vm_id
-        lab.api('/api/v1/vms', {**body, 'memory_mib': 2048}, expected=409)
+        lab.api('/api/v1/vms', {**body, 'memory': {**body['memory'], 'size_mib': 2048}}, expected=409)
         xml = ssh(hostlab, shlex.join(['virsh', '-c', 'qemu:///system', 'dumpxml', vm_id]), text=True).stdout
         report['defined_bios'] = verify_definition(hostlab, xml, {**body, 'id': vm_id}, storage_path, media)
         assert 'shut off' in ssh(hostlab, shlex.join(['virsh', '-c', 'qemu:///system', 'domstate', vm_id]), text=True).stdout
@@ -267,7 +315,9 @@ def main():
         ssh(hostlab, shlex.join(['virsh', '-c', 'qemu:///system', 'screenshot', vm_id, screenshot]), text=True)
         (evidence / 'guest-boot.png').write_bytes(ssh(hostlab, f'cat {screenshot}').stdout)
         lab.passed('Exact newly-created VM starts through local lab virsh and remains running; guest screen captured for human boot inspection')
-        uefi_body = {**body, 'request_id': 'qa-create-uefi', 'name': f'managed-vm-qa-uefi-{suffix}', 'firmware': 'uefi'}
+        # The UEFI variant also exercises the maximum memory mode and its virtio balloon.
+        uefi_body = {**body, 'request_id': 'qa-create-uefi', 'name': f'managed-vm-qa-uefi-{suffix}',
+            'boot': {**body['boot'], 'firmware': 'uefi'}, 'memory': {'mode': 'maximum', 'size_mib': 1024}}
         uefi = lab.api('/api/v1/vms', uefi_body, expected=202)
         operation(uefi['operation']['id'])
         uefi_id = uefi['vm_id']

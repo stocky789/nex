@@ -2,41 +2,46 @@
 package controller
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"nex.local/nex/internal/nexupdate"
 )
 
-func TestUpdatesAuthAndApply(t *testing.T) {
-	payload := []byte("deb")
-	sum := sha256.Sum256(payload)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/apt/updates.json", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"packages": map[string]any{
-				"nex-controller": map[string]string{
-					"version":  "9.9.9",
-					"filename": "nex-controller_9.9.9_amd64.deb",
-					"sha256":   hex.EncodeToString(sum[:]),
-				},
-			},
-		})
+// stubApt redirects nexupdate at a fake apt so this API test never touches the
+// host's package manager. The Controller applies updates through a privileged
+// helper, so only the check path needs apt here.
+func stubApt(t *testing.T, installed, candidate string) {
+	t.Helper()
+	dir := t.TempDir()
+	prevSource, prevStamp := nexupdate.AptSourcePath, nexupdate.IndexStampPath
+	prevCommand, prevLookPath := nexupdate.Command, nexupdate.LookPath
+	nexupdate.AptSourcePath = filepath.Join(dir, "nex.sources")
+	nexupdate.IndexStampPath = filepath.Join(dir, "apt-refresh.stamp")
+	nexupdate.LookPath = func(string) (string, error) { return "/usr/bin/stub", nil }
+	nexupdate.Command = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		line := strings.Join(append([]string{name}, args...), " ")
+		switch {
+		case strings.HasPrefix(line, "dpkg-query"):
+			return exec.CommandContext(ctx, "printf", "%s", installed)
+		case strings.HasPrefix(line, "apt-cache policy"):
+			return exec.CommandContext(ctx, "printf", "  Candidate: %s\n", candidate)
+		}
+		return exec.CommandContext(ctx, "true")
+	}
+	t.Cleanup(func() {
+		nexupdate.AptSourcePath, nexupdate.IndexStampPath = prevSource, prevStamp
+		nexupdate.Command, nexupdate.LookPath = prevCommand, prevLookPath
 	})
-	// NormalizeRepoURL rewrites plain-http loopback URLs to the public repo, so the
-	// test server must be TLS and trusted through the package HTTP client.
-	srv := httptest.NewTLSServer(mux)
-	t.Cleanup(srv.Close)
-	prevHTTP := nexupdate.HTTPClient
-	nexupdate.HTTPClient = srv.Client()
-	t.Cleanup(func() { nexupdate.HTTPClient = prevHTTP })
-	t.Setenv("NEX_UPDATE_REPO", srv.URL+"/apt")
+}
+
+func TestUpdatesAuthAndApply(t *testing.T) {
+	stubApt(t, "0.1.0", "9.9.9")
+	t.Setenv("NEX_UPDATE_REPO", "https://mirror.test/apt")
 
 	helper := filepath.Join(t.TempDir(), "apply-update")
 	pathUnit := filepath.Join(t.TempDir(), "nex-controller-update.path")

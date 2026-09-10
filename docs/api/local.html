@@ -1180,12 +1180,12 @@
   }
 }</pre></details></section>
 <section id="localGetUpdates"><h2>GET <code>/api/local/v1/updates</code></h2>
-<p>Check host-local package updates</p><p>Checks the configured package repo updates.json for nex-core-local. Repo failures surface in error with HTTP 200. Root local session required.</p>
+<p>Check host-local package updates</p><p>Refreshes the apt package index (at most every 5 minutes) and reports apt&#x27;s candidate version for nex-core-local against the installed version. A package no configured source offers surfaces in error with HTTP 200. Root local session required.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;localGetUpdates&quot;,
   &quot;summary&quot;: &quot;Check host-local package updates&quot;,
-  &quot;description&quot;: &quot;Checks the configured package repo updates.json for nex-core-local. Repo failures surface in error with HTTP 200. Root local session required.&quot;,
+  &quot;description&quot;: &quot;Refreshes the apt package index (at most every 5 minutes) and reports apt&#x27;s candidate version for nex-core-local against the installed version. A package no configured source offers surfaces in error with HTTP 200. Root local session required.&quot;,
   &quot;security&quot;: [
     {
       &quot;LocalSession&quot;: []
@@ -1217,12 +1217,12 @@
   }
 }</pre></details></section>
 <section id="localApplyUpdates"><h2>POST <code>/api/local/v1/updates/apply</code></h2>
-<p>Apply host-local package update</p><p>Downloads the nex-core-local deb from the configured repo, runs dpkg -i as root, then schedules systemctl restart via systemd-run --no-block. Returns 202 scheduled on success. CSRF and same-origin required.</p>
+<p>Apply host-local package update</p><p>Runs apt-get update then apt-get install --only-upgrade nex-core-local as root against the signed Nex archive, so dependencies resolve and the package signature is verified, then schedules systemctl restart via systemd-run --no-block. Fails if the installed version did not advance. Returns 202 scheduled on success. CSRF and same-origin required.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;localApplyUpdates&quot;,
   &quot;summary&quot;: &quot;Apply host-local package update&quot;,
-  &quot;description&quot;: &quot;Downloads the nex-core-local deb from the configured repo, runs dpkg -i as root, then schedules systemctl restart via systemd-run --no-block. Returns 202 scheduled on success. CSRF and same-origin required.&quot;,
+  &quot;description&quot;: &quot;Runs apt-get update then apt-get install --only-upgrade nex-core-local as root against the signed Nex archive, so dependencies resolve and the package signature is verified, then schedules systemctl restart via systemd-run --no-block. Fails if the installed version did not advance. Returns 202 scheduled on success. CSRF and same-origin required.&quot;,
   &quot;security&quot;: [
     {
       &quot;LocalSession&quot;: []

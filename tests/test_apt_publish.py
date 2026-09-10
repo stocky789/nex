@@ -57,18 +57,21 @@ class AptPublishTests(unittest.TestCase):
             core = build_minimal_deb(base, "nex-core-local", "0.1.0-alpha1")
             stderr = io.StringIO()
             with redirect_stderr(stderr):
-                updates = apt.publish(repo, "nex", "main", "amd64",
-                                      [controller, core], gpg)
+                published = apt.publish(repo, "nex", "main", "amd64",
+                                        [controller, core], gpg)
             self.assertIn("warning: no signing key", stderr.getvalue())
             packages = repo / "dists/nex/main/binary-amd64/Packages"
             packages_gz = repo / "dists/nex/main/binary-amd64/Packages.gz"
             release = repo / "dists/nex/Release"
-            updates_path = repo / "updates.json"
             self.assertTrue(packages.is_file())
             self.assertTrue(packages_gz.is_file())
             self.assertTrue(release.is_file())
-            self.assertTrue(updates_path.is_file())
             self.assertFalse(packages.is_symlink())
+            # Current hosts update through apt, but hosts released before that switch
+            # poll updates.json. Freezing it would hide every later release from them,
+            # so it stays published until no supported host reads it.
+            updates_path = repo / "updates.json"
+            self.assertTrue(updates_path.is_file())
             self.assertEqual(
                 (repo / "pool/main/n/nex-controller" / controller.name).read_bytes(),
                 controller.read_bytes(),
@@ -95,7 +98,8 @@ class AptPublishTests(unittest.TestCase):
             self.assertEqual(payload["packages"]["nex-controller"]["version"], "0.1.0-alpha1")
             self.assertEqual(payload["packages"]["nex-core-local"]["version"], "0.1.0-alpha1")
             self.assertTrue(payload["packages"]["nex-controller"]["filename"].startswith("pool/"))
-            self.assertEqual(updates["packages"]["nex-controller"]["version"], "0.1.0-alpha1")
+            # The legacy index must track the signed one, or old hosts stop seeing releases.
+            self.assertEqual(published, payload)
             self.assertFalse((repo / "dists/nex/InRelease").exists())
 
     def test_rejects_invalid_deb_name(self):

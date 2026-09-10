@@ -3,13 +3,20 @@
 ## Status
 
 This development workflow registers existing local storage and guest networking, uploads
-installation media, and creates a **stopped VM** through Nex Controller. The VM belongs to
-a pool with a separate assignment to one host. Storage and network access are checked on
-that host; a pool registration does not make a local disk shared.
+installation media, and creates a VM through Nex Controller with a six-page wizard:
+**Identity**, **CPU and memory**, **Disks**, **Networks**, **Boot and media** and **Review**.
+One VM can have up to eight disks and up to eight network interfaces, either
+[memory mode](#memory-modes), UEFI or BIOS firmware, an explicit boot order and optional
+autostart. The VM belongs to a pool with a separate assignment to one host. Storage and
+network access are checked on that host; a pool registration does not make a local disk shared.
 
-Editing and deletion are not yet available in this development build. Start the VM with
-its [Power controls](vm-power.md), then install the guest through
-[Open a VM console](vm-console.md).
+**Creation never starts a guest.** The VM is always created stopped. **Start after creation**
+makes Nex issue a separate start request once creation has succeeded, so you see two tasks.
+
+Editing an existing VM and deleting a VM are not yet available in this development build:
+plan the disks, interfaces, firmware and memory before you create the VM, because changing
+them later means creating a new one. Start the VM with its [Power controls](vm-power.md),
+then install the guest through [Open a VM console](vm-console.md).
 An adopted Controller appliance remains visibly protected and is not recreated by this workflow.
 Use an explicitly selected disposable lab host; this is not production acceptance.
 
@@ -29,6 +36,10 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
   not supported in this build. The standalone agent service permits writes under
   `/var/lib/libvirt/images`; another location also needs an explicit service write allowance.
   Manual registration does not create the selected directory or format a disk.
+- Free space on each storage target for the **full size of every disk placed on it plus about
+  4 GiB of headroom**, whether the disks are thin or thick. Thin disks are checked at their
+  full size on creation but are not reserved afterwards, so later growth can still fill the
+  filesystem.
 - For a VLAN network: the name of the host NIC that carries the VLAN (the installer names
   NICs `nex0`, `nex1`, …; the host's **Networking** panel lists them with their kind) and a
   switch port that trunks that VLAN. Nex creates the guest bridge itself and never changes
@@ -41,6 +52,9 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
   capabilities for KVM, x86-64 and q35. Allow 2 GiB of available memory for the host in
   addition to the requested guest memory.
   Upgrade Controller before Core; an older Controller rejects the new Core report fields.
+- For a Windows guest on a **VirtIO** or **SCSI** disk bus or a **VirtIO** network adapter:
+  the virtio-win driver media, because Windows setup cannot see those devices without it.
+  Choosing **SATA** and **Intel e1000e** avoids that at some cost in performance.
 
 ## Steps
 
@@ -64,25 +78,145 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
 4. Open **ISO library**, then **Upload ISO**. Choose the validated **Destination storage**
    (the default **ISO** registration is fine) and select or drop one **ISO file**. Select **Upload and transfer ISO**. The progress
    bar measures the upload to Controller; wait for the separate host transfer task to
-   show `succeeded` before using the image.
+   show `succeeded` before using the image. Upload the ISO to the storage the VM's disks
+   will use: an ISO can only be attached from a storage target one of the VM's own disks
+   sits on.
    To check one host, select it in **Resources**, open **Storage**, and look under
    **Host ISO images**. Each row shows the ISO, destination storage/directory, size,
    availability and transfer task. Return to the pool to continue creating the VM.
-5. Open **Virtual machines**, then **Create VM**. Complete the four pages:
-   enter **VM name** (1–63 lowercase letters, digits or internal hyphens) and **Placement host**; choose the transferred **Install ISO**,
-   **Virtual CPUs** (1–64) and **Memory (MiB)** (512–262144); select **VM storage**, **Disk size (GiB)** (1–2048),
-   **Guest network** and **Firmware**; then review all selections.
-   Choose the same host and storage used for the ISO. Use **Back** to correct selections.
-6. Select **Create stopped VM** once. In **VM details**, follow **Creation task** to its
-   result and inspect **Observed state** and freshness independently.
+5. Open **Virtual machines**, then **Create VM**. The heading shows the current page, for
+   example **Create VM · 1 of 6: Identity**. **Next** moves on, **Back** corrects an earlier
+   page, and **Close** puts the wizard away. Nothing is submitted until the last page.
+   1. **Identity**
+      - **VM name** — 1–63 lowercase letters, digits or internal hyphens, starting and
+        ending with a letter or digit. It must be unique in the pool and becomes the libvirt
+        domain name on the host; it cannot be changed in this build.
+      - **Description** — optional, at most 4096 characters, stored with the VM definition
+        on the pool master.
+      - **Guest operating system** — **Linux**, **Windows** or **Other**. A record and a
+        hint only: it is shown on the VM's page and drives advice such as the virtio-win
+        reminder. It does not change the VM's devices, and Nex never installs or configures
+        a guest.
+      - **Placement host** — the host this VM is assigned to. Hosts that are not freshly
+        connected or lack managed-VM support are listed but cannot be chosen; the entry says
+        `agent upgrade required` when the agent is too old. Selecting a host resets the
+        storage, network and ISO choices to what that host has validated, so choose the
+        host first.
+   2. **CPU and memory**
+      - **Virtual CPUs** — 1 to 64, and no more than the host reports. This is the number of
+        vCPUs the guest sees.
+      - **Sockets**, **Cores per socket**, **Threads per core** — leave all three blank for
+        the default of **one socket, one core per vCPU and one thread per core**. If you set
+        them, their product must equal the vCPU count, and the page states the mismatch in
+        place until it does. Set a topology only when guest licensing or NUMA-aware software
+        needs a particular shape.
+      - **CPU model** — **Host passthrough** (the default) gives the guest this host's exact
+        processor and the best instruction-set coverage. **Host model** presents a common
+        processor instead, which is what will allow the VM to migrate later to a host whose
+        CPU is not identical. The choice is part of the definition and cannot be changed in
+        this build.
+      - **Memory mode** — **Dedicated** or **Maximum**; see [Memory modes](#memory-modes).
+      - **Memory (MiB)** — 512 to 262144, and no more than the host's total memory. The page
+        shows the host's reported CPU and memory capacity underneath. This size is the
+        ceiling in both modes, and the host must be able to meet it at creation time.
+   3. **Disks** — one to eight disks, each its own **Disk 1**, **Disk 2**, … block.
+      - **Storage** — a local storage registration that is validated on the selected host.
+        Different disks may use different storage targets. If the host has none, use
+        **Open Storage** to register one.
+      - **Disk name** — 1–63 letters, digits, dots, dashes or underscores, starting with a
+        letter or digit, and unique within this VM. It labels the disk in Nex; it is not the
+        device name the guest sees.
+      - **Size (GiB)** — 1 to 2048 per disk.
+      - **Bus** — **VirtIO** is fastest and appears as `/dev/vdX` in the guest. **SCSI**
+        attaches through a virtio-scsi controller. Both are VirtIO devices: Linux has the
+        drivers built in, Windows needs virtio-win drivers loaded during installation.
+        **SATA** is slower but works with the drivers every guest already has.
+      - **Provisioning** — **Thin · grows as written** creates a small file that grows with
+        the guest's writes. **Thick · allocated now** allocates the whole size immediately,
+        which takes longer to create but keeps the guest from meeting an out-of-space error
+        on a write the host already accepted. Either way, creation requires free space for
+        the full size of every disk on that storage plus about 4 GiB of headroom.
+      - **Add disk** and **Remove disk N** manage the list. The last remaining disk cannot be
+        removed. Every disk is created inside this VM's own directory on its storage;
+        existing files are never reused or overwritten.
+   4. **Networks** — zero to eight interfaces, each its own **Network interface N** block.
+      - **Network** — a network registration validated on the selected host. Use
+        **Open Networking** if the host has none. A registration on the pool does not make a
+        host's network reachable from another host.
+      - **Adapter model** — **VirtIO** is fastest but needs guest drivers (built into Linux,
+        virtio-win on Windows). **Intel e1000e** is emulated and works with the drivers a
+        guest already has.
+      - **MAC address** — leave blank for **Automatic**: a stable address derived from this
+        VM's identity and the interface position, which does not change. A manual address
+        must be six lower-case hexadecimal octets separated by colons and unicast (an even
+        second character), such as `52:54:00:12:34:56`, and unused anywhere else in the pool.
+      - **Add network interface** and **Remove network interface N** manage the list, up to
+        eight. A VM with no interfaces is allowed and starts with no guest networking; the
+        page says so.
+   5. **Boot and media**
+      - **Firmware** — **UEFI** (the default) or **BIOS**. UEFI must be advertised by the
+        host's libvirt capabilities. Firmware cannot be changed after creation, and an
+        installed guest generally cannot be moved between the two.
+      - **Install ISO** — an optional transferred ISO, or **No install media**. Only ISOs
+        stored on a storage target one of this VM's own disks uses can be attached; the host
+        resolves the image there. The ISO is attached read-only as a SATA CD-ROM, so any
+        guest installer can read it. Use **Open ISO library** if none is available.
+      - **Boot order** — the list shows every disk and, when one is selected, the install
+        media. **Up** and **Down** reorder it, and Nex renumbers the devices from 1. The host
+        tries them in this order: put **Install media** first to install a guest. Removing
+        the ISO removes it from the order.
+   6. **Review** — every selection is listed for a last check, including the derived or
+      manual MAC of each interface and the resolved boot order. Under **Lifecycle**:
+      - **Start after creation** — Nex issues a separate start request only once creation has
+        succeeded, so you will see two tasks; the VM itself is always created stopped. The
+        automatic start is attempted once and is not retried.
+      - **Start automatically when the host boots** — sets the VM's autostart property on the
+        host. It does not start the VM now.
+6. Select **Create stopped VM** (or **Create and start VM**, when start after creation is
+   selected) once. Controller opens the new VM's page. Follow **Creation task** to its
+   result and inspect **Observed state** and its freshness independently.
+
+### Memory modes
+
+| Mode | What the VM gets | When to use it |
+|---|---|---|
+| **Dedicated** | The VM always has this much. It is reserved from the host at the size you chose and is never given to another VM. | Predictable performance; guests without the balloon driver; anything you do not want competing for memory. |
+| **Maximum** | A ceiling only. The VM reserves nothing, uses the memory it actually touches, and gives back memory it frees. | Fitting more guests on a host when their real use is well below the ceiling. |
+
+Three limits to know before choosing **Maximum**:
+
+- **Returning freed memory needs the balloon driver running inside the guest.** Linux has it
+  built into the kernel. Windows gets it from the virtio-win guest tools; see
+  [Install guest tools](guest-tools.md). Until the driver runs, the guest keeps every page it
+  has ever touched, so the VM drifts up to its ceiling and holds it — behaving exactly like a
+  dedicated VM of the same size, without the reservation. Even with the driver, only memory
+  the guest counts as free comes back; pages it holds as file cache stay with the guest.
+- **Nothing grows or shrinks a guest under host memory pressure.** This build has no daemon
+  that reclaims memory when the host runs short. **Maximum** means the ceiling is enforced and
+  free pages come back when the guest reports them; it does not mean Nex balances memory
+  between guests.
+- **The ceiling is checked in both modes.** The host must be able to meet the full size, plus
+  a 2 GiB reserve for itself, at creation time, so a VM that cannot reach its maximum is
+  refused. **Maximum** lets the ceilings of several VMs add up to more than the host has, and
+  nothing prevents them all from claiming it.
+
+Controller does not display live memory use per VM in this build. The VM's page shows the
+mode and size that were requested.
 
 ## Expected result
 
-The storage, network and ISO rows show successful host operations. The new VM appears
-under its pool and assigned host, with a stable VM identity, requested resources and ISO
-attached to a newly created guest definition and disk. A successful creation task means
-provisioning completed; fresh libvirt observations establish its current state separately.
-The guest is not started or installed by this workflow.
+The storage, network and ISO rows show successful host operations. The new VM appears under
+its pool and assigned host. Its page lists the VM identity, assigned host, observed state,
+guest OS, vCPUs with the resolved topology and CPU model, memory with its mode, every disk
+with its size, bus, provisioning, boot position and storage, every interface with its adapter
+model and MAC, the install ISO with its boot position, the firmware and machine type, and
+whether the VM starts when the host boots. A successful creation task means provisioning
+completed; fresh libvirt observations establish its current state separately.
+
+Creation never starts a guest: with **Start after creation** the VM is created stopped and a
+separate power task starts it, so the VM's page can briefly show a stopped VM while that
+second task runs. No guest operating system is installed by this workflow — start the VM,
+open its [console](vm-console.md) and install the guest from the attached ISO.
 
 **Host ISO images** lists only transfers assigned to the selected host and pool.
 **Transferred · last verified** means import succeeded, storage was validated and
@@ -126,13 +260,55 @@ the host; files are checked again when creating a VM.
   transfer remains visible but does not establish current availability while the
   host is stale or revoked. Follow the transfer task for errors; uploading to one
   host does not copy the image to other hosts in the pool.
-- **Resource or firmware validation fails:** reduce the requested capacity or choose
-  firmware supported by the host and guest. Select successfully validated storage,
-  network and media belonging to this exact host and pool.
+- **The wizard refuses to continue:** the page states the reason in place. Sockets × cores ×
+  threads must equal the vCPU count (leave all three blank for the default); disk names must
+  be unique within the VM; a manual MAC must be lower-case, colon-separated and unicast; and
+  the install ISO must sit on storage one of this VM's disks uses. Add a disk on that storage,
+  choose another ISO, or continue without install media.
+- **A selection is no longer available:** *Some selections are no longer validated on this
+  host. Reselect them before continuing.* appears when a storage target, network or ISO you
+  picked has stopped being verified for this host — usually because the host went stale or a
+  registration was re-checked. Reselect the resource, or go back to **Storage**,
+  **Networking** or **ISO library** and confirm its state before continuing.
+- **The submission is refused immediately:** unresolvable storage, network or ISO selections,
+  a VM name already reserved in the pool, capacity beyond what the host reports, and a MAC
+  already used in the pool are all rejected by Controller without queuing a host task.
+  Nothing was created; correct the entry and submit again.
+- **A MAC address is already used:** Controller enforces MAC uniqueness across the whole
+  pool, including the automatic addresses of other VMs. Clear the field to take an automatic
+  address, or choose another one. If Controller reports that it could not derive free MAC
+  addresses for this VM, set them manually.
+- **Resource or firmware validation fails on the host:** the host repeats the checks with its
+  real state, so a request Controller accepted can still fail. *insufficient available memory
+  including 2 GiB host reserve* means the host's currently available memory cannot meet the
+  ceiling — free memory or lower it. *insufficient free storage including reserve* means a
+  storage target cannot hold every disk placed on it plus its headroom. *UEFI firmware is not
+  available on this host* means that host's libvirt does not advertise EFI for this machine
+  type; choose BIOS or fix the host's firmware packages.
+- **The VM was created but did not start:** creation and starting are separate tasks. Check
+  **Task history** for the follow-on power request; a host whose agent does not support
+  central power requests records the start as failed with that reason, and the VM still
+  exists, stopped. The automatic start is not retried; start it from the
+  [Power controls](vm-power.md).
+- **Autostart could not be enabled:** the VM is defined but its autostart property was not
+  set. The task says so. Inspect the VM on its host; the VM itself is intact.
+- **The guest does not boot from the ISO:** confirm **Install media** is first in the boot
+  order on the VM's page and that the firmware matches the installer. UEFI and BIOS installs
+  are not interchangeable; a VM created with the wrong firmware must be recreated.
+- **The guest installer cannot see the disk or the network:** VirtIO and SCSI disks and
+  VirtIO adapters need drivers. On Windows, load them from the virtio-win media during setup,
+  or recreate the VM with a SATA disk and an Intel e1000e adapter.
+- **A Maximum VM never gives memory back:** on Windows the balloon driver is missing; install
+  the virtio-win [guest tools](guest-tools.md). On Linux the driver is in the kernel, and only
+  memory the guest counts as free comes back, so a guest holding a large file cache can sit
+  near its ceiling legitimately. Nothing in this build reclaims memory under host pressure.
 - **The response is lost or Controller disconnects:** inspect **Task history** and the
   existing resource before submitting another request. Preserve the original form while
   reconciling an uncertain response. This browser tab retains submitted request identities
-  across refresh; retry with the original entries and, for uploads, the original file.
+  across refresh, and reopening **Create VM** restores those entries so the retry reconciles
+  the same request; for uploads, use the original file. If you change the entries first, the
+  wizard refuses with *An earlier submission has an uncertain outcome*: restore them, or
+  inspect **Task history** before starting another request.
   Do not create a differently named replacement to
   bypass an ambiguous task; unknown state does not prove that no disk or VM exists.
 - **A task reports `failed` or `needs_attention`:** inspect its error and the selected
@@ -145,6 +321,15 @@ the host; files are checked again when creating a VM.
   writable instance. Retain host-local recovery access.
 
 ## Verification
+
+**Full VM creation (2026-09-10) — not yet walked through.** The six-page wizard, multiple
+disks and interfaces, the memory modes, per-device boot order, autostart and the follow-on
+start request are new in this build, and **no browser walkthrough or lab run has been
+executed against them yet**. The reports below were produced against the earlier four-page,
+single-disk, single-interface form and remain valid only for the parts of this procedure that
+did not change: sign-in, storage/network registration, ISO upload and transfer, and the
+stopped-VM outcome. Treat every instruction in step 5 as untested until a report covering the
+six pages is linked here.
 
 **Pool VLAN networks (2026-09-09):** the [VLAN network checks](../qa/pool-vlan-networks/checks.md)
 record the simulated browser walkthrough of the new **Connection** / **VLAN ID** form and the
@@ -174,16 +359,18 @@ checks and limits. Default **ISO** auto-registration is covered by Controller un
 a live enroll walkthrough that skips manual Register local storage is not yet recorded.
 The [native browser walkthrough](../qa/managed-vm/browser-native-results.json)
 used Chromium, a real HTTPS Controller and a disposable Debian host with nested KVM/libvirt.
-It exercised sign-in, resource registration/reuse, ISO upload, all four creation pages, stopped-VM
+It exercised sign-in, resource registration/reuse, ISO upload, the creation pages as they
+were then, stopped-VM
 details, lost-response/reload recovery, keyboard use and desktop/360px layouts. The final
 run rejected duplicate storage and network registrations and reused the directory and
 bridge successfully registered in preceding native browser attempts. Its stale/error/response-loss presentation was
 injected; these checks do not represent physical failures.
 
 The [simulated browser walkthrough](../qa/managed-vm/browser-simulated-results.json) separately
-covers the full registration-to-creation flow with a simulated agent and synthetic ISO.
-Its screenshots verify browser behavior, not native storage execution. Desktop review and
-mobile VM-details captures from both walkthroughs were inspected against these instructions.
+covers the full registration-to-creation flow with a simulated agent and synthetic ISO, in its
+earlier four-page form. Its screenshots verify browser behavior, not native storage execution.
+Desktop review and mobile VM-details captures from both walkthroughs were inspected against
+the instructions as they stood then.
 
 The [native execution checks](../qa/managed-vm/results.json) and
 [definition checks](../qa/managed-vm/definition-verification.json) additionally exercised

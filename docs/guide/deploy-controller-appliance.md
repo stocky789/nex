@@ -8,11 +8,11 @@ disposable lab hosts. The host-local web service deploys a prepared Debian 13 vi
 appliance and provides restricted local VM power recovery. No Controller installer ISO
 or interactive Debian installation is involved; the guest configures itself on first boot.
 
-Current Nex Core ISO builds include the local-host package. For an existing host, install
-the updated package before using root login. Its service discovers the default-route
+Every Nex Core ISO build includes the local-host package. On an existing Nex Core host,
+take the update before using root login. Its service discovers the default-route
 management IPv4 address and starts local access automatically. Controller deployment
 uses `br0` created by current GUI installations when a management NIC is selected.
-Older installations and package-only hosts still require a prepared management bridge.
+Hosts installed by an older ISO still require a prepared management bridge.
 The newer [web-security development changes](secure-web-access.md) alter login/session
 and new-password rules; their actual rebuilt-package walkthrough is separately recorded.
 The `0.1.0+usability1` signed appliance and matching host package include DHCP and
@@ -51,17 +51,19 @@ Controller failover remain outside this slice. This page does not establish Phas
 
 ## Steps
 
-1. On a current GUI-installed Core host, the package and management bridge are already
-   configured; continue to step 2. On an older or package-only host, use the root console
-   to install the supplied package. It starts local access
-   using the default-route management IPv4 address and `/var/lib/libvirt/images`. It uses
-   the default-route interface as a bridge only when that interface is already a Linux bridge.
-   If needed, set the intended existing address, directory and bridge explicitly using the
-   last two commands below. Replace capitalized values; configuration does not create a
-   bridge or change networking.
+1. On a Nex Core host the package and management bridge are already configured;
+   continue to step 2. Nex Core is a distribution, so the host must have been installed
+   from the Nex Core ISO — installing `nex-core-local` onto an arbitrary Debian system
+   is refused, because the package alone does not establish the storage layout,
+   networking, console identity and recovery paths a supported host needs.
+
+   Local access uses the default-route management IPv4 address and
+   `/var/lib/libvirt/images`, and treats the default-route interface as a bridge only
+   when that interface is already a Linux bridge. If you need a different existing
+   address, directory or bridge, set them explicitly from the root console. Replace
+   capitalized values; configuration does not create a bridge or change networking.
 
    ```sh
-   apt install ./nex-core-local_0.1.0+managed1_amd64.deb
    /usr/lib/nex/core-local-setup configure --address HOST_MANAGEMENT_IP --storage EXISTING_ABSOLUTE_DIRECTORY --bridge EXISTING_BRIDGE
    systemctl restart nex-core-local
    ```
@@ -74,8 +76,7 @@ Controller failover remain outside this slice. This page does not establish Phas
    locally and restart `nex-core-local`. After a management address change, restart the
    service to refresh automatic discovery.
 
-   On ISO-installed hosts the local UI package is already present. On a package-only host,
-   install it first as in step 1.
+   The local UI package is present on every Nex Core host; the ISO installs it.
 
    Read the SHA-256 certificate fingerprint after root console login:
 

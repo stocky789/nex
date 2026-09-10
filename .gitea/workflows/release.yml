@@ -1,0 +1,156 @@
+name: Release
+# Tag-driven release. The tag, the CHANGELOG heading and the Debian package version
+# are one number in three notations; the build refuses to start unless they agree,
+# so a release can never ship stamped with a version its changelog does not describe.
+#
+# Publishing needs three repository secrets. Without them the job still builds and
+# uploads artifacts, and skips publishing rather than failing, so a tag can be built
+# and inspected before the deploy path is wired up:
+#   NEX_DEPLOY_HOST         website host (for example 172.16.4.3)
+#   NEX_DEPLOY_KEY          private SSH key for the publishing user on that host
+#   NEX_DEPLOY_KNOWN_HOSTS  that host's public key, so the runner pins its identity
+on:
+  push:
+    tags:
+      - 'v*'
+permissions:
+  contents: read
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve release version from the tag and CHANGELOG
+        id: version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME:?}"
+          version=$(python3 scripts/release-version.py --tag "$tag")
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag as Debian version $version"
+
+      - name: Require Docker
+        run: docker info
+
+      - name: Build source archive, packages and ISO
+        env:
+          NEX_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # build.sh rebuilds the appliance and the nex-core-local package from current
+          # source, then the ISO from that package. The Controller package is separate.
+          bash installer/build.sh
+          python3 packaging/controller/build.py \
+            --source dist/nex-source.tar.gz --version "$NEX_VERSION" --output dist/controller
+
+      - name: Verify every artifact carries the released version
+        env:
+          NEX_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          iso="dist/nex-core-${NEX_VERSION}-amd64.iso"
+          core="dist/core-local/nex-core-local_${NEX_VERSION}_amd64.deb"
+          controller="dist/controller/nex-controller_${NEX_VERSION}_amd64.deb"
+          for artifact in "$iso" "$core" "$controller"; do
+            [ -f "$artifact" ] || { echo "missing artifact: $artifact" >&2; exit 1; }
+          done
+          # A matching filename is not proof of a matching package version.
+          for deb in "$core" "$controller"; do
+            actual=$(dpkg-deb -f "$deb" Version)
+            [ "$actual" = "$NEX_VERSION" ] || {
+              echo "$deb declares $actual, expected $NEX_VERSION" >&2; exit 1; }
+          done
+          ( cd dist && sha256sum "nex-core-${NEX_VERSION}-amd64.iso" \
+              > "nex-core-${NEX_VERSION}-amd64.iso.sha256" )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nex-core-${{ steps.version.outputs.version }}
+          path: |
+            dist/nex-core-*-amd64.iso
+            dist/nex-core-*-amd64.iso.sha256
+            dist/core-local/*.deb
+            dist/controller/*.deb
+          retention-days: 14
+
+      - name: Check for deploy credentials
+        id: deploy
+        env:
+          NEX_DEPLOY_HOST: ${{ secrets.NEX_DEPLOY_HOST }}
+          NEX_DEPLOY_KEY: ${{ secrets.NEX_DEPLOY_KEY }}
+        run: |
+          set -eu
+          if [ -n "${NEX_DEPLOY_HOST:-}" ] && [ -n "${NEX_DEPLOY_KEY:-}" ]; then
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+            echo 'Deploy secrets are not set: built and uploaded artifacts, published nothing.'
+          fi
+
+      - name: Publish to the website host
+        if: steps.deploy.outputs.enabled == 'true'
+        env:
+          NEX_VERSION: ${{ steps.version.outputs.version }}
+          NEX_DEPLOY_HOST: ${{ secrets.NEX_DEPLOY_HOST }}
+          NEX_DEPLOY_KEY: ${{ secrets.NEX_DEPLOY_KEY }}
+          NEX_DEPLOY_KNOWN_HOSTS: ${{ secrets.NEX_DEPLOY_KNOWN_HOSTS }}
+          NEX_DEPLOY_USER: ${{ secrets.NEX_DEPLOY_USER || 'matt' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NEX_DEPLOY_KNOWN_HOSTS:-}" ]; then
+            echo 'NEX_DEPLOY_KNOWN_HOSTS is required; refusing to trust an unverified host' >&2
+            exit 1
+          fi
+          # umask before writing the key: a world-readable key is refused by ssh anyway,
+          # and the runner's workspace may be shared between jobs.
+          umask 077
+          keydir=$(mktemp -d)
+          trap 'rm -rf "$keydir"' EXIT
+          printf '%s\n' "$NEX_DEPLOY_KEY" > "$keydir/id"
+          printf '%s\n' "$NEX_DEPLOY_KNOWN_HOSTS" > "$keydir/known_hosts"
+          ssh_opts="-i $keydir/id -o IdentitiesOnly=yes -o UserKnownHostsFile=$keydir/known_hosts -o StrictHostKeyChecking=yes"
+          target="$NEX_DEPLOY_USER@$NEX_DEPLOY_HOST"
+          staging="/tmp/nex-release-$NEX_VERSION"
+
+          # shellcheck disable=SC2086
+          ssh $ssh_opts "$target" "rm -rf '$staging' && mkdir -m 700 '$staging'"
+          # shellcheck disable=SC2086
+          scp $ssh_opts \
+            "dist/nex-core-${NEX_VERSION}-amd64.iso" \
+            "dist/core-local/nex-core-local_${NEX_VERSION}_amd64.deb" \
+            "dist/controller/nex-controller_${NEX_VERSION}_amd64.deb" \
+            scripts/release-publish.py \
+            "$target:$staging/"
+
+          # Packages first: the signing key never leaves the host, and nex-apt-publish
+          # is the one command the publishing user may run as root without a password.
+          # shellcheck disable=SC2086
+          ssh $ssh_opts "$target" "set -eu
+            sudo -n /usr/local/sbin/nex-apt-publish '$staging/nex-core-local_${NEX_VERSION}_amd64.deb' '$staging/nex-controller_${NEX_VERSION}_amd64.deb'
+            python3 '$staging/release-publish.py' --iso '$staging/nex-core-${NEX_VERSION}-amd64.iso' --keep 3
+            rm -rf '$staging'"
+
+      - name: Confirm the release is actually reachable
+        if: steps.deploy.outputs.enabled == 'true'
+        env:
+          NEX_VERSION: ${{ steps.version.outputs.version }}
+          NEX_PUBLIC_URL: ${{ secrets.NEX_PUBLIC_URL || 'https://nexvirtualization.com' }}
+        run: |
+          set -euo pipefail
+          # A successful publish command is not proof the artifact is served.
+          for path in \
+            "/apt/dists/nex/InRelease" \
+            "/apt/dists/nex/main/binary-amd64/Packages" \
+            "/downloads/${NEX_VERSION}/nex-core-${NEX_VERSION}-amd64.iso.sha256"; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 60 "${NEX_PUBLIC_URL}${path}")
+            [ "$code" = 200 ] || { echo "$path returned $code" >&2; exit 1; }
+          done
+          curl -sS --max-time 60 "${NEX_PUBLIC_URL}/apt/dists/nex/main/binary-amd64/Packages" \
+            | grep -qx "Version: ${NEX_VERSION}" || {
+              echo "published index does not list ${NEX_VERSION}" >&2; exit 1; }

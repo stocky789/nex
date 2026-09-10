@@ -1810,7 +1810,7 @@
    "get": {
     "operationId": "listManagedAppliances",
     "summary": "List managed VMs and protected Controller appliances",
-    "description": "Unified VM listing. Existing adopted appliances preserve role=controller and protected=true without creation spec/status. Generic guest entries add spec and operation_id/status/error; state/freshness always come from fresh successful libvirt observations independently of creation status. Read-only administrator access; safe to retry.",
+    "description": "Unified VM listing. Existing adopted appliances preserve role=controller and protected=true without creation spec/status. Generic guest entries add spec and operation_id/status/error; spec is the complete VM specification (identity, CPU and topology, memory mode and ceiling, every disk and network interface, boot order, install media, autostart), and state/freshness always come from fresh successful libvirt observations independently of creation status. Read-only administrator access; safe to retry.",
     "security": [
      {
       "AdminSession": []
@@ -1857,7 +1857,7 @@
    "post": {
     "operationId": "createVM",
     "summary": "Create a stopped guest VM",
-    "description": "Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. CPU 1–64, memory 512–262144 MiB, disk 1–2048 GiB, bios or uefi. Host observed capacity and Core current capacity must suffice. Storage/network/ISO must have succeeded on this host/pool, and ISO must reside on selected storage. Controller assigns UUID and reserves name within pool before dispatch. Core journals effects and reconciles ownership before replay; needs_attention preserves uncertain resources for manual recovery. No boot, console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64/q35 libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint.",
+    "description": "Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Shared bounds, enforced identically on Controller and Core: 1–8 disks of 1–2048 GiB on virtio, sata or scsi with names unique in the VM; at most 8 NICs on virtio or e1000e with unicast lower-case manual MACs; at least 1 vCPU with sockets × cores × threads equal to the count when a topology is given; at least 512 MiB in memory mode dedicated or maximum; uefi or bios; boot orders unique across disks and install media, numbered from 1 without gaps, with at least one boot device. Controller additionally caps CPU at 64 and memory at 262144 MiB, enforces MAC uniqueness across the pool, assigns the UUID and reserves the name within the pool before dispatch. Host observed capacity and Core current capacity must suffice, using the memory ceiling in both modes. Storage, network and ISO must have succeeded on this host and pool, and the install ISO must reside on a storage target this VM uses. Core journals effects and reconciles per-disk ownership before replay; needs_attention preserves uncertain resources for manual recovery. Creation never boots a guest: start_after_create makes Controller issue the separate vm-power start only after creation succeeds, and autostart is a libvirt property set while the stopped VM is defined. No console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64 and machine-type libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint.",
     "security": [
      {
       "AdminSession": []
@@ -2955,7 +2955,7 @@
    "get": {
     "operationId": "getUpdates",
     "summary": "Check Controller software updates",
-    "description": "Implemented in development product 0.1.0. Reads the configured package repo (NEX_UPDATE_REPO or /etc/nex/updates.conf, else https://nexvirtualization.com/apt) updates.json for package nex-controller, compares versions, and reports whether an update is available. Repo failures are returned in the error field with HTTP 200 so operators can still see the installed version. Administrator session required. Read-only; safe to retry.",
+    "description": "Implemented in development product 0.1.0. Refreshes the apt package index (at most every 5 minutes) and reports apt's candidate version for nex-controller against the installed version. The signed Nex archive source is written from the configured repo URL (NEX_UPDATE_REPO or /etc/nex/updates.conf, else https://nexvirtualization.com/apt) and verified with the packaged archive keyring. A package no configured source offers is returned in the error field with HTTP 200 so operators can still see the installed version. Administrator session required. Read-only; safe to retry.",
     "tags": [
      "Client → Controller"
     ],
@@ -3010,7 +3010,7 @@
    "post": {
     "operationId": "applyUpdates",
     "summary": "Request Controller package update",
-    "description": "Writes pending-update.json under the Controller state directory for the privileged nex-controller-update path unit. Returns 202 scheduled; the helper downloads the deb, runs dpkg -i and restarts nex-controller. Returns 503 when apply-update or the path unit is missing. Controller cannot run apt itself (ProtectSystem=strict, NoNewPrivileges). Audits update.apply. Empty JSON body. CSRF and same-origin required.",
+    "description": "Writes pending-update.json under the Controller state directory for the privileged nex-controller-update path unit. Returns 202 scheduled; the helper runs apt-get update then apt-get install --only-upgrade nex-controller, so dependencies resolve and the package signature is verified, and restarts nex-controller. A failed upgrade restarts the service before reporting. Returns 503 when apply-update or the path unit is missing. Controller cannot run apt itself (ProtectSystem=strict, NoNewPrivileges). Audits update.apply. Empty JSON body. CSRF and same-origin required.",
     "tags": [
      "Client → Controller"
     ],
@@ -5110,11 +5110,188 @@
     ],
     "x-go-type": "protocol.Media"
    },
+   "VMCPU": {
+    "type": "object",
+    "properties": {
+     "count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64,
+      "description": "vCPUs presented to the guest. Both sides require at least 1; Controller caps the request at 64 and refuses more than the host reports."
+     },
+     "sockets": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Sockets, or 0 with cores and threads for the default topology."
+     },
+     "cores": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Cores per socket, or 0 for the default topology."
+     },
+     "threads": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Threads per core, or 0 for the default topology."
+     },
+     "model": {
+      "type": "string",
+      "enum": [
+       "host-passthrough",
+       "host-model"
+      ],
+      "description": "host-passthrough (the default) gives the guest the host CPU; host-model describes it so a later migration to a non-identical host stays possible. Named model lists are not offered."
+     }
+    },
+    "required": [
+     "count",
+     "sockets",
+     "cores",
+     "threads",
+     "model"
+    ],
+    "x-go-type": "protocol.VMCPU",
+    "description": "vCPU count, optional topology and CPU model. Sockets, cores and threads all 0 select the default topology of one socket, count cores and one thread; otherwise each must be at least 1 and sockets × cores × threads must equal count. JSON Schema cannot express that product, so Controller and Core both enforce it in protocol.ValidateVMSpec."
+   },
+   "VMMemory": {
+    "type": "object",
+    "properties": {
+     "mode": {
+      "type": "string",
+      "enum": [
+       "dedicated",
+       "maximum"
+      ],
+      "description": "dedicated reserves the ceiling: memory and currentMemory at size_mib with no balloon device, counted in full against host capacity and never handed to another VM. maximum caps without reserving: the same ceiling plus a virtio balloon with free page reporting, so the guest returns pages it frees. Reclaim requires the balloon driver running in the guest (built into Linux; virtio-win guest tools on Windows); without it the guest drifts to the ceiling and holds it. There is no pressure-driven reclaim daemon."
+     },
+     "size_mib": {
+      "type": "integer",
+      "minimum": 512,
+      "maximum": 262144,
+      "description": "Memory ceiling in MiB. Both sides require at least 512; Controller caps the request at 262144."
+     }
+    },
+    "required": [
+     "mode",
+     "size_mib"
+    ],
+    "x-go-type": "protocol.VMMemory",
+    "description": "Memory ceiling and how the host treats it. size_mib is the ceiling in both modes and host capacity preflight uses that ceiling in both modes: a VM that cannot reach its ceiling is refused. dedicated additionally counts against committed capacity; maximum reserves nothing and is allowed to oversubscribe."
+   },
+   "VMDisk": {
+    "type": "object",
+    "properties": {
+     "storage_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Registered storage that has succeeded on this VM's host and pool. Core resolves it by resource ID, not by pool/host ID, so it survives Controller replacement."
+     },
+     "name": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$",
+      "description": "Operator-facing disk name, unique within the VM. Letters, digits, dot, dash and underscore, starting with a letter or digit; it is not a path."
+     },
+     "size_gib": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2048
+     },
+     "bus": {
+      "type": "string",
+      "enum": [
+       "virtio",
+       "sata",
+       "scsi"
+      ],
+      "description": "virtio needs guest drivers (built into Linux, virtio-win on Windows); sata and scsi work without them."
+     },
+     "thin": {
+      "type": "boolean",
+      "description": "true creates a sparse qcow2 that grows on use; false preallocates the full size."
+     },
+     "boot_order": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "0 keeps the disk out of the boot order. Non-zero values are unique across every disk and boot.media_boot_order and number the boot devices from 1 with no gaps."
+     }
+    },
+    "required": [
+     "storage_id",
+     "name",
+     "size_gib",
+     "bus",
+     "thin",
+     "boot_order"
+    ],
+    "x-go-type": "protocol.VMDisk",
+    "description": "One virtual disk, created inside the VM's own exclusive directory on its storage target. Disks are never shared or reused: Core checks exclusive ownership for every disk and free space per storage target, summing the disks that land on the same target."
+   },
+   "VMNIC": {
+    "type": "object",
+    "properties": {
+     "network_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Registered network that has succeeded on this VM's host and pool, resolved by resource ID."
+     },
+     "model": {
+      "type": "string",
+      "enum": [
+       "virtio",
+       "e1000e"
+      ],
+      "description": "virtio needs guest drivers (built into Linux, virtio-win on Windows); e1000e is emulated and works without them."
+     },
+     "mac": {
+      "type": "string",
+      "pattern": "^(([0-9a-f][02468ace])(:[0-9a-f]{2}){5})?$",
+      "description": "Empty derives a stable MAC from the VM ID and the interface index (protocol.DerivedMAC: the 52:54:00 locally administered prefix, two octets of sha256(id) and the index), which never collides across a VM's at most 8 interfaces. A manual address must be six octets in canonical lower-case colon form and unicast; the pattern encodes the cleared multicast bit as an even second hex digit. All-zero addresses are refused, addresses are unique within the VM, and Controller additionally enforces uniqueness across the pool by plain string comparison."
+     }
+    },
+    "required": [
+     "network_id",
+     "model",
+     "mac"
+    ],
+    "x-go-type": "protocol.VMNIC",
+    "description": "One virtual network interface on a registered pool network. A VM may have none and at most 8."
+   },
+   "VMBoot": {
+    "type": "object",
+    "properties": {
+     "firmware": {
+      "type": "string",
+      "enum": [
+       "uefi",
+       "bios"
+      ],
+      "description": "uefi is the default and requires EFI firmware advertised by the host's libvirt domain capabilities; bios stays selectable."
+     },
+     "machine": {
+      "type": "string",
+      "pattern": "^([a-z0-9][a-z0-9._-]{0,31})?$",
+      "description": "Empty selects Core's default machine type (q35)."
+     },
+     "media_boot_order": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "0 keeps the install ISO out of the boot order; any other value joins the disks' contiguous 1..N numbering and requires media_id."
+     }
+    },
+    "required": [
+     "firmware",
+     "machine",
+     "media_boot_order"
+    ],
+    "x-go-type": "protocol.VMBoot",
+    "description": "Firmware, machine type and the install media's place in the boot order. Boot order is per device (libvirt forbids mixing per-device boot with an os/boot device list), so at least one disk or the install media must carry a non-zero order."
+   },
    "VMCreateSpec": {
     "type": "object",
     "properties": {
      "id": {
-      "type": "string"
+      "type": "string",
+      "description": "Controller-assigned stable UUID; identity is preserved across Controller replacement and later migration."
      },
      "pool_id": {
       "type": "string"
@@ -5124,38 +5301,67 @@
      },
      "name": {
       "type": "string",
-      "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+      "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+      "description": "Unique within the pool and reserved before dispatch; failed or uncertain creations keep their reservation."
      },
-     "storage_id": {
-      "type": "string"
+     "description": {
+      "type": "string",
+      "maxLength": 4096,
+      "description": "Free-text operator note, at most 4096 characters."
      },
-     "network_id": {
-      "type": "string"
-     },
-     "media_id": {
-      "type": "string"
-     },
-     "cpus": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 64
-     },
-     "memory_mib": {
-      "type": "integer",
-      "minimum": 512,
-      "maximum": 262144
-     },
-     "disk_gib": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 2048
-     },
-     "firmware": {
+     "guest_os": {
       "type": "string",
       "enum": [
-       "bios",
-       "uefi"
-      ]
+       "",
+       "linux",
+       "windows",
+       "other"
+      ],
+      "description": "Guest OS hint recorded for display and guest-tools advice; empty leaves it unset. It installs nothing and does not change the VM devices: disk bus and NIC model are chosen per device."
+     },
+     "cpu": {
+      "$ref": "#/components/schemas/VMCPU"
+     },
+     "memory": {
+      "$ref": "#/components/schemas/VMMemory"
+     },
+     "disks": {
+      "type": [
+       "array",
+       "null"
+      ],
+      "items": {
+       "$ref": "#/components/schemas/VMDisk"
+      },
+      "minItems": 1,
+      "maxItems": 8,
+      "description": "One to eight disks; names unique within the VM."
+     },
+     "nics": {
+      "type": [
+       "array",
+       "null"
+      ],
+      "items": {
+       "$ref": "#/components/schemas/VMNIC"
+      },
+      "maxItems": 8,
+      "description": "Zero to eight network interfaces."
+     },
+     "boot": {
+      "$ref": "#/components/schemas/VMBoot"
+     },
+     "media_id": {
+      "type": "string",
+      "description": "Install ISO (Media.id), empty for none. The ISO must reside on a storage target this VM uses, and is required when boot.media_boot_order is non-zero."
+     },
+     "start_after_create": {
+      "type": "boolean",
+      "description": "Not part of creation. When creation succeeds, Controller issues the existing vm-power start as a second, separate operation; the vm-create command never starts a guest, so a failed or uncertain creation never boots."
+     },
+     "autostart": {
+      "type": "boolean",
+      "description": "libvirt autostart, set while the stopped guest is defined so the host starts this VM on boot. It is not a start."
      }
     },
     "required": [
@@ -5163,16 +5369,19 @@
      "pool_id",
      "host_id",
      "name",
-     "storage_id",
-     "network_id",
+     "description",
+     "guest_os",
+     "cpu",
+     "memory",
+     "disks",
+     "nics",
+     "boot",
      "media_id",
-     "cpus",
-     "memory_mib",
-     "disk_gib",
-     "firmware"
+     "start_after_create",
+     "autostart"
     ],
     "x-go-type": "protocol.VMCreateSpec",
-    "description": "Controller-assigned stable UUID and pool membership with separate host assignment. Creation defines a stopped VM, never boots it. Dependencies must be verified on this host/pool; ISO must use selected storage."
+    "description": "The complete VM specification: Controller-assigned UUID and pool membership with separate host assignment, identity, CPU, memory, every disk and network interface, boot and install media, and the two lifecycle switches. Creation defines a stopped VM and never boots it. Dependencies must have succeeded on this host and pool. Both sides validate the shared bounds through protocol.ValidateVMSpec; Controller owns identity, reference existence, pool-wide MAC uniqueness and capacity."
    },
    "StorageRegistrationRequest": {
     "type": "object",
@@ -5290,38 +5499,67 @@
      },
      "name": {
       "type": "string",
-      "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+      "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+      "description": "Unique within the pool and reserved before dispatch; failed or uncertain creations keep their reservation."
      },
-     "storage_id": {
-      "type": "string"
+     "description": {
+      "type": "string",
+      "maxLength": 4096,
+      "description": "Free-text operator note, at most 4096 characters."
      },
-     "network_id": {
-      "type": "string"
-     },
-     "media_id": {
-      "type": "string"
-     },
-     "cpus": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 64
-     },
-     "memory_mib": {
-      "type": "integer",
-      "minimum": 512,
-      "maximum": 262144
-     },
-     "disk_gib": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 2048
-     },
-     "firmware": {
+     "guest_os": {
       "type": "string",
       "enum": [
-       "bios",
-       "uefi"
-      ]
+       "",
+       "linux",
+       "windows",
+       "other"
+      ],
+      "description": "Guest OS hint recorded for display and guest-tools advice; empty leaves it unset. It installs nothing and does not change the VM devices: disk bus and NIC model are chosen per device."
+     },
+     "cpu": {
+      "$ref": "#/components/schemas/VMCPU"
+     },
+     "memory": {
+      "$ref": "#/components/schemas/VMMemory"
+     },
+     "disks": {
+      "type": [
+       "array",
+       "null"
+      ],
+      "items": {
+       "$ref": "#/components/schemas/VMDisk"
+      },
+      "minItems": 1,
+      "maxItems": 8,
+      "description": "One to eight disks; names unique within the VM."
+     },
+     "nics": {
+      "type": [
+       "array",
+       "null"
+      ],
+      "items": {
+       "$ref": "#/components/schemas/VMNIC"
+      },
+      "maxItems": 8,
+      "description": "Zero to eight network interfaces."
+     },
+     "boot": {
+      "$ref": "#/components/schemas/VMBoot"
+     },
+     "media_id": {
+      "type": "string",
+      "description": "Install ISO (Media.id), empty for none. The ISO must reside on a storage target this VM uses, and is required when boot.media_boot_order is non-zero."
+     },
+     "start_after_create": {
+      "type": "boolean",
+      "description": "Not part of creation. When creation succeeds, Controller issues the existing vm-power start as a second, separate operation; the vm-create command never starts a guest, so a failed or uncertain creation never boots."
+     },
+     "autostart": {
+      "type": "boolean",
+      "description": "libvirt autostart, set while the stopped guest is defined so the host starts this VM on boot. It is not a start."
      },
      "request_id": {
       "type": "string"
@@ -5331,13 +5569,16 @@
      "pool_id",
      "host_id",
      "name",
-     "storage_id",
-     "network_id",
+     "description",
+     "guest_os",
+     "cpu",
+     "memory",
+     "disks",
+     "nics",
+     "boot",
      "media_id",
-     "cpus",
-     "memory_mib",
-     "disk_gib",
-     "firmware",
+     "start_after_create",
+     "autostart",
      "request_id"
     ],
     "additionalProperties": false
@@ -5403,7 +5644,7 @@
        "$ref": "#/components/schemas/VMCreateSpec"
       },
       "maxItems": 10000,
-      "description": "Succeeded VM definitions from the host journal."
+      "description": "Succeeded VM definitions from the host journal: the full specification of every VM this host created, which is what a replaced Controller re-adopts by resource ID."
      }
     },
     "required": [],
@@ -5744,7 +5985,7 @@
    "result": {
     "$ref": "#/components/schemas/Result"
    },
-   "semantics": "Create stopped VM with exclusive new disk; reconcile journal and ownership on replay. Never start a guest. Core resolves storage, network and media references by resource ID, not by pool/host ID, so creation works after re-enrollment under a new Controller. Succeeded definitions are reported back in Inventory.managed.vms and adopted by a Controller that does not hold them (request_id adopt-vm-create:<host>:<id>) without redelivery."
+   "semantics": "Create a stopped VM from the full specification: one exclusive new qcow2 per disk inside the VM's own directory on each disk's storage target (sparse when thin, preallocated when not), one interface per NIC with its derived or manual MAC, per-device boot order, the memory mode's balloon configuration, the selected firmware and machine type, and libvirt autostart when requested. Never start a guest: start_after_create is satisfied by Controller issuing the separate vm-power start after this command succeeds. Reconcile journal and per-disk ownership on replay. Core resolves storage, network and media references by resource ID, not by pool/host ID, so creation works after re-enrollment under a new Controller. Succeeded definitions are reported back in Inventory.managed.vms and adopted by a Controller that does not hold them (request_id adopt-vm:<host>:<id>) without redelivery."
   },
   "vm-power": {
    "transport": "POST /api/v1/agent/report response.commands",

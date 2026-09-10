@@ -2,8 +2,10 @@
 package protocol
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
 )
 
@@ -46,18 +48,188 @@ type Media struct {
 	Status      string `json:"status"`
 	Error       string `json:"error,omitempty"`
 }
-type VMCreateSpec struct {
-	ID        string `json:"id"`
-	PoolID    string `json:"pool_id"`
-	HostID    string `json:"host_id"`
-	Name      string `json:"name"`
+
+// VMCPU carries the vCPU count, optional topology and CPU model. A zero topology means the
+// default: one socket, Count cores, one thread.
+type VMCPU struct {
+	Count   int    `json:"count"`
+	Sockets int    `json:"sockets"`
+	Cores   int    `json:"cores"`
+	Threads int    `json:"threads"`
+	Model   string `json:"model"`
+}
+
+// VMMemory is the ceiling in both modes: "dedicated" reserves it, "maximum" only caps it.
+type VMMemory struct {
+	Mode    string `json:"mode"`
+	SizeMiB int    `json:"size_mib"`
+}
+type VMDisk struct {
 	StorageID string `json:"storage_id"`
+	Name      string `json:"name"`
+	SizeGiB   int    `json:"size_gib"`
+	Bus       string `json:"bus"`
+	Thin      bool   `json:"thin"`
+	BootOrder int    `json:"boot_order"`
+}
+
+// VMNIC's MAC is empty for a MAC derived from the VM ID and interface index.
+type VMNIC struct {
 	NetworkID string `json:"network_id"`
-	MediaID   string `json:"media_id"`
-	CPUs      int    `json:"cpus"`
-	MemoryMiB int    `json:"memory_mib"`
-	DiskGiB   int    `json:"disk_gib"`
-	Firmware  string `json:"firmware"`
+	Model     string `json:"model"`
+	MAC       string `json:"mac"`
+}
+type VMBoot struct {
+	Firmware       string `json:"firmware"`
+	Machine        string `json:"machine"`
+	MediaBootOrder int    `json:"media_boot_order"`
+}
+type VMCreateSpec struct {
+	ID               string   `json:"id"`
+	PoolID           string   `json:"pool_id"`
+	HostID           string   `json:"host_id"`
+	Name             string   `json:"name"`
+	Description      string   `json:"description"`
+	GuestOS          string   `json:"guest_os"`
+	CPU              VMCPU    `json:"cpu"`
+	Memory           VMMemory `json:"memory"`
+	Disks            []VMDisk `json:"disks"`
+	NICs             []VMNIC  `json:"nics"`
+	Boot             VMBoot   `json:"boot"`
+	MediaID          string   `json:"media_id"`
+	StartAfterCreate bool     `json:"start_after_create"`
+	Autostart        bool     `json:"autostart"`
+}
+
+var diskName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
+var machineType = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,31}$`)
+
+// Topology resolves the sockets × cores × threads a domain uses, applying the documented
+// default when the operator left the topology unset. ValidateVMSpec has already checked
+// that a supplied topology multiplies to Count.
+func (c VMCPU) Topology() (sockets, cores, threads int) {
+	if c.Sockets == 0 && c.Cores == 0 && c.Threads == 0 {
+		return 1, c.Count, 1
+	}
+	return c.Sockets, c.Cores, c.Threads
+}
+
+// DerivedMAC returns the stable MAC for a VM's interface index: the QEMU locally administered
+// unicast prefix 52:54:00, two octets from the VM ID and the index. Indices differ by the last
+// octet, so the at most 8 interfaces a VM may have never collide with each other.
+func DerivedMAC(vmID string, index int) string {
+	h := sha256.Sum256([]byte(vmID))
+	return fmt.Sprintf("52:54:00:%02x:%02x:%02x", h[0], h[1], byte(index))
+}
+
+// ValidateVMSpec checks the bounds Controller and Core enforce identically on a VM
+// specification. Identity, resource references, pool-wide MAC uniqueness and host capacity
+// belong to their owners and are not checked here.
+func ValidateVMSpec(v VMCreateSpec) error {
+	if v.GuestOS != "" && v.GuestOS != "linux" && v.GuestOS != "windows" && v.GuestOS != "other" {
+		return errors.New("guest OS must be linux, windows or other")
+	}
+	if len(v.Description) > 4096 {
+		return errors.New("description must be at most 4096 characters")
+	}
+	if v.CPU.Count < 1 {
+		return errors.New("a VM needs at least 1 vCPU")
+	}
+	if v.CPU.Sockets != 0 || v.CPU.Cores != 0 || v.CPU.Threads != 0 {
+		if v.CPU.Sockets < 1 || v.CPU.Cores < 1 || v.CPU.Threads < 1 || v.CPU.Sockets*v.CPU.Cores*v.CPU.Threads != v.CPU.Count {
+			return errors.New("sockets × cores × threads must equal the vCPU count")
+		}
+	}
+	if v.CPU.Model != "host-passthrough" && v.CPU.Model != "host-model" {
+		return errors.New("CPU model must be host-passthrough or host-model")
+	}
+	if v.Memory.Mode != "dedicated" && v.Memory.Mode != "maximum" {
+		return errors.New("memory mode must be dedicated or maximum")
+	}
+	if v.Memory.SizeMiB < 512 {
+		return errors.New("memory must be at least 512 MiB")
+	}
+	if v.Boot.Firmware != "uefi" && v.Boot.Firmware != "bios" {
+		return errors.New("firmware must be uefi or bios")
+	}
+	if v.Boot.Machine != "" && !machineType.MatchString(v.Boot.Machine) {
+		return errors.New("machine type must be a plain libvirt machine name such as q35")
+	}
+	if len(v.Disks) < 1 || len(v.Disks) > 8 {
+		return errors.New("a VM needs 1 to 8 disks")
+	}
+	if len(v.NICs) > 8 {
+		return errors.New("a VM allows at most 8 network interfaces")
+	}
+	orders, names := map[int]bool{}, map[string]bool{}
+	boot := func(o int) error {
+		if o < 0 {
+			return errors.New("boot order must not be negative")
+		}
+		if o > 0 {
+			if orders[o] {
+				return errors.New("boot order values must be unique across disks and the install media")
+			}
+			orders[o] = true
+		}
+		return nil
+	}
+	for _, d := range v.Disks {
+		if d.StorageID == "" {
+			return errors.New("each disk needs a storage target")
+		}
+		if !diskName.MatchString(d.Name) {
+			return errors.New("each disk needs a name of letters, digits, dot, dash or underscore starting with a letter or digit")
+		}
+		if names[d.Name] {
+			return errors.New("disk names must be unique within a VM")
+		}
+		names[d.Name] = true
+		if d.SizeGiB < 1 || d.SizeGiB > 2048 {
+			return errors.New("each disk must be 1 to 2048 GiB")
+		}
+		if d.Bus != "virtio" && d.Bus != "sata" && d.Bus != "scsi" {
+			return errors.New("disk bus must be virtio, sata or scsi")
+		}
+		if err := boot(d.BootOrder); err != nil {
+			return err
+		}
+	}
+	if v.MediaID == "" && v.Boot.MediaBootOrder != 0 {
+		return errors.New("an install media boot order needs an install ISO")
+	}
+	if err := boot(v.Boot.MediaBootOrder); err != nil {
+		return err
+	}
+	if len(orders) == 0 {
+		return errors.New("at least one disk or the install media must have a boot order")
+	}
+	for i := 1; i <= len(orders); i++ {
+		if !orders[i] {
+			return errors.New("boot order must number the boot devices from 1 without gaps")
+		}
+	}
+	macs := map[string]bool{}
+	for _, n := range v.NICs {
+		if n.NetworkID == "" {
+			return errors.New("each network interface needs a network")
+		}
+		if n.Model != "virtio" && n.Model != "e1000e" {
+			return errors.New("network adapter model must be virtio or e1000e")
+		}
+		if n.MAC == "" {
+			continue
+		}
+		hw, err := net.ParseMAC(n.MAC)
+		if err != nil || len(hw) != 6 || hw.String() != n.MAC || hw[0]&1 != 0 || (hw[0]|hw[1]|hw[2]|hw[3]|hw[4]|hw[5]) == 0 {
+			return errors.New("a manual MAC must be a unicast six-octet address in lower case, such as 52:54:00:12:34:56")
+		}
+		if macs[n.MAC] {
+			return errors.New("MAC addresses must be unique within a VM")
+		}
+		macs[n.MAC] = true
+	}
+	return nil
 }
 
 var uplinkName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,9}$`)

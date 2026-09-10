@@ -37,7 +37,7 @@ func testManagedIdentity(t *testing.T, handler http.Handler) (*httptest.Server, 
 
 func TestManagedCommandJournalDoesNotCompleteFromInventoryOrReplayChangedInput(t *testing.T) {
 	s := testStore(t)
-	cmd := protocol.Command{OperationID: "managed-1", Kind: "vm-create", VM: &protocol.VMCreateSpec{ID: "vm-1", HostID: "host-1", CPUs: 2}}
+	cmd := protocol.Command{OperationID: "managed-1", Kind: "vm-create", VM: &protocol.VMCreateSpec{ID: "vm-1", HostID: "host-1", CPU: protocol.VMCPU{Count: 2}}}
 	if err := applyResponse(s, protocol.ReportResponse{Commands: []protocol.Command{cmd}}); err != nil {
 		t.Fatal(err)
 	}
@@ -57,12 +57,12 @@ func TestManagedCommandJournalDoesNotCompleteFromInventoryOrReplayChangedInput(t
 	if err = json.Unmarshal(data, &saved); err != nil {
 		t.Fatal(err)
 	}
-	if saved.Journal[cmd.OperationID].Command.VM.CPUs != 2 {
+	if saved.Journal[cmd.OperationID].Command.VM.CPU.Count != 2 {
 		t.Fatal("full command not persisted before dispatch")
 	}
 	changed := cmd
 	spec := *cmd.VM
-	spec.CPUs = 3
+	spec.CPU.Count = 3
 	changed.VM = &spec
 	if err := applyResponse(s, protocol.ReportResponse{Commands: []protocol.Command{changed}}); err == nil {
 		t.Fatal("changed payload replay accepted")

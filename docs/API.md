@@ -6,7 +6,9 @@ certificate enrollment,
 observations, and durable inventory refresh operations. The appliance bootstrap slice adds
 host-local deployment/recovery and adoption of the existing Controller VM. The first managed-VM
 slice adds local storage and existing-network registration, ISO transfer and creation of a
-stopped VM. The console slice adds ticketed browser/host-local VNC streams. Central power controls and event streams remain unimplemented. Verification limits are recorded in the
+stopped VM; the VM creation slice replaces that flat shape with the full specification
+(topology, memory modes, multiple disks and NICs, boot order, autostart).
+The console slice adds ticketed browser/host-local VNC streams. Central power controls and event streams remain unimplemented. Verification limits are recorded in the
 [platform plan](plans/2026-09-08-nex-platform.md).
 
 ## Contract and generated reference
@@ -459,10 +461,10 @@ computes its size/SHA-256 and checks its ISO descriptor. Core checks all three a
 publishing read-only media. See the OpenAPI operations for upload limits and errors.
 
 `vm-create` preserves pool membership separately from host placement, allocates a stable
-UUID and requires successful registrations/media for the same host and pool. The ISO must
-reside on the selected storage. Core rechecks storage, networking, capacity and firmware,
-then creates a new disk and defines a stopped guest through system libvirt. It does not
-start the VM. The shared host engine's `NewManaged(stateDir)` selects its private journal;
+UUID and requires successful registrations/media for the same host and pool. Core rechecks
+storage, networking, capacity and firmware, then creates every disk and defines a stopped
+guest through system libvirt. It does not start the VM. The shared host engine's
+`NewManaged(stateDir)` selects its private journal;
 `Execute(ctx, command, fetch)` validates scope and payload, serializes effects and returns
 the durable `Result` separately from journal/persistence errors. The agent supplies the
 authenticated media fetcher; commands cannot supply a download URL.
@@ -470,6 +472,88 @@ The existing VM list still includes adopted Controller appliances with
 `role: controller` and `protected: true`; generic guests add `spec`, `operation_id`,
 `status` and optional `error`, with `role: guest`. Creation status never substitutes for
 fresh libvirt execution state.
+
+**Full VM specification (changed contract, 2026-09-10):** `POST /api/v1/vms`, the `vm-create`
+command payload and the VM list/report inventory carry `VMCreateSpec` in its complete shape
+([plan](plans/2026-09-10-vm-creation-system.md)). Bounds below are enforced identically on
+Controller and Core by `protocol.ValidateVMSpec`; existence of referenced resources, pool-wide
+MAC uniqueness and host capacity stay with their owners.
+
+- **Identity.** `name` unique within the pool (`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`, reserved
+  before dispatch), `description` at most 4096 characters, and `guest_os` (`""`, `linux`,
+  `windows`, `other`) recorded for display and guest-tools advice. It installs nothing and does
+  not change the VM's devices: disk bus and NIC model are chosen per device.
+- **`cpu`.** `count` at least 1; Controller caps it at 64 and at host capacity. `sockets`,
+  `cores` and `threads` all `0` select the documented default topology — one socket, `count`
+  cores, one thread — instead of libvirt's own default; otherwise each must be at least 1 and
+  sockets × cores × threads must equal `count`. `model` is `host-passthrough` (the default) or
+  `host-model`, which is what keeps later migration to a non-identical host possible.
+- **`memory`.** `size_mib` at least 512, capped by Controller at 262144, is the ceiling in both
+  modes. `dedicated` reserves it: `<memory>`/`<currentMemory>` at the ceiling, no balloon device,
+  and the whole amount counted against host capacity and never handed to another VM. `maximum`
+  caps without reserving: the same ceiling plus a virtio balloon with free page reporting, so the
+  guest returns pages it frees. Reclaim needs the balloon driver running in the guest (built into
+  Linux; virtio-win guest tools on Windows) — without it a guest drifts to its ceiling and holds
+  it, and this slice has no pressure-driven reclaim daemon. Capacity preflight uses the ceiling
+  in both modes, so a VM that cannot reach its maximum is refused.
+- **`disks`.** One to eight. Each carries `storage_id`, a `name` unique within the VM
+  (`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`; a name, not a path), `size_gib` 1–2048, `bus`
+  `virtio|sata|scsi`, `thin` (`true` sparse, `false` preallocated) and `boot_order`. Disks are
+  created inside the VM's exclusive directory on their storage target; Core checks exclusive
+  ownership for every disk and free space per target, summing the disks that share one.
+- **`nics`.** Zero to eight. Each carries `network_id`, `model` `virtio|e1000e` and `mac`. An
+  empty `mac` means the derived address (`protocol.DerivedMAC`: the `52:54:00` locally
+  administered unicast prefix, two octets of `sha256(vm id)` and the interface index), which is
+  stable per VM and interface and cannot collide within a VM. A manual `mac` must be six octets
+  in canonical lower-case colon form, unicast and not all zero; that canonical form is what lets
+  Controller enforce pool-wide uniqueness by plain string comparison.
+- **Boot order.** `0` means "not a boot device". Non-zero values are unique across every disk and
+  `boot.media_boot_order` and must number the boot devices `1..N` without gaps; at least one boot
+  device is required. A non-zero `media_boot_order` requires `media_id`, and the install ISO must
+  reside on a storage target the VM uses. Order is per device because libvirt forbids mixing
+  per-device boot with an `<os><boot dev>` list.
+- **`boot`.** `firmware` `uefi` (the default; requires EFI firmware advertised by the host's
+  `domcapabilities`) or `bios`. `machine` is empty for Core's default (q35) or a plain machine
+  name (`^[a-z0-9][a-z0-9._-]{0,31}$`).
+- **Lifecycle.** `autostart` is the libvirt property (`virsh autostart`) set while the stopped
+  guest is defined, so the host starts the VM on boot; it is not a start. `start_after_create` is
+  **not** part of creation: when the create command succeeds, Controller issues the existing,
+  proven `vm-power` `start` as a second operation. The managed create engine still never starts a
+  guest, so a failed or uncertain creation never boots and the operator sees two honest tasks.
+  The follow-on carries actor `system` and the stable `request_id start-after-create:<vm id>`, so
+  it is one durable attempt and not a retry loop. If the host does not report `vm-power-v1`,
+  Controller records that `vm-power` operation as `failed` with the reason instead of queueing a
+  command: the VM exists, stopped, and the operator starts it explicitly. Adoption by a replaced
+  Controller clears `start_after_create`, so re-adopting a pool never powers guests on.
+
+`createVM` refusals, in the order they are evaluated: **400** for a client-supplied `id`, an
+invalid `request_id` or name, any `protocol.ValidateVMSpec` violation (its message is returned
+verbatim) and the Controller ceilings `cpu.count > 64` or `memory.size_mib > 262144`; **409** for
+a replay whose payload changed, a host outside the named pool, a stale or revoked host, a
+`media_id` on a storage target none of the VM's disks use, capacity above the host's observed CPU
+or memory, a VM name already reserved in the pool, and a manual `mac` already used by another VM
+in that pool (including another VM's derived addresses); **404** for any `disks[].storage_id`,
+`nics[].network_id` or non-empty `media_id` that is not a registration this pool and host have
+verified. A **200** replay returns the original VM and operation; a new request returns **202**.
+
+API impact: **changed contract**. The VM creation request, the `vm-create` command payload and
+the VM list/report inventory (`ManagedAppliance.spec`, `Inventory.managed.vms`) all carry the new
+specification. Authentication, authorization, CSRF and origin checks, durable operations, replay
+by `request_id`, result acknowledgement and audit attribution are the **existing contract** and
+do not change; protocol version stays `1` and the capability stays `managed-vm-v1`. There is
+**no compatibility shim**, because Nex is unreleased: no decode-only legacy fields, no
+`managed-vm-v2` capability gate and no journal normalisation. Upgrade Controller and Core
+together and recreate lab VMs and managed journal entries written in the earlier flat shape. The
+Controller appliance is unaffected — it is built from `DeploySpec` through `makeDomain`, a
+separate path from `VMCreateSpec`.
+
+Every field of the specification is pool-scoped state, so its durable host-side record is the
+**managed journal on the pool master**: each `vm-create` entry persists the full specification,
+the generated domain XML and the path of every disk it created. Cores report succeeded entries in
+`Inventory.managed.vms`, and a replaced Controller re-adopts them by resource ID (actor `system`,
+`request_id adopt-vm:<host>:<id>`) with the VM's identity, name and shape intact and no
+command redelivered; storage, network and media references resolve by resource ID on the host for
+the same reason. No part of a VM definition exists only in the Controller database.
 
 Clients retain a stable `request_id` and exact payload. Replays return the original identity
 and operation; changed payloads return 409. Upload replay rehashes the supplied bytes and
@@ -481,8 +565,8 @@ inspection; it does not authorize another instance or imply that a disk is safe 
 Definite failed storage/network checks may be resubmitted with a new request identity after
 the cause is corrected; active or uncertain registrations retain their reservation.
 
-There is no cancellation, deletion, automatic cleanup of uncertain Core disks, or central
-power/console API in this development workflow. Controller staging is released after terminal
+There is no cancellation, deletion or automatic cleanup of uncertain Core disks in this
+development workflow; central power requests and consoles have their own sections below. Controller staging is released after terminal
 import results and orphaned upload files are cleaned at startup. Running VMs and local
 recovery remain independent of Controller availability. The
 [operator workflow](guide/create-virtual-machine.md) records availability and verification limits.
@@ -558,7 +642,7 @@ the VM definition: every `vm-create` now defines, next to the guest agent channe
 `qemu-vdagent` channel (`clipboard copypaste='yes'`, `mouse mode='server'`, target
 `com.redhat.spice.0`), which is what QEMU renders as `-chardev qemu-vdagent,clipboard=on` and
 bridges to the VNC server, plus a USB tablet and a VirtIO video model. `validateManagedDefinition`
-still compares disks, NIC, OS/CPU/boot and the single VNC display, so definitions created
+still compares disks, NICs, OS/CPU/boot and the single VNC display, so definitions created
 before this change remain valid; their guest observation reports `clipboard: no-channel` and
 `resize: false`. VNC power control (`powerControl`) is deliberately not enabled.
 
@@ -602,27 +686,43 @@ API impact: **new contract** — Controller `GET /api/v1/updates` and
 `POST /api/local/v1/updates/apply`. Schemas `UpdateStatus` and `UpdateApplyResult`
 are in the generated references.
 
+Updates are apt operations against the signed Nex archive, not bare `.deb`
+installs. Nex Core is a distribution: apt owns download, GPG verification and
+dependency resolution, so a release that adds a dependency installs cleanly instead
+of leaving dpkg half-configured. Clients read the archive's signed `Release`/`Packages`
+index and no longer fetch `{repo}/updates.json`. The publisher still writes that file
+for hosts released before this change, which poll it to discover releases; it is a
+compatibility shim, not a contract current clients depend on.
+
 Both sides read a package repo URL from `NEX_UPDATE_REPO`, else `/etc/nex/updates.conf`
 (`repo_url=`), else `https://nexvirtualization.com/apt`. Plain HTTP repo URLs that
-point at private or loopback addresses are treated as the public default.
-They fetch `{repo}/updates.json`
-listing package version, filename and sha256. GET compares the installed Debian
-package version (or the build-time `version.Version` fallback) and returns
-non-fatal repo errors in the JSON `error` field with HTTP 200. While an apply
-runs, GET also returns `phase`, `progress` (0–100) and `message` from
-`update-progress.json` in the service state directory.
+point at private or loopback addresses are treated as the public default. That URL is
+written to `/etc/apt/sources.list.d/nex.sources` with
+`Signed-By: /usr/share/keyrings/nex-archive-keyring.gpg`, which both packages ship, so
+a repo changed after install takes effect without reinstalling. GET refreshes the
+package index at most once every 5 minutes (stamped at `/var/lib/nex/apt-refresh.stamp`,
+because the UI polls GET while an apply runs) and compares the installed Debian package
+version against apt's candidate. A package no configured source offers is returned in
+the JSON `error` field with HTTP 200. While an apply runs, GET also returns `phase`,
+`progress` and `message` from `update-progress.json` in the service state directory.
+`progress` reports fixed steps rather than download percentage.
 
 Controller apply writes `pending-update.json` under the state directory and returns
 202; the root `nex-controller-update` path unit runs `/usr/local/lib/nex/apply-update`,
-which downloads the deb (updating progress), runs `dpkg -i` and restarts the service.
-If the helper or path unit is missing, apply returns **503** instead of scheduling.
-Core apply starts the same work in the background and returns 202; the UI polls GET
-until `phase` is `done` or `failed`.
+which runs `apt-get update` then `apt-get install --only-upgrade nex-controller` and
+restarts the service. Running outside `nex-controller.service` keeps apt from being
+killed mid-transaction by the restart its own postinst triggers, and a failed upgrade
+restarts the service before reporting. If the helper or path unit is missing, apply
+returns **503** instead of scheduling. Core apply starts the same work in the
+background and returns 202; the UI polls GET until `phase` is `done` or `failed`.
+Both sides re-read the installed version afterwards and fail the apply if it did not
+advance, because apt exits 0 when nothing needed upgrading.
 
 Checks: `go test ./internal/nexupdate ./internal/controller ./internal/localcore`
-(update-focused cases). Operator UI is under Updates on Controller and the host-local
-page. Packaged installs and current appliance images include the update helper so
-Controller VMs can upgrade in place.
+(update-focused cases, including that apply invokes apt and never `dpkg -i`).
+Operator UI is under Updates on Controller and the host-local page. Packaged installs
+and current appliance images include the update helper so Controller VMs can upgrade
+in place.
 
 ## Source access and availability
 
@@ -642,7 +742,7 @@ Choose exact operations and payloads when implementing the relevant phase.
 
 | Phase | Coverage to add as implemented |
 |---|---|
-| 2 (remaining) | Stopped-VM editing/deletion and installed-guest acceptance (power requests and console streaming are implemented above) |
+| 2 (remaining) | Stopped-VM editing/deletion with disk retention (full VM creation, power requests and console streaming are implemented above) |
 | 3 | Installer/first-boot enrollment integration and package/version compatibility |
 | 4 | Multi-host pools (member join under the pool master, master change, member eject), shared NFS access per host, network changes and recovery, placement, maintenance and removal |
 | 5 | Snapshot create/list/revert/delete, disk/configuration coverage and interrupted-operation recovery |

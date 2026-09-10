@@ -13,6 +13,13 @@ production or physical-hardware installation certification. Current verification
 limits are recorded below.
 [Return to the guide](README.md).
 
+Nex Core is a distribution, not a package set you add to an existing Debian system.
+The ISO establishes the storage layout, networking, console identity, host
+configuration and recovery paths that a supported virtualization host depends on, so
+`nex-core-local` refuses to install on a system the Nex Core installer did not create.
+The installer records this as `/etc/nex/core-release`. Updates afterwards come from the
+signed Nex APT archive; see [software updates](software-updates.md).
+
 ## Prerequisites
 
 - A locally built ISO and its matching SHA256 sidecar; see [build instructions](../../installer/README.md).

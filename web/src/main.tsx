@@ -1267,13 +1267,16 @@ function UpdatesPanel({
 }) {
   const working = phase === "checking" || phase === "applying";
   const pct = typeof update?.progress === "number" ? update.progress : undefined;
+  // Updates run through apt in fixed steps, so prefer the step the server reports
+  // over a percentage; "downloading" now covers refreshing the package index too.
   const label =
     phase === "checking" ? "Checking…"
-      : update?.phase === "downloading" ? `Downloading… ${pct ?? 0}%`
-        : update?.phase === "installing" ? "Installing…"
-          : update?.phase === "restarting" ? "Restarting…"
-            : phase === "applying" ? "Updating…"
-              : note || "Done";
+      : update?.message && update.phase && update.phase !== "done" ? `${update.message}…`
+        : update?.phase === "downloading" ? "Downloading…"
+          : update?.phase === "installing" ? "Installing…"
+            : update?.phase === "restarting" ? "Restarting…"
+              : phase === "applying" ? "Updating…"
+                : note || "Done";
   return (
     <section className="panel">
       <dl className="details">

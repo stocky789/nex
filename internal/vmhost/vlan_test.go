@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -53,7 +54,7 @@ func TestVLANShapeAndRendering(t *testing.T) {
 		t.Fatal("host address ownership detection")
 	}
 	// Domain XML attaches VLAN networks as plain bridges.
-	b, err := managedDomainXML(protocol.VMCreateSpec{ID: "12345678-1234-4234-8234-123456789012", Name: "g", CPUs: 1, MemoryMiB: 512, Firmware: "bios"}, good, "/d", "/i")
+	b, err := managedDomainXML(protocol.VMCreateSpec{ID: "12345678-1234-4234-8234-123456789012", Name: "g", CPU: protocol.VMCPU{Count: 1, Model: "host-passthrough"}, Memory: protocol.VMMemory{Mode: "dedicated", SizeMiB: 512}, Disks: []protocol.VMDisk{{StorageID: "st-1", Name: "system", SizeGiB: 1, Bus: "virtio", BootOrder: 1}}, NICs: []protocol.VMNIC{{NetworkID: "net-1", Model: "virtio"}}, Boot: protocol.VMBoot{Firmware: "bios"}}, []protocol.NetworkRegistration{good}, []string{"/d"}, "")
 	if err != nil || !strings.Contains(string(b), `<interface type="bridge">`) || !strings.Contains(string(b), `<source bridge="nex1v100">`) {
 		t.Fatalf("VLAN domain interface: %v\n%s", err, b)
 	}
@@ -190,7 +191,7 @@ func TestAppliedFromJournal(t *testing.T) {
 	n.OperationID, n.Status = "op-net", "applied"
 	s := protocol.StorageRegistration{ID: "st-1", PoolID: "pool", HostID: "host", Name: "Local", Path: "/srv/vms", OperationID: "op-st", Status: "applied"}
 	m := protocol.Media{ID: "iso-1", PoolID: "pool", HostID: "host", StorageID: "st-1", Name: "debian.iso", SizeBytes: 40000, SHA256: strings.Repeat("ab", 32), OperationID: "op-iso", Status: "ready"}
-	v := protocol.VMCreateSpec{ID: "12345678-1234-4234-8234-123456789012", PoolID: "pool", HostID: "host", Name: "guest", StorageID: "st-1", NetworkID: "net-1", MediaID: "iso-1", CPUs: 1, MemoryMiB: 512, DiskGiB: 1, Firmware: "bios"}
+	v := protocol.VMCreateSpec{ID: "12345678-1234-4234-8234-123456789012", PoolID: "pool", HostID: "host", Name: "guest", MediaID: "iso-1", CPU: protocol.VMCPU{Count: 1, Model: "host-passthrough"}, Memory: protocol.VMMemory{Mode: "dedicated", SizeMiB: 512}, Disks: []protocol.VMDisk{{StorageID: "st-1", Name: "system", SizeGiB: 1, Bus: "virtio", BootOrder: 1}}, NICs: []protocol.VMNIC{{NetworkID: "net-1", Model: "virtio"}}, Boot: protocol.VMBoot{Firmware: "bios"}}
 	for _, j := range []managedJournal{
 		{Command: protocol.Command{OperationID: "op-st", Kind: "storage-register", Storage: &s}, Result: protocol.Result{OperationID: "op-st", Status: "succeeded"}},
 		{Command: protocol.Command{OperationID: "op-net", Kind: "network-register", Network: &n}, Result: protocol.Result{OperationID: "op-net", Status: "succeeded"}},
@@ -212,7 +213,7 @@ func TestAppliedFromJournal(t *testing.T) {
 	if got.Networks[0] != (protocol.NetworkRegistration{ID: "net-1", PoolID: "pool", HostID: "host", Name: "Servers", Kind: "vlan", Source: "nex0v15", Uplink: "nex0", VLAN: 15}) {
 		t.Fatalf("network %+v", got.Networks[0])
 	}
-	if got.Media[0].OperationID != "" || got.Media[0].Status != "" || got.Media[0].ID != "iso-1" || got.VMs[0] != v {
+	if got.Media[0].OperationID != "" || got.Media[0].Status != "" || got.Media[0].ID != "iso-1" || !reflect.DeepEqual(got.VMs[0], v) {
 		t.Fatalf("media %+v vm %+v", got.Media[0], got.VMs[0])
 	}
 }

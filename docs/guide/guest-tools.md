@@ -13,6 +13,11 @@ feature keep their original definitions: their page shows **Channel missing** fo
 clipboard and no display resize until they are recreated. Windows guests have not been
 walked through yet; see [Verification](#verification).
 
+On Windows the same virtio-win package carries the memory balloon driver, so a VM created
+with the **Maximum** [memory mode](create-virtual-machine.md#memory-modes) returns no freed
+memory to the host until that package is installed; Linux has the driver in its kernel. See
+[Memory reclaim](#memory-reclaim) below.
+
 ## Prerequisites
 
 - A VM [created through Controller](create-virtual-machine.md) on a host running matching
@@ -57,6 +62,28 @@ system, hostname and addresses are asked from the agent about once a minute. Whi
 is stopped the panel says guest tools are observed only while it runs. A connected agent reports facts and lets
 the host ask the guest for information; it is not proof that the guest's applications work.
 
+### Memory reclaim
+
+A VM created with the **Maximum** [memory mode](create-virtual-machine.md#memory-modes) only
+returns memory it frees while the **virtio balloon driver** runs inside the guest. Until it
+does, the guest keeps every page it has ever touched, so the VM drifts up to its ceiling and
+holds it, behaving like a dedicated VM without the reservation. A **Dedicated** VM is
+unaffected: its memory is reserved either way and its definition carries no balloon device.
+
+- **Linux** has the balloon driver in the kernel and loads it automatically for the device,
+  so reclaim needs no extra package. The guest tools remain worth installing for everything
+  else on this page.
+- **Windows** needs the virtio-win guest tools from step 1, which carry the balloon driver
+  and its service alongside the QEMU guest agent. Without that package there is no reclaim.
+
+Controller does not report reclaim as its own state, so read the **Guest tools** panel as the
+practical per-VM signal: on Windows, **Guest agent: Connected** means the virtio-win package
+that carries both is installed, while **Not running in the guest** or **Attached but not
+answering** on a Maximum Windows VM means freed memory is probably not coming back yet.
+
+Nothing in this build grows or shrinks a guest under host memory pressure. The driver lets a
+guest hand back pages it has already freed; it does not make Nex rebalance memory between VMs.
+
 ## Troubleshooting
 
 - **Not running in the guest:** the channel exists but nothing in the guest opened it.
@@ -80,6 +107,12 @@ the host ask the guest for information; it is not proof that the guest's applica
   **Channel missing** VM was created before guest tools support and must be recreated).
 - **Addresses look wrong:** the panel shows what the guest reports, including addresses on
   networks Controller does not manage. Use the console to inspect the guest.
+- **A Maximum VM holds all its memory:** on Windows, check the **Guest tools** panel for that
+  VM; an agent that is not **Connected** means the virtio-win package is missing, so install
+  it as in step 1. On Linux the driver is in the kernel, and what returns is what the guest
+  counts as free — pages held as file cache stay with the guest, so a busy guest can sit near
+  its ceiling legitimately. This build reclaims nothing under host pressure, so lower the
+  ceiling or use **Dedicated** for a predictable reservation instead.
 
 ## Verification
 

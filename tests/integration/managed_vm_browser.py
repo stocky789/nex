@@ -217,22 +217,81 @@ def acceptance(config, password, iso, evidence, mode):
         page.get_by_label('VM name', exact=True).fill('Invalid Uppercase')
         assert page.get_by_label('VM name', exact=True).evaluate('(el) => el.validity.patternMismatch')
         page.get_by_label('VM name', exact=True).fill(vm_name)
+        page.get_by_label('Description').fill('Browser acceptance guest')
+        page.get_by_label('Guest operating system').select_option('linux')
         page.get_by_label('Placement host').select_option(config['host_id'])
         page.get_by_role('button', name='Next', exact=True).focus()
         page.keyboard.press('Enter')
-        expect(page.get_by_role('heading', name='Create VM · 2 of 4:', exact=False)).to_be_focused()
-        page.get_by_label('Install ISO').select_option(label=iso.name)
+        # Step 2: an impossible topology must block Next and say why.
+        expect(page.get_by_role('heading', name='Create VM · 2 of 6:', exact=False)).to_be_focused()
         page.get_by_label('Virtual CPUs', exact=True).fill('2')
+        page.get_by_label('Sockets', exact=True).fill('3')
+        expect(page.locator('#vm-topology-issue')).to_be_visible()
+        expect(page.get_by_role('button', name='Next', exact=True)).to_be_disabled()
+        capture('topology-invalid')
+        page.get_by_label('Sockets', exact=True).fill('2')
+        page.get_by_label('Cores per socket', exact=True).fill('1')
+        page.get_by_label('Threads per core', exact=True).fill('1')
+        expect(page.locator('#vm-topology-issue')).to_have_count(0)
+        page.get_by_label('CPU model').select_option('host-model')
+        page.get_by_role('radio', name='Maximum', exact=True).check()
         page.get_by_label('Memory (MiB)', exact=True).fill('512')
         page.get_by_role('button', name='Next', exact=True).click()
-        page.get_by_label('VM storage').select_option(label=next(t for t in page.get_by_label('VM storage').locator('option').all_text_contents() if t.startswith(storage_name)))
-        page.get_by_label('Disk size (GiB)').fill('1')
-        page.get_by_label('Guest network').select_option(label=next(t for t in page.get_by_label('Guest network').locator('option').all_text_contents() if t.startswith(network_name)))
-        page.get_by_label('Firmware').select_option('bios')
+        # Step 3: two disks on the same storage with different buses and provisioning.
+        expect(page.get_by_role('heading', name='Create VM · 3 of 6:', exact=False)).to_be_focused()
+        def pick_storage(group):
+            options = group.get_by_label('Storage').locator('option').all_text_contents()
+            group.get_by_label('Storage').select_option(label=next(t for t in options if t.startswith(storage_name)))
+        first_disk = page.get_by_role('group', name='Disk 1', exact=True)
+        pick_storage(first_disk)
+        first_disk.get_by_label('Disk name', exact=True).fill('system')
+        first_disk.get_by_label('Size (GiB)', exact=True).fill('1')
+        page.get_by_role('button', name='Add disk', exact=True).click()
+        second_disk = page.get_by_role('group', name='Disk 2', exact=True)
+        pick_storage(second_disk)
+        second_disk.get_by_label('Disk name', exact=True).fill('system')
+        expect(page.locator('#vm-disk-issue')).to_be_visible()
+        expect(page.get_by_role('button', name='Next', exact=True)).to_be_disabled()
+        capture('duplicate-disk-name')
+        second_disk.get_by_label('Disk name', exact=True).fill('data')
+        second_disk.get_by_label('Size (GiB)', exact=True).fill('1')
+        second_disk.get_by_label('Bus').select_option('sata')
+        second_disk.get_by_label('Provisioning').select_option('thick')
+        expect(page.locator('#vm-disk-issue')).to_have_count(0)
         page.get_by_role('button', name='Next', exact=True).click()
-        expect(page.get_by_text('The VM will be created stopped', exact=False)).to_be_visible()
-        page.get_by_role('button', name='Back', exact=True).click()
-        expect(page.get_by_label('Disk size (GiB)')).to_have_value('1')
+        # Step 4: a derived MAC and a manual one; a malformed manual MAC must block Next.
+        expect(page.get_by_role('heading', name='Create VM · 4 of 6:', exact=False)).to_be_focused()
+        def pick_network(group):
+            options = group.get_by_label('Network').locator('option').all_text_contents()
+            group.get_by_label('Network').select_option(label=next(t for t in options if t.startswith(network_name)))
+        pick_network(page.get_by_role('group', name='Network interface 1', exact=True))
+        page.get_by_role('button', name='Add network interface', exact=True).click()
+        second_nic = page.get_by_role('group', name='Network interface 2', exact=True)
+        pick_network(second_nic)
+        second_nic.get_by_label('Adapter model').select_option('e1000e')
+        second_nic.get_by_label('MAC address').fill('52:54:00:ab:cd')
+        expect(page.locator('#vm-nic-issue')).to_be_visible()
+        expect(page.get_by_role('button', name='Next', exact=True)).to_be_disabled()
+        capture('invalid-mac')
+        second_nic.get_by_label('MAC address').fill('52:54:00:ab:cd:ef')
+        expect(page.locator('#vm-nic-issue')).to_have_count(0)
+        page.get_by_role('button', name='Next', exact=True).click()
+        # Step 5: firmware, install media and an explicit boot order with the ISO first.
+        expect(page.get_by_role('heading', name='Create VM · 5 of 6:', exact=False)).to_be_focused()
+        page.get_by_label('Firmware').select_option('bios')
+        page.get_by_label('Install ISO').select_option(label=iso.name)
+        boot = page.get_by_role('group', name='Boot order', exact=True)
+        expect(boot.locator('li')).to_have_count(3)
+        for _ in range(2):  # the Up control is the first button in the row
+            boot.locator('li').filter(has_text='Install media').get_by_role('button').first.click()
+        expect(boot.locator('li').first).to_contain_text('Install media')
+        capture('boot-order')
+        page.get_by_role('button', name='Next', exact=True).click()
+        expect(page.get_by_role('heading', name='Create VM · 6 of 6:', exact=False)).to_be_focused()
+        expect(page.get_by_text('created stopped', exact=False)).to_be_visible()
+        page.get_by_role('button', name='Back', exact=True).click()  # entries survive stepping back
+        expect(page.get_by_role('group', name='Boot order', exact=True).locator('li').first).to_contain_text('Install media')
+        expect(page.get_by_label('Firmware')).to_have_value('bios')
         page.get_by_role('button', name='Next', exact=True).click()
         capture('review-desktop')
         page.set_viewport_size({'width': 360, 'height': 800})
@@ -255,21 +314,30 @@ def acceptance(config, password, iso, evidence, mode):
         page.get_by_role('navigation', name='Resource views').get_by_role('button', name='Virtual machines', exact=True).click()
         page.get_by_role('button', name='Create VM', exact=True).click()
         expect(page.get_by_label('VM name', exact=True)).to_have_value(vm_name)
-        for _ in range(3):
+        for _ in range(5):
             page.get_by_role('button', name='Next', exact=True).click()
         page.get_by_role('button', name='Create stopped VM').click()
         expect(page.get_by_role('heading', name='VM details', exact=True)).to_be_visible()
         expect(page.locator('.details')).to_contain_text('succeeded', timeout=180000)
         expect(page.locator('.details')).to_contain_text('shut off', timeout=30000)
-        for label, value in [('Virtual CPUs', '2'), ('Memory', '512 MiB'), ('Disk', '1 GiB'), ('Firmware', 'BIOS'), ('Creation task', 'succeeded')]:
+        for label, value in [('Virtual CPUs', '2'), ('Memory', '512 MiB'), ('Disks', 'system'), ('Disks', 'data'),
+                             ('Networks', 'Intel e1000e'), ('Networks', '52:54:00:ab:cd:ef'), ('Install ISO', iso.name),
+                             ('Firmware', 'BIOS'), ('Creation task', 'succeeded')]:
             expect(page.locator('dt').filter(has_text=label).locator('xpath=following-sibling::dd[1]')).to_contain_text(value)
         vms = page.request.get(config['url'] + '/api/v1/vms').json()
         assert len([v for v in vms if v['name'] == vm_name]) == 1
+        # The retry must reconcile the original request, so exactly one submission body exists.
+        spec = next(v for v in vms if v['name'] == vm_name)['spec']
+        assert bodies and all(b['name'] == vm_name for b in bodies), bodies
+        assert [d['name'] for d in spec['disks']] == ['system', 'data'] and [d['bus'] for d in spec['disks']] == ['virtio', 'sata'], spec
+        assert spec['disks'][1]['thin'] is False and spec['cpu'] == {'count': 2, 'sockets': 2, 'cores': 1, 'threads': 1, 'model': 'host-model'}, spec
+        assert spec['memory'] == {'mode': 'maximum', 'size_mib': 512} and spec['boot']['media_boot_order'] == 1, spec
+        assert [n['mac'] for n in spec['nics']] == ['', '52:54:00:ab:cd:ef'], spec
         capture('created-desktop')
         page.set_viewport_size({'width': 360, 'height': 800})
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'details narrow page overflow'
         capture('created-360')
-        passed('ISO picker validation, upload and four-stage keyboard-accessible VM creation; lost reply retry creates exactly one stopped VM; desktop and 360px checks')
+        passed('ISO picker validation, upload and six-step keyboard-accessible VM creation with two disks, two NICs, an explicit topology, maximum memory and an ISO-first boot order; invalid topology, duplicate disk name and malformed MAC refused in place; lost reply retry creates exactly one stopped VM; desktop and 360px checks')
         # Response fault injection validates presentation; it is not a native outage test.
         page.route('**/api/v1/vms', lambda route: route.fulfill(json=[{**v, 'freshness': 'stale'} for v in vms]))
         page.reload()

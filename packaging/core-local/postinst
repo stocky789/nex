@@ -5,6 +5,12 @@ set -eu
 root=${DPKG_ROOT:-}
 if [ "$1" = configure ]; then
     install -d -m755 "$root/etc/nex"
+    # The system stamp preinst requires. The installer writes it before installing
+    # any package; creating it here only backfills hosts provisioned before the
+    # check shipped, and never overwrites the installer's own provenance.
+    if [ ! -f "$root/etc/nex/core-release" ]; then
+        printf 'NEX_CORE=1\nINSTALLED_BY=package-upgrade\n' > "$root/etc/nex/core-release"
+    fi
     if [ ! -f "$root/etc/nex/updates.conf" ] || grep -Eq 'repo_url=http://(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)' "$root/etc/nex/updates.conf"; then
         printf 'repo_url=https://nexvirtualization.com/apt\n' > "$root/etc/nex/updates.conf"
     fi

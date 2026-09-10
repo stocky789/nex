@@ -12,10 +12,23 @@ import shutil
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def default_version():
+    """The newest CHANGELOG version, in Debian notation."""
+    result = subprocess.run(
+        ['python3', str(ROOT / 'scripts/release-version.py'), '--current'],
+        check=False, capture_output=True, text=True)
+    if result.returncode != 0 or not result.stdout.strip():
+        raise SystemExit('nex-controller build: ' +
+                         (result.stderr.strip() or 'could not resolve a build version'))
+    return result.stdout.strip()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', required=True, type=Path)
-    parser.add_argument('--version', default='0.1.5~alpha1')
+    # Default to the newest CHANGELOG heading rather than a constant that goes stale
+    # and silently mislabels a build. The release workflow passes --version explicitly.
+    parser.add_argument('--version', default=default_version())
     parser.add_argument('--output', type=Path, default=ROOT / 'dist/controller')
     parser.add_argument('--docker', default='docker', help='Docker executable or wrapper path')
     args = parser.parse_args()
