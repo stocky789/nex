@@ -1019,7 +1019,7 @@ Choose exact operations and payloads when implementing the relevant phase.
 | 6 | Backup repositories/policies/jobs, manifests/catalogs, restore/verification, controller recovery |
 | 7 | Migration preflight, relocation/live migration, evacuation, execution ownership and interrupted results |
 | 8 | Scoped access, upgrades, operating/recovery procedures and supported-version reference review |
-| Follow-on after 8 | MCP server shipped disabled by default: explicit Controller deployment enablement, scoped agent credentials, read-only inventory/operation tools, and explicitly confirmed existing Controller operations; no direct Core commands or MCP-held pool state |
+| Follow-on after 8 | MCP server shipped disabled by default: a visibly enabled Controller MCP service principal with a scoped administrator role, read-only inventory/operation tools, and explicitly confirmed existing Controller operations; no direct Core commands or MCP-held pool state |
 | 9 | HA configuration/status, quorum/fencing observations and commands respecting pool-local authority |
 | 10 | Managed node VMs, Swarm integration, applications/services, volumes/secrets, backup/recovery and lifecycle |
 | Agreed follow-on: [hardware passthrough](plans/2026-09-08-nex-platform.md#guided-hardware-passthrough) | Device/group inventory and readiness, host preparation/undo, exclusive VM assignment/removal, reset and reboot observations; reuse earlier inventory/configuration/task contracts and add missing capabilities |

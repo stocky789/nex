@@ -697,9 +697,12 @@ not become a second control plane: it is a stateless adapter, never a direct Cor
 channel, scheduler, cache, or source of pool state.
 
 Ship the MCP server with every Controller build, but leave it disabled by default. An
-administrator must explicitly enable it through the supported Controller deployment
-configuration before it listens or accepts agent credentials; rebuilding a Controller
-without that configuration leaves it disabled and does not affect a pool or its workloads.
+administrator must explicitly enable it in Nex Controller before it listens or accepts
+agent credentials; it must be visibly shown as enabled in Controller. Model enablement as
+an active MCP service principal with an existing scoped administrator role, not an
+untracked deployment flag or pool setting. Thus a fresh Controller has MCP disabled; a
+Controller backup/restore recovers it only as Controller-scoped administrator/authentication
+state, and neither case affects a pool or its workloads.
 
 Begin with read-only inventory and operation-status tools. Add mutating tools only for
 existing, explicitly bounded Controller operations, with narrow agent credentials/scopes,
@@ -713,9 +716,10 @@ the implementation slice, then update OpenAPI/API reference and the operator gui
 real authorization, failure/retry, Controller-replacement and browser/agent walkthrough evidence.
 
 **API impact: new contract (planned feature); none for this roadmap change.** The MCP
-transport, explicit enablement configuration and agent credential contract are new
-client-facing Controller interfaces. It reuses existing Controller-to-Core operations and
-introduces no durable pool state.
+transport and agent credential contract are new client-facing Controller interfaces. MCP
+enablement is an explicitly activated Controller-scoped service principal under the existing
+administrator-role exception; it reuses existing Controller-to-Core operations and introduces
+no durable pool state.
 **Guide impact: none.** MCP is not implemented; publish operator setup, permissions and
 recovery guidance with the feature.
 
