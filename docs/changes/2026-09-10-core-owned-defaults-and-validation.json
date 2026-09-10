@@ -1,0 +1,51 @@
+{
+  "summary": "Move host behaviour out of Controller code: Nex Core self-registers its default ISO storage and untagged networks in its managed journal, honours start_after_create inside vm-create, and validates storage-path/bridge conflicts, VM name and MAC uniqueness and dedicated-memory admission against its own journal and libvirt. Controller no longer invents defaults, chains a follow-on start, or refuses from its mirror table; it records and shows the host's failed or needs_attention results.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/defaults_test.go",
+    "internal/agent/managed.go",
+    "internal/agent/managed_test.go",
+    "internal/agent/probes.go",
+    "internal/controller/managed.go",
+    "internal/controller/managed_test.go",
+    "internal/controller/power_test.go",
+    "internal/controller/identity.go",
+    "tests/integration/vlan_lab.py",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/create-virtual-machine.md",
+    "docs/plans/2026-09-09-pool-vlan-networks.md",
+    "docs/changes/2026-09-10-core-owned-defaults-and-validation.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operator-visible behaviour changed: the ISO storage and untagged networks come from the host itself; duplicate paths, bridges, VM names, MACs and unpromisable dedicated memory are no longer immediate Controller refusals but failed host tasks in Task history; Start after creation is the last step of the creation task and a start failure reports needs_attention instead of a second power task.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "API impact: changed contract. storage-register, network-register and vm-create now return failed results for conflicts the Controller used to refuse with 409 (registered path/bridge, reserved VM name, used MAC, dedicated-memory promise); vm-create honours start_after_create itself and can return needs_attention for a start failure; default registrations are host-originated journal entries reaching Controller only through Inventory.managed adoption, and Controller no longer queues auto-storage/auto-network or start-after-create operations. Protocol version and capabilities unchanged; compatibility with an older Core recorded.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Every durable record this change adds or moves lives on the host: the default storage and network registrations, the start_after_create outcome, and the admission facts (registered paths and bridges, VM names, effective MACs, dedicated promises) are the managed journal plus libvirt on the pool master. Controller keeps only its existing mirror rows.",
+    "record": "Nex Core managed journal under <agent state dir>/managed-vms/<operation id>.json: self-registered storage-register/network-register entries with host-generated IDs (skipped when any entry already holds the path or bridge), and the vm-create entry's stage and `start` field recording whether the guest was started. A fresh Controller recovers all of it through the existing adoption path: Applied() reports succeeded entries in Inventory.managed and adoptManaged mirrors them by resource ID with the pool assigned at adoption (request_id adopt-<kind>:<host>:<id>)."
+  },
+  "verification": {
+    "method": "Worktree .claude/worktrees/corelogic, branch invariant-corelogic, this workstation. go build ./... exit 0. go test ./... : all packages ok (agent, controller, localcore, nexupdate, protocol, vmhost, websecurity, wsock). New vmhost tests in internal/vmhost/defaults_test.go: DefaultNetworks derivation; RegisterDefaults idempotent, no duplicate when a Controller-issued entry holds the path/bridge, a new uplink adds one network, invalid host identity refused; registrationConflict for storage path and bridge/libvirt-network namespaces including failed entries releasing the resource; vmConflict for duplicate name and duplicate manual/derived MAC; dedicatedCommitted/dedicatedFits boundary (exact fit accepted, one MiB over refused, maximum mode exempt); start_after_create with a fake virsh: starts once, second call and replay issue no start, failure records the reason at stage starting, an interrupted start is reconciled by observation to succeeded or needs_attention. Controller tests rewritten: host-reported defaults are mirrored and never dispatched (including to an agent without managed-vm-v1), duplicate VLAN/bridge registrations and duplicate MAC/name creations are queued and the host's failed result is shown, start_after_create issues no follow-on vm-power; the old auto-registration, start chaining and dedicated-memory 409 tests were removed with the code. cd web && npm run typecheck exit 0. python3 scripts/check_docs.py --worktree passed. Not executed: browser walkthrough, disposable-host defaults self-registration on a real Nex Core, a real start after creation, tests/integration/vlan_lab.py (needs the lab).",
+    "evidence": [
+      "internal/vmhost/defaults_test.go",
+      "internal/controller/managed_test.go",
+      "internal/agent/managed_test.go"
+    ]
+  }
+}

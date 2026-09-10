@@ -414,11 +414,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 				return
 			}
 			if hasManagedCapability(v.Capabilities) {
-				if err = c.adoptManaged(tx, host, merged); err == nil {
-					if err = c.autoStorage(tx, host); err == nil {
-						err = c.autoNetworks(tx, host, merged)
-					}
-				}
+				err = c.adoptManaged(tx, host, merged)
 			}
 			// The managed journal is mirrored into managed_resources, not stored as inventory.
 			stored := *merged

@@ -358,10 +358,17 @@ func readInventory(version string) (NativeInventory, error) {
 			v.OS = strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), "\"'")
 		}
 	}
+	v.NICs, err = readNICs()
+	return v, err
+}
+
+// readNICs observes every host interface with its kind, topology, state and addresses.
+func readNICs() ([]NativeNIC, error) {
 	nics, err := net.Interfaces()
 	if err != nil {
-		return v, err
+		return nil, err
 	}
+	var out []NativeNIC
 	for _, nic := range nics {
 		n := NativeNIC{Name: nic.Name, MAC: nic.HardwareAddr.String(), State: "unknown", Kind: nicKind(nic.Name, nic.Flags)}
 		n.Master, n.Parent = nicTopology(nic.Name)
@@ -370,14 +377,33 @@ func readInventory(version string) (NativeInventory, error) {
 		}
 		addresses, e := nic.Addrs()
 		if e != nil {
-			return v, e
+			return nil, e
 		}
 		for _, address := range addresses {
 			n.Addresses = append(n.Addresses, address.String())
 		}
-		v.NICs = append(v.NICs, n)
+		out = append(out, n)
 	}
-	return v, nil
+	return out, nil
+}
+
+// reported is the NIC as the Controller and the managed engine see it.
+func (n NativeNIC) reported() protocol.NIC {
+	return protocol.NIC{Name: n.Name, MAC: n.MAC, Kind: n.Kind, Master: n.Master, Parent: n.Parent, State: n.State, Addresses: append([]string(nil), n.Addresses...)}
+}
+
+// HostNICs is the same interface observation the inventory probe reports, for callers that
+// need the host's bridges and their physical ports outside the probe cycle.
+func HostNICs() ([]protocol.NIC, error) {
+	nics, err := readNICs()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]protocol.NIC, len(nics))
+	for i, n := range nics {
+		out[i] = n.reported()
+	}
+	return out, nil
 }
 
 // cappedOutput bounds subprocess memory as well as its execution time.
@@ -430,7 +456,7 @@ func (m *Monitor) Snapshot() *protocol.Inventory {
 			out.OSVersion = data.OS
 			out.AgentVersion = data.AgentVersion
 			for _, n := range data.NICs {
-				out.NICs = append(out.NICs, protocol.NIC{Name: n.Name, MAC: n.MAC, Kind: n.Kind, Master: n.Master, Parent: n.Parent, State: n.State, Addresses: append([]string(nil), n.Addresses...)})
+				out.NICs = append(out.NICs, n.reported())
 			}
 		case DiskCapacity:
 			out.Disks = append(out.Disks, protocol.Disk{Name: data.Path, SizeBytes: data.TotalBytes, AvailableBytes: &data.AvailableBytes})

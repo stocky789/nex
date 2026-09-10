@@ -3,6 +3,7 @@ package vmhost
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -23,7 +25,9 @@ import (
 )
 
 // ManagedEngine owns Controller-created guests separately from local appliance recovery.
-// Its journal survives Controller disconnects; no command ever starts a guest.
+// Its journal survives Controller disconnects. The only command that starts a guest is a
+// vm-create asking for start_after_create, and it starts that guest once, after the definition
+// is verified; every other command leaves power state to vm-power.
 type ManagedEngine struct{ stateDir, networkDir string }
 
 func NewManaged(stateDir string) *ManagedEngine {
@@ -37,6 +41,9 @@ type managedJournal struct {
 	Disks     []string         `json:"disks,omitempty"`
 	MediaPath string           `json:"media_path,omitempty"`
 	Domain    []byte           `json:"domain,omitempty"`
+	// Start records the outcome of start_after_create: "started", or why it did not start.
+	// It is recorded in the same entry so a retried or reconciled creation never starts twice.
+	Start string `json:"start,omitempty"`
 }
 
 func (e *ManagedEngine) save(j managedJournal) error {
@@ -144,7 +151,7 @@ func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch f
 		j.Result.Error = ""
 	} else {
 		j.Result.Status = "failed"
-		if j.Stage == "allocating" || j.Stage == "defining" {
+		if j.Stage == "allocating" || j.Stage == "defining" || j.Stage == "starting" {
 			j.Result.Status = "needs_attention"
 		}
 		j.Result.Error = err.Error()
@@ -495,10 +502,8 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 		if err := localStorage(c.Storage.Path, 1<<30); err != nil {
 			return err
 		}
-		for _, old := range js {
-			if old.Command.Storage != nil && old.Result.Status == "succeeded" && old.Command.Storage.Path == c.Storage.Path {
-				return errors.New("storage path is already registered")
-			}
+		if err := registrationConflict(js, c); err != nil {
+			return err
 		}
 		f, err := os.CreateTemp(c.Storage.Path, ".nex-access-")
 		if err != nil {
@@ -516,6 +521,9 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 		}
 		return removeErr
 	case "network-register":
+		if err := registrationConflict(js, c); err != nil {
+			return err
+		}
 		if c.Network.Kind == "vlan" {
 			return ensureGuestBridge(ctx, *c.Network, e.networkDir)
 		}
@@ -824,7 +832,26 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 func managedMemoryFits(availableKiB uint64, m protocol.VMMemory) bool {
 	return availableKiB >= uint64(m.SizeMiB+2048)*1024
 }
-func managedCapacity(ctx context.Context, v protocol.VMCreateSpec) error {
+
+// dedicatedCommitted sums the dedicated memory this host has already promised, in MiB: every
+// other vm-create the journal still holds, including pending and uncertain ones, because a
+// stopped dedicated VM consumes nothing yet and MemAvailable proves nothing about it.
+func dedicatedCommitted(js []managedJournal, except string) int {
+	total := 0
+	for _, j := range js {
+		if j.Command.Kind == "vm-create" && j.Command.VM != nil && j.Command.VM.ID != except && j.Result.Status != "failed" && j.Command.VM.Memory.Mode == "dedicated" {
+			total += j.Command.VM.Memory.SizeMiB
+		}
+	}
+	return total
+}
+
+// dedicatedFits admission-controls a dedicated VM against total host memory: what is already
+// promised, this VM and the 2 GiB host reserve must fit. Maximum mode reserves nothing.
+func dedicatedFits(totalKiB uint64, committedMiB int, m protocol.VMMemory) bool {
+	return m.Mode != "dedicated" || uint64(committedMiB+m.SizeMiB+2048)*1024 <= totalKiB
+}
+func managedCapacity(ctx context.Context, v protocol.VMCreateSpec, js []managedJournal) error {
 	if runtime.GOARCH != "amd64" || v.CPU.Count > runtime.NumCPU() {
 		return errors.New("requires amd64 with sufficient host CPUs")
 	}
@@ -837,15 +864,21 @@ func managedCapacity(ctx context.Context, v protocol.VMCreateSpec) error {
 	if err != nil {
 		return err
 	}
-	available := uint64(0)
+	available, total := uint64(0), uint64(0)
 	for _, line := range strings.Split(string(mem), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) > 1 && fields[0] == "MemAvailable:" {
 			available, _ = strconv.ParseUint(fields[1], 10, 64)
 		}
+		if len(fields) > 1 && fields[0] == "MemTotal:" {
+			total, _ = strconv.ParseUint(fields[1], 10, 64)
+		}
 	}
 	if !managedMemoryFits(available, v.Memory) {
 		return errors.New("insufficient available memory including 2 GiB host reserve")
+	}
+	if !dedicatedFits(total, dedicatedCommitted(js, v.ID), v.Memory) {
+		return errors.New("dedicated memory exceeds what this host has left to promise; free a dedicated VM or use the maximum memory mode")
 	}
 	b, err := managedVirsh(ctx, "domcapabilities", "--virttype", "kvm", "--arch", "x86_64", "--machine", managedMachine(v))
 	if err != nil {
@@ -921,7 +954,10 @@ func (e *ManagedEngine) create(ctx context.Context, j *managedJournal, js []mana
 		}
 		mediaPath = path
 	}
-	if err = managedCapacity(ctx, v); err != nil {
+	if err = managedCapacity(ctx, v, js); err != nil {
+		return err
+	}
+	if err = vmConflict(js, v); err != nil {
 		return err
 	}
 	// A failed lookup is not evidence that a domain is absent: list first and fail closed.
@@ -940,7 +976,23 @@ func (e *ManagedEngine) create(ctx context.Context, j *managedJournal, js []mana
 	}
 	for _, name := range strings.Split(strings.TrimSpace(string(names)), "\n") {
 		if name == v.Name {
-			return errors.New("VM name already exists")
+			return errors.New("VM name " + v.Name + " already exists on this host")
+		}
+	}
+	// ponytail: one dumpxml per domain; batch through a single libvirt query if hosts carry hundreds.
+	for _, id := range strings.Fields(string(ids)) {
+		b, err := managedVirsh(ctx, "dumpxml", id, "--inactive")
+		if err != nil {
+			return errors.New("cannot read an existing VM definition to check MAC uniqueness")
+		}
+		var d managedDomain
+		if xml.Unmarshal(b, &d) != nil {
+			continue
+		}
+		for _, nic := range d.Devices.Interfaces {
+			if slices.Contains(vmMACs(v), strings.ToLower(nic.MAC.Address)) {
+				return errors.New("MAC address " + nic.MAC.Address + " is already used by VM " + d.Name + " on this host")
+			}
 		}
 	}
 	for _, t := range targets {
@@ -1013,6 +1065,78 @@ func (e *ManagedEngine) create(ctx context.Context, j *managedJournal, js []mana
 		return err
 	}
 	j.Stage = "defined"
+	return e.startCreated(ctx, j)
+}
+
+// startCreated honours start_after_create once the definition is verified. Stage "starting" is
+// persisted before the single libvirt request so an interruption is reconciled by observation,
+// and the outcome lands in the same journal entry so a retry never starts the guest again. A
+// start failure leaves the creation intact and reports needs_attention with the reason.
+func (e *ManagedEngine) startCreated(ctx context.Context, j *managedJournal) error {
+	if !j.Command.VM.StartAfterCreate || j.Start != "" {
+		return nil
+	}
+	j.Stage = "starting"
+	if err := e.save(*j); err != nil {
+		return err
+	}
+	if err := powerVM(ctx, protocol.VMPowerRequest{VMID: j.Command.VM.ID, Action: "start"}); err != nil {
+		j.Start = err.Error()
+		return errors.New("VM created but not started: " + err.Error())
+	}
+	j.Start, j.Stage = "started", "started"
+	return nil
+}
+
+// registrationConflict refuses a storage path, or a network source in its namespace, that
+// another registration on this host still holds: pending, succeeded or uncertain. A failed
+// registration releases its resource. VLAN and plain bridge registrations share the bridge
+// namespace; libvirt networks have their own.
+func registrationConflict(js []managedJournal, c protocol.Command) error {
+	for _, old := range js {
+		if old.Command.OperationID == c.OperationID || old.Result.Status == "failed" {
+			continue
+		}
+		if c.Storage != nil && old.Command.Storage != nil && old.Command.Storage.Path == c.Storage.Path {
+			return errors.New("storage path " + c.Storage.Path + " is already registered on this host as " + old.Command.Storage.Name)
+		}
+		if c.Network != nil && old.Command.Network != nil && old.Command.Network.Source == c.Network.Source && (old.Command.Network.Kind == "network") == (c.Network.Kind == "network") {
+			return errors.New("network " + c.Network.Source + " is already registered on this host as " + old.Command.Network.Name)
+		}
+	}
+	return nil
+}
+
+// vmMACs lists a VM's effective interface addresses: the supplied MAC, or the one derived
+// from the VM identity and interface index.
+func vmMACs(v protocol.VMCreateSpec) []string {
+	out := make([]string, len(v.NICs))
+	for i, n := range v.NICs {
+		out[i] = n.MAC
+		if n.MAC == "" {
+			out[i] = protocol.DerivedMAC(v.ID, i)
+		}
+	}
+	return out
+}
+
+// vmConflict refuses a VM whose name or any effective MAC another vm-create in the journal
+// still holds; a failed creation holds nothing. libvirt's own domains are checked separately.
+func vmConflict(js []managedJournal, v protocol.VMCreateSpec) error {
+	macs := vmMACs(v)
+	for _, old := range js {
+		if old.Command.Kind != "vm-create" || old.Command.VM == nil || old.Command.VM.ID == v.ID || old.Result.Status == "failed" {
+			continue
+		}
+		if old.Command.VM.Name == v.Name {
+			return errors.New("VM name " + v.Name + " is already used on this host")
+		}
+		for _, mac := range vmMACs(*old.Command.VM) {
+			if slices.Contains(macs, mac) {
+				return errors.New("MAC address " + mac + " is already used by VM " + old.Command.VM.Name + " on this host")
+			}
+		}
+	}
 	return nil
 }
 func (e *ManagedEngine) observeCreated(ctx context.Context, j managedJournal) error {
@@ -1166,6 +1290,20 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protoc
 			j.Result.Status = "succeeded"
 			j.Result.Error = ""
 			j.Stage = "defined"
+			if err = e.startCreated(ctx, &j); err != nil {
+				j.Result.Status = "needs_attention"
+				j.Result.Error = err.Error()
+			}
+		}
+	}
+	if j.Command.Kind == "vm-create" && j.Stage == "starting" {
+		// The start request was issued or interrupted; only observation says which.
+		if err := powerObserved(ctx, protocol.VMPowerRequest{VMID: j.Command.VM.ID, Action: "start"}); err == nil {
+			j.Result.Status = "succeeded"
+			j.Result.Error = ""
+			j.Start, j.Stage = "started", "started"
+		} else if j.Start == "" {
+			j.Result.Error = "VM created but not started: " + err.Error()
 		}
 	}
 	if j.Command.Kind == "vm-power" {
@@ -1489,4 +1627,74 @@ func mediaObserved(ctx context.Context, req protocol.VMMediaRequest, path string
 		return nil
 	}
 	return errors.New("media change was interrupted; observe the CD drive and submit a new request")
+}
+
+// Default resources every host owns without operator action: its local libvirt image
+// directory as storage named ISO, and one untagged network per host bridge that sits on a
+// physical NIC or bond, named "<port> untagged" with the port recorded as the uplink.
+const (
+	DefaultStorageName = "ISO"
+	DefaultStoragePath = "/var/lib/libvirt/images"
+)
+
+// DefaultNetworks derives the untagged default network of every bridge on a physical port.
+func DefaultNetworks(nics []protocol.NIC) []protocol.NetworkRegistration {
+	var out []protocol.NetworkRegistration
+	for _, bridge := range nics {
+		if bridge.Kind != "bridge" || !managedSource.MatchString(bridge.Name) {
+			continue
+		}
+		for _, port := range bridge.Ports(nics) {
+			if protocol.ValidUplink(port) {
+				out = append(out, protocol.NetworkRegistration{Name: port + " untagged", Kind: "bridge", Source: bridge.Name, Uplink: port})
+				break
+			}
+		}
+	}
+	return out
+}
+
+// hostID mints a host-generated resource or operation identity.
+func hostID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b)
+}
+
+// RegisterDefaults self-registers the host's default storage and untagged networks in the
+// managed journal, through the same verification a Controller-issued registration gets, so a
+// Controller only mirrors them. A journal entry already holding the path or bridge, in any
+// state and whoever issued it, means nothing is added; the pool is assigned on adoption, so
+// the host's own identity stands in for it. It is safe to call on every uplink change.
+func (e *ManagedEngine) RegisterDefaults(ctx context.Context, host string, nics []protocol.NIC) error {
+	if !identifier.MatchString(host) {
+		return errors.New("defaults need the enrolled host identity")
+	}
+	js, err := e.journals()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	var commands []protocol.Command
+	if !slices.ContainsFunc(js, func(j managedJournal) bool {
+		return j.Command.Storage != nil && j.Command.Storage.Path == DefaultStoragePath
+	}) {
+		commands = append(commands, protocol.Command{OperationID: hostID(), Kind: "storage-register", Storage: &protocol.StorageRegistration{ID: hostID(), PoolID: host, HostID: host, Name: DefaultStorageName, Path: DefaultStoragePath}})
+	}
+	for _, n := range DefaultNetworks(nics) {
+		if slices.ContainsFunc(js, func(j managedJournal) bool {
+			return j.Command.Network != nil && j.Command.Network.Kind != "network" && j.Command.Network.Source == n.Source
+		}) {
+			continue
+		}
+		n.ID, n.PoolID, n.HostID = hostID(), host, host
+		commands = append(commands, protocol.Command{OperationID: hostID(), Kind: "network-register", Network: &n})
+	}
+	for _, c := range commands {
+		if _, err := e.Execute(ctx, c, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }

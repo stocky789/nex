@@ -153,7 +153,16 @@ def main():
         passed('Host gained exactly nex0.100 and bridge nex0v100 with that port; br0 addresses/routes unchanged; ifupdown stanza sourced and listed by ifquery')
 
         base = {'pool_id': pool_id, 'host_id': host_id, 'kind': 'vlan', 'uplink': UPLINK, 'vlan': 100}
-        result['refusals']['duplicate_vlan'] = api('/api/v1/networks', {**base, 'request_id': str(uuid.uuid4()), 'name': 'Duplicate'}, 409)
+        # A duplicate is the host's refusal: queued by Controller, failed by Core naming the holder.
+        duplicate = api('/api/v1/networks', {**base, 'request_id': str(uuid.uuid4()), 'name': 'Duplicate'}, 201)
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            duplicate = next(n for n in api('/api/v1/networks') if n['id'] == duplicate['id'])
+            if duplicate['status'] in ('failed', 'succeeded', 'needs_attention'):
+                break
+            time.sleep(2)
+        assert duplicate['status'] == 'failed' and 'already registered on this host' in duplicate['error'], duplicate
+        result['refusals']['duplicate_vlan'] = duplicate
         result['refusals']['bridge_as_uplink'] = api('/api/v1/networks', {**base, 'request_id': str(uuid.uuid4()), 'name': 'Bridge uplink', 'uplink': 'br0'}, 409)
         result['refusals']['bad_tag'] = api('/api/v1/networks', {**base, 'request_id': str(uuid.uuid4()), 'name': 'Bad tag', 'vlan': 4095}, 400)
         untagged = api('/api/v1/networks', {**base, 'request_id': str(uuid.uuid4()), 'name': 'Untagged nex0', 'vlan': 0}, 201)
@@ -166,7 +175,7 @@ def main():
         assert untagged['status'] == 'failed' and 'br0' in untagged['error'], untagged
         result['refusals']['untagged_management_nic'] = untagged
         assert host_state(lab)['links'] == after['links'] and bridge_state(lab)['bridge_ports'] == [PORT]
-        passed('Controller refused duplicate/bridge/out-of-range requests; Core refused untagged use of the management port without changing any device')
+        passed('Core refused the duplicate VLAN as a failed task; Controller refused bridge/out-of-range requests; Core refused untagged use of the management port without changing any device')
 
         storage = next(s for s in api('/api/v1/storage') if s['status'] == 'succeeded' and s['host_id'] == host_id)
         media = next(m for m in api('/api/v1/media') if m['status'] == 'succeeded' and m['storage_id'] == storage['id'])
