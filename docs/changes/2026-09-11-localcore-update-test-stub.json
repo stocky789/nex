@@ -1,0 +1,23 @@
+{
+  "summary": "Update the local Core updates test stub to recognise apt install without --only-upgrade after the appliance first-install change.",
+  "paths": [
+    "internal/localcore/updates_test.go",
+    "docs/changes/2026-09-11-localcore-update-test-stub.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Test stub only."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Test stub only."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No product state."
+  },
+  "verification": {
+    "method": "go test ./internal/localcore/ ./internal/nexupdate/ ./internal/controller/ -run Update|Apply",
+    "evidence": ["internal/localcore/updates_test.go"]
+  }
+}

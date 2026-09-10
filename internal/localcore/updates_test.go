@@ -37,7 +37,7 @@ func stubApt(t *testing.T, installed, candidate string) {
 			return exec.CommandContext(ctx, "printf", "%s", current.Load().(string))
 		case strings.HasPrefix(line, "apt-cache policy"):
 			return exec.CommandContext(ctx, "printf", "  Candidate: %s\n", candidate)
-		case strings.Contains(line, "install -y --only-upgrade"):
+		case strings.Contains(line, "install -y"):
 			current.Store(candidate)
 		}
 		return exec.CommandContext(ctx, "true")
