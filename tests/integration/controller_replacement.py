@@ -191,6 +191,33 @@ def main():
         lab.stop(agent)
         evidence['steps'].append({'controller': 'A', 'destroyed': True, 'data_dir_removed': not a_data.exists()})
 
+        # Before Controller B exists, seed what a real host would hold that Controller A never
+        # created: an appliance engine deploy journal (the host's ownership record of a Controller
+        # VM), a managed journal entry that ended failed, and one corrupt journal file. Controller B
+        # must list the failed task, must not lose the other entries over the corrupt file, and,
+        # when libvirt observes the appliance VM, must list it as the protected Controller VM.
+        appliance_uuid = str(uuid.uuid4())
+        appliance_journal = lab.path / 'appliance-journal'
+        appliance_journal.mkdir(mode=0o700)
+        (appliance_journal / 'deploy-seed.json').write_text(json.dumps({
+            'id': 'deploy-seed', 'vm_id': appliance_uuid, 'kind': 'deploy', 'status': 'booted', 'stage': 'ready', 'progress': 100,
+            'digest': '', 'name': 'seeded-controller', 'disk': str(lab.path / 'unused.qcow2'), 'bridge': args.bridge}))
+        managed_journal = state / 'managed-vms'
+        failed_command = {'operation_id': 'seed-failed', 'kind': 'storage-register',
+                          'storage': {'id': 'seed-broken', 'pool_id': scope['pool_id'], 'host_id': old_identity['host_id'], 'name': 'Seeded broken storage',
+                                      'path': '/nonexistent/seeded', 'operation_id': 'seed-failed', 'status': 'failed'}}
+        (managed_journal / 'seed-failed.json').write_text(json.dumps({
+            'command': failed_command, 'stage': 'validating',
+            'result': {'operation_id': 'seed-failed', 'status': 'failed', 'error': 'seeded failure: storage must be an existing directory', 'observed_at': '2026-09-10T00:00:00Z'}}))
+        (managed_journal / 'corrupt.json').write_text('{"command":{"kind":"storage-register","operation_id":"corrupt"},"result":{"status":"pending"}')
+        if vm:
+            # A domain with the appliance UUID, never started, so real libvirt observes the seeded deployment.
+            domain = lab.path / 'seeded-appliance.xml'
+            domain.write_text(f"<domain type='qemu'><name>seeded-controller</name><uuid>{appliance_uuid}</uuid><memory unit='MiB'>64</memory>"
+                              "<vcpu>1</vcpu><os><type arch='x86_64'>hvm</type></os></domain>")
+            virsh('define', str(domain))
+        agent_args = lambda: [agent_bin, 'run', '--state-dir', state, '--heartbeat', '1s', '--probe-interval', '1s', '--probe-timeout', '10s', '--appliance-journal-dir', appliance_journal]
+
         # Controller B: new port, new certificate, new database. Connect the host with an ordinary enrollment.
         import socket
         with socket.socket() as sock:
@@ -223,11 +250,31 @@ def main():
             item = eventually(lambda: next((x for x in lab.api('/api/v1/vms') if x['id'] == vm['id'] and x['state'] == 'shut off' and x['freshness'] == 'fresh'), None),
                               'adopted VM observed shut off by libvirt on Controller B', timeout=30)
             adopted['vm'] = item
+        # Seeded host truth on Controller B: the failed task with the host's operation ID, status and
+        # error; every other entry adopted despite the corrupt file, which the host names in a check.
+        seeded = eventually(lambda: next((op for op in lab.api('/api/v1/operations') if op['id'] == 'seed-failed'), None), 'failed journal entry listed by Controller B', timeout=30)
+        assert seeded['status'] == 'failed' and seeded['kind'] == 'storage-register' and seeded['actor'] == 'system' and seeded['host_id'] == host_b['id'] and 'seeded failure' in seeded['error'], seeded
+        checks = {c['name']: c for c in (lab.api('/api/v1/hosts')[0].get('inventory') or {}).get('checks') or []}
+        assert checks['managed-journal']['status'] == 'failed' and 'corrupt.json' in checks['managed-journal']['error'], checks.get('managed-journal')
+        adopted['seeded_failed_operation'], adopted['managed_journal_check'] = seeded, checks['managed-journal']
+        # The host refuses new mutations while a journal file is unreadable (fail closed); removing
+        # the file is the operator's recovery, after which the check returns to healthy.
+        (managed_journal / 'corrupt.json').unlink()
+        eventually(lambda: next((c for c in (lab.api('/api/v1/hosts')[0].get('inventory') or {}).get('checks') or [] if c['name'] == 'managed-journal' and c['status'] == 'healthy'), None),
+                   'managed-journal check healthy after the corrupt file is removed', timeout=30)
+        if vm:
+            appliance = eventually(lambda: next((x for x in lab.api('/api/v1/vms') if x['id'] == appliance_uuid), None), 'seeded appliance adopted by Controller B', timeout=30)
+            assert appliance['role'] == 'controller' and appliance['protected'] and appliance['name'] == 'seeded-controller' and appliance['host_id'] == host_b['id'] and appliance['pool_id'] == host_b['pool_id'], appliance
+            lab.api('/api/v1/appliances/adopt', {'request_id': 'deploy-seed', 'host_id': host_b['id'], 'vm_id': appliance_uuid, 'name': 'seeded-controller'}, expected=200)
+            adopted['seeded_appliance'] = appliance
+        else:
+            print('NOTE: appliance re-adoption needs libvirt to observe the seeded VM; not covered in this run (no --vm)', flush=True)
         time.sleep(4)  # several more reports: nothing may be duplicated
         eventually(lambda: not [op for op in lab.api('/api/v1/operations') if op['status'] in ('queued', 'dispatched')],
                    'auto registrations settled', timeout=60)
         counts = {p: len(lab.api(p)) for p in ('/api/v1/networks', '/api/v1/media', '/api/v1/vms')}
-        assert counts == {'/api/v1/networks': 1, '/api/v1/media': 1, '/api/v1/vms': 1 if vm else 0}, counts
+        assert counts == {'/api/v1/networks': 1, '/api/v1/media': 1, '/api/v1/vms': 2 if vm else 0}, counts
+        assert sum(1 for op in lab.api('/api/v1/operations') if op['id'] == 'seed-failed') == 1, 'seeded outcome duplicated'
         storages = lab.api('/api/v1/storage')
         assert any(s['id'] == storage['id'] and s['status'] == 'succeeded' for s in storages), storages
         # Default ISO at /var/lib/libvirt/images is auto-registered when not already held.
@@ -261,6 +308,11 @@ def main():
         evidence['diagnostics']['logs'] = {log.name: Path(log.name).read_text()[-4000:] for log in lab.logs if Path(log.name).exists()}
         raise
     finally:
+        if args.vm:
+            try:
+                run('virsh', '-c', 'qemu:///system', 'undefine', 'seeded-controller')
+            except Exception:  # noqa: BLE001
+                pass
         lab.close()
         shutil.rmtree(args.storage_root, ignore_errors=True)
         (args.evidence / 'controller-replacement.json').write_text(json.dumps(evidence, indent=2) + '\n')

@@ -3891,7 +3891,7 @@
                 "type": "null"
               }
             ],
-            "description": "Pool-scoped configuration this host has durably applied, read from the Core managed journal; null or omitted when the host holds nothing. On each managed report Controller adopts, under actor system, every entry it does not hold (request_id adopt-<kind>:<host>:<id>, kind storage-register | network-register | iso-import | vm-create), reusing the resource ID and recording the operation as already succeeded without dispatching a command. Entries that duplicate an existing ID, storage path, network (kind, source) or VM name, and invalid entries, are skipped."
+            "description": "Pool-scoped configuration this host has durably applied, read from the Core managed journal; null or omitted when the host holds nothing. On each managed report Controller adopts, under actor system, every entry it does not hold (request_id adopt-<kind>:<host>:<id>, kind storage-register | network-register | iso-import | vm-create), reusing the resource ID and recording the operation as already succeeded without dispatching a command; it also rebuilds its appliances record from appliances and records outcomes as operations. Entries that duplicate an existing ID, storage path, network (kind, source) or VM name, invalid entries, entries whose references are not adopted on the host and VMs listed in missing_vms are not adopted; each leaves one needs_attention operation and an audit entry (see ManagedState). The host's managed-journal check reports failed when a journal file could not be read (that file is skipped, the rest is still reported) and managed-vms reports failed when a journaled VM is missing from libvirt."
           },
           "disks": {
             "type": [
@@ -6033,11 +6033,44 @@
             },
             "maxItems": 10000,
             "description": "Succeeded VM definitions from the host journal: the full specification of every VM this host created, which is what a replaced Controller re-adopts by resource ID."
+          },
+          "missing_vms": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10000,
+            "description": "IDs of entries in vms whose persistent domain libvirt no longer lists (for example after an out-of-band undefine). The journal still holds them; Controller records each as a needs_attention operation instead of adopting it, and the host's managed-vms check reports failed. Omitted when libvirt lists every VM or cannot answer."
+          },
+          "appliances": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Appliance"
+            },
+            "maxItems": 10000,
+            "description": "Controller appliance VMs this host deployed through its local appliance engine, from that engine's deploy journal. Controller rebuilds its appliances record from them (insert when missing, keyed by VM UUID; moved to the reporting host when the previous owner is revoked) once healthy libvirt observes the VM, so a replaced Controller lists the appliance as the protected Controller VM again."
+          },
+          "outcomes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ManagedOutcome"
+            },
+            "maxItems": 10000,
+            "description": "Journal entries that ended failed or needs_attention. Controller records each it does not hold as an operation with the host's operation ID, kind, status and error (actor system, request_id adopt-outcome:<host>:<operation_id>), so task history reflects host truth after a replacement; the issuing Controller already holds the row and records nothing."
           }
         },
         "required": [],
         "x-go-type": "protocol.ManagedState",
-        "description": "Every succeeded registration and VM definition from the Core managed journal, at most 10000 entries per list; each list is omitted when empty. pool_id and host_id inside entries are those of the Controller that created them and are rewritten on adoption; resource IDs are stable across Controllers, which is how a replaced Controller recovers a pool from its master."
+        "description": "Every succeeded registration and VM definition from the Core managed journal, plus the host's appliance deployments and its failed or interrupted outcomes, at most 10000 entries per list; each list is omitted when empty. pool_id and host_id inside entries are those of the Controller that created them and are rewritten on adoption; resource IDs are stable across Controllers, which is how a replaced Controller recovers a pool from its master. Entries the Controller already holds under the same ID and kind are silently current. Any other entry it cannot adopt (invalid, conflicting ID/path/source/name, references not adopted on the host, or missing from libvirt) is recorded once per host and entry as a needs_attention operation (request_id adopt-attention:<host>:<kind>:<id>, actor system, error prefixed 'not adopted from host report:') with an audit entry adopt.attention naming the reason; the record is marked succeeded once the entry is adopted. A vm-create entry interrupted after its definition step is re-observed by the host on report and promoted to succeeded when the persistent domain matches its journaled definition."
       },
       "ConsoleRequest": {
         "type": "object",
@@ -6356,6 +6389,81 @@
           "action": "insert",
           "media_id": "<media-id>"
         }
+      },
+      "Appliance": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Lowercase libvirt domain UUID of the appliance VM."
+          },
+          "name": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string",
+            "description": "The deployment's stable request ID, which is also the request_id of POST /api/v1/appliances/adopt during the handoff."
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "controller"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "request_id",
+          "role"
+        ],
+        "x-go-type": "protocol.Appliance",
+        "description": "A Controller appliance VM the host deployed through its local appliance engine and still owns, reported from that engine's deploy journal (the host's durable ownership record)."
+      },
+      "ManagedOutcome": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "description": "The host journal's operation ID: the Controller operation ID when this Controller issued it."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "storage-register",
+              "network-register",
+              "iso-import",
+              "vm-create",
+              "vm-power",
+              "vm-media"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "description": "Resource ID the operation addressed (registration, media or VM ID)."
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "needs_attention"
+            ]
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "kind",
+          "id",
+          "status"
+        ],
+        "x-go-type": "protocol.ManagedOutcome",
+        "description": "A managed journal entry that did not succeed."
       }
     }
   },

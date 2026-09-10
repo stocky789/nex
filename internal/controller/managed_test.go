@@ -749,3 +749,142 @@ func TestDedicatedMemoryIsAdmissionControlled(t *testing.T) {
 	fits.Memory = protocol.VMMemory{Mode: "dedicated", SizeMiB: 6144}
 	l.create("req-dedicated-4", fits, 202)
 }
+
+// A replaced Controller rebuilds the appliance row from the host's deploy journal, records
+// the host's failed and interrupted operations as task history, and never skips an entry
+// silently: invalid, conflicting, unresolved and libvirt-missing entries each leave one
+// needs_attention operation and an audit entry, resolved once the entry is adopted.
+func TestAdoptionRebuildsApplianceOutcomesAndAttention(t *testing.T) {
+	a := newClient(t)
+	host := a.enroll(a.token(a.site(), ""), csr(t))
+	cert := certificate(t, host.CertificatePEM)
+	pool := a.poolOf(host.HostID)
+	appliance := "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	guest := vmSpec("old-pool", "old-host", "guest1", "stor-1", "net-default", "")
+	guest.ID = "12345678-1234-4234-8234-123456789012"
+	gone := vmSpec("old-pool", "old-host", "gone", "stor-1", "net-default", "")
+	gone.ID = "12345678-1234-4234-8234-123456789013"
+	managed := &protocol.ManagedState{
+		Storage:    []protocol.StorageRegistration{{ID: "stor-1", Name: "Local", Path: "/var/lib/nex/vms"}},
+		Networks:   []protocol.NetworkRegistration{{ID: "net-default", Name: "nex0 untagged", Kind: "bridge", Source: "br0", Uplink: "nex0"}, {ID: "bad id!", Name: "bogus", Kind: "vlan", Source: "wrong", Uplink: "nex0", VLAN: 7}},
+		Media:      []protocol.Media{{ID: "iso-orphan", StorageID: "stor-missing", Name: "orphan.iso", SizeBytes: 65536, SHA256: strings.Repeat("ab", 32)}},
+		VMs:        []protocol.VMCreateSpec{guest, gone},
+		MissingVMs: []string{gone.ID},
+		Appliances: []protocol.Appliance{{ID: appliance, Name: "nex-controller", RequestID: "deploy-1", Role: "controller"}},
+		Outcomes: []protocol.ManagedOutcome{
+			{OperationID: "op-failed", Kind: "storage-register", ID: "stor-x", Name: "Broken", Status: "failed", Error: "storage is not writable"},
+			{OperationID: "op-stuck", Kind: "vm-create", ID: "12345678-1234-4234-8234-123456789014", Name: "stuck", Status: "needs_attention", Error: "disk allocation interrupted"},
+			{OperationID: "bad op!", Kind: "vm-create", ID: "x", Status: "failed"},
+		},
+	}
+	now := time.Now().UTC()
+	inv := &protocol.Inventory{ObservedAt: now, Hostname: "core", CPUCount: 8, MemoryBytes: 16 << 30, Managed: managed,
+		NICs:   []protocol.NIC{{Name: "nex0", Kind: "physical", Master: "br0"}, {Name: "br0", Kind: "bridge"}},
+		VMs:    []protocol.VM{{ID: appliance, Name: "nex-controller", State: "running"}, {ID: guest.ID, Name: "guest1", State: "shut off"}},
+		Checks: []protocol.Check{{Name: "libvirt", Status: "healthy", ObservedAt: now}}}
+	report := func(seq uint64) protocol.ReportResponse {
+		return a.report(cert, protocol.ReportRequest{Version: 1, Sequence: seq, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: inv})
+	}
+	report(1)
+	var vms []managedAppliance
+	read(t, a.call("GET", "/api/v1/vms", nil, nil, 200), &vms)
+	found := map[string]managedAppliance{}
+	for _, v := range vms {
+		found[v.ID] = v
+	}
+	if v := found[appliance]; v.Role != "controller" || !v.Protected || v.PoolID != pool || v.HostID != host.HostID || v.Name != "nex-controller" || v.State != "running" {
+		t.Fatalf("appliance not rebuilt from the host report: %+v", vms)
+	}
+	if v := found[guest.ID]; v.Status != "succeeded" || v.PoolID != pool {
+		t.Fatalf("guest not adopted: %+v", vms)
+	}
+	if _, ok := found[gone.ID]; ok || len(vms) != 2 {
+		t.Fatalf("VM missing from libvirt was adopted: %+v", vms)
+	}
+	// The rebuilt row is what the handoff would have created, so its adoption call replays.
+	a.call("POST", "/api/v1/appliances/adopt", applianceRequest{RequestID: "deploy-1", HostID: host.HostID, VMID: appliance, Name: "nex-controller"}, nil, 200)
+	a.call("POST", "/api/v1/appliances/adopt", applianceRequest{RequestID: "deploy-2", HostID: host.HostID, VMID: appliance, Name: "nex-controller"}, nil, 409)
+	var ops []protocol.Operation
+	read(t, a.call("GET", "/api/v1/operations", nil, nil, 200), &ops)
+	byRequest := map[string]protocol.Operation{}
+	for _, op := range ops {
+		byRequest[op.RequestID] = op
+	}
+	if op := byRequest["adopt-outcome:"+host.HostID+":op-failed"]; op.ID != "op-failed" || op.Kind != "storage-register" || op.Status != "failed" || op.Error != "storage is not writable" || op.Actor != "system" || op.HostID != host.HostID {
+		t.Fatalf("failed outcome not adopted: %+v", ops)
+	}
+	if op := byRequest["adopt-outcome:"+host.HostID+":op-stuck"]; op.Status != "needs_attention" || op.Kind != "vm-create" {
+		t.Fatalf("needs_attention outcome not adopted: %+v", ops)
+	}
+	attention := func(key string) protocol.Operation {
+		op, ok := byRequest["adopt-attention:"+host.HostID+":"+key]
+		if !ok || op.Status != "needs_attention" || op.Actor != "system" || !strings.HasPrefix(op.Error, "not adopted from host report: ") {
+			t.Fatalf("no needs_attention record for %s: %+v", key, ops)
+		}
+		return op
+	}
+	attention("network:bad id!")
+	attention("media:iso-orphan")
+	if op := attention("vm:" + gone.ID); !strings.Contains(op.Error, "missing from libvirt") {
+		t.Fatalf("missing VM reason: %+v", op)
+	}
+	for _, op := range ops {
+		if op.RequestID == "adopt-outcome:"+host.HostID+":bad op!" {
+			t.Fatalf("invalid outcome adopted: %+v", op)
+		}
+	}
+	var audits []protocol.Audit
+	read(t, a.call("GET", "/api/v1/audit", nil, nil, 200), &audits)
+	actions := map[string]int{}
+	reasons := ""
+	for _, e := range audits {
+		actions[e.Action]++
+		reasons += e.Detail + "\n"
+	}
+	if actions["appliance.adopt"] != 1 || actions["adopt.outcome"] != 2 || actions["adopt.attention"] != 3 || !strings.Contains(reasons, "bogus") || !strings.Contains(reasons, "stor-missing") {
+		t.Fatalf("audit %v\n%s", actions, reasons)
+	}
+	// Every later report is steady state: nothing duplicated, nothing new recorded.
+	inv.ObservedAt = now.Add(time.Second)
+	report(2)
+	report(3)
+	var again []protocol.Operation
+	read(t, a.call("GET", "/api/v1/operations", nil, nil, 200), &again)
+	if len(again) != len(ops) {
+		t.Fatalf("repeated reports changed operations: %d -> %d", len(ops), len(again))
+	}
+	read(t, a.call("GET", "/api/v1/vms", nil, nil, 200), &vms)
+	if len(vms) != 2 {
+		t.Fatalf("repeated reports duplicated VMs: %+v", vms)
+	}
+	// Once the host resolves an entry (the ISO's storage arrives), its attention record closes.
+	managed.Storage = append(managed.Storage, protocol.StorageRegistration{ID: "stor-missing", Name: "Second", Path: "/var/lib/nex/vms2"})
+	inv.ObservedAt = now.Add(2 * time.Second)
+	report(4)
+	read(t, a.call("GET", "/api/v1/operations", nil, nil, 200), &again)
+	for _, op := range again {
+		if op.RequestID == "adopt-attention:"+host.HostID+":media:iso-orphan" && (op.Status != "succeeded" || op.Error != "") {
+			t.Fatalf("resolved entry still needs attention: %+v", op)
+		}
+	}
+	var media []protocol.Media
+	read(t, a.call("GET", "/api/v1/media", nil, nil, 200), &media)
+	if len(media) != 1 || media[0].ID != "iso-orphan" || media[0].Status != "succeeded" {
+		t.Fatalf("media not adopted after its storage: %+v", media)
+	}
+	// The appliance row follows the host when it re-enrolls under a new identity after revocation.
+	a.call("POST", "/api/v1/hosts/"+host.HostID+"/revoke", nil, nil, 200)
+	second := a.enroll(a.token(a.site(), ""), csr(t))
+	inv.ObservedAt = now.Add(3 * time.Second)
+	a.report(certificate(t, second.CertificatePEM), protocol.ReportRequest{Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: inv})
+	read(t, a.call("GET", "/api/v1/vms", nil, nil, 200), &vms)
+	moved := false
+	for _, v := range vms {
+		if v.ID == appliance && v.HostID == second.HostID && v.PoolID == a.poolOf(second.HostID) {
+			moved = true
+		}
+	}
+	if !moved {
+		t.Fatalf("appliance did not follow the re-enrolled host: %+v", vms)
+	}
+}
