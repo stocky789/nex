@@ -579,8 +579,12 @@ MAC uniqueness and host capacity stay with their owners.
 - **`cpu`.** `count` at least 1; Controller caps it at 64 and at host capacity. `sockets`,
   `cores` and `threads` all `0` select the documented default topology — one socket, `count`
   cores, one thread — instead of libvirt's own default; otherwise each must be at least 1 and
-  sockets × cores × threads must equal `count`. `model` is `host-passthrough` (the default) or
-  `host-model`, which is what keeps later migration to a non-identical host possible.
+  sockets × cores × threads must equal `count`. `model` is `host-passthrough` (the default),
+  `host-model`, or a model from the assigned host's read-only `Inventory.cpu_models` list. Core
+  obtains that list from its own libvirt/QEMU, rechecks the selected named model immediately
+  before defining the VM, and writes it as an exact custom model with fallback forbidden.
+  `max` uses libvirt's maximum CPU mode. Host passthrough is tied to that host's CPU; use a
+  common baseline reported by every destination before planning a migration.
 - **`memory`.** `size_mib` at least 512, capped by Controller at 262144, is the ceiling in both
   modes. `dedicated` reserves it: `<memory>`/`<currentMemory>` at the ceiling, no balloon device,
   and the whole amount counted against host capacity and never handed to another VM. `maximum`

@@ -209,6 +209,9 @@ func NICMAC(vmID string, index int, n VMNIC) string {
 
 var diskName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
 var machineType = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,31}$`)
+var cpuModel = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+func ValidCPUModel(model string) bool { return cpuModel.MatchString(model) }
 
 // Topology resolves the sockets × cores × threads a domain uses, applying the documented
 // default when the operator left the topology unset. ValidateVMSpec has already checked
@@ -246,8 +249,8 @@ func ValidateVMSpec(v VMCreateSpec) error {
 			return errors.New("sockets × cores × threads must equal the vCPU count")
 		}
 	}
-	if v.CPU.Model != "host-passthrough" && v.CPU.Model != "host-model" {
-		return errors.New("CPU model must be host-passthrough or host-model")
+	if v.CPU.Model != "host-passthrough" && v.CPU.Model != "host-model" && !ValidCPUModel(v.CPU.Model) {
+		return errors.New("invalid CPU model")
 	}
 	if v.Memory.Mode != "dedicated" && v.Memory.Mode != "maximum" {
 		return errors.New("memory mode must be dedicated or maximum")

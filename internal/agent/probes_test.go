@@ -119,6 +119,36 @@ func TestVirshOutputIsBounded(t *testing.T) {
 	}
 }
 
+func TestCPUModelsAreValidatedSortedAndDistinct(t *testing.T) {
+	models, err := cpuModels("qemu64\nSkylake-Server\nqemu64\n")
+	if err != nil || !reflect.DeepEqual(models, []string{"Skylake-Server", "qemu64"}) {
+		t.Fatalf("models=%q err=%v", models, err)
+	}
+	if _, err := cpuModels("bad/model"); err == nil {
+		t.Fatal("unsafe CPU model accepted")
+	}
+}
+
+func TestFailedCPUModelProbeIsNotPresentedAsCurrent(t *testing.T) {
+	var calls atomic.Int32
+	m := NewMonitor(time.Second, map[string]Probe{"cpu-models": func(context.Context) (any, error) {
+		if calls.Add(1) == 1 {
+			return []string{"qemu64"}, nil
+		}
+		return nil, errors.New("libvirt unavailable")
+	}})
+	m.Tick(context.Background())
+	waitProbe(t, m, "cpu-models", "healthy")
+	if got := m.Snapshot().CPUModels; !reflect.DeepEqual(got, []string{"qemu64"}) {
+		t.Fatalf("current models=%q", got)
+	}
+	m.Tick(context.Background())
+	waitProbe(t, m, "cpu-models", "failed")
+	if got := m.Snapshot().CPUModels; got != nil {
+		t.Fatalf("stale models presented as current: %q", got)
+	}
+}
+
 func TestObservationTimestampPredatesInFlightRefresh(t *testing.T) {
 	release, started := make(chan struct{}), make(chan struct{})
 	m := NewMonitor(time.Second, map[string]Probe{"inventory": func(context.Context) (any, error) {

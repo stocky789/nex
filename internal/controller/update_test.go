@@ -23,7 +23,7 @@ func (l *managedLab) reportState(state string, managed *protocol.ManagedState, r
 			_ = inv_vm
 		}
 	}
-	inv := &protocol.Inventory{ObservedAt: now, Hostname: "core", CPUCount: 8, MemoryBytes: 16 << 30, NICs: nics, Managed: defaults, Checks: []protocol.Check{{Name: "libvirt", Status: "healthy", ObservedAt: now}}}
+	inv := &protocol.Inventory{ObservedAt: now, Hostname: "core", CPUCount: 8, CPUModels: []string{"Skylake-Server"}, MemoryBytes: 16 << 30, NICs: nics, Managed: defaults, Checks: []protocol.Check{{Name: "libvirt", Status: "healthy", ObservedAt: now}}}
 	for _, v := range defaults.VMs {
 		inv.VMs = append(inv.VMs, protocol.VM{ID: v.ID, Name: v.Name, State: state})
 	}
@@ -67,6 +67,9 @@ func TestUpdateVMValidatesFreezesMACsDispatchesAndRefreshes(t *testing.T) {
 	started := next
 	started.StartAfterCreate = true
 	l.update("edit-0", id, started, 400)
+	unknownCPU := next
+	unknownCPU.CPU.Model = "EPYC-Genoa"
+	l.update("edit-0", id, unknownCPU, 409)
 	resized := next
 	resized.Disks = []protocol.VMDisk{{StorageID: l.storage, Name: "system", SizeGiB: 40, Bus: "virtio", Thin: true, BootOrder: 1}}
 	if r := l.update("edit-0", id, resized, 400); !strings.Contains(r["error"].(string), "cannot be changed after creation") {

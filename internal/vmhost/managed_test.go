@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"syscall"
@@ -539,6 +540,11 @@ func TestManagedDomainXMLMemoryModesAndTopology(t *testing.T) {
 	if xml.Unmarshal(b, &d) != nil || d.CPU.Topology == nil || *d.CPU.Topology != (managedTopology{2, 2, 1}) {
 		t.Fatalf("requested topology: %s", b)
 	}
+	v.CPU.Model = "Skylake-Server"
+	b, _ = testDomainXML(v, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, []string{"/disk-0.qcow2"}, "")
+	if xml.Unmarshal(b, &d) != nil || d.CPU.Mode != "custom" || d.CPU.Match != "exact" || d.CPU.Check != "full" || d.CPU.Model == nil || *d.CPU.Model != (cpuModelXML{Fallback: "forbid", Value: "Skylake-Server"}) {
+		t.Fatalf("named CPU model is not exact and forbidden from fallback: %s", b)
+	}
 }
 
 // Free space is checked once per storage target against the sum of the disks landing on it.
@@ -600,6 +606,18 @@ func TestManagedCapacityUsesTheMemoryCeiling(t *testing.T) {
 	v.CPU.Count = runtime.NumCPU() + 1
 	if managedCapacity(context.Background(), v, nil) == nil {
 		t.Fatal("more vCPUs than host CPUs accepted")
+	}
+}
+
+func TestAvailableCPUModelUsesCoreLibvirtList(t *testing.T) {
+	query := func(_ context.Context, args ...string) ([]byte, error) {
+		if !reflect.DeepEqual(args, []string{"cpu-models", "x86_64"}) {
+			t.Fatalf("query=%q", args)
+		}
+		return []byte("qemu64\nSkylake-Server\n"), nil
+	}
+	if !availableCPUModel(context.Background(), "Skylake-Server", query) || availableCPUModel(context.Background(), "EPYC-Genoa", query) {
+		t.Fatal("CPU model availability did not follow libvirt")
 	}
 }
 

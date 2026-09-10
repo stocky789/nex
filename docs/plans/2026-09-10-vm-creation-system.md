@@ -52,8 +52,9 @@ milestone; each item below is either in this slice or listed under follow-ups wi
   `makeDomain` (`internal/vmhost/engine.go`), a separate path from `VMCreateSpec`.
   Decision: Matt, 2026-09-10.
 - **CPU model defaults to `host-passthrough`**, unchanged from today, with `host-model` selectable.
-  `host-model` is what makes Phase 7 live migration between non-identical hosts possible, so the
-  field exists now even though the default does not change. Named model lists are not offered.
+  Core reports the named models available from its own libvirt/QEMU in inventory; Controller
+  displays that host-specific list and Core rechecks a named selection before defining the VM.
+  `host-model` and a common named baseline support later migration between non-identical hosts.
 - **Creation still never starts a guest.** `StartAfterCreate` is satisfied by the Controller
   issuing the existing, proven `vm-power` `start` request after creation succeeds — not by adding
   a start path to the managed create engine. This preserves the engine's stated invariant
@@ -212,7 +213,7 @@ uncommitted working tree. Unticked boxes were **not run**; none of them may be c
 
 Stopped-VM editing and deletion with disk retention (the remaining Phase 2 work, and the upgrade
 path for VMs created before this slice); templates, clones and cloud-init; bulk creation; CPU weight
-and cap; pressure-driven memory reclaim; named CPU model lists for migration compatibility.
+and cap; pressure-driven memory reclaim.
 
 Deferred from this slice during review, both recorded rather than silently dropped:
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useRef, useState, type FormEvent } from "react";
 import type { Host, Media, Network, Storage, VM, VMSpec } from "./managed";
-import { adapterNames, adapterNotes, applyTopology, autoDiskName, busNames, describeNetwork, readyHost, topologyIssue, type DiskRow, type NICRow } from "./vm-create";
+import { adapterNames, adapterNotes, applyTopology, autoDiskName, busNames, cpuName, describeNetwork, readyHost, topologyIssue, type DiskRow, type NICRow } from "./vm-create";
 
 type API = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
 type Draft = { name: string; description: string; guest_os: string; cpu: VMSpec["cpu"]; memory: VMSpec["memory"]; disks: DiskRow[]; nics: NICRow[]; boot: VMSpec["boot"]; media_id: string; autostart: boolean };
@@ -119,7 +119,7 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
         <label>Sockets<input type="number" min={1} max={maxCPUs} step={1} value={draft.cpu.sockets || ""} {...lock()} onChange={e => edit({ cpu: applyTopology(draft.cpu, "sockets", e.target.valueAsNumber) })} /></label>
         <label>Cores per socket<input type="number" min={1} max={maxCPUs} step={1} value={draft.cpu.cores || ""} {...lock()} onChange={e => edit({ cpu: applyTopology(draft.cpu, "cores", e.target.valueAsNumber) })} /></label>
         <label>Threads per core<input type="number" min={1} max={maxCPUs} step={1} value={draft.cpu.threads || ""} {...lock()} onChange={e => edit({ cpu: applyTopology(draft.cpu, "threads", e.target.valueAsNumber) })} /></label>
-        <label>CPU model<select value={draft.cpu.model} {...lock()} onChange={e => edit({ cpu: { ...draft.cpu, model: e.target.value } })}><option value="host-passthrough">Host passthrough</option><option value="host-model">Host model</option></select></label>
+        <label>CPU model<select value={draft.cpu.model} {...lock()} onChange={e => edit({ cpu: { ...draft.cpu, model: e.target.value } })}><option value="host-passthrough">Host passthrough</option><option value="host-model">Host model</option>{host?.inventory?.cpu_models?.filter(m => m !== "host-passthrough" && m !== "host-model").map(m => <option key={m} value={m}>{cpuName(m)}</option>)}</select></label>
         <label>Memory mode<select value={draft.memory.mode} {...lock()} onChange={e => edit({ memory: { ...draft.memory, mode: e.target.value } })}><option value="dedicated">Dedicated · always reserved</option><option value="maximum">Maximum · a ceiling only</option></select></label>
         <label>Memory (MiB)<input type="number" required min={512} max={maxMiB} step={1} value={num(draft.memory.size_mib)} {...lock()} onChange={e => edit({ memory: { ...draft.memory, size_mib: e.target.valueAsNumber } })} /></label>
       </div>

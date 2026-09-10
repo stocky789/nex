@@ -82,7 +82,7 @@ func (l *managedLab) report(results ...protocol.Result) protocol.ReportResponse 
 	l.t.Helper()
 	l.seq++
 	nics := []protocol.NIC{{Name: "nex0", Kind: "physical", Master: "br0"}, {Name: "br0", Kind: "bridge"}}
-	inv := &protocol.Inventory{Hostname: "core", CPUCount: 8, MemoryBytes: 16 << 30, NICs: nics, Managed: hostDefaults(l.host.HostID)}
+	inv := &protocol.Inventory{Hostname: "core", CPUCount: 8, CPUModels: []string{"Skylake-Server"}, MemoryBytes: 16 << 30, NICs: nics, Managed: hostDefaults(l.host.HostID)}
 	return l.a.report(l.cert, protocol.ReportRequest{Version: 1, Sequence: l.seq, Capabilities: l.caps, Inventory: inv, Results: results})
 }
 func (l *managedLab) spec(name string) protocol.VMCreateSpec {
@@ -490,7 +490,7 @@ func TestCreateVMSpecificationReferencesAndScope(t *testing.T) {
 		"boot order negative": func(v *protocol.VMCreateSpec) { v.Disks[0].BootOrder = -1 },
 		"boot order clash":    func(v *protocol.VMCreateSpec) { addDisks(v, 1); v.Disks[1].BootOrder = 1 },
 		"cpu topology":        func(v *protocol.VMCreateSpec) { v.CPU.Sockets, v.CPU.Cores, v.CPU.Threads = 2, 2, 1 },
-		"cpu model":           func(v *protocol.VMCreateSpec) { v.CPU.Model = "Skylake-Server" },
+		"cpu model":           func(v *protocol.VMCreateSpec) { v.CPU.Model = "Skylake Server" },
 		"cpu floor":           func(v *protocol.VMCreateSpec) { v.CPU.Count = 0 },
 		"cpu ceiling":         func(v *protocol.VMCreateSpec) { v.CPU.Count = 65 },
 		"memory mode":         func(v *protocol.VMCreateSpec) { v.Memory.Mode = "ballooned" },
@@ -520,6 +520,9 @@ func TestCreateVMSpecificationReferencesAndScope(t *testing.T) {
 		l.create("bad-"+name, v, 400)
 	}
 	l.create("", l.spec("guest1"), 400)
+	unknownCPU := l.spec("unknown-cpu")
+	unknownCPU.CPU.Model = "EPYC-Genoa"
+	l.create("unknown-cpu", unknownCPU, 409)
 	// References must name a resource this host has verified in this pool.
 	for name, bad := range map[string]func(v *protocol.VMCreateSpec){
 		"storage": func(v *protocol.VMCreateSpec) { v.Disks[0].StorageID = "absent" },

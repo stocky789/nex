@@ -73,7 +73,7 @@ def simulated(lab):
                 for v in vms:
                     v['state'] = control['state']
                 payload = {'version': 1, 'sequence': sequence, 'capabilities': ['managed-vm-v1', 'vm-update-v1'], 'results': results,
-                    'inventory': {'observed_at': now, 'hostname': 'simulated-browser-host', 'cpu_count': 8,
+                        'inventory': {'observed_at': now, 'hostname': 'simulated-browser-host', 'cpu_count': 8, 'cpu_models': ['qemu64', 'Skylake-Server'],
                         'memory_bytes': 16 * 1024**3, 'vms': vms, 'managed': {'vms': list(specs.values())}, 'checks': [{'name': 'libvirt', 'status': 'healthy', 'observed_at': now, 'last_success': now}], 'nics': [{'name': 'nex1', 'mac': '52:54:00:00:00:11', 'kind': 'physical', 'state': 'up', 'addresses': []}], 'disks': []}}
                 request = urllib.request.Request(lab.url + '/api/v1/agent/report', data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'})
                 with urllib.request.urlopen(request, context=context, timeout=5) as response:
@@ -258,7 +258,8 @@ def acceptance(config, password, iso, evidence, mode):
         page.get_by_label('Cores per socket', exact=True).fill('1')
         page.get_by_label('Threads per core', exact=True).fill('1')
         expect(page.locator('#vm-topology-issue')).to_have_count(0)
-        page.get_by_label('CPU model').select_option('host-model')
+        assert 'QEMU model · Skylake-Server' in page.get_by_label('CPU model').locator('option').all_text_contents()
+        page.get_by_label('CPU model').select_option('Skylake-Server')
         page.get_by_role('radio', name='Maximum', exact=True).check()
         page.get_by_label('Memory (MiB)', exact=True).fill('512')
         page.get_by_role('button', name='Next', exact=True).click()
@@ -366,7 +367,7 @@ def acceptance(config, password, iso, evidence, mode):
         spec = next(v for v in vms if v['name'] == vm_name)['spec']
         assert bodies and all(b['name'] == vm_name for b in bodies), bodies
         assert [d['name'] for d in spec['disks']] == ['system', 'data'] and [d['bus'] for d in spec['disks']] == ['virtio', 'sata'], spec
-        assert spec['disks'][1]['thin'] is False and spec['cpu'] == {'count': 2, 'sockets': 2, 'cores': 1, 'threads': 1, 'model': 'host-model'}, spec
+        assert spec['disks'][1]['thin'] is False and spec['cpu'] == {'count': 2, 'sockets': 2, 'cores': 1, 'threads': 1, 'model': 'Skylake-Server'}, spec
         assert spec['memory'] == {'mode': 'maximum', 'size_mib': 512} and spec['boot']['media_boot_order'] == 1, spec
         # An automatic MAC is listed as its effective derived address.
         assert re.fullmatch(r'52:54:00:[0-9a-f]{2}:[0-9a-f]{2}:00', spec['nics'][0]['mac']) and spec['nics'][1]['mac'] == '52:54:00:ab:cd:ef', spec

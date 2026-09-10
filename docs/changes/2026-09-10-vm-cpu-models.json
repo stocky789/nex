@@ -1,0 +1,46 @@
+{
+  "summary": "Expose each Nex Core host's available libvirt/QEMU CPU models in the VM create and edit forms, and define named choices as exact custom CPU models with fallback forbidden.",
+  "paths": [
+    "internal/protocol/protocol.go",
+    "internal/protocol/managed.go",
+    "internal/protocol/managed_test.go",
+    "internal/agent/probes.go",
+    "internal/agent/probes_test.go",
+    "internal/controller/monitor.go",
+    "internal/controller/managed.go",
+    "internal/controller/managed_test.go",
+    "internal/controller/update_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "tests/integration/managed_vm_browser.py",
+    "web/src/managed.tsx",
+    "web/src/vm-create.tsx",
+    "web/src/vm-edit.tsx",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/plans/2026-09-10-vm-creation-system.md",
+    "docs/changes/2026-09-10-vm-cpu-models.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The CPU model selector now includes the actual named models available on the selected host and both creation and edit guides explain their availability and migration constraint.",
+    "pages": ["docs/guide/create-virtual-machine.md", "docs/guide/edit-virtual-machine.md"]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Inventory adds cpu_models from Core's libvirt/QEMU. VMCPU.model accepts a validated named model; Core rechecks availability before define and uses custom/exact XML with fallback forbidden. Authentication, authorization, operations, replay and outage handling are unchanged.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/index.html"]
+  },
+  "state": {
+    "owner": "core",
+    "reason": "A selected CPU model is pool-scoped VM configuration; the availability list is a read-only Core observation.",
+    "record": "The selected model remains in the full VM specification in the pool master's managed journal and returns through Inventory.managed.vms, so a fresh Controller re-adopts it. Inventory.cpu_models is discovered from the assigned Core host's libvirt/QEMU and is never Controller-owned state."
+  },
+  "verification": {
+    "method": "2026-09-10: focused protocol, Core XML, agent parsing and Controller validation tests passed. The simulated browser walkthrough passed against a real HTTPS Controller and simulated mTLS Core: a host-reported Skylake-Server choice appeared in the selector and the succeeded VM specification preserved it. npm run typecheck, npm run build, python3 scripts/check_docs.py --worktree, python3 scripts/generate_api.py --check and python3 -m unittest discover -s tests -p test_api_contract.py passed. The browser run did not define a real libvirt domain; Core XML and availability checks are covered by Go tests.",
+    "evidence": ["internal/protocol/managed_test.go", "internal/vmhost/managed_test.go", "internal/agent/probes_test.go", "tests/integration/managed_vm_browser.py"]
+  }
+}

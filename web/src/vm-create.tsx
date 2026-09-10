@@ -43,7 +43,8 @@ export const adapterNotes: Record<string, string> = {
   rtl8139: "Emulates a 100 Mbit Realtek card for guests too old to have a gigabit driver. The 100 Mbit limit is the emulated hardware, not a setting.",
   vmxnet3: "VMware's paravirtualised adapter, for guests that already carry VMware drivers. Prefer VirtIO for anything else.",
 };
-export const cpuNames: Record<string, string> = { "host-passthrough": "Host passthrough", "host-model": "Host model" };
+export const cpuNames: Record<string, string> = { "host-passthrough": "Host passthrough", "host-model": "Host model", max: "Maximum host CPU" };
+export const cpuName = (model: string) => cpuNames[model] || `QEMU model · ${model}`;
 // Unicast, lower-case, colon-separated: the only manual form the protocol accepts.
 const macPattern = "[0-9a-f][02468ace](:[0-9a-f]{2}){5}";
 const staleText = "Some selections are no longer validated on this host. Reselect them before continuing.";
@@ -203,8 +204,8 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
         </div>
         <p className="help">Leave sockets, cores and threads blank for the default: one socket with {count || "the chosen number of"} cores and one thread per core.</p>
         {topoIssue && <p className="task-error" id="vm-topology-issue">{topoIssue}</p>}
-        <label>CPU model<select value={draft.cpu.model} onChange={e => edit({ cpu: { ...draft.cpu, model: e.target.value } })}><option value="host-passthrough">Host passthrough</option><option value="host-model">Host model</option></select></label>
-        <p className="help">Host passthrough gives the guest this host's exact processor. Host model presents a common processor instead, which is what allows this VM to migrate later to a host whose CPU is not identical.</p>
+        <label>CPU model<select value={draft.cpu.model} onChange={e => edit({ cpu: { ...draft.cpu, model: e.target.value } })}><option value="host-passthrough">Host passthrough</option><option value="host-model">Host model</option>{selectedHost?.inventory?.cpu_models?.filter(m => m !== "host-passthrough" && m !== "host-model").map(m => <option key={m} value={m}>{cpuName(m)}</option>)}</select></label>
+        <p className="help">Host passthrough gives the guest this host's exact processor. Host model presents a common processor instead. The remaining choices are models this host's QEMU reports; use a common baseline across hosts for future migration.</p>
         <fieldset>
           <legend>Memory mode</legend>
           <label className="console-option"><input type="radio" style={{ width: "auto" }} name="vm-memory-mode" value="dedicated" checked={draft.memory.mode === "dedicated"} onChange={() => edit({ memory: { ...draft.memory, mode: "dedicated" } })} /> Dedicated</label>

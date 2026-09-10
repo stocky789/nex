@@ -13,7 +13,7 @@ export type Media = Registration & { storage_id: string; size_bytes: number; sha
 export type VMSpec = { revision?: number; description: string; guest_os: string; cpu: { count: number; sockets: number; cores: number; threads: number; model: string }; memory: { mode: string; size_mib: number }; disks: DiskRow[] | null; nics: NICRow[] | null; boot: { firmware: string; machine: string; media_boot_order: number }; media_id: string; start_after_create: boolean; autostart: boolean };
 export type VM = Registration & { spec?: VMSpec; state: string; freshness: string; role: string; protected: boolean; guest?: Guest | null };
 type NIC = { name: string; mac: string; kind?: string; master?: string; parent?: string; state: string; addresses?: string[] | null };
-export type Host = { id: string; pool_id: string; hostname: string; connection: string; revoked: boolean; capabilities?: string[]; inventory: { cpu_count: number; memory_bytes: number; nics?: NIC[] | null } | null };
+export type Host = { id: string; pool_id: string; hostname: string; connection: string; revoked: boolean; capabilities?: string[]; inventory: { cpu_count: number; cpu_models?: string[] | null; memory_bytes: number; nics?: NIC[] | null } | null };
 type API = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
 type Props = { account: string; poolID: string; poolName: string; tab: string; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[]; vms: VM[]; api: API; reload: () => Promise<void>; setTab: (tab: string) => void; unavailable: boolean; uploading: boolean; startIsoUpload: <T>(path: string, file: File) => Promise<T>; createVM: boolean; onCreateVMShown: () => void };
 const GiB = 1024 ** 3;

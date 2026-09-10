@@ -30,8 +30,13 @@ func validateInventory(v *protocol.Inventory) error {
 	if v == nil {
 		return nil
 	}
-	if v.CPUCount < 0 || v.CPUCount > 65536 || len(v.NICs) > 1024 || len(v.Disks) > 4096 || len(v.VMs) > 10000 || len(v.Checks) > 256 || len(v.Virtualization) > 1024 || len(v.Hostname) > 200 || len(v.CPUModel) > 4096 || len(v.OSVersion) > 4096 || len(v.AgentVersion) > 200 {
+	if v.CPUCount < 0 || v.CPUCount > 65536 || len(v.CPUModels) > 256 || len(v.NICs) > 1024 || len(v.Disks) > 4096 || len(v.VMs) > 10000 || len(v.Checks) > 256 || len(v.Virtualization) > 1024 || len(v.Hostname) > 200 || len(v.CPUModel) > 4096 || len(v.OSVersion) > 4096 || len(v.AgentVersion) > 200 {
 		return errors.New("inventory limits exceeded")
+	}
+	for _, model := range v.CPUModels {
+		if !protocol.ValidCPUModel(model) {
+			return errors.New("invalid CPU model")
+		}
 	}
 	names := map[string]bool{}
 	for _, check := range v.Checks {

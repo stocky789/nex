@@ -949,7 +949,14 @@ type managedTopology struct {
 }
 type managedCPU struct {
 	Mode     string           `xml:"mode,attr"`
+	Match    string           `xml:"match,attr,omitempty"`
+	Check    string           `xml:"check,attr,omitempty"`
+	Model    *cpuModelXML     `xml:"model,omitempty"`
 	Topology *managedTopology `xml:"topology,omitempty"`
+}
+type cpuModelXML struct {
+	Fallback string `xml:"fallback,attr,omitempty"`
+	Value    string `xml:",chardata"`
 }
 
 // managedBalloon is what makes the memory mode real: "maximum" needs a virtio balloon reporting
@@ -1079,6 +1086,11 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 	}
 	sockets, cores, threads := v.CPU.Topology()
 	d.CPU = managedCPU{Mode: v.CPU.Model, Topology: &managedTopology{sockets, cores, threads}}
+	if v.CPU.Model == "max" {
+		d.CPU.Mode = "maximum"
+	} else if v.CPU.Model != "host-passthrough" && v.CPU.Model != "host-model" {
+		d.CPU = managedCPU{Mode: "custom", Match: "exact", Check: "full", Model: &cpuModelXML{Fallback: "forbid", Value: v.CPU.Model}, Topology: &managedTopology{sockets, cores, threads}}
+	}
 	scsi := false
 	for i, disk := range v.Disks {
 		x := managedDisk{Type: "file", Device: "disk", Driver: driverXML{"qemu", "qcow2"}, Source: &sourceXML{File: disks[i]}, Target: targetXML{Dev: targets[i], Bus: disk.Bus}}
@@ -1213,6 +1225,11 @@ func managedCapacity(ctx context.Context, v protocol.VMCreateSpec, js []managedJ
 	if !dedicatedFits(total, dedicatedCommitted(js, v.ID), v.Memory) {
 		return errors.New("dedicated memory exceeds what this host has left to promise; free a dedicated VM or use the maximum memory mode")
 	}
+	if v.CPU.Model != "host-passthrough" && v.CPU.Model != "host-model" {
+		if !availableCPUModel(ctx, v.CPU.Model, managedVirsh) {
+			return fmt.Errorf("CPU model %s is not available on this host", v.CPU.Model)
+		}
+	}
 	b, err := managedVirsh(ctx, "domcapabilities", "--virttype", "kvm", "--arch", "x86_64", "--machine", managedMachine(v))
 	if err != nil {
 		return errors.New("cannot verify KVM capabilities for this machine type")
@@ -1245,6 +1262,11 @@ func managedCapacity(ctx context.Context, v protocol.VMCreateSpec, js []managedJ
 		}
 	}
 	return nil
+}
+
+func availableCPUModel(ctx context.Context, model string, query func(context.Context, ...string) ([]byte, error)) bool {
+	models, err := query(ctx, "cpu-models", "x86_64")
+	return err == nil && slices.Contains(strings.Fields(string(models)), model)
 }
 func (e *ManagedEngine) create(ctx context.Context, j *managedJournal, js []managedJournal) error {
 	v := *j.Command.VM
@@ -1580,7 +1602,7 @@ func validateManagedDefinition(b, expected []byte) error {
 		}
 	}
 	// libvirt expands a machine alias such as q35 to its versioned form.
-	if got.OS.Type.Arch != want.OS.Type.Arch || got.OS.Type.Value != want.OS.Type.Value || (got.OS.Type.Machine != want.OS.Type.Machine && !strings.HasPrefix(got.OS.Type.Machine, "pc-"+want.OS.Type.Machine+"-")) || got.CPU.Mode != want.CPU.Mode {
+	if got.OS.Type.Arch != want.OS.Type.Arch || got.OS.Type.Value != want.OS.Type.Value || (got.OS.Type.Machine != want.OS.Type.Machine && !strings.HasPrefix(got.OS.Type.Machine, "pc-"+want.OS.Type.Machine+"-")) || got.CPU.Mode != want.CPU.Mode || got.CPU.Match != want.CPU.Match || got.CPU.Check != want.CPU.Check || (got.CPU.Model == nil) != (want.CPU.Model == nil) || (got.CPU.Model != nil && *got.CPU.Model != *want.CPU.Model) {
 		return errors.New("VM CPU or machine changed")
 	}
 	if want.CPU.Topology != nil && (got.CPU.Topology == nil || *got.CPU.Topology != *want.CPU.Topology) {

@@ -79,6 +79,7 @@ type Inventory struct {
 	ObservedAt     time.Time `json:"observed_at"`
 	Hostname       string    `json:"hostname"`
 	CPUModel       string    `json:"cpu_model"`
+	CPUModels      []string  `json:"cpu_models"`
 	CPUCount       int       `json:"cpu_count"`
 	MemoryBytes    uint64    `json:"memory_bytes"`
 	Virtualization []string  `json:"virtualization"`

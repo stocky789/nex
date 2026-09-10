@@ -705,6 +705,10 @@ type createVMRequest struct {
 	protocol.VMCreateSpec
 }
 
+func availableCPUModel(inventory *protocol.Inventory, model string) bool {
+	return model == "host-passthrough" || model == "host-model" || slices.Contains(inventory.CPUModels, model)
+}
+
 func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf string) {
 	var v createVMRequest
 	if !decode(w, r, &v) {
@@ -776,6 +780,10 @@ func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf
 	// The memory ceiling is what the host must be able to meet, in both memory modes.
 	if v.CPU.Count > inv.CPUCount || uint64(v.Memory.SizeMiB)*1024*1024 > inv.MemoryBytes {
 		fail(w, 409, "requested CPU or RAM exceeds observed host capacity")
+		return
+	}
+	if !availableCPUModel(&inv, v.CPU.Model) {
+		fail(w, 409, "selected CPU model is not currently available on the host")
 		return
 	}
 	// Name and MAC uniqueness, dedicated-memory admission and start_after_create are the
@@ -981,6 +989,10 @@ func (c *Controller) updateVM(w http.ResponseWriter, r *http.Request, user, csrf
 	}
 	if spec.CPU.Count > inv.CPUCount || uint64(spec.Memory.SizeMiB)*1024*1024 > inv.MemoryBytes {
 		fail(w, 409, "requested CPU or RAM exceeds observed host capacity")
+		return
+	}
+	if !availableCPUModel(&inv, spec.CPU.Model) {
+		fail(w, 409, "selected CPU model is not currently available on the host")
 		return
 	}
 	// Interfaces keep their identity by address: every automatic MAC is frozen into the

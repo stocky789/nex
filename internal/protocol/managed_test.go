@@ -56,7 +56,8 @@ func TestValidateVMSpec(t *testing.T) {
 		{"topology partly set", func(v *VMCreateSpec) { v.CPU.Sockets = 4 }, false},
 		{"topology zero factor", func(v *VMCreateSpec) { v.CPU.Sockets, v.CPU.Cores, v.CPU.Threads = 4, 1, 0 }, false},
 		{"CPU model host-model", func(v *VMCreateSpec) { v.CPU.Model = "host-model" }, true},
-		{"CPU model named", func(v *VMCreateSpec) { v.CPU.Model = "Skylake-Server" }, false},
+		{"CPU model named", func(v *VMCreateSpec) { v.CPU.Model = "Skylake-Server" }, true},
+		{"CPU model unsafe", func(v *VMCreateSpec) { v.CPU.Model = "Skylake Server" }, false},
 		{"CPU model empty", func(v *VMCreateSpec) { v.CPU.Model = "" }, false},
 
 		{"memory maximum", func(v *VMCreateSpec) { v.Memory.Mode = "maximum" }, true},

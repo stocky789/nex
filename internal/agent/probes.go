@@ -178,7 +178,14 @@ type DiskCapacity struct {
 // NativeProbes only observes the local machine; it never changes VM or host state.
 func NativeProbes(version string) map[string]Probe {
 	return map[string]Probe{
-		"inventory":   func(ctx context.Context) (any, error) { return readInventory(version) },
+		"inventory": func(ctx context.Context) (any, error) { return readInventory(version) },
+		"cpu-models": func(ctx context.Context) (any, error) {
+			models, err := virsh(ctx, "cpu-models", "x86_64")
+			if err != nil {
+				return nil, err
+			}
+			return cpuModels(models)
+		},
 		"block-disks": func(ctx context.Context) (any, error) { return readBlockDisks(ctx, "/sys/block") },
 		"disk": func(ctx context.Context) (any, error) {
 			var stat syscall.Statfs_t
@@ -362,6 +369,25 @@ func readInventory(version string) (NativeInventory, error) {
 	return v, err
 }
 
+func cpuModels(output string) ([]string, error) {
+	seen := map[string]bool{}
+	for _, model := range strings.Fields(output) {
+		if !protocol.ValidCPUModel(model) {
+			return nil, fmt.Errorf("invalid CPU model from libvirt")
+		}
+		seen[model] = true
+	}
+	if len(seen) > 256 {
+		return nil, fmt.Errorf("CPU model limit exceeded")
+	}
+	models := make([]string, 0, len(seen))
+	for model := range seen {
+		models = append(models, model)
+	}
+	sort.Strings(models)
+	return models, nil
+}
+
 // readNICs observes every host interface with its kind, topology, state and addresses.
 func readNICs() ([]NativeNIC, error) {
 	nics, err := net.Interfaces()
@@ -464,6 +490,10 @@ func (m *Monitor) Snapshot() *protocol.Inventory {
 			out.Disks = append(out.Disks, data...)
 		case []protocol.VM:
 			out.VMs = append([]protocol.VM(nil), data...)
+		case []string:
+			if r.Status == "healthy" {
+				out.CPUModels = append([]string(nil), data...)
+			}
 		case []guestObservation:
 			// Retained data from a failed or overdue guest probe is not attached: facts must be current.
 			if r.Status == "healthy" {
