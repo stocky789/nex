@@ -111,7 +111,7 @@ func TestManagedJournalReplayAndInterruptedNoEffects(t *testing.T) {
 	count := filepath.Join(t.TempDir(), "calls")
 	t.Setenv("MANAGED_CALLS", count)
 	fakeCommand(t, "virsh", `echo call >> "$MANAGED_CALLS"
-printf 'default\n'`)
+printf 'default\nlab\n'`)
 	r, err := e.Execute(ctx, c, nil)
 	if err != nil || r.Status != "succeeded" {
 		t.Fatalf("%+v %v", r, err)
@@ -138,9 +138,11 @@ printf 'default\n'`)
 	if err != nil || r.Status != "failed" {
 		t.Fatal("reserved resource reused")
 	}
+	// A second registration of the same libvirt network is a host-side conflict now; the
+	// interrupted one registers another network.
 	c.OperationID = "op-3"
 	n.ID = "other"
-	n.Source = "default"
+	n.Source = "lab"
 	c.Network = &n
 	j := managedJournal{Command: c, Result: protocol.Result{OperationID: c.OperationID, Status: "pending"}, Stage: "validating"}
 	if err = e.save(j); err != nil {
@@ -586,7 +588,7 @@ func TestManagedCapacityUsesTheMemoryCeiling(t *testing.T) {
 	}
 	v := managedTestVM()
 	v.CPU.Count = runtime.NumCPU() + 1
-	if managedCapacity(context.Background(), v) == nil {
+	if managedCapacity(context.Background(), v, nil) == nil {
 		t.Fatal("more vCPUs than host CPUs accepted")
 	}
 }

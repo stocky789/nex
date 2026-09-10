@@ -135,7 +135,8 @@ func TestManagedWorkerRejectsDifferentHostWithoutEffects(t *testing.T) {
 	}
 	cancel()
 	<-done
-	if _, err := os.Stat(filepath.Join(dir, "managed-vms")); !os.IsNotExist(err) {
+	// The worker registers the host's own defaults; the refused command left no journal entry.
+	if _, err := os.Stat(filepath.Join(dir, "managed-vms", "wrong-host.json")); !os.IsNotExist(err) {
 		t.Fatal("wrong-host command created engine state")
 	}
 }
