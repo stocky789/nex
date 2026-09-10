@@ -2,7 +2,7 @@
   "summary": "BUG-0050: stop clipping .panel overflow so Create VM native select menus stay open.",
   "paths": [
     "web/src/style.css",
-    "tests/integration/form_select_overflow.py",
+    "tests/integration/form_select_picker.py",
     ".github/workflows/phase1.yml",
     ".gitea/workflows/phase1.yml",
     "docs/BUG_LEDGER.md",
@@ -24,9 +24,9 @@
     "reason": "Presentation-only fix; no durable pool or Controller state."
   },
   "verification": {
-    "method": "Reproduced Bus/select flicker with .panel overflow:hidden under the desktop shell; menus stay open with overflow visible. form_select_overflow.py fails on the old rule and passes on the fix; headed run confirmed open-menu highlight pixels.",
+    "method": "Reproduced Bus/select flicker with .panel overflow:hidden under the desktop shell; menus stay open with overflow visible. form_select_overflow.py (since renamed to form_select_picker.py) fails on the old rule and passes on the fix; headed run confirmed open-menu highlight pixels.",
     "evidence": [
-      "tests/integration/form_select_overflow.py",
+      "tests/integration/form_select_picker.py",
       "docs/BUG_LEDGER.md"
     ]
   }
