@@ -107,6 +107,31 @@ def path_list(root, values, label, exists=False):
     return set(values)
 
 
+def check_state(file, data, required):
+    """Force each change to say where its durable state lives.
+
+    Nex Controller is replaceable, so pool state belongs on the pool master; a feature that
+    parks it in the Controller breaks the product model (AGENTS.md, architecture invariant).
+    Prose alone did not stop that, so every new change answers the question explicitly.
+    Like the updated-pages rule, this applies to a record when it is added: correcting a
+    merged record must not require inventing an assessment for someone else's finished work,
+    and records that predate the field stay valid.
+    """
+    state = data.get('state')
+    if state is None and not required:
+        return
+    if not isinstance(state, dict) or state.get('owner') not in ('none', 'core', 'controller'):
+        raise ValueError(f'{file}: state.owner must be none, core, or controller')
+    nonempty(state.get('reason'), 'state.reason')
+    if state['owner'] == 'none':
+        if state.get('record'):
+            raise ValueError(f'{file}: state none requires no record')
+    else:
+        # core: the host-side record and the path a fresh Controller re-adopts it by.
+        # controller: which closed Controller-scoped exception it is, and its backup path.
+        nonempty(state.get('record'), 'state.record')
+
+
 def check_record(root, file, changed=None, new=True):
     data = json.loads(file.read_text())
     if not isinstance(data, dict):
@@ -139,6 +164,7 @@ def check_record(root, file, changed=None, new=True):
                 raise ValueError(f'{file}: {kind} updated requires pages changed in this range')
         elif pages:
             raise ValueError(f'{file}: {kind} none requires empty pages')
+    check_state(file, data, required=changed is not None and new)
     verification = data.get('verification')
     if not isinstance(verification, dict):
         raise ValueError(f'{file}: verification object required')

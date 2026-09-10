@@ -1,0 +1,46 @@
+{
+  "summary": "Default the VM disk name to <pool>-<vm>, widen the network adapter models to virtio, e1000, e1000e, rtl8139 and vmxnet3, and add a per-interface MTU accepted only on virtio.",
+  "paths": [
+    "internal/protocol/managed.go",
+    "internal/protocol/managed_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/controller/managed_test.go",
+    "web/src/vm-create.tsx",
+    "web/src/managed.tsx",
+    "web/src/main.tsx",
+    "tests/integration/managed_vm_browser.py",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/create-virtual-machine.md",
+    "docs/changes/2026-09-10-vm-nic-models-and-disk-names.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators see a prefilled disk name, three additional adapter models each with what it is actually for, and an MTU field that appears only on VirtIO. The creation guide explains each model and states that the emulated adapters cannot learn an MTU from the host, so it must be set inside the guest.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Changed contract: VMNIC.model widens from virtio|e1000e to the five supported models and VMNIC gains an optional mtu, refused on any model other than virtio because only virtio's host_mtu can communicate an MTU to the guest. Bounds are 1280 (IPv6 minimum) to 9216. Authentication, authorization, operations, replay and audit are unchanged. The durable host-side record is unchanged in shape: the full specification including the new field persists in the managed journal on the pool master and is re-adopted by resource ID, so a replaced Controller recovers adapter model and MTU with the VM.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The adapter model and MTU are part of the pool-scoped VM definition, so they persist on the pool master like the rest of the specification.",
+    "record": "The full VM specification, including the new mtu field, is written to the managed journal on the pool master and re-adopted by resource ID, so a replaced Controller recovers each adapter's model and MTU with its VM. Nex Controller keeps no separate copy."
+  },
+  "verification": {
+    "method": "go build ./... and go test ./internal/... passing, including new protocol cases for each accepted model, pcnet rejected as an unsupported-but-real model, MTU accepted on virtio, refused on e1000, and refused outside 1280-9216; new vmhost TestNICModelsAndMTUReachTheDomain asserting every model reaches libvirt as its own <model type> and that <mtu> is emitted only for virtio; TestVerifyDomainAcceptsAnEqualMTU covering the pointer-comparison hazard introduced by the new field. Mutation-checked: removing the MTU emission fails TestNICModelsAndMTUReachTheDomain with 'virtio MTU dropped'. python3 -m unittest discover -s tests -p 'test_api_contract.py' passing after the schema update (it caught the missing mtu property before the schema was written). npm run typecheck and npm run build passing. NOT executed: the browser walkthrough. tests/integration/managed_vm_browser.py gained assertions that an untouched disk name derives from the pool and VM name and that a second disk takes the suffixed default, but no Playwright environment exists on this workstation, so those assertions run in CI and have not been observed passing here. No guest was booted, so no adapter model or MTU has been exercised against a real libvirt or inside a running guest.",
+    "evidence": [
+      "docs/qa/vm-creation/checks.md"
+    ]
+  }
+}

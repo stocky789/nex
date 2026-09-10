@@ -12,10 +12,9 @@ stopped-VM editing**, so that edit is written once against the final VM model in
 built against the single-disk, single-NIC shape the
 [first managed VM slice](2026-09-09-first-managed-vm.md) delivered and then reworked.
 
-Reference products reviewed for the field set: Xen Orchestra with XCP-ng (the form Matt supplied),
-Proxmox VE's creation wizard, and the vSphere New Virtual Machine wizard. Research is inspiration,
-not authorization to expand the milestone; each item below is either in this slice or listed under
-follow-ups with the reason.
+The field set was reviewed against the creation form Matt supplied and the fields a VM
+specification actually needs. Research is inspiration, not authorization to expand the
+milestone; each item below is either in this slice or listed under follow-ups with the reason.
 
 ### In this slice
 

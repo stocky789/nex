@@ -16,8 +16,10 @@ import (
 	"time"
 )
 
-// Staging is bounded independently of Content-Length. Successful host imports release it.
-const maxStagingBytes int64 = 16 << 30
+// Staging is bounded by the free space it can actually claim, independently of
+// Content-Length, keeping this reserve free for the rest of the Controller.
+// Successful host imports release the staged bytes.
+const mediaStagingReserve int64 = 256 << 20
 
 func (c *Controller) initMedia() error {
 	dir := filepath.Join(c.cfg.DataDir, "media")
@@ -67,10 +69,6 @@ func (c *Controller) media(w http.ResponseWriter, r *http.Request, user, csrf st
 		fail(w, 400, "storage_id, stable request_id and .iso filename required")
 		return
 	}
-	if r.ContentLength > protocol.MaxISOBytes {
-		fail(w, 413, "ISO exceeds 8 GiB limit")
-		return
-	}
 	if !c.mediaMu.TryLock() {
 		fail(w, 409, "another media transfer is active; retry shortly")
 		return
@@ -99,30 +97,22 @@ func (c *Controller) media(w http.ResponseWriter, r *http.Request, user, csrf st
 		fail(w, 500, "media staging unavailable")
 		return
 	}
-	var used int64
 	for _, entry := range entries {
 		info, e := entry.Info()
 		if e != nil || !info.Mode().IsRegular() {
 			fail(w, 500, "invalid staging entry")
 			return
 		}
-		used += info.Size()
-	}
-	budget := protocol.MaxISOBytes
-	if remaining := maxStagingBytes - used; remaining < budget {
-		budget = remaining
 	}
 	var fs syscall.Statfs_t
 	if syscall.Statfs(dir, &fs) != nil {
 		fail(w, 500, "cannot check staging capacity")
 		return
 	}
-	free := int64(fs.Bavail)*int64(fs.Bsize) - (256 << 20)
-	if free < budget {
-		budget = free
-	}
+	// Free space already excludes bytes held by existing staged files.
+	budget := int64(fs.Bavail)*int64(fs.Bsize) - mediaStagingReserve
 	if budget < 32774 || r.ContentLength > budget {
-		fail(w, 507, "insufficient media staging space (16 GiB total; 256 MiB reserved)")
+		fail(w, 507, "insufficient media staging space (256 MiB reserved for the Controller)")
 		return
 	}
 	rc := http.NewResponseController(w)
@@ -142,7 +132,7 @@ func (c *Controller) media(w http.ResponseWriter, r *http.Request, user, csrf st
 		return
 	}
 	if n > budget {
-		fail(w, 413, "ISO exceeds upload or staging capacity limit")
+		fail(w, 413, "ISO exceeds available media staging capacity")
 		return
 	}
 	magic := make([]byte, 5)

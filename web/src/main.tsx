@@ -118,6 +118,41 @@ function Brand() {
 function Badge({ value }: { value: string }) {
   return <span className={`badge ${value}`}>{value.replaceAll("-", " ")}</span>;
 }
+type Upload = {
+  name: string;
+  loaded: number;
+  total: number;
+  percent: number;
+  rate: number;
+  state: "uploading" | "succeeded" | "failed" | "cancelled";
+  message: string;
+};
+const rate = (bytes: number) =>
+  bytes >= 1024 ** 2
+    ? `${(bytes / 1024 ** 2).toFixed(1)} MiB/s`
+    : `${Math.max(0, Math.round(bytes / 1024))} KiB/s`;
+// UploadStatus covers only the browser-to-Controller transfer. The host import that follows it
+// is a durable task and stays in the task list and the ISO library.
+function UploadStatus({ upload, onCancel }: { upload: Upload; onCancel: () => void }) {
+  const running = upload.state === "uploading";
+  return (
+    <section className="panel" aria-label="ISO upload to Controller">
+      <div className="section-heading">
+        <h2>{upload.name}</h2>
+        <div className="actions" style={{ alignItems: "center" }}>
+          {/* Only the outcome is announced; percent changes far too often for a live region. */}
+          <span role="status"><Badge value={upload.state} /></span>
+          <progress max={100} value={upload.percent} aria-label={`Upload progress for ${upload.name}`} style={{ width: 110 }} />
+          <span className="muted mono">
+            {upload.percent}% · {running ? rate(upload.rate) : size(upload.total)}
+          </span>
+          {running && <button onClick={onCancel}>Cancel</button>}
+        </div>
+      </div>
+      {upload.message && <p className="panel-note task-error">{upload.message}</p>}
+    </section>
+  );
+}
 type ResourceKind = "site" | "pool" | "host" | "home" | "refresh" | "tasks" | "vm";
 const stroke = { strokeWidth: 1.25, strokeLinecap: "round", strokeLinejoin: "round" } as const;
 function Icon({ kind }: { kind: ResourceKind }) {
@@ -233,6 +268,13 @@ function App() {
   const requestID = useRef<string | null>(null);
   const generation = useRef(0);
   const reloadOrdinal = useRef(0);
+  // The browser-to-Controller upload outlives the form that started it, so the App shell owns
+  // the request and reports it in the activity dock until the operator navigates or reloads.
+  const [upload, setUpload] = useState<Upload | null>(null);
+  const uploadRequest = useRef<XMLHttpRequest | null>(null);
+  const uploadCancelled = useRef(false);
+  const uploadClear = useRef(0);
+  const uploadSample = useRef({ at: 0, loaded: 0, rate: 0 });
   const [kind, id] = route.split("/").filter(Boolean);
   const vm = data.vms.find(v => (kind === "vms" || kind === "console") && v.id === id);
   const host = data.hosts.find((h) => kind === "hosts" && h.id === id);
@@ -273,7 +315,8 @@ function App() {
     path: string,
     method = "GET",
     body?: unknown,
-    progress?: (percent: number) => void,
+    progress?: (loaded: number, total: number) => void,
+    register?: (xhr: XMLHttpRequest) => void,
   ): Promise<T> {
     const requestGeneration = generation.current;
     const response = body instanceof Blob ? await new Promise<Response>((resolve, reject) => {
@@ -281,7 +324,8 @@ function App() {
       xhr.open(method, `/api/v1/${path}`);
       xhr.setRequestHeader("Content-Type", "application/octet-stream");
       if (session) xhr.setRequestHeader("X-CSRF-Token", session.csrf_token);
-      xhr.upload.onprogress = e => { if (e.lengthComputable) progress?.(Math.round(e.loaded / e.total * 100)); };
+      register?.(xhr);
+      xhr.upload.onprogress = e => { if (e.lengthComputable) progress?.(e.loaded, e.total); };
       xhr.onerror = () => reject(new Error("Upload connection lost. Check the ISO library and retry with the same file and destination."));
       xhr.onabort = () => reject(new Error("Upload interrupted. Check the ISO library before retrying."));
       xhr.onload = () => resolve(new Response(xhr.responseText, { status: xhr.status }));
@@ -315,6 +359,46 @@ function App() {
     if (requestGeneration !== generation.current)
       throw new Error("Session changed. Sign in and retry the action.");
     return result;
+  }
+  function cancelUpload() {
+    uploadCancelled.current = true;
+    uploadRequest.current?.abort();
+  }
+  async function startIsoUpload<T>(path: string, file: File): Promise<T> {
+    if (uploadRequest.current || upload?.state === "uploading") {
+      throw new Error("Another ISO upload is already in progress.");
+    }
+    clearTimeout(uploadClear.current);
+    uploadCancelled.current = false;
+    uploadSample.current = { at: performance.now(), loaded: 0, rate: 0 };
+    setUpload({ name: file.name, loaded: 0, total: file.size, percent: 0, rate: 0, state: "uploading", message: "" });
+    const settle = (patch: Partial<Upload>) => {
+      uploadRequest.current = null;
+      setUpload(current => current && { ...current, rate: 0, ...patch });
+      uploadClear.current = window.setTimeout(() => setUpload(null), 8000);
+    };
+    try {
+      const result = await api<T>(path, "POST", file, (loaded, total) => {
+        const now = performance.now();
+        const previous = uploadSample.current;
+        const elapsed = now - previous.at;
+        // Average the rate over at least 400 ms of deltas; per-chunk values swing too widely to read.
+        if (elapsed >= 400) {
+          const instant = (loaded - previous.loaded) / (elapsed / 1000);
+          uploadSample.current = { at: now, loaded, rate: previous.rate ? previous.rate * 0.6 + instant * 0.4 : instant };
+        }
+        setUpload(current => current && { ...current, loaded, total, percent: total ? Math.round((loaded / total) * 100) : 0, rate: uploadSample.current.rate });
+      }, xhr => { uploadRequest.current = xhr; });
+      settle({ state: "succeeded", percent: 100, loaded: file.size });
+      return result;
+    } catch (e) {
+      if (uploadCancelled.current) {
+        settle({ state: "cancelled" });
+        throw Object.assign(new Error("Upload cancelled."), { cancelled: true });
+      }
+      settle({ state: "failed", message: (e as Error).message });
+      throw e;
+    }
   }
   async function openConsole(id: string) {
     const ticket = await api<{ websocket: string }>(`vms/${encodeURIComponent(id)}/console`, "POST", {});
@@ -993,6 +1077,7 @@ function App() {
             </section>
           ) : kind === "tasks" ? (
             <>
+              {upload && <UploadStatus upload={upload} onCancel={cancelUpload} />}
               <Tasks operations={data.operations} hosts={data.hosts} />
               <Activity entries={data.audit} data={data} />
             </>
@@ -1051,7 +1136,7 @@ function App() {
             />
           ) : (
             <>
-              {pool && !host && !vm && <ManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} tab={tab} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={setTab} unavailable={Boolean(error)} />}
+              {pool && !host && !vm && <ManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} poolName={pool.name} tab={tab} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={setTab} unavailable={Boolean(error)} uploading={upload?.state === "uploading"} startIsoUpload={startIsoUpload} />}
               {vm && tab !== "Activity" && <VMPower key={`power-${vm.id}`} vm={vm} host={data.hosts.find(h => h.id === vm.host_id)} api={api} reload={reload} busy={busy} unavailable={Boolean(error)} onNotice={setNotice} />}
               {vm && tab === "General" && <VMDetails vm={vm} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} />}
               {vm && tab === "Console" && <Console key={vm.id} name={vm.name} guest={vm.guest} popout={`#/console/${vm.id}`} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={() => openConsole(vm.id)} />}
@@ -1241,6 +1326,7 @@ function App() {
           </div>
           {!loading && kind !== "tasks" && kind !== "updates" && <details className="activity-dock" open>
             <summary>Recent tasks <span>{data.operations.filter((o) => scopedHosts.some((h) => h.id === o.host_id)).length}</span></summary>
+            {upload && <UploadStatus upload={upload} onCancel={cancelUpload} />}
             <Tasks operations={data.operations.filter((o) => scopedHosts.some((h) => h.id === o.host_id)).slice(0, 5)} hosts={data.hosts} recent />
           </details>}
         </main>

@@ -15,9 +15,9 @@ guide impact: **updated** with actual implementation and walkthrough evidence.
 The complete Phase 2 lifecycle/console acceptance gate remains separate.
 
 **Controller layout direction, 2026-09-09:** Matt redirected the next work to a
-Windows XenCenter-style overhaul of the Controller web GUI: compact menu/toolbar,
+Windows desktop application overhaul of the Controller web GUI: compact menu/toolbar,
 left inventory tree, selected-resource header and tabs, dense properties/tables,
-and bottom activity/status. This supersedes the earlier vCenter/XO 6 shell choice;
+and bottom activity/status. This supersedes the earlier browser-shell choice;
 retain Nex identity and Sites → Pools → Hosts → VMs. Implement the
 [desktop layout slice](2026-09-09-controller-desktop-layout.md) using existing
 Controller capabilities. Core-local UI, installer work and phase acceptance gates
@@ -27,10 +27,10 @@ host-action, operation and audit APIs and existing Core commands/results.
 **Guide impact: updated** — align navigation instructions with the delivered UI
 and record actual browser walkthrough evidence before accepting the redesign.
 
-**Pool model correction, 2026-09-09:** Matt decided that Nex pools follow the
-XenServer/XCP-ng model. Administrators never create pools; every enrolling Nex Core
+**Pool model correction, 2026-09-09:** Matt decided that Nex pools follow the established
+master-and-members model. Administrators never create pools; every enrolling Nex Core
 host becomes the **pool master** of its own automatically created pool, named after
-its hostname. Other hosts in a pool are **member hosts** (XenServer calls them slaves).
+its hostname. Other hosts in a pool are **member hosts**.
 Enrollment tokens bind to a site, not a pool. Joining a member to an existing pool,
 changing the master and ejecting a member remain Phase 4 work and are not available.
 See the [pool master model decision](2026-09-09-pool-master-model.md).
@@ -57,7 +57,7 @@ and the guest-tools dependency for memory reclaim.
 
 ## Build order: basics first
 
-Each milestone must work end to end before the next one expands the scope. The competitor review is a source of follow-on features, not a requirement to build three enterprise products before Nex can run a VM.
+Each milestone must work end to end before the next one expands the scope. The feature review is a source of follow-on features, not a requirement to build an enterprise feature set before Nex can run a VM.
 
 | Order | Working result | Detailed phases |
 |---|---|---|
@@ -74,7 +74,7 @@ Each milestone must work end to end before the next one expands the scope. The c
 
 **Subsequent development decisions, 2026-09-08:** Matt authorized Phase 1 alongside
 installer work; see its [implemented scope and development acceptance](2026-09-08-controller-foundation.md).
-Matt then agreed to a host-local web UI on every Nex Core host, inspired by XO Lite,
+Matt then agreed to a host-local web UI on every Nex Core host,
 with Controller appliance deployment and local recovery. Deliver this in
 [Phase 3 after Phase 2 VM operations](#host-local-ui-and-controller-appliance-bootstrap),
 before Phase 4 multi-host expansion. It is planned work, not an expansion of the
@@ -183,7 +183,7 @@ this scope decision does not establish those checks passed.
 
 **Outstanding before any external ISO distribution, including alphas:** inventory every embedded component (base ISO, installer, added packages, and firmware); retain the exact required corresponding source and build/install material; preserve notices and verify source delivery; review firmware terms and resolve Nex artwork redistribution rights. The current recipe supplies Nex source and an added-package manifest only, so these gates remain open. A generic Debian mirror link does not discharge Nex's source-delivery obligations. Future network services must provide AGPL source access where required. This review covered the recipe, not a built ISO or implemented controller/agent dependencies.
 
-The [feature and UX review](2026-09-08-feature-and-ux-review.md) records Proxmox, XCP-ng/Xen Orchestra, and VMware inspiration, with a separate vCenter/XO 6 interface review. Recommendations there do not silently expand the first milestone.
+The [feature and UX review](2026-09-08-feature-and-ux-review.md) records the established management patterns Nex adopts and the interface direction. Recommendations there do not silently expand the first milestone.
 
 **UX planning revision, 2026-09-08:** emphasize understandable day-to-day virtualization management in Nex Controller. The [UX opportunity and phase fit](2026-09-08-feature-and-ux-review.md#ux-opportunity-and-phase-fit) maps the supplied suggestions to existing workflows and follow-on candidates. Build useful pool summaries, responsive forms, guided VM creation, readable tasks, safe defaults, and accessible ISO upload with Phases 1–2; explain storage/network consequences in Phases 2/4 and simplify reviewed backup policy setup in Phase 6. Global search/command palette, templates, optional dark theme, and GPU/PCI passthrough retain their stated follow-on boundaries. The current standalone ISO slice and first-release virtualization safety gates remain unchanged.
 
@@ -424,9 +424,8 @@ Preseed supports package/repository and installation configuration. Offline oper
 **Agreed 2026-09-08; planned Phase 3 work.** Every installed Nex Core host serves
 a small local web interface for setup, host/VM status, basic local control and
 recovery. A first-time operator needs one physical server and a browser, without
-an existing VM or external Controller. XO Lite's host-served deployment workflow
-is inspiration, not copied branding or inspected Nex behavior; see the
-[documented XOA deployment options](https://docs.xen-orchestra.com/installation).
+an existing VM or external Controller. A host-served deployment workflow is the
+design intent here, not inspected Nex behavior.
 
 Deliver after Phase 2 proves local VM provisioning, power operations and console
 authorization, and alongside Phase 3 packages/first-boot integration. Reuse those

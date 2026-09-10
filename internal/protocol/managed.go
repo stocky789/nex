@@ -7,10 +7,11 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"slices"
+	"strings"
 )
 
 const ManagedVMCapability = "managed-vm-v1"
-const MaxISOBytes int64 = 8 << 30
 
 type StorageRegistration struct {
 	ID          string `json:"id"`
@@ -73,12 +74,26 @@ type VMDisk struct {
 	BootOrder int    `json:"boot_order"`
 }
 
-// VMNIC's MAC is empty for a MAC derived from the VM ID and interface index.
+// VMNIC's MAC is empty for a MAC derived from the VM ID and interface index. MTU is 0 for the
+// network's own MTU; a value is only accepted on virtio, the one model that can tell the guest.
 type VMNIC struct {
 	NetworkID string `json:"network_id"`
 	Model     string `json:"model"`
 	MAC       string `json:"mac"`
+	MTU       int    `json:"mtu,omitempty"`
 }
+
+// NICModels are the adapter models Core can define. virtio is paravirtualised and needs a guest
+// driver; the rest emulate real cards so a guest without virtio drivers still gets a network.
+// rtl8139 is a 100 Mbit part and vmxnet3 exists for guests carrying VMware drivers.
+var NICModels = []string{"virtio", "e1000", "e1000e", "rtl8139", "vmxnet3"}
+
+// MTU bounds: below 1280 breaks IPv6, and 9216 is the largest jumbo frame common NICs accept.
+const (
+	MinNICMTU = 1280
+	MaxNICMTU = 9216
+)
+
 type VMBoot struct {
 	Firmware       string `json:"firmware"`
 	Machine        string `json:"machine"`
@@ -214,8 +229,19 @@ func ValidateVMSpec(v VMCreateSpec) error {
 		if n.NetworkID == "" {
 			return errors.New("each network interface needs a network")
 		}
-		if n.Model != "virtio" && n.Model != "e1000e" {
-			return errors.New("network adapter model must be virtio or e1000e")
+		if !slices.Contains(NICModels, n.Model) {
+			return errors.New("network adapter model must be one of " + strings.Join(NICModels, ", "))
+		}
+		// QEMU communicates an MTU to the guest through virtio's host_mtu feature. The emulated
+		// models have no equivalent, so accepting an MTU there would set the host side while the
+		// guest silently kept 1500. Refuse it rather than pretend.
+		if n.MTU != 0 {
+			if n.Model != "virtio" {
+				return errors.New("an MTU can only be set on a virtio adapter; other models take their MTU from inside the guest")
+			}
+			if n.MTU < MinNICMTU || n.MTU > MaxNICMTU {
+				return fmt.Errorf("a network adapter MTU must be between %d and %d", MinNICMTU, MaxNICMTU)
+			}
 		}
 		if n.MAC == "" {
 			continue

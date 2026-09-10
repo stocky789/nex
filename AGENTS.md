@@ -3,6 +3,48 @@
 This is the shared contributor contract for Nex Controller and Nex Core. Tool-specific files
 reference this file; keep working rules here rather than maintaining competing copies.
 
+## The architecture invariant: Nex Core does the work, Nex Controller only asks
+
+Read this before designing anything. It is the foundation of the product, and it is the rule
+implementation work keeps quietly breaking. It is not negotiable by convenience.
+
+- **Nex Core is the product.** Every capability — VMs, storage, networks, media, backup, containers
+  — is implemented in the host distribution and exposed through its API. Each host is either its
+  pool's **master** or a **member**; which one performs an operation depends on the feature, and the
+  master keeps the pool's durable record of it.
+- **Nex Controller is an orchestrator and nothing else.** It authenticates operators, renders the
+  UI, and calls host APIs. It is a replaceable front end onto the hosts. It does not own, compute,
+  or keep pool state; it asks a host and shows what the host reports.
+- **Every function happens over the API.** If a feature needs Nex Controller to do the work itself,
+  the feature is in the wrong process: implement it in Nex Core and give it an API call.
+- **The replacement test — apply it to every design.** Delete the Controller. Install a fresh one
+  tomorrow, connect the pool masters, and every pool setting, network, storage registration, VM,
+  identity, name, and policy comes back from the hosts while the workloads never stopped. If your
+  design would lose anything, or make an operator re-enter anything, the design is wrong. Fix the
+  design; do not add a recovery path, export, or migration to compensate.
+- **The only Controller-owned data** is Controller-scoped: sites, administrator accounts and roles,
+  audit history, enrollment tokens, and the Controller CA, which are backed up and restored
+  separately. That list is closed. Adding to it is a product decision for Matt, not an
+  implementation choice.
+
+A change breaks the invariant if it:
+
+- adds a Controller table, cache, or file that holds the only copy of anything — a setting, name,
+  ID, mapping, host assignment, schedule, or counter;
+- makes Nex Controller derive, remember, or reconcile state a host could report instead;
+- implements host behavior in Controller code because that is quicker than adding a Core API;
+- has Nex Controller schedule, poll, or drive a multi-step operation that a host should run and
+  report — any job the Controller must stay alive to finish;
+- gives a resource an identity, name, or relationship the host does not know, so a re-adopting
+  Controller could not reproduce it;
+- keeps operator-visible data about pool resources (tags, notes, custom names, layouts of pool
+  objects) with no host-side record, on the grounds that it is "not real state".
+
+If a requirement genuinely does not fit the invariant, stop and resolve it with Matt. Do not invent
+an exception, and do not leave the loophole for a later phase to clean up. Every change declares
+where its durable state lives in its `docs/changes/*.json` record (`state.owner`), and both the API
+impact check and phase acceptance gates verify it.
+
 ## Read before working
 
 - Read `docs/plans/2026-09-08-nex-platform.md` for the product model, build order, and acceptance gates.
@@ -54,14 +96,11 @@ when blocked; do not repeatedly ask permission for already authorized work.
 - VMs belong to pools and have separate host assignments. Preserve identity across migration.
 - Storage registrations, backup repositories/policies, and logical networks belong to pools.
   Track actual access per host: pool-level registration never makes a local disk shared.
-- **Nex Controller is replaceable; the pool master is the durable source of truth for its pool.**
-  The web UI and API act on hosts, not on a private Controller model. Every pool-scoped setting
-  (membership, networks, storage, media, VM definitions, policies, VM identity) must be persisted on
-  the pool master's Nex Core and re-adopted, with identity and names, when a host (re-)enrolls with a
-  new or rebuilt Controller. Replacing a failed Controller must need no more than installing a new one
-  and connecting each pool master to it; nothing else is re-entered. Controller-scoped data (sites,
-  administrator accounts/roles, audit history, enrollment tokens, its CA) is the only exception and
-  needs Controller backup/restore. Agents/libvirt report observed state; show stale/unknown state
+- **Apply the [architecture invariant](#the-architecture-invariant-nex-core-does-the-work-nex-controller-only-asks)
+  to every pool-scoped setting**: membership, networks, storage, media, VM definitions, VM identity
+  and policies persist on the pool master's Nex Core and are re-adopted, with their identities and
+  names, when a host (re-)enrolls with a new or rebuilt Controller. The web UI and API act on hosts,
+  not on a private Controller model. Agents/libvirt report observed state; show stale/unknown state
   honestly and reconcile ambiguous outcomes before retrying. Decision: Matt, 2026-09-09.
 - Running VMs and local recovery access must survive a controller outage. Never interpret an unreachable
   host as proof its VMs stopped. Never permit duplicate writable execution after a timeout or partition.
@@ -71,8 +110,10 @@ when blocked; do not repeatedly ask permission for already authorized work.
   ownership, and restore integrity. A completed backup job is not proof of a working restore.
 - Migration requires compatible CPU/runtime, networking, storage, and firmware, not just shared disks.
   HA requires proven quorum, fencing, and failure recovery before automatic restart is enabled.
-- Use vCenter and XO6 as inspiration for operator workflows and navigation, with the simplest working
-  UI first. Do not copy branding or present documentation-only research as inspected visual behavior.
+- Follow established infrastructure-management conventions for operator workflows and navigation,
+  with the simplest working UI first. Never name another product as the source of a design in code,
+  documentation, commit messages, or the UI; never copy another product's branding, artwork, or
+  wording; and do not present documentation-only research as inspected visual behavior.
 - Container Services use Docker Swarm in Nex-managed node VMs, with the full lifecycle in Nex Controller;
   not LXC or Docker directly on Nex Core. Keep this after the VM foundation and preserve the agreed
   colorful application/service icons. Follow Phase 10 for storage ownership, recovery, and quorum rules.
@@ -120,8 +161,9 @@ when blocked; do not repeatedly ask permission for already authorized work.
   sides and define authentication, authorization, validation, errors, asynchronous results, safe retries,
   outage/reconnect behavior, and Controller/Core version compatibility in the same slice.
 - Every new pool-scoped setting must name its durable host-side record on the pool master and the
-  inventory/adoption path a fresh Controller uses to recover it. A setting that exists only in the
-  Controller database leaves the slice open; record it as such in the plan.
+  inventory/adoption path a fresh Controller uses to recover it, in the change record's
+  `state.record` and in the plan. A setting that exists only in the Controller database is a broken
+  invariant, not a documentation gap: it leaves the slice open and needs a design fix.
 - Maintain [docs/API.md](docs/API.md), the living reference for all Nex API calls, functions/commands,
   events, and streams. Update the applicable machine-readable contracts and generated reference in the
   same change as API behavior; keep planned interfaces clearly separate from implemented ones.
@@ -149,6 +191,9 @@ when blocked; do not repeatedly ask permission for already authorized work.
   rewrite later. Do not expose contributor implementation details in operator workflows.
 - Add a scoped `docs/changes/*.json` assessment covering changed paths. Applicable guide/API changes
   must name updated documentation and verification evidence; `none` requires a reviewable reason.
+  Every record also declares `state.owner` as `none`, `core`, or `controller` with a reason;
+  anything but `none` names the durable record and how a fresh Controller recovers it. Reviewers
+  reject a `controller` owner that is not one of the closed Controller-scoped exceptions.
   Run `python3 scripts/check_docs.py --worktree` before committing: it applies the same gate CI
   applies, to uncommitted and untracked work, so a missing assessment is caught locally instead of
   as a red build. Then run the relevant behavior checks and follow the documented CI procedure.

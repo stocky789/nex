@@ -69,8 +69,7 @@ unchanged. Older UI builds that call `POST /api/v1/pools` or send `{pool_id}` to
 `POST /api/v1/enrollment-tokens` receive 404 and 400 respectively.
 
 Planned, **not available**: joining a second host to an existing pool as a member host,
-changing the pool master, and ejecting a member (Phase 4 multi-host pools). A member host is
-what XenServer calls a slave.
+changing the pool master, and ejecting a member (Phase 4 multi-host pools).
 
 ## Simple host enrollment (add host by address + root password)
 
@@ -456,9 +455,10 @@ sites, administrator accounts and roles, audit history, enrollment tokens and th
 CA. Each pool master lands in a newly created pool named after its hostname on the new
 Controller, as enrollment already does.
 `iso-import` fetches only the assigned media from the enrolled Controller over host mTLS;
-redirects and another host's media are refused. Controller stages a bounded raw upload,
-computes its size/SHA-256 and checks its ISO descriptor. Core checks all three again before
-publishing read-only media. See the OpenAPI operations for upload limits and errors.
+redirects and another host's media are refused. Controller stages a raw upload bounded by available staging free space minus a 256 MiB
+reserve, computes its size/SHA-256 and checks its ISO descriptor. There is no fixed
+per-image GiB cap. Core checks size, hash and descriptor again before publishing
+read-only media. See the OpenAPI operations for admission errors.
 
 `vm-create` preserves pool membership separately from host placement, allocates a stable
 UUID and requires successful registrations/media for the same host and pool. Core rechecks
@@ -501,7 +501,15 @@ MAC uniqueness and host capacity stay with their owners.
   `virtio|sata|scsi`, `thin` (`true` sparse, `false` preallocated) and `boot_order`. Disks are
   created inside the VM's exclusive directory on their storage target; Core checks exclusive
   ownership for every disk and free space per target, summing the disks that share one.
-- **`nics`.** Zero to eight. Each carries `network_id`, `model` `virtio|e1000e` and `mac`. An
+- **`nics`.** Zero to eight. Each carries `network_id`, `model`, `mac` and an optional `mtu`.
+  `model` is `virtio|e1000|e1000e|rtl8139|vmxnet3`: `virtio` is paravirtualised and needs a guest
+  driver; `e1000`/`e1000e` emulate Intel gigabit cards for guests and installers that cannot see
+  a virtio adapter; `rtl8139` emulates a 100 Mbit card for guests too old for a gigabit driver;
+  `vmxnet3` is VMware's paravirtualised adapter for guests carrying VMware drivers. `mtu` is
+  `0` for the network's own MTU and is **accepted only on `virtio`** — QEMU communicates an MTU
+  to the guest through virtio's `host_mtu`, and the emulated models have no equivalent, so a
+  value on them is refused rather than applied to the host side while the guest keeps 1500.
+  A set `mtu` is between 1280 (the IPv6 minimum) and 9216. An
   empty `mac` means the derived address (`protocol.DerivedMAC`: the `52:54:00` locally
   administered unicast prefix, two octets of `sha256(vm id)` and the interface index), which is
   stable per VM and interface and cannot collide within a VM. A manual `mac` must be six octets

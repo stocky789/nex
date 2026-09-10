@@ -1,5 +1,5 @@
 {
-  "summary": "Adopt the XenServer-style pool model: every enrolling host becomes the pool master of an automatically created pool named after its hostname; administrators never create pools; enrollment tokens bind to a site. API impact: changed contract for POST /api/v1/enrollment-tokens, POST /api/v1/agent/enroll, POST /api/v1/appliances/bootstrap, POST /api/v1/appliances/adopt, GET /api/v1/pools (master_host_id) and the removed POST /api/v1/pools, plus the Core local deploy/handoff request without pool_name. Guide impact: updated.",
+  "summary": "Adopt the master-and-members pool model: every enrolling host becomes the pool master of an automatically created pool named after its hostname; administrators never create pools; enrollment tokens bind to a site. API impact: changed contract for POST /api/v1/enrollment-tokens, POST /api/v1/agent/enroll, POST /api/v1/appliances/bootstrap, POST /api/v1/appliances/adopt, GET /api/v1/pools (master_host_id) and the removed POST /api/v1/pools, plus the Core local deploy/handoff request without pool_name. Guide impact: updated.",
   "paths": [
     "AGENTS.md",
     "CHANGELOG.md",

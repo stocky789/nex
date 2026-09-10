@@ -29,10 +29,11 @@ class DocumentationGateTests(unittest.TestCase):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text)
 
-    def record(self, paths, name='change', guide=None, api=None):
+    def record(self, paths, name='change', guide=None, api=None, state=None):
         data = {'summary': 'Test change', 'paths': paths,
                 'guide': guide or {'impact': 'none', 'reason': 'Internal change', 'pages': []},
                 'api': api or {'impact': 'none', 'reason': 'No API behavior changes', 'pages': []},
+                'state': state or {'owner': 'none', 'reason': 'Stores nothing durable'},
                 'verification': {'method': 'Run focused local check', 'evidence': ['check.txt']}}
         file = f'docs/changes/{name}.json'
         self.write(file, json.dumps(data))
@@ -76,6 +77,37 @@ class DocumentationGateTests(unittest.TestCase):
         (self.root / 'check.txt').unlink()
         with self.assertRaisesRegex(ValueError, 'evidence: file does not exist'):
             docs.check(self.root, {'app.py', file})
+
+    def test_state_owner_declared_and_host_state_names_its_durable_record(self):
+        """A change that keeps pool state in the replaceable Controller must be visible.
+
+        The recurring architectural mistake is a feature whose only copy of a setting lives
+        in the Controller database. The gate cannot judge the design, but it can refuse a
+        change that never says who owns the state.
+        """
+        record = self.record(['app.py'])
+        data = json.loads((self.root / record).read_text())
+        del data['state']
+        self.write(record, json.dumps(data))
+        with self.assertRaisesRegex(ValueError, 'state.owner must be'):
+            docs.check(self.root, {'app.py', record}, added={record})
+        docs.check(self.root)  # Records predating the field stay valid in tree mode,
+        docs.check(self.root, {'app.py', record}, added=set())  # and when corrected later.
+        data['state'] = {'owner': 'controller-only', 'reason': 'Kept in the Controller database'}
+        self.write(record, json.dumps(data))
+        with self.assertRaisesRegex(ValueError, 'state.owner must be'):
+            docs.check(self.root, {'app.py', record}, added={record})
+        data['state'] = {'owner': 'core', 'reason': 'New pool-scoped setting'}
+        self.write(record, json.dumps(data))
+        with self.assertRaisesRegex(ValueError, 'state.record'):
+            docs.check(self.root, {'app.py', record}, added={record})
+        data['state']['record'] = 'Managed journal on the pool master; re-adopted by resource ID.'
+        self.write(record, json.dumps(data))
+        docs.check(self.root, {'app.py', record}, added={record})
+        data['state'] = {'owner': 'none', 'reason': 'Nothing persists', 'record': 'Contradiction'}
+        self.write(record, json.dumps(data))
+        with self.assertRaisesRegex(ValueError, 'state none requires no record'):
+            docs.check(self.root, {'app.py', record}, added={record})
 
     def test_editing_a_merged_record_does_not_demand_its_pages_change_again(self):
         """The trap: a record's pages requirement must apply when it is added, not forever.

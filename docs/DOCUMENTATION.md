@@ -71,6 +71,10 @@ Example for an internal tooling change (replace paths and evidence with the real
     "reason": "The installer has no Nex Controller/Core API.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Validation runs at build time and persists nothing."
+  },
   "verification": {
     "method": "Run the affected validation check and inspect its actual result.",
     "evidence": ["installer/check.sh"]
@@ -83,6 +87,24 @@ diff. `guide.pages` names guide Markdown; `api.pages` names `docs/API.md` or fil
 The API field concerns documentation impact; retain the more specific runtime API impact classification
 from [AGENTS.md](../AGENTS.md#required-api-impact-check) in the summary/plan. An existing contract
 whose behavior changes can still require updated documentation. Explain any `none` honestly.
+
+`state.owner` says where the change's durable state lives, because Nex Controller is replaceable
+and must be able to be thrown away and rebuilt from the hosts. Declare one of:
+
+- `none` — the change persists nothing new. Omit `record`.
+- `core` — state lives on a Nex Core host. `record` names the durable host-side record on the pool
+  master and the inventory/adoption path a fresh Controller uses to recover it with the same
+  identity and name.
+- `controller` — one of the closed Controller-scoped exceptions (sites, administrator accounts and
+  roles, audit history, enrollment tokens, the Controller CA). `record` names which one and how it
+  is backed up and restored. Anything else with this owner is a design defect: fix the design.
+
+The checker cannot judge whether the named record actually exists or whether the owner is honest;
+it refuses a change that never answers the question. Reviewers verify the answer against the
+[architecture invariant](../AGENTS.md#the-architecture-invariant-nex-core-does-the-work-nex-controller-only-asks).
+Like the `impact: updated` page rule below, this is required when a record is **added**, so
+correcting a merged record does not ask you to assess someone else's finished work, and records
+written before the field remain valid.
 
 The `impact: updated` requirement that listed pages change in the same diff applies when a record
 is **added**, which is when it has to prove the pages were updated with it. Correcting a merged
@@ -132,7 +154,8 @@ ordinary ranges use only added/modified records. These checks do not demand a se
 every intermediate commit, nor do they run on unpushed local commits.
 
 The gate requires changed paths to be covered by an added/modified assessment, validates reasons
-and evidence references, requires applicable guide/API pages to change, and checks guide structure,
+and evidence references, requires a declared `state.owner` with a named record where one is owed,
+requires applicable guide/API pages to change, and checks guide structure,
 local links, and navigation. External URLs are not fetched; reference-style Markdown links are outside
 the supported guide format. It deliberately does not infer whether arbitrary code changes need an
 API or judge prose correctness. Reviewers must challenge an incorrect `none`. API schema/operation

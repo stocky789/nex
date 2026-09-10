@@ -1,0 +1,34 @@
+{
+  "summary": "Make the replaceable-Controller architecture invariant the first thing the contributor contract states, and require every change record to declare where its durable state lives via state.owner.",
+  "paths": [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "CURSOR.md",
+    ".cursor/rules/project.mdc",
+    "docs/DOCUMENTATION.md",
+    "scripts/check_docs.py",
+    "tests/test_check_docs.py",
+    "docs/changes/2026-09-10-controller-state-invariant.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor contract, agent entry points and the change-assessment schema only. No product behavior, GUI, CLI or recovery step an operator follows changes, so no guide page has anything new to describe.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Nex Controller/Core contract, client-facing endpoint, agent command or result flow is added or changed; this restates an existing product rule and adds a field to the local documentation gate's JSON records. The rule itself concerns where API-delivered state persists, which is unchanged here.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation and repository tooling. Nothing is persisted by Nex Controller or Nex Core as a result of this change; the new state.owner field is a static declaration inside review records held in Git."
+  },
+  "verification": {
+    "method": "python3 -m unittest discover -s tests -p 'test_check_docs.py' passing, including the new test_state_owner_declared_and_host_state_names_its_durable_record, which asserts a missing state block, an invented owner value, a core owner with no named record, and a none owner that still names one are each rejected, and that records predating the field still pass tree mode. Mutation-checked: removing the check_state call from check_record fails that test. python3 scripts/check_docs.py --worktree and --all passing over this working tree, which is the gate CI runs. Not executed: no application, controller or host behavior is touched by this change, so no backend, browser or lab check applies.",
+    "evidence": [
+      "tests/test_check_docs.py",
+      "scripts/check_docs.py"
+    ]
+  }
+}

@@ -244,11 +244,20 @@ def acceptance(config, password, iso, evidence, mode):
             group.get_by_label('Storage').select_option(label=next(t for t in options if t.startswith(storage_name)))
         first_disk = page.get_by_role('group', name='Disk 1', exact=True)
         pick_storage(first_disk)
+        # The disk name defaults to <pool>-<vm> and follows the VM name typed on page 1 until
+        # the operator overrides it, so an untouched disk must already carry the derived label.
+        derived = first_disk.get_by_label('Disk name', exact=True).input_value()
+        assert derived.endswith(vm_name), f'disk name {derived!r} does not derive from VM name {vm_name!r}'
+        assert derived != vm_name, f'disk name {derived!r} is missing the pool prefix'
         first_disk.get_by_label('Disk name', exact=True).fill('system')
         first_disk.get_by_label('Size (GiB)', exact=True).fill('1')
         page.get_by_role('button', name='Add disk', exact=True).click()
         second_disk = page.get_by_role('group', name='Disk 2', exact=True)
         pick_storage(second_disk)
+        # An added disk takes the same derived name with a suffix, because the protocol
+        # requires disk names to be unique within a VM.
+        added = second_disk.get_by_label('Disk name', exact=True).input_value()
+        assert added == f'{derived}-2', f'second disk {added!r} is not the suffixed default of {derived!r}'
         second_disk.get_by_label('Disk name', exact=True).fill('system')
         expect(page.locator('#vm-disk-issue')).to_be_visible()
         expect(page.get_by_role('button', name='Next', exact=True)).to_be_disabled()

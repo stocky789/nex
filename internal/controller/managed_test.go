@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -141,26 +142,25 @@ func TestManagedWorkflowScopeRetryAndMedia(t *testing.T) {
 	report(true)
 	report(true, protocol.Result{OperationID: network.OperationID, Status: "succeeded"})
 	uploadPath := "/api/v1/media?storage_id=" + storage.ID + "&name=guest.iso&request_id=iso1"
-	// Sparse files exercise actual streamed-byte limits without an 8GiB allocation.
-	sparsePath := filepath.Join(a.c.cfg.DataDir, "media", "reserved")
-	sparse, err := os.Create(sparsePath)
-	if err != nil {
+	// Declared length beyond free staging space is refused before any byte is read.
+	mediaDir := filepath.Join(a.c.cfg.DataDir, "media")
+	var fs syscall.Statfs_t
+	if err := syscall.Statfs(mediaDir, &fs); err != nil {
 		t.Fatal(err)
 	}
-	if err = sparse.Truncate(maxStagingBytes - 40000); err != nil {
-		t.Fatal(err)
+	budget := int64(fs.Bavail)*int64(fs.Bsize) - mediaStagingReserve
+	if budget < 32774 {
+		t.Skipf("media staging needs over %d bytes free", mediaStagingReserve+32774)
 	}
-	sparse.Close()
-	oversized := httptest.NewRequest("POST", "https://nex.test"+uploadPath, bytes.NewReader(make([]byte, 65536)))
-	oversized.ContentLength = -1
+	oversized := httptest.NewRequest("POST", "https://nex.test"+uploadPath, nil)
+	oversized.ContentLength = budget + 1
 	oversized.AddCookie(a.cookie)
 	oversized.Header.Set("X-CSRF-Token", a.csrf)
 	oversizedResponse := httptest.NewRecorder()
 	a.c.Handler().ServeHTTP(oversizedResponse, oversized)
-	if oversizedResponse.Code != 413 {
-		t.Fatalf("actual body limit: %d %s", oversizedResponse.Code, oversizedResponse.Body.String())
+	if oversizedResponse.Code != 507 {
+		t.Fatalf("declared length over budget: %d %s", oversizedResponse.Code, oversizedResponse.Body.String())
 	}
-	os.Remove(sparsePath)
 
 	a.call("POST", uploadPath, "bad", nil, 400)
 	iso := make([]byte, 65536)
@@ -250,13 +250,15 @@ func TestManagedAuthorizationAndActualBodyLimits(t *testing.T) {
 	cert := certificate(t, host.CertificatePEM)
 	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}})
 	a.call("POST", "/api/v1/storage", registrationRequest{RequestID: "bad", PoolID: pool, HostID: host.HostID, Name: "bad", Path: "/var/../root"}, nil, 400)
-	r := httptest.NewRequest("POST", "https://nex.test/api/v1/media?name=x.iso&storage_id=x&request_id=x", nil)
-	r.AddCookie(a.cookie)
-	r.Header.Set("X-CSRF-Token", a.csrf)
-	r.ContentLength = protocol.MaxISOBytes + 1
+	// A declared length beyond the staging budget is refused before any byte is read.
+	l := newManagedLab(t, protocol.ManagedVMCapability)
+	r := httptest.NewRequest("POST", "https://nex.test/api/v1/media?name=x.iso&storage_id="+l.storage+"&request_id=x", nil)
+	r.AddCookie(l.a.cookie)
+	r.Header.Set("X-CSRF-Token", l.a.csrf)
+	r.ContentLength = 1 << 62
 	w := httptest.NewRecorder()
-	a.c.Handler().ServeHTTP(w, r)
-	if w.Code != http.StatusRequestEntityTooLarge {
+	l.a.c.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusInsufficientStorage {
 		t.Fatal(w.Code, w.Body.String())
 	}
 }
@@ -428,6 +430,11 @@ func TestHostReportedManagedStateIsAdopted(t *testing.T) {
 	// rebuilt Controller must adopt the VM without powering it on.
 	adopted := vmSpec("old-pool", "old-host", "guest1", "stor-1", "net-default", "iso-1")
 	adopted.ID, adopted.StartAfterCreate = "vm-1", true
+	// Every operator-visible choice is pool-scoped state the master owns, so a rebuilt
+	// Controller must recover the operator's disk label, adapter model and MTU too, not just
+	// the VM's identity and its storage/network references.
+	adopted.Disks[0].Name = "corepool-guest1"
+	adopted.NICs = []protocol.VMNIC{{NetworkID: "net-default", Model: "virtio", MTU: 9000}, {NetworkID: "net-vlan15", Model: "vmxnet3", MAC: "52:54:00:aa:bb:cc"}}
 	managed := &protocol.ManagedState{
 		Storage: []protocol.StorageRegistration{{ID: "stor-1", PoolID: "old-pool", HostID: "old-host", Name: "Local", Path: "/var/lib/nex/vms"}},
 		Networks: []protocol.NetworkRegistration{
@@ -486,8 +493,11 @@ func TestHostReportedManagedStateIsAdopted(t *testing.T) {
 		t.Fatalf("media %+v", media)
 	}
 	if len(vms) != 1 || vms[0].ID != "vm-1" || vms[0].Name != "guest1" || vms[0].PoolID != pool || vms[0].HostID != host.HostID || vms[0].Status != "succeeded" || vms[0].Spec == nil || vms[0].Spec.MediaID != "iso-1" || vms[0].Spec.PoolID != pool ||
-		len(vms[0].Spec.Disks) != 1 || vms[0].Spec.Disks[0].StorageID != "stor-1" || len(vms[0].Spec.NICs) != 1 || vms[0].Spec.NICs[0].NetworkID != "net-default" || vms[0].Spec.StartAfterCreate {
+		len(vms[0].Spec.Disks) != 1 || vms[0].Spec.Disks[0].StorageID != "stor-1" || len(vms[0].Spec.NICs) != 2 || vms[0].Spec.NICs[0].NetworkID != "net-default" || vms[0].Spec.StartAfterCreate {
 		t.Fatalf("vms %+v", vms)
+	}
+	if s := vms[0].Spec; s.Disks[0].Name != "corepool-guest1" || s.NICs[0].Model != "virtio" || s.NICs[0].MTU != 9000 || s.NICs[1].Model != "vmxnet3" || s.NICs[1].MAC != "52:54:00:aa:bb:cc" {
+		t.Fatalf("adoption lost the operator's disk label, adapter model or MTU: %+v", s)
 	}
 	var ops []protocol.Operation
 	read(t, a.call("GET", "/api/v1/operations", nil, nil, 200), &ops)
@@ -548,7 +558,9 @@ func TestCreateVMSpecificationReferencesAndScope(t *testing.T) {
 		"guest os":         func(v *protocol.VMCreateSpec) { v.GuestOS = "plan9" },
 		"description":      func(v *protocol.VMCreateSpec) { v.Description = strings.Repeat("x", 4097) },
 		"nine nics":        func(v *protocol.VMCreateSpec) { addNICs(v, 8) },
-		"nic model":        func(v *protocol.VMCreateSpec) { v.NICs[0].Model = "rtl8139" },
+		"nic model":        func(v *protocol.VMCreateSpec) { v.NICs[0].Model = "pcnet" },
+		"nic mtu on e1000": func(v *protocol.VMCreateSpec) { v.NICs[0].Model, v.NICs[0].MTU = "e1000", 9000 },
+		"nic mtu range":    func(v *protocol.VMCreateSpec) { v.NICs[0].MTU = 9217 },
 		"multicast mac":    func(v *protocol.VMCreateSpec) { v.NICs[0].MAC = "53:54:00:12:34:56" },
 		"upper case mac":   func(v *protocol.VMCreateSpec) { v.NICs[0].MAC = "52:54:00:AB:CD:EF" },
 		"short mac":        func(v *protocol.VMCreateSpec) { v.NICs[0].MAC = "52:54:00:12:34" },

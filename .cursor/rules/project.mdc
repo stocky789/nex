@@ -7,6 +7,9 @@ Read and follow the repository-root AGENTS.md before working. It is the canonica
 
 @AGENTS.md
 
+Start with its architecture invariant: Nex Core does the work and keeps the state, Nex Controller
+only calls host APIs and is replaceable. Check every design against it before writing code.
+
 Apply AGENTS.md's required API impact check to every change; maintain repository-root docs/API.md.
 Apply its living user guide gate; maintain docs/guide/README.md, verify applicable workflows,
 and follow docs/DOCUMENTATION.md for change assessments and documentation checks.

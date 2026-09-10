@@ -5,14 +5,14 @@ Status: Implemented and verified on 2026-09-09 (simulated browser suites plus a 
 
 ## Decision
 
-Matt decided that Nex pools follow the XenServer/XCP-ng model:
+Matt decided that Nex pools follow the established master-and-members model:
 
 - Administrators never create pools. There is no **Create pool** action and no manual
   pool-creation API.
 - Every Nex Core host that enrolls becomes its own pool automatically. The pool is named after
   the host's hostname and that host is the pool's **pool master**.
-- A pool has exactly one pool master; other hosts are **member hosts** (XenServer calls them
-  slaves). The pool master controls the pool.
+- A pool has exactly one pool master; other hosts are **member hosts**. The pool master
+  controls the pool.
 - Sites still group pools. Enrollment tokens are bound to a **site**, not a pool.
 - Hierarchy wording everywhere: **Sites → Pools (one master host + members) → Hosts → VMs**.
 
@@ -40,8 +40,8 @@ Matt decided that Nex pools follow the XenServer/XCP-ng model:
 Manual pool creation added a step with no decision behind it: a single host could not be
 enrolled without first inventing a pool, and a pool-bound token forced the operator to choose
 a grouping before the host existed. Naming the pool after its first host and making that host
-the master matches the XenServer/XCP-ng behavior operators already know, keeps the single-host
-case trivial, and gives Phase 4 a defined starting point for joining members.
+the master matches the master-and-members behavior operators already expect, keeps the
+single-host case trivial, and gives Phase 4 a defined starting point for joining members.
 
 ## Not in this change (planned, Phase 4)
 

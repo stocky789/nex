@@ -46,8 +46,9 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
   the management bridge, host addresses or routes. Use the same NIC names on every host.
 - Otherwise an existing Linux bridge such as the installer-created `br0`, or an active
   libvirt network on the selected host; that registration changes no host networking.
-- A guest installation `.iso` containing an ISO-9660 volume descriptor, at most 8 GiB.
-  Retain enough local space on Controller for staging and on Core for the transferred image.
+- A guest installation `.iso` containing an ISO-9660 volume descriptor (at least ~32 KiB).
+  Size is limited by free space on Controller staging (256 MiB reserved) and on the host
+  storage target, not by a fixed GiB cap.
   Select firmware supported by the guest; UEFI must be advertised by the host's libvirt
   capabilities for KVM, x86-64 and q35. Allow 2 GiB of available memory for the host in
   addition to the requested guest memory.
@@ -76,11 +77,13 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
    bridge or libvirt network by name. Select **Register and check access**, then wait for
    `succeeded`. The table shows each network's connection, bridge and VM count.
 4. Open **ISO library**, then **Upload ISO**. Choose the validated **Destination storage**
-   (the default **ISO** registration is fine) and select or drop one **ISO file**. Select **Upload and transfer ISO**. The progress
-   bar measures the upload to Controller; wait for the separate host transfer task to
-   show `succeeded` before using the image. Upload the ISO to the storage the VM's disks
-   will use: an ISO can only be attached from a storage target one of the VM's own disks
-   sits on.
+   (the default **ISO** registration is fine) and select or drop one **ISO file**. Select
+   **Upload and transfer ISO**. Progress, rate and **Cancel** for the upload to Controller
+   appear under **Recent tasks**; you can close the form and keep working in the UI while
+   that upload runs (keep the Controller tab open). Wait for the separate host transfer
+   task to show `succeeded` before using the image. Upload the ISO to the storage the VM's
+   disks will use: an ISO can only be attached from a storage target one of the VM's own
+   disks sits on.
    To check one host, select it in **Resources**, open **Storage**, and look under
    **Host ISO images**. Each row shows the ISO, destination storage/directory, size,
    availability and transfer task. Return to the pool to continue creating the VM.
@@ -143,9 +146,24 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
       - **Network** — a network registration validated on the selected host. Use
         **Open Networking** if the host has none. A registration on the pool does not make a
         host's network reachable from another host.
-      - **Adapter model** — **VirtIO** is fastest but needs guest drivers (built into Linux,
-        virtio-win on Windows). **Intel e1000e** is emulated and works with the drivers a
-        guest already has.
+      - **Adapter model** — which network card the guest sees. The page explains each choice
+        as you select it.
+        - **VirtIO (paravirtualised)** — fastest and lowest host CPU, and the right choice
+          for anything modern. The guest needs a VirtIO driver: built into Linux, and on
+          Windows supplied by the [guest tools](guest-tools.md).
+        - **Intel E1000** and **Intel E1000E** — emulate Intel gigabit cards that nearly every
+          operating system already has a driver for. Slower and more host CPU than VirtIO.
+          Use one when a guest, or an installer running before drivers load, cannot see a
+          VirtIO adapter at all.
+        - **Realtek RTL8139** — emulates a 100 Mbit card for guests too old to have a gigabit
+          driver. The 100 Mbit limit is the emulated hardware, not a setting.
+        - **VMware vmxnet3** — for guests that already carry VMware drivers, so a machine
+          brought over from VMware keeps working without reconfiguring its networking.
+      - **MTU** — shown only for **VirtIO**, the one model that can tell the guest its MTU.
+        Leave it blank for the network's own MTU; 9000 is the usual jumbo-frame value.
+        Every device along the path must agree, or traffic is dropped with no error. On the
+        emulated adapters the field is replaced by a note: set the MTU inside the guest
+        instead, because those cards have no way to learn it from the host.
       - **MAC address** — leave blank for **Automatic**: a stable address derived from this
         VM's identity and the interface position, which does not change. A manual address
         must be six lower-case hexadecimal octets separated by colons and unicast (an even
@@ -330,6 +348,11 @@ single-disk, single-interface form and remain valid only for the parts of this p
 did not change: sign-in, storage/network registration, ISO upload and transfer, and the
 stopped-VM outcome. Treat every instruction in step 5 as untested until a report covering the
 six pages is linked here.
+
+**Background ISO upload / no fixed size cap (2026-09-10) — not yet walked through in a
+browser.** Step 4's Recent tasks progress/rate/Cancel behaviour and uploads larger than the
+old 8 GiB cap are covered by Controller unit tests and UI typecheck only until a disposable
+lab walkthrough is recorded.
 
 **Pool VLAN networks (2026-09-09):** the [VLAN network checks](../qa/pool-vlan-networks/checks.md)
 record the simulated browser walkthrough of the new **Connection** / **VLAN ID** form and the

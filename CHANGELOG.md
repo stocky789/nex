@@ -24,6 +24,7 @@ Core version. This is the version the packages currently build as (`0.1.5~alpha1
 
 ### Minor Feature
 
+- ISO upload to Controller can be closed and continues in the background while the UI stays open; progress, rate and Cancel live under Recent tasks. Removed the fixed 8 GiB ISO size cap — staging is limited by free disk space (256 MiB reserved).
 - **Check** and **Update** now use the system package manager against the signed Nex repository, instead of downloading a single package file and installing it directly. Updates that need a new supporting component now install cleanly rather than failing part-way, and every package is signature-checked. Progress is reported in steps rather than as a download percentage, and the available-version check refreshes at most once every five minutes.
 - Nex Core is now installed only from its own ISO. Installing the Nex package onto an ordinary Debian system is refused with an explanation: Nex Core is a distribution, and the installer establishes the storage, networking, console identity and recovery paths that a supported host depends on. Existing hosts continue to update normally.
 - The Controller appliance now carries the Nex repository signing key and repository entry, which it previously lacked entirely.
@@ -37,6 +38,7 @@ Core version. This is the version the packages currently build as (`0.1.5~alpha1
 
 ### Bug Fixes
 
+- Shortened the notice after a VM power request so it no longer tells you to follow the task for the next host report.
 - Fixed a fresh Nex Core install having no Nex package repository: the host now ships the Nex archive signing key and configures `/etc/apt/sources.list.d/nex.sources`, so `apt update` lists the Nex repo out of the box (BUG-0042).
 - Fixed the continuous-integration update tests so they reach the public APT repo, an OpenSSL 3.0 TLS-match check, and a private-IP fixture in the Controller capture harness (BUG-0040, BUG-0041).
 
@@ -99,7 +101,7 @@ Controller desktop shell.
 
 ### Minor Feature
 
-- Rebuilt the Controller shell as a compact XenCenter-style desktop layout: a menu and toolbar, a searchable collapsible resource tree, General/Networking/Storage/Activity tabs, and a bottom task drawer.
+- Rebuilt the Controller shell as a compact desktop layout: a menu and toolbar, a searchable collapsible resource tree, General/Networking/Storage/Activity tabs, and a bottom task drawer.
 
 ### Bug Fixes
 

@@ -10,7 +10,7 @@ SHA256: `8fc53ba1706d864dacd11d281575514a46c790f03dc216ed2b37ea079394706c`
 Both firmware menus offer **GUI install - Nex Core** and **Minimal install - Nex Core (text)**,
 plus the existing serial and rescue options. They wait for selection. GUI uses the bundled
 Debian GTK installer; minimal uses its text frontend. Both install the same headless Nex host
-through the same preseed and hooks. This is not a custom Proxmox UI or an installed desktop.
+through the same preseed and hooks. This is not a custom graphical shell or an installed desktop.
 The native wizard retains Debian's banner. No dependency or upstream executable was added or
 modified for this choice. Upstream notices and existing redistribution gates still apply.
 

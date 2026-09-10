@@ -614,3 +614,58 @@ func TestManagedCreationEvidenceCoversEveryDisk(t *testing.T) {
 		t.Fatalf("incomplete disk evidence accepted: %v", err)
 	}
 }
+
+// Each adapter model must reach libvirt as its own model type, and an MTU must appear only for
+// virtio, the one model QEMU can communicate an MTU to (host_mtu). A list of names that all
+// produced the same device, or an MTU that was silently dropped, would be the real failure.
+func TestNICModelsAndMTUReachTheDomain(t *testing.T) {
+	for _, model := range protocol.NICModels {
+		v := managedTestVM()
+		v.NICs = []protocol.VMNIC{{NetworkID: "net-1", Model: model}}
+		if model == "virtio" {
+			v.NICs[0].MTU = 9000
+		}
+		b, err := managedDomainXML(v, []protocol.NetworkRegistration{{ID: "net-1", Kind: "bridge", Source: "br0"}}, []string{"/vms/disk-0.qcow2"}, "")
+		if err != nil {
+			t.Fatalf("%s: %v", model, err)
+		}
+		var d managedDomain
+		if err = xml.Unmarshal(b, &d); err != nil {
+			t.Fatalf("%s: %v", model, err)
+		}
+		if len(d.Devices.Interfaces) != 1 || d.Devices.Interfaces[0].Model.Type != model {
+			t.Fatalf("%s: adapter model not carried into the domain: %s", model, b)
+		}
+		mtu := d.Devices.Interfaces[0].MTU
+		if model == "virtio" {
+			if mtu == nil || mtu.Size != 9000 {
+				t.Fatalf("virtio MTU dropped: %s", b)
+			}
+		} else if mtu != nil {
+			t.Fatalf("%s: MTU emitted for a model that cannot tell the guest: %s", model, b)
+		}
+	}
+}
+
+// verifyDomain compares interfaces field by field because MTU is a pointer; whole-struct
+// equality would compare addresses and reject every adapter carrying an MTU.
+func TestVerifyDomainAcceptsAnEqualMTU(t *testing.T) {
+	want := managedNIC{Type: "bridge"}
+	want.Model.Type, want.MTU = "virtio", &mtuXML{Size: 9000}
+	got := want
+	got.MTU = &mtuXML{Size: 9000}
+	if !sameMTU(got.MTU, want.MTU) {
+		t.Fatal("an equal MTU held in a different pointer was treated as a change")
+	}
+	got.MTU = &mtuXML{Size: 1500}
+	if sameMTU(got.MTU, want.MTU) {
+		t.Fatal("a different MTU was accepted")
+	}
+	got.MTU = nil
+	if sameMTU(got.MTU, want.MTU) {
+		t.Fatal("a missing requested MTU was accepted")
+	}
+	if !sameMTU(&mtuXML{Size: 1500}, nil) {
+		t.Fatal("an MTU we never requested must not fail the VM")
+	}
+}

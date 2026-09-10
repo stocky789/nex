@@ -5,11 +5,11 @@ Status: Frontend slice passed local verification and independent review.
 
 ## Scope and reference
 
-Rebuild the Controller web shell around the inspected Windows XenCenter layout:
+Rebuild the Controller web shell around a Windows desktop application layout:
 compact menu and icon toolbar, left resource tree, selected resource header and
 horizontal views, dense property rows, bottom tasks and status. Retain Nex identity.
-The [layout plan](../../plans/2026-09-09-controller-desktop-layout.md) links the
-actual reference screenshots and records authorization. No vendor artwork or code
+The [layout plan](../../plans/2026-09-09-controller-desktop-layout.md) describes the
+layout and records authorization. No third-party artwork or code
 is shipped. The Core local UI, installer, VM capabilities and backend are unchanged.
 
 API impact: **existing contract** — session, site/pool creation, host inventory,

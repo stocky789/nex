@@ -6,10 +6,11 @@ Status: Controller frontend slice implemented and verified locally with independ
 ## Authorized change
 
 Matt redirected the next work from installer walkthroughs and Phase 2 expansion to
-overhauling the Nex Controller web GUI. The requested visual target is the Windows
-XenCenter application: make the layout and density closely match its desktop
-management interface, including rebuilding the existing shell where needed.
-This supersedes the earlier vCenter/XO 6 shell direction in the
+overhauling the Nex Controller web GUI. The requested visual target is a Windows
+desktop management application: a compact menu row and icon toolbar, a left
+resource tree, a grey selected-resource header above horizontal detail tabs, and
+dense property content, including rebuilding the existing shell where needed.
+This supersedes the earlier browser-shell direction in the
 [feature and interface review](2026-09-08-feature-and-ux-review.md).
 
 Retain Nex identity and the Sites → Pools → Hosts → VMs product hierarchy. The
@@ -22,16 +23,6 @@ The Nex Core host-local UI and installer are outside this redesign.
 to site creation by the [pool master model correction](2026-09-09-pool-master-model.md);
 **Create pool** no longer exists and each enrolling host becomes the master of its
 automatically created pool. The checklists remain as recorded for this slice.
-
-## Screenshot references
-
-The implementation workstream inspected downloaded Windows XenCenter screenshots
-from [XenServer's host/VM documentation](https://docs.xenserver.com/en-us/xenserver/8/media/singlehost-singlevm-tools-not-installed-anno.png)
-and [Oracle's XenCenter example](https://docs.oracle.com/cd/E59954_01/E59951/html/images/citrix_xencenter_mainwindow.png).
-Both show a compact menu and icon toolbar, a left resource tree, a grey selected
-resource header and horizontal tabs, and dense property content. These are the
-visual references for the Nex redesign; no authenticated XenCenter environment
-was operated and no vendor image assets are copied into the product.
 
 ## Layout and behavior
 
@@ -46,15 +37,15 @@ was operated and no vendor image assets are copied into the product.
 - Preserve working site/pool creation, enrollment, inventory refresh, revocation,
   re-enrollment, authentication, tasks, audit history and source access. Menus and
   tabs must lead to available actions or information; do not populate the shell
-  with unsupported XenCenter VM, storage, migration or HA controls.
+  with unsupported VM, storage, migration or HA controls.
 - Keep keyboard access, visible focus, non-color status labels, overflow handling
   and usable narrow-screen navigation. Compact desktop styling must not hide
   target confirmation, enrollment-token handling, errors or recovery instructions.
 
 Use existing React, CSS and native browser controls. Reuse the present API helper,
 session handling, scoped inventory and operation records; a visual rewrite does
-not require a new UI framework or a second state/API layer. XenCenter is a visual
-reference; retain Nex assets instead of copying vendor branding or artwork.
+not require a new UI framework or a second state/API layer. Retain Nex assets;
+never copy another product's branding, artwork or image assets into Nex.
 
 ## API and guide impact
 
@@ -75,10 +66,8 @@ that existing contracts and semantics remain unchanged.
 
 ## Acceptance
 
-- Compare inspected Windows XenCenter screenshots with actual Nex desktop
-  captures for the menu/toolbar, tree, detail tabs, dense content and bottom area.
-  Cite the reference sources and distinguish screenshot research from operating
-  XenCenter itself.
+- Check actual Nex desktop captures against the layout described above: the
+  menu/toolbar, tree, detail tabs, dense content and bottom area.
 - Exercise existing Controller workflows against disposable state: sign in,
   create site/pool, enroll/select a host, inspect observations, refresh inventory,
   inspect task/activity outcomes and confirm scoped revocation/re-enrollment.

@@ -1,0 +1,41 @@
+{
+  "summary": "Background ISO upload in Recent tasks with cancel and rate; remove fixed 8 GiB ISO size cap in favour of free-space staging.",
+  "paths": [
+    "internal/protocol/managed.go",
+    "internal/controller/media.go",
+    "internal/controller/managed.go",
+    "internal/controller/managed_test.go",
+    "internal/vmhost/managed.go",
+    "web/src/main.tsx",
+    "web/src/managed.tsx",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/create-virtual-machine.md",
+    "docs/plans/2026-09-10-iso-upload-background.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-10-iso-upload-background.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "ISO library upload can be dismissed while the Controller transfer continues; operators use Recent tasks for progress, rate and Cancel; prerequisites no longer claim an 8 GiB cap.",
+    "pages": ["docs/guide/create-virtual-machine.md"]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Changed contract: POST /api/v1/media no longer rejects solely for body over 8 GiB; admission uses staging free space minus a 256 MiB reserve. Auth, one-at-a-time transfer, CD001 and host iso-import are unchanged.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/index.html"]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Client upload UX and Controller staging admission bounds only; durable ISO records remain pool-scoped iso-import resources on the pool master as before.",
+    "record": ""
+  },
+  "verification": {
+    "method": "go test ./internal/controller/ ./internal/protocol/ ./internal/vmhost/ -count=1; web npm run typecheck; python3 scripts/check_docs.py --worktree. Browser walkthrough of dismiss/cancel/rate left open for disposable lab.",
+    "evidence": [
+      "internal/controller/managed_test.go",
+      "docs/api/openapi.json"
+    ]
+  }
+}

@@ -1,5 +1,5 @@
 {
-  "summary": "Rebuild Nex Controller with a Windows XenCenter-inspired desktop layout. API impact: existing contract; current client calls and Core refresh/report flows are unchanged.",
+  "summary": "Rebuild Nex Controller with a Windows desktop application layout. API impact: existing contract; current client calls and Core refresh/report flows are unchanged.",
   "paths": [
     "docs/BUG_LEDGER.md",
     "docs/guide/manage-controller.md",

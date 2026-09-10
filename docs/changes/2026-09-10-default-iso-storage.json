@@ -20,7 +20,7 @@
     ]
   },
   "api": {
-    "impact": "existing contract",
+    "impact": "updated",
     "reason": "No new endpoint or schema field. Controller queues the existing storage-register command for /var/lib/libvirt/images named ISO, same as auto-network for bridges. Documented in API.md and OpenAPI StorageRegistration semantics.",
     "pages": [
       "docs/API.md",

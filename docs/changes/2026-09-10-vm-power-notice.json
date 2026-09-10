@@ -1,0 +1,27 @@
+{
+  "summary": "Drop the follow-the-task sentence from the notice after a VM power request.",
+  "paths": [
+    "web/src/managed.tsx",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-10-vm-power-notice.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator steps and labels are unchanged; only a transient success notice lost a second sentence the guide never documented.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "UI copy only; power request contract and host reporting are unchanged.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable pool or Controller state; notice text only.",
+    "record": ""
+  },
+  "verification": {
+    "method": "Inspected the notice string in web/src/managed.tsx after a power submit; confirmed the follow-the-task sentence is gone.",
+    "evidence": ["web/src/managed.tsx"]
+  }
+}

@@ -21,7 +21,7 @@
     ]
   },
   "api": {
-    "impact": "existing contract",
+    "impact": "updated",
     "reason": "No new endpoint or field; DeployRequest.admin_password and bootstrap.json already carry the password. Firstboot now also applies it to the guest console account. Documented in docs/API.md bootstrap password section.",
     "pages": [
       "docs/API.md"

@@ -2516,12 +2516,12 @@
   }
 }</pre></details></section>
 <section id="uploadMedia"><h2>POST <code>/api/v1/media</code></h2>
-<p>Upload and transfer a guest ISO</p><p>Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Send the raw ISO body, not multipart or JSON. Name must be a basename ending .iso. Controller hashes the actual stream, verifies CD001 at offset 32769 and stages privately before committing an iso-import command. Maximum 8 GiB per image, 16 GiB total staging, 256 MiB free-space reserve; one transfer admission at a time, 2-hour read/write budget. Capacity is bounded even with absent/false Content-Length. Identical retries reupload and hash the bytes before comparing the original request. Terminal import results release Controller staging; orphan files are removed at startup. No remote URL fetch or public media download.</p>
+<p>Upload and transfer a guest ISO</p><p>Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Send the raw ISO body, not multipart or JSON. Name must be a basename ending .iso. Controller hashes the actual stream, verifies CD001 at offset 32769 and stages privately before committing an iso-import command. There is no fixed per-image maximum: an upload is admitted only while the staging filesystem&#x27;s free space, less a 256 MiB Controller reserve, covers it; one transfer admission at a time, 2-hour read/write budget. Capacity is bounded even with absent/false Content-Length. Identical retries reupload and hash the bytes before comparing the original request. Terminal import results release Controller staging; orphan files are removed at startup. No remote URL fetch or public media download.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;uploadMedia&quot;,
   &quot;summary&quot;: &quot;Upload and transfer a guest ISO&quot;,
-  &quot;description&quot;: &quot;Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Send the raw ISO body, not multipart or JSON. Name must be a basename ending .iso. Controller hashes the actual stream, verifies CD001 at offset 32769 and stages privately before committing an iso-import command. Maximum 8 GiB per image, 16 GiB total staging, 256 MiB free-space reserve; one transfer admission at a time, 2-hour read/write budget. Capacity is bounded even with absent/false Content-Length. Identical retries reupload and hash the bytes before comparing the original request. Terminal import results release Controller staging; orphan files are removed at startup. No remote URL fetch or public media download.&quot;,
+  &quot;description&quot;: &quot;Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Send the raw ISO body, not multipart or JSON. Name must be a basename ending .iso. Controller hashes the actual stream, verifies CD001 at offset 32769 and stages privately before committing an iso-import command. There is no fixed per-image maximum: an upload is admitted only while the staging filesystem&#x27;s free space, less a 256 MiB Controller reserve, covers it; one transfer admission at a time, 2-hour read/write budget. Capacity is bounded even with absent/false Content-Length. Identical retries reupload and hash the bytes before comparing the original request. Terminal import results release Controller staging; orphan files are removed at startup. No remote URL fetch or public media download.&quot;,
   &quot;security&quot;: [
     {
       &quot;AdminSession&quot;: []
@@ -2616,7 +2616,7 @@
       }
     },
     &quot;413&quot;: {
-      &quot;description&quot;: &quot;Actual or declared body exceeds 8 GiB or the available staging budget.&quot;,
+      &quot;description&quot;: &quot;Streamed body exceeds the available staging budget.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -2626,7 +2626,7 @@
       }
     },
     &quot;507&quot;: {
-      &quot;description&quot;: &quot;Insufficient Controller staging space; 16 GiB total with 256 MiB reserve.&quot;,
+      &quot;description&quot;: &quot;Insufficient Controller staging space, or a declared Content-Length beyond it; staging free space keeps a 256 MiB reserve.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -2681,8 +2681,7 @@
         &quot;schema&quot;: {
           &quot;type&quot;: &quot;string&quot;,
           &quot;format&quot;: &quot;binary&quot;,
-          &quot;x-min-bytes&quot;: 32774,
-          &quot;x-max-bytes&quot;: 8589934592
+          &quot;x-min-bytes&quot;: 32774
         }
       }
     }
@@ -5216,8 +5215,7 @@
     },
     &quot;size_bytes&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
-      &quot;minimum&quot;: 32774,
-      &quot;maximum&quot;: 8589934592
+      &quot;minimum&quot;: 32774
     },
     &quot;sha256&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -5381,14 +5379,23 @@
       &quot;type&quot;: &quot;string&quot;,
       &quot;enum&quot;: [
         &quot;virtio&quot;,
-        &quot;e1000e&quot;
+        &quot;e1000&quot;,
+        &quot;e1000e&quot;,
+        &quot;rtl8139&quot;,
+        &quot;vmxnet3&quot;
       ],
-      &quot;description&quot;: &quot;virtio needs guest drivers (built into Linux, virtio-win on Windows); e1000e is emulated and works without them.&quot;
+      &quot;description&quot;: &quot;Which network card the guest sees. virtio is paravirtualised: fastest and lowest host CPU, but the guest needs a driver (built into Linux, virtio-win on Windows). e1000 and e1000e emulate Intel gigabit cards nearly every OS already drives, for guests and installers that cannot see a virtio adapter, at higher host CPU. rtl8139 emulates a 100 Mbit card for guests too old for a gigabit driver; the limit is the emulated hardware. vmxnet3 is VMware&#x27;s paravirtualised adapter, for guests already carrying VMware drivers.&quot;
     },
     &quot;mac&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;pattern&quot;: &quot;^(([0-9a-f][02468ace])(:[0-9a-f]{2}){5})?$&quot;,
       &quot;description&quot;: &quot;Empty derives a stable MAC from the VM ID and the interface index (protocol.DerivedMAC: the 52:54:00 locally administered prefix, two octets of sha256(id) and the index), which never collides across a VM&#x27;s at most 8 interfaces. A manual address must be six octets in canonical lower-case colon form and unicast; the pattern encodes the cleared multicast bit as an even second hex digit. All-zero addresses are refused, addresses are unique within the VM, and Controller additionally enforces uniqueness across the pool by plain string comparison.&quot;
+    },
+    &quot;mtu&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1280,
+      &quot;maximum&quot;: 9216,
+      &quot;description&quot;: &quot;Interface MTU, or 0 for the network&#x27;s own. Accepted only when model is virtio: QEMU communicates an MTU to the guest through virtio&#x27;s host_mtu feature and libvirt sizes the host tap to match, while the emulated models have no equivalent and would leave the guest on its own default. A value on any other model is refused rather than silently applied to the host side only. The floor is the IPv6 minimum MTU and the ceiling the largest jumbo frame common NICs accept; every device along the path must agree or traffic is dropped without an error.&quot;
     }
   },
   &quot;required&quot;: [

@@ -12,8 +12,8 @@ export type VMSpec = { description: string; guest_os: string; cpu: { count: numb
 export type VM = Registration & { spec?: VMSpec; state: string; freshness: string; role: string; protected: boolean; guest?: Guest | null };
 type NIC = { name: string; mac: string; kind?: string; master?: string; parent?: string; state: string; addresses?: string[] | null };
 export type Host = { id: string; pool_id: string; hostname: string; connection: string; revoked: boolean; capabilities?: string[]; inventory: { cpu_count: number; memory_bytes: number; nics?: NIC[] | null } | null };
-type API = <T>(path: string, method?: string, body?: unknown, progress?: (percent: number) => void) => Promise<T>;
-type Props = { account: string; poolID: string; tab: string; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[]; vms: VM[]; api: API; reload: () => Promise<void>; setTab: (tab: string) => void; unavailable: boolean };
+type API = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
+type Props = { account: string; poolID: string; poolName: string; tab: string; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[]; vms: VM[]; api: API; reload: () => Promise<void>; setTab: (tab: string) => void; unavailable: boolean; uploading: boolean; startIsoUpload: <T>(path: string, file: File) => Promise<T> };
 const GiB = 1024 ** 3;
 const status = (value: string) => <span className={`badge ${value}`}>{value || "unknown"}</span>;
 const task = (value: Registration) => <>{status(value.status)}{value.error && <p className="task-error">{value.error}</p>}{value.operation_id && <small><a href="#/tasks">Task {value.operation_id}</a></small>}</>;
@@ -27,7 +27,7 @@ function pendingRequests(key: string): Pending {
   return {};
 }
 
-export function ManagedVMs({ account, poolID, tab, hosts: allHosts, storage: allStorage, networks: allNetworks, media: allMedia, vms: allVMs, api, reload, setTab, unavailable }: Props) {
+export function ManagedVMs({ account, poolID, poolName, tab, hosts: allHosts, storage: allStorage, networks: allNetworks, media: allMedia, vms: allVMs, api, reload, setTab, unavailable, uploading, startIsoUpload }: Props) {
   const hosts = allHosts.filter(h => h.pool_id === poolID);
   const storage = allStorage.filter(s => s.pool_id === poolID);
   const networks = allNetworks.filter(n => n.pool_id === poolID);
@@ -41,7 +41,6 @@ export function ManagedVMs({ account, poolID, tab, hosts: allHosts, storage: all
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [progress, setProgress] = useState<number | null>(null);
   const [uploadStorage, setUploadStorage] = useState<string>(restored("iso").storage_id || "");
   const [networkHost, setNetworkHost] = useState<string>(restored("network").host_id || "");
   const [connection, setConnection] = useState<string>(() => { const r = restored("network"); return r.kind === "vlan" ? `vlan:${r.uplink}` : r.kind ? "custom" : ""; });
@@ -54,6 +53,14 @@ export function ManagedVMs({ account, poolID, tab, hosts: allHosts, storage: all
     try { sessionStorage.setItem(persistenceKey, JSON.stringify(requests.current)); }
     catch { setNotice("Browser storage is unavailable. Keep this page open until the task is confirmed so a retry can use the same request."); }
   }
+  // An ISO upload can finish after this view unmounts, so re-read the stored map before clearing
+  // an entry rather than persisting a snapshot another view has since replaced.
+  function clearRequest(scope: string) {
+    delete requests.current[scope];
+    const stored = pendingRequests(persistenceKey);
+    delete stored[scope];
+    try { sessionStorage.setItem(persistenceKey, JSON.stringify(stored)); } catch {}
+  }
   const nics = hosts.find(h => h.id === networkHost)?.inventory?.nics || [];
   const uplinks = nics.filter(n => !n.kind || n.kind === "physical" || n.kind === "bond");
   const bridges = nics.filter(n => n.kind === "bridge");
@@ -64,30 +71,37 @@ export function ManagedVMs({ account, poolID, tab, hosts: allHosts, storage: all
     persist();
     return requests.current[scope].id;
   }
-  async function run(scope: string, action: () => Promise<void>) {
-    if (lock.current) return;
-    lock.current = true;
-    setBusy(true); setError(""); setNotice("");
+  // An ISO upload runs unblocking: it must not disable Close or the rest of the pool view while
+  // the file streams to the Controller. Its own guard is the shell's single-upload state.
+  async function run(scope: string, action: () => Promise<void>, blocking = true) {
+    if (blocking) {
+      if (lock.current) return;
+      lock.current = true;
+      setBusy(true);
+    }
+    setError(""); setNotice("");
     try { await action(); } catch (e) {
       const code = (e as Error & { status?: number }).status;
-      if ([400, 401, 403, 404, 413, 507].includes(code || 0)) { delete requests.current[scope]; persist(); }
+      // An aborted request never reached the Controller, so its identity can be released.
+      if ((e as Error & { cancelled?: boolean }).cancelled) { clearRequest(scope); return; }
+      if ([400, 401, 403, 404, 413, 507].includes(code || 0)) clearRequest(scope);
       if (code === 409) {
         try {
           const current = await api<{ request_id: string }[]>("operations");
-          if (current.length < 1000 && !current.some(op => op.request_id === requests.current[scope]?.id)) { delete requests.current[scope]; persist(); }
+          if (current.length < 1000 && !current.some(op => op.request_id === requests.current[scope]?.id)) clearRequest(scope);
         } catch { /* Keep the original identity while the outcome is uncertain. */ }
       }
       setError((e as Error).message);
     }
-    finally { lock.current = false; setBusy(false); }
+    finally { if (blocking) { lock.current = false; setBusy(false); } }
   }
   function open(name: string) { setForm(name); setError(""); setNotice(""); }
   function chooseFile(value: File | null) {
-    if (busy) return;
-    setFile(null); setError(""); setProgress(null);
+    if (busy || uploading) return;
+    setFile(null); setError("");
     if (!value) return;
-    if (!/\.iso$/i.test(value.name) || value.size < 32774 || value.size > 8 * GiB) {
-      setError("Choose a non-empty ISO image ending in .iso, between 32 KiB and 8 GiB."); return;
+    if (!/\.iso$/i.test(value.name) || value.size < 32774) {
+      setError("Choose an ISO image ending in .iso of at least 32 KiB."); return;
     }
     setFile(value);
   }
@@ -108,14 +122,14 @@ export function ManagedVMs({ account, poolID, tab, hosts: allHosts, storage: all
     if (typeof values.vlan === "string") payload.vlan = Number(values.vlan);
     void run(kind, async () => {
       const result = await api<Registration>(kind === "storage" ? "storage" : "networks", "POST", { ...payload, request_id: requestID(kind, payload) });
-      delete requests.current[kind]; persist();
+      clearRequest(kind);
       setForm(""); await reload(); setNotice(`Registration ${result.status}. Follow host validation in Task history; registration does not make local storage shared.`);
     });
   }
   async function create(payload: Record<string, unknown>) {
     await run("vm", async () => {
       const result = await api<{ vm_id: string }>("vms", "POST", { ...payload, request_id: requestID("vm", payload) });
-      delete requests.current.vm; persist();
+      clearRequest("vm");
       await reload(); if (mounted.current) { setForm(""); location.hash = `/vms/${result.vm_id}`; }
     });
   }
@@ -156,28 +170,27 @@ export function ManagedVMs({ account, poolID, tab, hosts: allHosts, storage: all
       </form>
     </section>}
     {form === "iso" && <section className="panel form-panel" aria-label="Upload ISO">
-      <div className="section-heading"><h2>Upload guest ISO</h2><button disabled={busy} onClick={() => setForm("")}>Close</button></div>
-      <form onSubmit={e => { e.preventDefault(); if (!file) { setError("Choose an ISO file first."); return; } void run("iso", async () => {
-        const payload = { storage_id: uploadStorage, name: file.name, size: file.size, modified: file.lastModified };
-        const query = new URLSearchParams({ storage_id: uploadStorage, name: file.name, request_id: requestID("iso", payload) });
-        setProgress(0);
-        const result = await api<Media>(`media?${query}`, "POST", file, setProgress);
-        delete requests.current.iso; persist();
-        setProgress(null); setFile(null); if (input.current) input.current.value = "";
-        await reload(); setNotice(`ISO received by Controller; host transfer ${result.status}. Wait for a succeeded result before creating a VM.`);
-      }); }}>
-        <label>Destination storage<select required value={uploadStorage} onChange={e => setUploadStorage(e.target.value)} disabled={busy}><option value="">Select validated local storage</option>{storage.filter(s => s.status === "succeeded").map(s => <option key={s.id} value={s.id}>{s.name} · {hostName(s.host_id)}</option>)}</select></label>
+      <div className="section-heading"><h2>Upload guest ISO</h2><button onClick={() => setForm("")}>Close</button></div>
+      <form onSubmit={e => { e.preventDefault(); if (!file) { setError("Choose an ISO file first."); return; } const image = file; void run("iso", async () => {
+        const payload = { storage_id: uploadStorage, name: image.name, size: image.size, modified: image.lastModified };
+        const query = new URLSearchParams({ storage_id: uploadStorage, name: image.name, request_id: requestID("iso", payload) });
+        const result = await startIsoUpload<Media>(`media?${query}`, image);
+        clearRequest("iso");
+        if (mounted.current) { setFile(null); if (input.current) input.current.value = ""; }
+        await reload(); if (mounted.current) setNotice(`ISO received by Controller; host transfer ${result.status}. Wait for a succeeded result before creating a VM.`);
+      }, false); }}>
+        <label>Destination storage<select required value={uploadStorage} onChange={e => setUploadStorage(e.target.value)} disabled={busy || uploading}><option value="">Select validated local storage</option>{storage.filter(s => s.status === "succeeded").map(s => <option key={s.id} value={s.id}>{s.name} · {hostName(s.host_id)}</option>)}</select></label>
         <div className="iso-drop" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (e.dataTransfer.files.length !== 1) { setError("Drop one ISO image at a time."); return; } chooseFile(e.dataTransfer.files[0]); }}>
-          <label>ISO file<input ref={input} type="file" accept=".iso,application/x-iso9660-image" disabled={busy} onChange={e => chooseFile(e.target.files?.[0] || null)} /></label>
-          <p className="help">Drop one .iso image here or use the file picker. Maximum 8 GiB; the Controller and host validate its content and available space.</p>
+          <label>ISO file<input ref={input} type="file" accept=".iso,application/x-iso9660-image" disabled={busy || uploading} onChange={e => chooseFile(e.target.files?.[0] || null)} /></label>
+          <p className="help">Drop one .iso image here or use the file picker. The Controller and host validate its content and available space.</p>
           {file && <p className="iso-filename">{file.name} · {(file.size / GiB).toFixed(2)} GiB</p>}
         </div>
-        {busy && <div role="status"><label>Upload to Controller<progress max={100} value={progress ?? undefined} /></label>{progress === 100 ? "Upload sent; waiting for Controller validation…" : `${progress ?? 0}% sent`}</div>}
+        {uploading && <p className="help" role="status">Upload running · see Recent tasks</p>}
         {!storage.some(s => s.status === "succeeded") && <p className="help">Register local storage and wait for its access check to succeed first.</p>}
-        <button className="primary" disabled={busy || unavailable || !file || !uploadStorage}>{busy ? "Uploading…" : "Upload and transfer ISO"}</button>
+        <button className="primary" disabled={busy || uploading || unavailable || !file || !uploadStorage}>{uploading ? "Uploading…" : "Upload and transfer ISO"}</button>
       </form>
     </section>}
-    {form === "vm" && <VMWizard poolID={poolID} hosts={hosts} storage={storage} networks={networks} media={media} restored={() => restored("vm")} create={create} busy={busy} unavailable={unavailable} setTab={setTab} onClose={() => setForm("")} />}
+    {form === "vm" && <VMWizard poolID={poolID} poolName={poolName} hosts={hosts} storage={storage} networks={networks} media={media} restored={() => restored("vm")} create={create} busy={busy} unavailable={unavailable} setTab={setTab} onClose={() => setForm("")} />}
     {vmTab && <section className="panel"><div className="section-heading"><h2>Virtual machines</h2><span className="muted">{vms.length} in pool</span></div>{vms.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Assigned host</th><th>Observed state</th><th>Freshness</th><th>Creation task</th></tr></thead><tbody>{vms.map(v => <tr key={v.id}><td><a href={`#/vms/${v.id}`}>{v.name}</a>{v.protected && <small>Protected Controller appliance</small>}</td><td>{hostName(v.host_id)}</td><td>{v.state || "unknown"}</td><td>{status(v.freshness)}</td><td>{v.operation_id ? task(v) : "—"}</td></tr>)}</tbody></table></div> : <p className="empty">No virtual machines in this pool. Register storage and a network, upload an ISO, then create your first VM.</p>}<p className="panel-note">A stale or unreachable host does not mean its VMs have stopped. Creation results and current observations are separate.</p></section>}
     {tab === "Storage" && <section className="panel"><div className="section-heading"><h2>Pool local storage</h2></div>{storage.length ? <div className="table-scroll"><table><thead><tr><th>Name / directory</th><th>Accessible host</th><th>Access check</th></tr></thead><tbody>{storage.map(s => <tr key={s.id}><td>{s.name}<small>{s.path}</small></td><td>{hostName(s.host_id)}<small>Local only</small></td><td>{task(s)}</td></tr>)}</tbody></table></div> : <p className="empty">No local storage registered. Register an existing host directory to store guest disks and ISO files.</p>}</section>}
     {tab === "Networking" && <section className="panel"><div className="section-heading"><h2>Pool guest networks</h2></div>{networks.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Host</th><th>Connection</th><th>VMs</th><th>Host check</th></tr></thead><tbody>{[...networks].sort((a, b) => (a.vlan || 0) - (b.vlan || 0) || a.name.localeCompare(b.name)).map(n => <tr key={n.id}><td>{n.name}</td><td>{hostName(n.host_id)}</td><td>{describeNetwork(n)}<small className="mono">{n.source}</small></td><td>{vms.filter(v => v.spec?.nics?.some(i => i.network_id === n.id)).length}</td><td>{task(n)}</td></tr>)}</tbody></table></div> : <p className="empty">No networks reported yet.</p>}</section>}
@@ -192,7 +205,7 @@ export function VMDetails({ vm, hosts, storage, networks, media }: { vm: VM; hos
   const spec = vm.spec;
   return <><section className="panel"><div className="section-heading"><h2>VM details</h2>{status(vm.freshness)}</div>
     {vm.freshness !== "fresh" && <p className="warning">Current execution state is unknown. Last reported state: {vm.state || "unknown"}. An unreachable host does not prove that this VM stopped.</p>}
-    <dl className="details"><dt>VM identity</dt><dd>{vm.id}</dd><dt>Assigned host</dt><dd><a href={`#/hosts/${vm.host_id}`}>{hosts.find(h => h.id === vm.host_id)?.hostname || vm.host_id}</a></dd><dt>Observed state</dt><dd>{vm.state || "unknown"}</dd><dt>Role</dt><dd>{vm.protected ? "Protected Controller appliance" : "Guest VM"}</dd>{spec && <>{spec.description && <><dt>Description</dt><dd>{spec.description}</dd></>}<dt>Guest OS</dt><dd>{guestNames[spec.guest_os] || "Not recorded"}</dd><dt>Virtual CPUs</dt><dd>{spec.cpu.count}<small>{topology(spec.cpu)} · {cpuNames[spec.cpu.model] || spec.cpu.model}</small></dd><dt>Memory</dt><dd>{spec.memory.size_mib} MiB<small>{spec.memory.mode === "dedicated" ? "Dedicated · always reserved for this VM" : "Maximum · a ceiling only; free pages return to the host when the guest reports them"}</small></dd><dt>Disks</dt><dd>{spec.disks?.length ? <ul className="plain">{spec.disks.map((d, i) => <li key={i}>{d.name} · {d.size_gib} GiB · {busNames[d.bus] || d.bus} · {d.thin ? "Thin" : "Thick"}{d.boot_order > 0 ? ` · boot ${d.boot_order}` : ""}<small>{storage.find(s => s.id === d.storage_id)?.name || d.storage_id}</small></li>)}</ul> : "None recorded"}</dd><dt>Networks</dt><dd>{spec.nics?.length ? <ul className="plain">{spec.nics.map((n, i) => <li key={i}>{networks.find(x => x.id === n.network_id)?.name || n.network_id} · {adapterNames[n.model] || n.model}<small className="mono">{n.mac || "MAC derived from the VM identity"}</small></li>)}</ul> : "None"}</dd><dt>Install ISO</dt><dd>{spec.media_id ? media.find(m => m.id === spec.media_id)?.name || spec.media_id : "None"}{spec.media_id && spec.boot.media_boot_order > 0 && <small>Boot order {spec.boot.media_boot_order}</small>}</dd><dt>Firmware</dt><dd>{spec.boot.firmware?.toUpperCase()}<small>Machine type {spec.boot.machine || "q35"}</small></dd><dt>Autostart</dt><dd>{spec.autostart ? "Starts when the host boots" : "Does not start when the host boots"}</dd></>}{vm.operation_id && <><dt>Creation task</dt><dd>{task(vm)}</dd></>}</dl>
+    <dl className="details"><dt>VM identity</dt><dd>{vm.id}</dd><dt>Assigned host</dt><dd><a href={`#/hosts/${vm.host_id}`}>{hosts.find(h => h.id === vm.host_id)?.hostname || vm.host_id}</a></dd><dt>Observed state</dt><dd>{vm.state || "unknown"}</dd><dt>Role</dt><dd>{vm.protected ? "Protected Controller appliance" : "Guest VM"}</dd>{spec && <>{spec.description && <><dt>Description</dt><dd>{spec.description}</dd></>}<dt>Guest OS</dt><dd>{guestNames[spec.guest_os] || "Not recorded"}</dd><dt>Virtual CPUs</dt><dd>{spec.cpu.count}<small>{topology(spec.cpu)} · {cpuNames[spec.cpu.model] || spec.cpu.model}</small></dd><dt>Memory</dt><dd>{spec.memory.size_mib} MiB<small>{spec.memory.mode === "dedicated" ? "Dedicated · always reserved for this VM" : "Maximum · a ceiling only; free pages return to the host when the guest reports them"}</small></dd><dt>Disks</dt><dd>{spec.disks?.length ? <ul className="plain">{spec.disks.map((d, i) => <li key={i}>{d.name} · {d.size_gib} GiB · {busNames[d.bus] || d.bus} · {d.thin ? "Thin" : "Thick"}{d.boot_order > 0 ? ` · boot ${d.boot_order}` : ""}<small>{storage.find(s => s.id === d.storage_id)?.name || d.storage_id}</small></li>)}</ul> : "None recorded"}</dd><dt>Networks</dt><dd>{spec.nics?.length ? <ul className="plain">{spec.nics.map((n, i) => <li key={i}>{networks.find(x => x.id === n.network_id)?.name || n.network_id} · {adapterNames[n.model] || n.model}{n.mtu ? ` · MTU ${n.mtu}` : ""}<small className="mono">{n.mac || "MAC derived from the VM identity"}</small></li>)}</ul> : "None"}</dd><dt>Install ISO</dt><dd>{spec.media_id ? media.find(m => m.id === spec.media_id)?.name || spec.media_id : "None"}{spec.media_id && spec.boot.media_boot_order > 0 && <small>Boot order {spec.boot.media_boot_order}</small>}</dd><dt>Firmware</dt><dd>{spec.boot.firmware?.toUpperCase()}<small>Machine type {spec.boot.machine || "q35"}</small></dd><dt>Autostart</dt><dd>{spec.autostart ? "Starts when the host boots" : "Does not start when the host boots"}</dd></>}{vm.operation_id && <><dt>Creation task</dt><dd>{task(vm)}</dd></>}</dl>
     {!vm.protected && <p className="panel-note">Creation provisions a stopped VM. Use the Power controls to start it, then open the Console tab.</p>}
   </section>
   <GuestTools vm={vm} />
@@ -304,7 +317,7 @@ export function VMPower({ vm, host, api, reload, busy, unavailable, onNotice }: 
       await api(`vms/${encodeURIComponent(vm.id)}/power`, "POST", { request_id: request.current[item.action], action: item.action });
       delete request.current[item.action];
       setPending(null);
-      onNotice(`${item.label} requested for ${vm.name}. Follow the task; the observed state updates with the next host report.`);
+      onNotice(`${item.label} requested for ${vm.name}.`);
       await reload();
     } catch (e) { setError((e as Error).message); }
     finally { setWorking(false); }

@@ -213,7 +213,7 @@ func validateManaged(c protocol.Command) error {
 		m := c.Media
 		id, pool, host = m.ID, m.PoolID, m.HostID
 		h, err := hex.DecodeString(m.SHA256)
-		if !identifier.MatchString(m.StorageID) || m.SizeBytes < 32774 || m.SizeBytes > protocol.MaxISOBytes || err != nil || len(h) != 32 || strings.ToLower(m.SHA256) != m.SHA256 {
+		if !identifier.MatchString(m.StorageID) || m.SizeBytes < 32774 || err != nil || len(h) != 32 || strings.ToLower(m.SHA256) != m.SHA256 {
 			return errors.New("invalid ISO storage, size or SHA-256")
 		}
 	case "vm-create":
@@ -672,6 +672,12 @@ type managedNIC struct {
 	Model struct {
 		Type string `xml:"type,attr"`
 	} `xml:"model"`
+	// Only emitted for virtio: QEMU passes it to the guest through host_mtu, and libvirt sizes
+	// the host tap to match. The emulated models have no way to tell the guest.
+	MTU *mtuXML `xml:"mtu,omitempty"`
+}
+type mtuXML struct {
+	Size int `xml:"size,attr"`
 }
 type managedDomain struct {
 	XMLName       xml.Name    `xml:"domain"`
@@ -780,6 +786,9 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 			nic.MAC.Address = protocol.DerivedMAC(v.ID, i)
 		}
 		nic.Model.Type = requested.Model
+		if requested.MTU != 0 {
+			nic.MTU = &mtuXML{Size: requested.MTU}
+		}
 		d.Devices.Interfaces = append(d.Devices.Interfaces, nic)
 	}
 	consoleDevices(&d)
@@ -1100,11 +1109,20 @@ func validateManagedDefinition(b, expected []byte) error {
 		return errors.New("unsupported VM devices or exposed graphics")
 	}
 	for i, nic := range got.Devices.Interfaces {
-		if nic != want.Devices.Interfaces[i] {
+		// Compared field by field rather than as whole structs: MTU is a pointer, so struct
+		// equality would compare addresses and reject every adapter that carries one.
+		w := want.Devices.Interfaces[i]
+		if nic.Type != w.Type || nic.Source != w.Source || nic.MAC != w.MAC || nic.Model != w.Model || !sameMTU(nic.MTU, w.MTU) {
 			return errors.New("VM network assignment changed")
 		}
 	}
 	return nil
+}
+
+// sameMTU enforces a requested size and tolerates one we did not request, matching how the
+// balloon attribute is treated: a libvirt that adds its own default must not fail every VM.
+func sameMTU(got, want *mtuXML) bool {
+	return want == nil || (got != nil && *got == *want)
 }
 func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protocol.Result, error) {
 	j.Result.Status = "needs_attention"

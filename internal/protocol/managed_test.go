@@ -101,7 +101,17 @@ func TestValidateVMSpec(t *testing.T) {
 		{"nine NICs", func(v *VMCreateSpec) { v.NICs = specNICs(9) }, false},
 		{"NIC without network", func(v *VMCreateSpec) { v.NICs[0].NetworkID = "" }, false},
 		{"NIC model e1000e", func(v *VMCreateSpec) { v.NICs[0].Model = "e1000e" }, true},
-		{"NIC model unknown", func(v *VMCreateSpec) { v.NICs[0].Model = "rtl8139" }, false},
+		// pcnet is a real QEMU model Nex deliberately does not offer: the list is an allowlist,
+		// not a spell check.
+		{"NIC model unsupported", func(v *VMCreateSpec) { v.NICs[0].Model = "pcnet" }, false},
+		{"NIC model e1000", func(v *VMCreateSpec) { v.NICs[0].Model = "e1000" }, true},
+		{"NIC model rtl8139", func(v *VMCreateSpec) { v.NICs[0].Model = "rtl8139" }, true},
+		{"NIC model vmxnet3", func(v *VMCreateSpec) { v.NICs[0].Model = "vmxnet3" }, true},
+		{"MTU on virtio", func(v *VMCreateSpec) { v.NICs[0].Model, v.NICs[0].MTU = "virtio", 9000 }, true},
+		{"MTU on emulated model", func(v *VMCreateSpec) { v.NICs[0].Model, v.NICs[0].MTU = "e1000", 9000 }, false},
+		{"MTU below IPv6 minimum", func(v *VMCreateSpec) { v.NICs[0].MTU = 1279 }, false},
+		{"MTU above jumbo maximum", func(v *VMCreateSpec) { v.NICs[0].MTU = 9217 }, false},
+		{"MTU unset", func(v *VMCreateSpec) { v.NICs[0].MTU = 0 }, true},
 		{"NIC model empty", func(v *VMCreateSpec) { v.NICs[0].Model = "" }, false},
 
 		{"MAC manual", func(v *VMCreateSpec) { v.NICs[0].MAC = "52:54:00:12:34:56" }, true},

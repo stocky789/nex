@@ -12,8 +12,8 @@ names, and VM creation should pick a network by name.
 
 ## Decision
 
-A pool network is **name + uplink NIC name + VLAN ID** (0 = untagged), following the XCP-ng
-model where every host's Ethernet ports carry the same names (Matt, 2026-09-09). Nex Core
+A pool network is **name + uplink NIC name + VLAN ID** (0 = untagged), on the model where every
+host's Ethernet ports carry the same names (Matt, 2026-09-09). Nex Core
 already names NICs `nex0`, `nex1`, … by MAC binding, so the uplink name identifies the same
 physical network on every host. Core materializes the network as one Linux bridge per
 (uplink, VLAN), named `<uplink>v<VLAN>` (for example `nex1v100`) over the 802.1Q
@@ -44,8 +44,8 @@ interfaces, and whether everything comes back from the pool master if Controller
 - Every host bridge on a physical NIC or bond gets an automatic pool network
   `<port> untagged` (kind bridge, uplink recorded) when a managed host reports. Operators
   should never have to register the management LAN.
-- The 802.1Q sub-interface plus per-VLAN bridge is Linux plumbing (XCP-ng uses a `xapiN`
-  bridge per VLAN the same way). The host page now shows physical NICs and what they carry;
+- The 802.1Q sub-interface plus per-VLAN bridge is ordinary Linux plumbing: one bridge per
+  VLAN. The host page now shows physical NICs and what they carry;
   bridges, VLAN devices and VM ports are folded into an "All interfaces" list.
 - Core reports every succeeded registration and VM definition from its durable journal
   (`Inventory.managed`: storage, networks, media, VMs) and Controller adopts unknown ones

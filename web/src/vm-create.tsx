@@ -6,7 +6,7 @@ export const describeNetwork = (n: Network) => n.kind === "network" ? `libvirt n
 export const readyHost = (h: Host) => !h.revoked && h.connection === "fresh" && Boolean(h.capabilities?.includes("managed-vm-v1"));
 
 export type DiskRow = { storage_id: string; name: string; size_gib: number; bus: string; thin: boolean; boot_order: number };
-export type NICRow = { network_id: string; model: string; mac: string };
+export type NICRow = { network_id: string; model: string; mac: string; mtu: number };
 // Draft is the request body itself, so a restored uncertain submission spreads straight back in.
 type Draft = {
   host_id: string; name: string; description: string; guest_os: string;
@@ -17,7 +17,7 @@ type Draft = {
   boot: { firmware: string; machine: string; media_boot_order: number };
   media_id: string; start_after_create: boolean; autostart: boolean;
 };
-type Props = { poolID: string; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[]; restored: () => Partial<Draft>; create: (payload: Record<string, unknown>) => Promise<void>; busy: boolean; unavailable: boolean; setTab: (tab: string) => void; onClose: () => void };
+type Props = { poolID: string; poolName: string; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[]; restored: () => Partial<Draft>; create: (payload: Record<string, unknown>) => Promise<void>; busy: boolean; unavailable: boolean; setTab: (tab: string) => void; onClose: () => void };
 
 const steps = ["Identity", "CPU and memory", "Disks", "Networks", "Boot and media", "Review"];
 const blank: Draft = {
@@ -25,13 +25,24 @@ const blank: Draft = {
   cpu: { count: 2, sockets: 0, cores: 0, threads: 0, model: "host-passthrough" },
   memory: { mode: "dedicated", size_mib: 2048 },
   disks: [{ storage_id: "", name: "system", size_gib: 20, bus: "virtio", thin: true, boot_order: 1 }],
-  nics: [{ network_id: "", model: "virtio", mac: "" }],
+  nics: [{ network_id: "", model: "virtio", mac: "", mtu: 0 }],
   boot: { firmware: "uefi", machine: "", media_boot_order: 0 },
   media_id: "", start_after_create: false, autostart: false,
 };
 export const guestNames: Record<string, string> = { linux: "Linux", windows: "Windows", other: "Other" };
 export const busNames: Record<string, string> = { virtio: "VirtIO", sata: "SATA", scsi: "SCSI" };
-export const adapterNames: Record<string, string> = { virtio: "VirtIO", e1000e: "Intel e1000e" };
+export const adapterNames: Record<string, string> = {
+  virtio: "VirtIO (paravirtualised)", e1000: "Intel E1000", e1000e: "Intel E1000E",
+  rtl8139: "Realtek RTL8139", vmxnet3: "VMware vmxnet3",
+};
+// What each model is actually for, so the list is a decision and not five names.
+export const adapterNotes: Record<string, string> = {
+  virtio: "Fastest and lowest host CPU. The guest needs a VirtIO driver: built into Linux, and on Windows supplied by the guest tools.",
+  e1000: "Emulates an Intel gigabit card almost every operating system already has a driver for. Slower and more host CPU than VirtIO; use it when a guest or installer cannot see a VirtIO adapter.",
+  e1000e: "Emulates a newer Intel gigabit card. Same purpose as E1000, for guests that expect the later model.",
+  rtl8139: "Emulates a 100 Mbit Realtek card for guests too old to have a gigabit driver. The 100 Mbit limit is the emulated hardware, not a setting.",
+  vmxnet3: "VMware's paravirtualised adapter, for guests that already carry VMware drivers. Prefer VirtIO for anything else.",
+};
 export const cpuNames: Record<string, string> = { "host-passthrough": "Host passthrough", "host-model": "Host model" };
 // Unicast, lower-case, colon-separated: the only manual form the protocol accepts.
 const macPattern = "[0-9a-f][02468ace](:[0-9a-f]{2}){5}";
@@ -51,14 +62,25 @@ function renumber(d: Draft, keys = bootKeys(d)): Draft {
   return { ...d, disks: d.disks.map((disk, i) => ({ ...disk, boot_order: keys.indexOf(`disk-${i}`) + 1 })), boot: { ...d.boot, media_boot_order: d.media_id ? keys.indexOf("media") + 1 : 0 } };
 }
 
+// A disk name is an operator label: the host writes disk-<n>.qcow2 inside the VM's own
+// directory regardless. Default it to <pool>-<vm>, suffixed after the first disk because the
+// protocol requires the names to be unique within a VM. Trimmed to fit the 63-character limit
+// with room for that suffix, and reduced to the characters the protocol's pattern accepts.
+export function autoDiskName(pool: string, vm: string, index: number) {
+  const base = [pool, vm].filter(Boolean).join("-").toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-").replace(/^[^a-z0-9]+/, "").replace(/[-._]+$/, "").slice(0, 60) || "disk";
+  return index ? `${base}-${index + 1}` : base;
+}
+
 // VMWizard collects one VM specification. It never submits by itself: the owning panel holds the
 // durable request identity, so an uncertain outcome keeps the same request on retry.
-export function VMWizard({ poolID, hosts, storage, networks, media, restored, create, busy, unavailable, setTab, onClose }: Props) {
+export function VMWizard({ poolID, poolName, hosts, storage, networks, media, restored, create, busy, unavailable, setTab, onClose }: Props) {
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState<Draft>(() => {
     const r = restored();
     const d = { ...blank, ...r, cpu: { ...blank.cpu, ...r.cpu }, memory: { ...blank.memory, ...r.memory }, boot: { ...blank.boot, ...r.boot } };
-    return renumber({ ...d, disks: Array.isArray(d.disks) && d.disks.length ? d.disks : blank.disks, nics: Array.isArray(d.nics) ? d.nics : blank.nics });
+    const started = blank.disks.map((disk, i) => ({ ...disk, name: autoDiskName(poolName, d.name, i) }));
+    return renumber({ ...d, disks: Array.isArray(d.disks) && d.disks.length ? d.disks : started, nics: Array.isArray(d.nics) ? d.nics : blank.nics });
   });
   const heading = useRef<HTMLHeadingElement>(null);
   const go = (to: number) => { setStep(to); setTimeout(() => heading.current?.focus(), 0); };
@@ -104,10 +126,15 @@ export function VMWizard({ poolID, hosts, storage, networks, media, restored, cr
     const n = readyNetworks(id);
     edit({ host_id: id, media_id: "", disks: draft.disks.map(d => ({ ...d, storage_id: s.length === 1 ? s[0].id : "" })), nics: draft.nics.map(x => ({ ...x, network_id: n.length === 1 ? n[0].id : "" })) });
   }
+  // Renaming the VM carries the derived disk names with it, but only while a disk still holds
+  // the name we generated: once the operator types their own label it is left alone.
+  function renameVM(name: string) {
+    edit({ name, disks: draft.disks.map((d, i) => d.name === autoDiskName(poolName, draft.name, i) ? { ...d, name: autoDiskName(poolName, name, i) } : d) });
+  }
   function addDisk() {
-    let n = draft.disks.length + 1;
-    while (draft.disks.some(d => d.name === `disk-${n}`)) n++;
-    edit({ disks: [...draft.disks, { storage_id: hostStorage.length === 1 ? hostStorage[0].id : "", name: `disk-${n}`, size_gib: 20, bus: "virtio", thin: true, boot_order: 0 }] });
+    let n = draft.disks.length;
+    while (draft.disks.some(d => d.name === autoDiskName(poolName, draft.name, n))) n++;
+    edit({ disks: [...draft.disks, { storage_id: hostStorage.length === 1 ? hostStorage[0].id : "", name: autoDiskName(poolName, draft.name, n), size_gib: 20, bus: "virtio", thin: true, boot_order: 0 }] });
   }
   function move(index: number, delta: number) {
     const keys = bootKeys(draft), to = index + delta;
@@ -120,7 +147,7 @@ export function VMWizard({ poolID, hosts, storage, networks, media, restored, cr
     <div className="section-heading"><h2 ref={heading} tabIndex={-1}>Create VM · {step + 1} of 6: {steps[step]}</h2><button disabled={busy} onClick={onClose}>Close</button></div>
     <form onSubmit={e => { e.preventDefault(); if (step < 5) go(step + 1); else void create({ ...draft, pool_id: poolID }); }}>
       {step === 0 && <>
-        <label>VM name<input required maxLength={63} pattern={"[a-z0-9]([a-z0-9\\-]{0,61}[a-z0-9])?"} title="Use 1–63 lowercase letters, digits or hyphens; start and end with a letter or digit." value={draft.name} autoFocus onChange={e => edit({ name: e.target.value })} /></label>
+        <label>VM name<input required maxLength={63} pattern={"[a-z0-9]([a-z0-9\\-]{0,61}[a-z0-9])?"} title="Use 1–63 lowercase letters, digits or hyphens; start and end with a letter or digit." value={draft.name} autoFocus onChange={e => renameVM(e.target.value)} /></label>
         <label>Description<textarea rows={2} maxLength={4096} value={draft.description} onChange={e => edit({ description: e.target.value })} /><small>Optional. At most 4096 characters; stored with the VM definition on the pool master.</small></label>
         <label>Guest operating system<select value={draft.guest_os} onChange={e => edit({ guest_os: e.target.value })}><option value="linux">Linux</option><option value="windows">Windows</option><option value="other">Other</option></select><small>A hint used for device advice only. Nex does not install or configure the guest.</small></label>
         <label>Placement host<select required value={draft.host_id} onChange={e => chooseHost(e.target.value)}><option value="">Select host</option>{hosts.map(h => <option key={h.id} value={h.id} disabled={!readyHost(h)}>{h.hostname} · {h.connection}{!h.capabilities?.includes("managed-vm-v1") ? " · agent upgrade required" : ""}</option>)}</select></label>
@@ -172,15 +199,18 @@ export function VMWizard({ poolID, hosts, storage, networks, media, restored, cr
           <legend>Network interface {i + 1}</legend>
           <div className="vm-fields">
             <label>Network<select required value={n.network_id} onChange={e => setNIC(i, { network_id: e.target.value })}><option value="">Select validated network</option>{hostNetworks.map(x => <option key={x.id} value={x.id}>{x.name} · {describeNetwork(x)}</option>)}</select></label>
-            <label>Adapter model<select value={n.model} onChange={e => setNIC(i, { model: e.target.value })}>{Object.entries(adapterNames).map(([v, t]) => <option key={v} value={v}>{t}</option>)}</select></label>
+            <label>Adapter model<select value={n.model} onChange={e => setNIC(i, { model: e.target.value, ...(e.target.value === "virtio" ? {} : { mtu: 0 }) })}>{Object.entries(adapterNames).map(([v, t]) => <option key={v} value={v}>{t}</option>)}</select><small>{adapterNotes[n.model]}</small></label>
             <label>MAC address<input placeholder="Automatic" pattern={macPattern} title="Leave blank for an automatic address, or use six lower-case hex octets separated by colons with an even second character, such as 52:54:00:12:34:56." aria-describedby={macIssue ? "vm-nic-issue" : undefined} value={n.mac} onChange={e => setNIC(i, { mac: e.target.value.trim().toLowerCase().replace(/-/g, ":") })} /><small>Blank derives a stable address from this VM's identity.</small></label>
+            {n.model === "virtio"
+              ? <label>MTU<input type="number" min={1280} max={9216} step={1} placeholder="Network default" value={n.mtu || ""} onChange={e => setNIC(i, { mtu: whole(e.target.valueAsNumber) })} /><small>Blank uses the network's own MTU. 9000 is the usual jumbo-frame value and every device along the path must agree, or traffic is dropped without an error.</small></label>
+              : <p className="help">An MTU can only be set on a VirtIO adapter, which is the one model that tells the guest. On {adapterNames[n.model]} the guest keeps its own MTU; set it inside the guest instead.</p>}
           </div>
           <div className="actions"><button type="button" disabled={busy} onClick={() => edit({ nics: draft.nics.filter((_, x) => x !== i) })}>Remove network interface {i + 1}</button></div>
         </fieldset>)}
         {!draft.nics.length && <p className="help">This VM has no network interfaces. It will start with no guest networking.</p>}
         {macIssue && <p className="task-error" id="vm-nic-issue">{macIssue}</p>}
         {staleNICs && <p className="warning">{staleText}</p>}
-        <div className="actions"><button type="button" disabled={busy || draft.nics.length >= 8} onClick={() => edit({ nics: [...draft.nics, { network_id: hostNetworks.length === 1 ? hostNetworks[0].id : "", model: "virtio", mac: "" }] })}>Add network interface</button></div>
+        <div className="actions"><button type="button" disabled={busy || draft.nics.length >= 8} onClick={() => edit({ nics: [...draft.nics, { network_id: hostNetworks.length === 1 ? hostNetworks[0].id : "", model: "virtio", mac: "", mtu: 0 }] })}>Add network interface</button></div>
         <p className="help">A VM may have up to 8 interfaces. Registration does not make a host network reachable from another host.</p>
         {!hostNetworks.length && <p className="help">No verified network on this host. <button type="button" onClick={() => setTab("Networking")}>Open Networking</button></p>}
       </>}
@@ -208,7 +238,7 @@ export function VMWizard({ poolID, hosts, storage, networks, media, restored, cr
           <dt>CPU</dt><dd>{count} vCPUs · {(sockets || cores || threads) !== 0 ? `${sockets} × ${cores} × ${threads}` : `1 socket × ${count} cores × 1 thread`} · {cpuNames[draft.cpu.model] || draft.cpu.model}</dd>
           <dt>Memory</dt><dd>{draft.memory.size_mib} MiB · {draft.memory.mode === "dedicated" ? "Dedicated · reserved from the host" : "Maximum · reserves nothing, returns freed memory when guest tools run"}</dd>
           <dt>Disks</dt><dd><ul className="plain">{draft.disks.map((d, i) => <li key={i}>{d.name} · {storage.find(s => s.id === d.storage_id)?.name || "Unavailable"} · {d.size_gib} GiB · {busNames[d.bus] || d.bus} · {d.thin ? "Thin" : "Thick"}</li>)}</ul></dd>
-          <dt>Network interfaces</dt><dd>{draft.nics.length ? <ul className="plain">{draft.nics.map((n, i) => <li key={i}>{(x => x ? `${x.name} · ${describeNetwork(x)}` : "Unavailable")(networks.find(x => x.id === n.network_id))} · {adapterNames[n.model] || n.model} · {n.mac ? <span className="mono">{n.mac}</span> : "Automatic MAC"}</li>)}</ul> : "None"}</dd>
+          <dt>Network interfaces</dt><dd>{draft.nics.length ? <ul className="plain">{draft.nics.map((n, i) => <li key={i}>{(x => x ? `${x.name} · ${describeNetwork(x)}` : "Unavailable")(networks.find(x => x.id === n.network_id))} · {adapterNames[n.model] || n.model} · {n.mac ? <span className="mono">{n.mac}</span> : "Automatic MAC"}{n.mtu ? ` · MTU ${n.mtu}` : ""}</li>)}</ul> : "None"}</dd>
           <dt>Firmware</dt><dd>{draft.boot.firmware.toUpperCase()}</dd>
           <dt>Install ISO</dt><dd>{draft.media_id ? selectedMedia?.name || "Unavailable" : "None"}</dd>
           <dt>Boot order</dt><dd><ol>{order.map(k => <li key={k}>{bootLabel(k)}</li>)}</ol></dd>

@@ -14,9 +14,9 @@ Parent: [platform plan](2026-09-08-nex-platform.md) Phase 2 items 5 and 7; exten
 Matt asked for every console feature that is practical to implement, bidirectional clipboard
 included, and expected that guest tools would be needed so VMs can talk to Core/Controller.
 
-Research (noVNC 1.7.0 API, QEMU/libvirt VNC support, Proxmox VE, Xen Orchestra 6, oVirt,
-Cockpit machines and the vSphere HTML5 console) gave this catalogue; each item is either in
-this slice or listed under follow-ups with its reason:
+Research into what the noVNC 1.7.0 API and QEMU/libvirt VNC support make possible, alongside
+the console features operators expect, gave this catalogue; each item is either in this slice
+or listed under follow-ups with its reason:
 
 | Feature | Mechanism | This slice |
 |---|---|---|

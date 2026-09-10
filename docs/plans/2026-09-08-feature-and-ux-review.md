@@ -5,7 +5,7 @@ the [Phase 1 development UI and its browser evidence](2026-09-08-controller-foun
 are now available. Remaining planned surfaces, including the host-local UI, are
 not implemented or visually verified by this research.
 
-This supplements the [implementation plan](2026-09-08-nex-platform.md). It separates useful operator features from the minimum needed to get Nex working. Product comparisons inform our choices; they are not promises of feature or licensing parity.
+This supplements the [implementation plan](2026-09-08-nex-platform.md). It separates useful operator features from the minimum needed to get Nex working. Everything here is a Nex requirement or proposal; nothing here promises feature or licensing parity with anything else.
 
 Every feature, UI, and roadmap change must pass the [required API impact check](../../AGENTS.md#required-api-impact-check):
 trace the client-facing operation and required Nex Controller/Core commands and observations, reuse existing
@@ -22,7 +22,7 @@ their contracts and runnable checks must ship with their implementation.
 
 **Planning revision, 2026-09-08:** use the supplied AI feedback as a product hypothesis: make
 virtualization management easier to understand and operate, with clear consequences and recovery.
-Its assessment of Proxmox's appearance is subjective feedback, not a new verified competitor finding.
+Appearance opinions in that input are subjective feedback, not verified findings.
 Most of this work belongs in **Nex Controller**; Nex Core supplies the trusted host capabilities.
 Keep the authorized standalone ISO slice unchanged and retain Sites → Pools → Hosts → VMs.
 
@@ -71,19 +71,18 @@ platform gate. Validate the UX through actual enroll → create → inspect fail
 recording completion, confusing choices, and errors; no claim of being easier than another product
 without comparative user evidence.
 
-## Findings from Proxmox, XCP-ng, and VMware
+## Established management patterns and the Nex decision
 
-| Reference | Useful pattern | Nex decision |
-|---|---|---|
-| Proxmox VE | VM hardware defaults, protection, scoped access, templates, migration checks, integrated backup/restore | Include safe lifecycle and clear task feedback early; add repeatable provisioning after the basic VM workflow |
-| Proxmox Backup Server | Dedicated backup verification, retention, and storage maintenance | Borrow visibility into recovery health; do not build a new deduplication engine for the first release |
-| XCP-ng | Pool membership, host capabilities, shared-storage access, maintenance | Keep the pool central to administration, while retaining Nex Controller's own authority model |
-| Xen Orchestra | Central operations, templates, backup policies, restore, controller/pool metadata backup | Make protection and recovery first-class workflows, with durable progress and clean-controller recovery |
-| VMware vSphere/vCenter | Consistent object navigation, tasks/events, compatibility checks, templates, maintenance and lifecycle management | Use context-preserving object pages and explain blocked actions before starting a job |
+| Established pattern | Nex decision |
+|---|---|
+| VM hardware defaults, protection, scoped access, templates, migration checks, integrated backup/restore | Include safe lifecycle and clear task feedback early; add repeatable provisioning after the basic VM workflow |
+| Dedicated backup verification, retention, and storage maintenance | Make recovery health visible; do not build a new deduplication engine for the first release |
+| Pool membership, host capabilities, shared-storage access, maintenance | Keep the pool central to administration, while retaining Nex Controller's own authority model |
+| Central operations, templates, backup policies, restore, controller/pool metadata backup | Make protection and recovery first-class workflows, with durable progress and clean-controller recovery |
+| Consistent object navigation, tasks/events, compatibility checks, templates, maintenance and lifecycle management | Use context-preserving object pages and explain blocked actions before starting a job |
 
-Proxmox resource pools are not the same grouping as Nex host pools. PBS is a separate product; ordinary PVE backups do not require it. Xen Orchestra supplies management/backup capabilities above XCP-ng. vCenter supplies central management above ESXi; snapshots alone do not imply a complete VM backup service.
-
-Evidence: [Proxmox VM guide](https://github.com/proxmox/pve-docs/blob/master/qm.adoc), [PVE backup/restore](https://github.com/proxmox/pve-docs/blob/master/vzdump.adoc), [PBS maintenance](https://pbs.proxmox.com/docs/maintenance.html), [XCP-ng hosts/pools](https://docs.xcp-ng.org/management/hosts-pools/), [XO backups](https://docs.xen-orchestra.com/xo5/backups), [XO metadata recovery](https://docs.xen-orchestra.com/xo5/metadata_backup), [vSphere management API](https://developer.broadcom.com/xapis/vsphere-web-services-api/latest/vim.ServiceInstanceContent.html), [VMware snapshot guidance](https://knowledge.broadcom.com/external/article/318825/best-practices-for-using-vmware-snapshot.html).
+A Nex pool is a management grouping of hosts; it is not a scheduling or quota grouping, and it does
+not imply shared storage. Snapshots alone do not imply a complete VM backup service.
 
 ## Feature priorities
 
@@ -118,28 +117,26 @@ Evidence: [Proxmox VM guide](https://github.com/proxmox/pve-docs/blob/master/qm.
 | Rolling updates and placement rules | Predictable maintenance and workload distribution | Proven migration, spare capacity, and safe failure behavior |
 | Ceph RBD | Additional shared-storage backend | Later integration; separate decision on operating Ceph itself |
 
-These priorities are Nex recommendations. Their dependencies and acceptance gates live in the implementation plan. [Proxmox access control](https://github.com/proxmox/pve-docs/blob/master/pveum.adoc), [XO templates](https://docs.xen-orchestra.com/xo5/vm-templates), [vSphere template/library workflow](https://www.vmware.com/docs/manage-vm-templates-with-content-library), [VMware lifecycle approach](https://www.vmware.com/docs/what-is-the-difference-between-vlcm-desired-image-vs-vlcm-baseline) informed the follow-on selection.
+These priorities are Nex recommendations. Their dependencies and acceptance gates live in the implementation plan.
 
-## vCenter and XO 6: evidence and limits
+## Interface direction: evidence and limits
 
-**XO 6:** reviewed its current organization/getting-started documentation and inspected the official dashboard screenshot. Observed a persistent infrastructure tree, scoped object tabs, resource/status panels, alarms, and backup protection information. Documentation describes consistent tables with search/pagination, an inspector, and global/object task views. [Getting started](https://docs.xen-orchestra.com/xo6/gettingstarted), [organization](https://docs.xen-orchestra.com/xo6/coreconcepts).
+The interface conventions this document assumes — a persistent infrastructure tree, scoped object
+tabs, consistent tables with search and pagination, global and object task views, an alarms area,
+and compatibility checks explained before a job starts — are long-established patterns in
+infrastructure management interfaces, not observed Nex behavior.
 
-Do not confuse XO 6 with complete XO 5 parity. The reviewed comparison still routes migration and backup creation/restoration to XO 5, while XO 6 supplies oversight and increasingly complete host/storage management. The August 31 XO 6.8 release adds evacuation/host actions beyond the August 25 comparison, so newer release evidence wins for that specific feature. [XO 6/XO 5 comparison](https://docs.xen-orchestra.com/xo6/xo6vsxo5), [XO 6.8 release](https://xen-orchestra.com/blog/xen-orchestra-6-8/).
-
-**vCenter:** an official vSphere 7-era Content Library screenshot was inspected for inventory tree, global search, selected-object actions, detail tabs, and the Recent Tasks/Alarms area. It is evidence of established interaction patterns, not a verified screenshot of the newest client. The current management API corroborates tasks/events, permissions, performance collection, and compatibility checks; APIs do not prove exact visual styling. [Official screenshot/document](https://www.vmware.com/docs/manage-vm-templates-with-content-library), [management capabilities](https://developer.broadcom.com/xapis/vsphere-web-services-api/latest/vim.ServiceInstanceContent.html).
-
-Current Broadcom articles also distinguish object-scoped Monitor/Tasks from the Recent Tasks panel and document browsing/upload through Datastores/Files. These support discoverable storage and task history without assuming every older screen is unchanged. [Task views](https://knowledge.broadcom.com/external/article/408491/tasks-cannot-be-canceled-from-monitor-t.html), [datastore file workflow](https://knowledge.broadcom.com/external/article/403632).
-
-No authenticated vCenter or XO environment was operated. Vendor documentation and screenshots are the research evidence; Nex's proposed flows below require later prototyping and browser QA.
+No Nex interface was operated for this planning document. Every flow proposed below requires later
+prototyping and actual browser QA before it is treated as available.
 
 ## Proposed Nex Controller UX
 
 **Superseding layout decision, 2026-09-09:** Matt requested a Controller GUI
-overhaul closely matching Windows XenCenter. The
+overhaul to a dense Windows desktop application shell. The
 [desktop layout slice](2026-09-09-controller-desktop-layout.md) now owns the shell:
 compact Windows-like menu/toolbar, left inventory tree, selected-resource header
-and tabs, dense properties/tables, and bottom activity/status. The vCenter/XO 6
-research remains useful workflow context, but its shell proposal below is no
+and tabs, dense properties/tables, and bottom activity/status. The workflow
+requirements below still apply, but the shell proposal below is no
 longer the visual target. Preserve Nex branding, Sites → Pools → Hosts → VMs,
 existing capabilities and the Core-local UI. **API impact: existing contract** —
 presentation/navigation reuse current session, inventory, enrollment, host actions,
@@ -149,7 +146,7 @@ advance phase acceptance or establish QA.
 
 ### Audience and direction
 
-Design for an infrastructure operator installing a host, finding a VM, investigating a failure, or recovering data. Desktop operation comes first, with usable narrow-screen status and recovery access. Favor legible tables, predictable controls, persistent context, and clear consequences. Closely follow Windows XenCenter's layout and density while retaining Nex branding and capability boundaries.
+Design for an infrastructure operator installing a host, finding a VM, investigating a failure, or recovering data. Desktop operation comes first, with usable narrow-screen status and recovery access. Favor legible tables, predictable controls, persistent context, and clear consequences. Follow the dense Windows desktop application layout described in the desktop layout slice while retaining Nex branding and capability boundaries.
 
 The primary brand direction retains blue accents, white/platinum/grey surfaces, the graphite Nex wordmark, and white n on a blue icon. The [brand guide](../brand/README.md) adds supporting reference colors and an optional dark gradient without replacing that original identity. Keep a readable system sans and text/icons alongside status colors; use solid surfaces for dense operational content. UI token mapping, theme, and density still need review in the first design slice; brand approval is not a finished design system or implemented UI.
 
@@ -188,7 +185,7 @@ Initially search the current list/tree. Introduce permission-scoped global searc
 
 **Agreed 2026-09-08; planned for Phase 3 after Phase 2 VM/console foundations.**
 Opening an installed Core host's management address should show a small local
-interface inspired by XO Lite: authenticate, inspect this host, and choose
+interface: authenticate, inspect this host, and choose
 **Create a new environment**, **Connect to an existing Controller**, or
 **Recover this host's Controller**. A single new server must be enough to deploy
 the Controller appliance without an existing VM or central management service.
@@ -211,7 +208,7 @@ new local API and reused/extended Controller/Core contracts are planned in Phase
 
 ### Managed container services: seamless and colorful
 
-Matt's agreed extension is Docker Swarm inside Nex-managed worker VMs, with the complete operator workflow in Nex Controller. Do not use LXC or install application Docker workloads directly on Nex Core. This is a later milestone after the VM foundation; Ceph is not a prerequisite. The [container implementation phase](2026-09-08-nex-platform.md#10-managed-container-services-docker-swarm) owns architecture, dependencies, and safety gates; these are Nex design requirements, not claims about competitor functionality.
+Matt's agreed extension is Docker Swarm inside Nex-managed worker VMs, with the complete operator workflow in Nex Controller. Do not use LXC or install application Docker workloads directly on Nex Core. This is a later milestone after the VM foundation; Ceph is not a prerequisite. The [container implementation phase](2026-09-08-nex-platform.md#10-managed-container-services-docker-swarm) owns architecture, dependencies, and safety gates; these are Nex design requirements, not claims about functionality that already exists.
 
 - **Enable:** pool → Container Services → participating physical hosts, worker capacity, and supported pool storage → placement/prerequisite checks → review → tracked provisioning. Nex provisions and maintains worker VMs, configures Swarm, and distributes managers across physical failure domains; show roles and placement without requiring routine SSH or Docker commands.
 - **Deploy:** pool Applications → image/application name → ports, networks, replicas, resources, secrets, and persistent volumes → validation → review → tracked deployment. Pool Applications exposes services, their container instances, volumes, networks, and secrets with clear relationships and permissions. Never reveal secret values in routine details, logs, or task output.
@@ -227,14 +224,14 @@ Introduce these screens in the same sequence as the backend: stateless deploymen
 
 **Agreed follow-on: easy hardware passthrough.** Host → Hardware → guided readiness/preparation, then stopped VM → Hardware → Add physical device → review → tracked assignment. Give NVIDIA and AMD GPUs the same clear experience, with readable device names, companion functions, ownership, actionable firmware/isolation/reset blockers, reboot confirmation, and an undo/recovery path. Show host-bound placement and backup limitations before assignment; distinguish the browser console from physical GPU output. Supported workflows must avoid routine SSH or XML editing. The [hardware passthrough plan](2026-09-08-nex-platform.md#guided-hardware-passthrough) owns scope, planned new API contracts, and physical/browser acceptance gates; this documentation changes no runtime API and adds no controls to earlier milestones.
 
-1. **Create VM:** start in a pool or host → name/install source → placement/resources → storage/network → review → create. Preselect the originating scope, show supported choices, and link the resulting durable job. XO 6 documents a full VM form and contextual host preselection; the staged Nex flow is our proposal. [XO 6.7](https://xen-orchestra.com/blog/xen-orchestra-6-7/).
+1. **Create VM:** start in a pool or host → name/install source → placement/resources → storage/network → review → create. Preselect the originating scope, show supported choices, and link the resulting durable job. The staged flow is a Nex proposal, not implemented behavior.
 2. **Add storage:** pool → backend/location → participating hosts → access checks → review/register. Separate registration from formatting; registration must never silently destroy media.
 3. **Migrate:** VM → destination host → compatibility preflight → required mapping → review → tracked migration. Explain incompatible CPU/network/storage/attached-device constraints beside the destination. Shared storage does not bypass preflight.
 4. **Snapshot rollback:** VM → recovery point → affected disks/configuration and discarded changes → confirmation → tracked revert. Explain disk-only versus memory state and consistency.
 5. **Backup restore:** repository/recovery point → new identity → target pool/host/storage → network mapping with isolated/disconnected default → review → tracked restore → validation. Original-VM replacement is a separate explicit choice.
 6. **Host maintenance:** mark draining → display movable/blocked VMs → evacuate → verify empty → permit disruptive work. Never silently force-stop an immovable guest.
 
-Migration and restoration descriptions are Nex proposals informed by the broader products; they are not claims of observed XO 6 wizard behavior. Reuse the same validation and operations API as other clients.
+Migration and restoration descriptions are Nex proposals; they are not descriptions of an implemented wizard. Reuse the same validation and operations API as other clients.
 
 ### State, safety, and usability requirements
 
@@ -255,4 +252,4 @@ Migration and restoration descriptions are Nex proposals informed by the broader
 2. Review a focused prototype before spreading the layout to storage/protection/migration. Capture real browser output and verify keyboard use, forms, overflow, and a narrow viewport.
 3. Add each feature's screens when its backend gate passes. Do not ship placeholders that imply unimplemented protection or recovery support.
 4. Before release, walk through enroll → create → console → snapshot/revert → backup/restore → migrate/maintenance. Include controller disconnection, insufficient storage, forbidden actions, and interrupted jobs.
-5. Record captures and actual findings with the implementation slice. A screenshot of a competitor, a mockup, or a successful frontend build is not proof that Nex's workflows work.
+5. Record captures and actual findings with the implementation slice. A mockup or a successful frontend build is not proof that Nex's workflows work.

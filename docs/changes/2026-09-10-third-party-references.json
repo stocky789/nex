@@ -1,0 +1,44 @@
+{
+  "summary": "Remove every statement naming another product as the source of a Nex design from the contract, plans, API reference, changelog, QA records and change records, and forbid such statements going forward. Device and driver names that identify actual hardware are unchanged. API impact: none - no endpoint, schema, command or result flow changes; one descriptive sentence was removed from the reference.",
+  "paths": [
+    "AGENTS.md",
+    "CHANGELOG.md",
+    "docs/API.md",
+    "docs/plans/2026-09-08-feature-and-ux-review.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-09-console-features.md",
+    "docs/plans/2026-09-09-controller-desktop-layout.md",
+    "docs/plans/2026-09-09-pool-master-model.md",
+    "docs/plans/2026-09-09-pool-vlan-networks.md",
+    "docs/plans/2026-09-10-vm-creation-system.md",
+    "docs/qa/controller-desktop-layout/checks.md",
+    "docs/qa/iso/2026-09-08-installer-modes.md",
+    "docs/changes/2026-09-09-controller-desktop-layout.json",
+    "docs/changes/2026-09-09-pool-master-model.json",
+    "docs/changes/2026-09-10-third-party-references.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No guide page named another product as a design source, so none needed changing. The two remaining product names in the guide identify hardware, not inspiration: vmxnet3 is an emulated adapter an operator selects by that name, and Xen-named disks (xvd) are a device-name family the installer accepts. Removing either would leave an operator unable to tell which device to pick.",
+    "pages": []
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "docs/API.md dropped the sentence describing a member host in another vendor's terminology. No operation, schema, authorization, error, retry or version behavior changes; the pool master and member host model is described in Nex's own terms in the same place.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation wording only. Nothing is persisted by Nex Controller or Nex Core as a result of this change."
+  },
+  "verification": {
+    "method": "Repository-wide case-insensitive grep for the product names and for inspiration phrasing (inspired, competitor, reference product, modelled on, borrow), rerun after the edits: the only remaining matches are the device-name cases named above and a false positive on the maxCPUs identifier. python3 scripts/check_docs.py --all passing, which revalidates every change record schema and all guide structure, navigation and local links after the rewrite; the gate also passed over this change's own paths. Link targets and anchors into the rewritten plans were checked: only #ux-opportunity-and-phase-fit is referenced elsewhere and it still exists. NOT done: Git history is unchanged, so commit 1fb9782 still names a third-party product in its message, and no application behavior was exercised because none changed.",
+    "evidence": [
+      "docs/plans/2026-09-08-feature-and-ux-review.md",
+      "docs/plans/2026-09-09-controller-desktop-layout.md",
+      "docs/API.md"
+    ]
+  }
+}

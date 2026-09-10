@@ -393,7 +393,7 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		}
 	}
 	for _, md := range m.Media {
-		if !nameValid(md.Name) || filepath.Base(md.Name) != md.Name || !strings.HasSuffix(strings.ToLower(md.Name), ".iso") || md.SizeBytes < 32774 || md.SizeBytes > protocol.MaxISOBytes || !sha256Hex(md.SHA256) {
+		if !nameValid(md.Name) || filepath.Base(md.Name) != md.Name || !strings.HasSuffix(strings.ToLower(md.Name), ".iso") || md.SizeBytes < 32774 || !sha256Hex(md.SHA256) {
 			continue
 		}
 		if _, e := readyResource(tx, md.StorageID, "storage-register", pool, host); e != nil || !free(md.ID, "id:"+md.ID) {
