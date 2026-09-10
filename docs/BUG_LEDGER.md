@@ -1385,3 +1385,34 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 - Avoid: sharing one fail-closed reader between a mutation path and a read-only reporting path.
   Reporting must degrade entry by entry and say what it skipped; never turn one bad record into
   "the host holds nothing".
+
+## BUG-0066 — A failed VM edit reserved its revision, so every retry of that edit was refused
+
+- Date: 2026-09-10
+- Symptom: after a VM edit failed on the host (stop-first refusal, name clash, capacity, a
+  transient virsh error), every later edit of that VM failed with *resource ID already
+  reserved by another operation*. The host still reported the previous revision, so the
+  Controller kept sending the same next revision, and Core kept refusing it.
+- Root cause: `ManagedEngine.Execute` (`internal/vmhost/managed.go`) reserved every journal
+  entry's resource key regardless of status, and a `vm-update` is keyed
+  `vm-update:<vm>:<revision>`. The pending entry is saved before `update` runs, so an edit
+  that failed inside `update` left a `failed` entry holding a revision it never produced.
+  Related: `promote` only re-observed interrupted `vm-create` entries, so a `vm-update` a dead
+  agent process left pending at `defining`/`attaching`/`defined` held its key until a re-sent
+  operation, which a replaced Controller never sends; and Controller `adoptManaged` never closed
+  an adopted `adopt-outcome:<host>:<op>` needs_attention row once the host settled the entry.
+- Fix: the reservation loop skips `failed` `vm-update` entries (they changed nothing; `update`'s
+  `revision == current + 1` check still serialises retries); `promote` re-observes interrupted
+  `vm-update` entries with `observeDefinition` in the state the edit left the guest
+  (`attaching` → running, else shut off); `adoptManaged` marks needs_attention adopt-outcome
+  rows succeeded when their operation is absent from the host's current outcomes.
+- Regression evidence: `go test ./internal/vmhost -run 'TestManagedFailedUpdateDoesNotReserveRevision|TestAppliedPromotesInterruptedEdit'`
+  and `go test ./internal/controller -run TestAdoptedOutcomeClosesWhenHostSettlesIt`. Before the
+  fix all three failed (`retry did not reach the edit: ... resource ID already reserved by
+  another operation`; `interrupted edit not promoted`; `settled outcome still needs
+  attention`); with the fix they pass, and `go test -race -count=1 ./...` passes for every
+  package. They run in CI through `go test -race ./...` in both `.github/workflows/phase1.yml`
+  (line 31) and `.gitea/workflows/phase1.yml` (line 31).
+- Avoid: keying a reservation on a value the operation has not yet produced. A reservation
+  must be released when the operation provably changed nothing, or it must be keyed on the
+  request instead of the outcome.

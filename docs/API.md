@@ -503,9 +503,13 @@ deployed, from the appliance engine's deploy journal under the nex-core-local da
 `failed` or `needs_attention`, with the host's operation ID, kind, resource ID, name, status
 and error, plus two derived outcomes: a failed automatic start after `vm-create`, reported
 under ID `<operation-id>:start` with kind `vm-power` and status `failed`, and every `pending`
-entry the host is not currently executing — typically orphaned by a Controller replacement
-mid-operation — reported with status `needs_attention` and error `interrupted before
-completion; retry from a new request`; an entry still executing is not reported) and `missing_vms` (IDs of `vms` entries whose persistent domain
+entry the host is not currently executing — orphaned by an agent process death or a
+persistence failure, never by a Controller replacement, which does not stop the agent —
+reported with status `needs_attention` and error `interrupted before completion; retry from a
+new request`; an entry still executing is not reported. The host re-observes a `vm-create` or
+`vm-update` entry interrupted after its definition step at most once a minute and promotes it
+to `succeeded` when the persistent domain matches, so a settled outcome leaves later reports;
+Controller then marks its `adopt-outcome:<host>:<operation_id>` row `succeeded`) and `missing_vms` (IDs of `vms` entries whose persistent domain
 `virsh list --all --uuid` no longer reports). Two host checks qualify the report:
 `managed-journal` is `failed` when a journal file cannot be read — that file is skipped and
 named in the error while every other entry is still reported, instead of the whole state

@@ -21,7 +21,7 @@ unchanged apart from the two fixes it produced. No libvirt on the workstation.
 | Command | Result |
 |---|---|
 | `go build ./...`, `go vet ./...`, `gofmt -l` | exit 0, no diagnostics, nothing to format |
-| `go test -race -count=1 ./...` | all `ok`; new tests `TestNeedsStopClassifiesEdits`, `TestManagedUpdateLayoutKeepsExistingDisks`, `TestManagedCurrentAndAppliedFollowRevisions`, `TestManagedApplyLiveReconcilesDevices` (`internal/vmhost`), `TestUpdateVMValidatesFreezesMACsDispatchesAndRefreshes`, `TestUpdateVMRunningStateAndCapacityGates` (`internal/controller`) |
+| `go test -race -count=1 ./...` | all `ok`; new tests `TestNeedsStopClassifiesEdits`, `TestManagedUpdateLayoutKeepsExistingDisks`, `TestManagedCurrentAndAppliedFollowRevisions`, `TestManagedApplyLiveReconcilesDevices` (`internal/vmhost`), `TestUpdateVMValidatesFreezesMACsDispatchesAndRefreshes`, `TestUpdateVMRunningStateAndGates` (`internal/controller`) |
 | `python3 -m unittest tests.test_api_contract` | 21 tests OK (routes, schemas ↔ structs, command kinds, generated reference current) |
 | `python3 scripts/generate_api.py --check` | `index.html is current` |
 | `npm run typecheck`, `npm run build` (in `web/`) | exit 0 |

@@ -1,0 +1,42 @@
+{
+  "summary": "Re-review fixes for VM edits on the invariant branch: a failed vm-update no longer reserves the revision it never produced, so the Controller's next edit at that revision executes; the host re-observes a vm-update an agent interruption left at defining/attaching/defined and promotes it when the persistent definition matches; the Controller closes an adopted needs_attention outcome row once the host stops reporting it. BUG-0066.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/managed_update_test.go",
+    "internal/controller/managed.go",
+    "internal/controller/managed_test.go",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/manage-controller.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/vm-edit/checks.md",
+    "docs/changes/2026-09-10-invariant-review-docs.json",
+    "docs/changes/2026-09-10-invariant-review-fixes.json",
+    "docs/changes/2026-09-10-vm-update-reservation.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The Controller replacement page said an in-flight task shows as interrupted when the Controller goes away; it now says the host finishes it, that the interrupted outcome comes from an agent process interruption, and that an interrupted creation or edit closes on its own once the host confirms the definition.",
+    "pages": ["docs/guide/manage-controller.md"]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "API impact: existing contract. ManagedState.outcomes, the vm-update command and the operations rows keep their shapes. Behaviour on the existing contract changed: Core accepts a vm-update at a revision a failed edit named, settles interrupted vm-update entries on report, and the Controller marks adopt-outcome rows succeeded when the host no longer reports them. docs/API.md and the openapi.json description of outcomes are corrected (orphaned entries come from an agent process death or persistence failure, not a Controller replacement) and extended with the promotion and closure; index.html regenerated.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/index.html"]
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Every durable fact is a managed journal entry on the pool master's Nex Core; the Controller's operations rows only mirror what the host reports.",
+    "record": "The managed journal vm-update entry under <agent state>/managed-vms/<operation>.json, whose revision key vm-update:<vm>:<revision> is derived from its command and whose result/stage record the edit. A fresh Controller recovers it through ManagedEngine.Applied() in the host report (the highest succeeded revision becomes the VM definition; a failed or needs_attention entry is an outcome) and Controller.adoptManaged, which rebuilds the VM row and the adopt-outcome:<host>:<operation> rows and closes them when the host settles the entry."
+  },
+  "verification": {
+    "method": "2026-09-10, branch invariant in the integration worktree, Linux host. Regression tests written first and run against the pre-fix code: TestManagedFailedUpdateDoesNotReserveRevision failed with 'retry did not reach the edit: ... resource ID already reserved by another operation', TestAppliedPromotesInterruptedEdit failed with 'interrupted edit not promoted' (entry still a needs_attention outcome), TestAdoptedOutcomeClosesWhenHostSettlesIt failed with 'settled outcome still needs attention'; all three pass with the fixes. gofmt -l on the changed Go files: clean (pre-existing internal/vmhost/hostconsole*.go untouched). go build ./... && go vet ./... && go test -race -count=1 ./...: exit 0, all 8 packages ok (controller 83s). python3 -m unittest tests.test_api_contract: Ran 21 tests, OK. python3 scripts/generate_api.py --check: index.html is current, local.html is current. python3 scripts/check_docs.py --worktree: passed. The guide wording was not walked through against a host: the promoted-edit and closed-outcome behaviour is covered by the unit tests above, and no disposable host with libvirt was used in this change.",
+    "evidence": [
+      "internal/vmhost/managed_update_test.go",
+      "internal/controller/managed_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

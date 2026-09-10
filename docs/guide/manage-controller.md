@@ -288,12 +288,15 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
   receives its resources), and its storage registrations, networks, ISO records and VM
   definitions return with their original names and IDs. The Controller appliance VM itself returns too, as the
   protected **Controller** VM on the host that deployed it, and the host's failed or
-  interrupted tasks reappear in **Tasks** with their original status and error. A task the
-  old Controller issued that was still running when it went away, and that the host has not
-  finished, shows as `needs_attention` with *interrupted before completion; retry from a new
-  request*: the host will not resume it. Check the resource it addressed in **Storage**,
-  **Networking**, **ISO library** or **Virtual machines**, and submit it again as a new
-  request if it is missing. A VM whose automatic start failed shows a separate failed
+  interrupted tasks reappear in **Tasks** with their original status and error. Replacing the
+  Controller does not stop the host: a task still running when the old Controller went away
+  finishes on the host. A task the host's agent was interrupted in (its process died) shows
+  as `needs_attention` with *interrupted before completion; retry from a new request*: the
+  host will not resume it. A VM creation or edit interrupted after its definition was written
+  is checked by the host on its next reports and closes on its own once the definition
+  matches. Otherwise check the resource it addressed in **Storage**, **Networking**,
+  **ISO library** or **Virtual machines**, and submit it again as a new request if it is
+  missing. A VM whose automatic start failed shows a separate failed
   *VM created but not started* task; the VM itself is adopted and starts from its
   [Power controls](vm-power.md). Verify each
   pool's **Storage**, **Networking**, **ISO library** and **Virtual machines** tabs and the
