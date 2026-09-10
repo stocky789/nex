@@ -1,0 +1,34 @@
+{
+  "summary": "Unblock VM edit retries after needs_attention by releasing the revision reservation, and accept libvirt's injected CPU check=none on host-passthrough.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/managed_update_test.go",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-11-vm-update-needs-attention-reserve.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator edit steps are unchanged; this restores the existing edit retry path after a stuck needs_attention outcome.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "vm-update request/response contracts are unchanged; only Core journal reservation and definition observation behaviour change."
+  },
+  "state": {
+    "owner": "core",
+    "record": "Managed journal vm-update entries and the libvirt domain definition on the pool master",
+    "reason": "Edit revisions and observation outcomes live on the host; a fresh Controller re-adopts succeeded definitions from Applied."
+  },
+  "verification": {
+    "method": "go test ./internal/vmhost -count=1 -run 'TestManagedNeedsAttentionUpdateDoesNotReserveRevision|TestLibvirtCPUCheckNoneAccepted|TestManagedDefinitionTampering|TestManagedFailedUpdateDoesNotReserveRevision' and full ./internal/vmhost suite; both passed.",
+    "evidence": [
+      "internal/vmhost/managed_update_test.go",
+      "internal/vmhost/managed_test.go",
+      "docs/BUG_LEDGER.md"
+    ],
+    "limits": "Fix is in source; au-matthome still needs an updated Nex Core package deployed before the live debian VM edit retry succeeds."
+  }
+}

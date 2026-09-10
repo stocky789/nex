@@ -1416,3 +1416,28 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 - Avoid: keying a reservation on a value the operation has not yet produced. A reservation
   must be released when the operation provably changed nothing, or it must be keyed on the
   request instead of the outcome.
+
+## BUG-0067 — A needs_attention VM edit locked its revision; libvirt CPU check=none failed observation
+
+- Date: 2026-09-11
+- Symptom: after a VM edit ended *needs_attention* with *VM CPU or machine changed*, every
+  later edit failed with *resource ID already reserved by another operation*
+  (`b896d350…` on au-matthome). The host still reported the previous succeeded revision, so
+  the Controller kept sending the same next revision.
+- Root cause: (1) `validateManagedDefinition` required an exact CPU `check` match, but libvirt
+  injects `check='none' migratable='on'` on host-passthrough when the domain omitted `check`,
+  so observation after define failed and the entry stayed `needs_attention` at stage
+  `defining`. (2) BUG-0066 only skipped `failed` `vm-update` entries from the reservation
+  loop; `needs_attention` still held `vm-update:<vm>:<revision>` even though `Applied` never
+  treats those entries as the current definition.
+- Fix: write `check='none'` for host-passthrough/host-model; tolerate libvirt's injected
+  `check='none'` when the expected definition omitted check; skip `needs_attention`
+  `vm-update` entries in the reservation loop the same way as `failed`.
+- Regression evidence: `go test ./internal/vmhost -run 'TestManagedNeedsAttentionUpdateDoesNotReserveRevision|TestLibvirtCPUCheckNoneAccepted|TestManagedDefinitionTampering|TestManagedFailedUpdateDoesNotReserveRevision'`.
+  Before the fix, NeedsAttention reserved the revision and libvirt's check=none injection was
+  rejected; with the fix they pass, and `go test -count=1 ./internal/vmhost` passes. They run
+  in CI through `go test -race ./...` in both `.github/workflows/phase1.yml` and
+  `.gitea/workflows/phase1.yml`.
+- Avoid: treating `needs_attention` as a lasting reservation when reporting does not adopt it
+  as current state; and treating libvirt-injected CPU attributes as tampering when the domain
+  omitted them.

@@ -193,8 +193,9 @@ case "$*" in *dumpxml*) cat "`+actualPath+`";; esac`)
 	}
 }
 
-// A vm-update that failed inside update reserved nothing: the revision it named is still the
-// next one the Controller sends, and the retry must reach the edit instead of the reservation.
+// A vm-update that failed or needs_attention reserved nothing: Applied does not treat either
+// as the current definition, the revision they named is still the next one the Controller
+// sends, and the retry must reach the edit instead of the reservation.
 func TestManagedFailedUpdateDoesNotReserveRevision(t *testing.T) {
 	e := NewManaged(t.TempDir())
 	os.MkdirAll(e.stateDir, 0700)
@@ -204,6 +205,31 @@ func TestManagedFailedUpdateDoesNotReserveRevision(t *testing.T) {
 	for _, entry := range []managedJournal{
 		{Command: protocol.Command{OperationID: "op-create", Kind: "vm-create", VM: &v0}, Result: protocol.Result{OperationID: "op-create", Status: "succeeded"}, Disks: []string{"/d0"}, Targets: []string{"vda"}, MediaTarget: "sda"},
 		{Command: protocol.Command{OperationID: "op-1", Kind: "vm-update", VM: &v1}, Result: protocol.Result{OperationID: "op-1", Status: "failed", Error: "VM is running; stop it first"}, Stage: "validating"},
+	} {
+		if err := e.save(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fakeCommand(t, "virsh", "echo crashed")
+	retry := v1
+	retry.Description = "second try"
+	r, err := e.Execute(context.Background(), protocol.Command{OperationID: "op-2", Kind: "vm-update", VM: &retry}, nil)
+	if err != nil || r.Status != "failed" || !strings.HasPrefix(r.Error, "VM is crashed") {
+		t.Fatalf("retry did not reach the edit: %+v %v", r, err)
+	}
+}
+
+// needs_attention after define (for example libvirt CPU check mismatch) must not permanently
+// lock the revision: Applied never promotes that entry to the current definition.
+func TestManagedNeedsAttentionUpdateDoesNotReserveRevision(t *testing.T) {
+	e := NewManaged(t.TempDir())
+	os.MkdirAll(e.stateDir, 0700)
+	v0 := managedTestVM()
+	v1 := v0
+	v1.Revision, v1.Description = 1, "first try"
+	for _, entry := range []managedJournal{
+		{Command: protocol.Command{OperationID: "op-create", Kind: "vm-create", VM: &v0}, Result: protocol.Result{OperationID: "op-create", Status: "succeeded"}, Disks: []string{"/d0"}, Targets: []string{"vda"}, MediaTarget: "sda"},
+		{Command: protocol.Command{OperationID: "op-1", Kind: "vm-update", VM: &v1}, Result: protocol.Result{OperationID: "op-1", Status: "needs_attention", Error: "VM CPU or machine changed"}, Stage: "defining", Domain: []byte("<domain/>"), Disks: []string{"/d0"}, Targets: []string{"vda"}, MediaTarget: "sda"},
 	} {
 		if err := e.save(entry); err != nil {
 			t.Fatal(err)

@@ -1,0 +1,17 @@
+#!/bin/bash
+# SPDX-License-Identifier: AGPL-3.0-only
+# Enable QEMU VNC lossy encodings so noVNC quality/compression levels take effect.
+set -euo pipefail
+qemu=/usr/bin/qemu-system-x86_64
+args=()
+vnc_next=0
+for a in "$@"; do
+  if ((vnc_next)); then
+    [[ "$a" == *lossy=* ]] || a+=",lossy=on"
+    vnc_next=0
+  elif [[ "$a" == -vnc ]]; then
+    vnc_next=1
+  fi
+  args+=("$a")
+done
+exec "$qemu" "${args[@]}"

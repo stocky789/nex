@@ -17,6 +17,12 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
+- Fixed VM edits stuck on *resource ID already reserved by another operation* after a previous
+  edit needed attention (libvirt CPU check mismatch). Retries can run again, and host-passthrough
+  definitions match what libvirt stores.
+- Fixed the console image quality control so Low / Balanced / Best actually change how the VM
+  display is compressed. Existing VMs pick this up the next time their definition is applied
+  and the guest is restarted.
 - Fixed the VM CPU model list so it only shows named models this host can actually run, and
   named models start under KVM instead of failing on common baselines such as qemu64.
 - Fixed Controller software-update checks in appliance deployments. The appliance now includes

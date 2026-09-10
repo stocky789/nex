@@ -1,0 +1,42 @@
+{
+  "summary": "Make console image quality presets take effect by enabling QEMU VNC lossy encoding and refreshing the framebuffer when the preset changes.",
+  "paths": [
+    "internal/vmhost/qemu_vnc.go",
+    "internal/vmhost/qemu_vnc_test.go",
+    "internal/vmhost/engine.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "packaging/core-local/qemu-vnc-lossy",
+    "packaging/core-local/build-inside.sh",
+    "web/src/console.tsx",
+    "web/src/novnc.d.ts",
+    "web/src/main.tsx",
+    "docs/guide/vm-console.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-11-console-quality-lossy.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Quality control behaviour and host-console limitation are described for operators.",
+    "pages": ["docs/guide/vm-console.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Console WebSocket and ticket contracts are unchanged; only QEMU VNC encoding options and the browser client presets change."
+  },
+  "state": {
+    "owner": "core",
+    "record": "VM domain XML emulator path (/usr/lib/nex/qemu-vnc-lossy) on the pool master host",
+    "reason": "Lossy VNC is a host-side QEMU display option stored in the libvirt domain definition; a fresh Controller re-adopts the same domain from the host."
+  },
+  "verification": {
+    "method": "go test ./internal/vmhost/ -count=1 -run 'QEMUVNC|LossyVNC|ManagedReferencesAndXML|ManagedDomainXML' and npm run typecheck in web/; both passed.",
+    "evidence": [
+      "internal/vmhost/qemu_vnc_test.go",
+      "internal/vmhost/managed_test.go",
+      "web/src/console.tsx",
+      "web/src/novnc.d.ts"
+    ],
+    "limits": "Visual quality difference against a live QEMU guest with lossy=on not re-walked in this change; requires a redefined/restarted VM on an updated Core host."
+  }
+}

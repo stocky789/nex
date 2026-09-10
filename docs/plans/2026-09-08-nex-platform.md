@@ -687,6 +687,38 @@ operator migration/recovery instructions alongside its implementation.
 
 **Gate:** complete a clean install, upgrade, host-replacement, controller-loss, and VM-restore rehearsal using only the published instructions. [Debian upgrade/recovery guidance](https://www.debian.org/releases/trixie/release-notes/upgrading.en.html)
 
+### Follow-on: MCP operator integration
+
+**Agreed 2026-09-11:** after Phase 8 establishes scoped roles, stable supported-version
+API compatibility, and recovery procedures, add an optional MCP server to Nex Controller
+so an authorized AI agent can inspect and operate a cluster through the same Controller
+operations as the UI. This is not a prerequisite for the first supported release and must
+not become a second control plane: it is a stateless adapter, never a direct Core/libvirt
+channel, scheduler, cache, or source of pool state.
+
+Ship the MCP server with every Controller build, but leave it disabled by default. An
+administrator must explicitly enable it through the supported Controller deployment
+configuration before it listens or accepts agent credentials; rebuilding a Controller
+without that configuration leaves it disabled and does not affect a pool or its workloads.
+
+Begin with read-only inventory and operation-status tools. Add mutating tools only for
+existing, explicitly bounded Controller operations, with narrow agent credentials/scopes,
+audit attribution, an explicit target and confirmation for disruptive or destructive work,
+stable request IDs, and returned operation IDs that agents must inspect to completion.
+Reuse Controller/Core validation, authorization, operation reconciliation, outage behavior
+and host-side durable records; do not expose arbitrary HTTP forwarding, shell execution, or
+raw Core commands. Define the agent credential issuance, expiry, revocation, scope isolation,
+transport, tool schemas, confirmation behavior, and Controller/Core version compatibility in
+the implementation slice, then update OpenAPI/API reference and the operator guide with
+real authorization, failure/retry, Controller-replacement and browser/agent walkthrough evidence.
+
+**API impact: new contract (planned feature); none for this roadmap change.** The MCP
+transport, explicit enablement configuration and agent credential contract are new
+client-facing Controller interfaces. It reuses existing Controller-to-Core operations and
+introduces no durable pool state.
+**Guide impact: none.** MCP is not implemented; publish operator setup, permissions and
+recovery guidance with the feature.
+
 ### 9. Optional per-pool HA
 
 1. Evaluate Corosync/Pacemaker and fencing agents in a separate lab; establish one pool-local authority for HA-managed VM starts/stops. The controller must submit to that authority rather than compete with it.

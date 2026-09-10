@@ -1,0 +1,30 @@
+{
+  "summary": "Place MCP-based AI operator access after Phase 8, where scoped authorization, stable supported API compatibility and recovery procedures exist. Ship it in every Controller build but disable it by default until explicitly enabled through Controller deployment configuration. API impact: new contract when implemented (MCP transport, enablement configuration and scoped agent credentials); none for this roadmap-only change. The MCP server stays a stateless Controller adapter over existing Controller-to-Core operations and introduces no pool state.",
+  "paths": [
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/API.md",
+    "docs/changes/2026-09-11-mcp-roadmap.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "MCP access is planned and unavailable, so no operator workflow exists to document yet.",
+    "pages": []
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "The planned-coverage table records the future MCP client-facing contract, disabled-by-default deployment boundary, and Controller-only routing. No implemented endpoint, command or schema changes in this roadmap-only change.",
+    "pages": ["docs/API.md"]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Roadmap and API planning documentation only; no Nex Controller or Nex Core state is added. The planned MCP adapter is explicitly stateless, its default-disabled deployment configuration does not create pool state, and pool state remains on Nex Core."
+  },
+  "verification": {
+    "method": "Run the documentation gate and inspect that MCP is planned after Phase 8, shipped disabled by default, and makes no implemented API claim or Controller-owned pool-state claim.",
+    "evidence": [
+      "docs/plans/2026-09-08-nex-platform.md",
+      "docs/API.md",
+      "scripts/check_docs.py"
+    ]
+  }
+}

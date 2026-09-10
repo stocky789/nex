@@ -200,6 +200,25 @@ func TestManagedReferencesAndXML(t *testing.T) {
 		}
 	}
 }
+
+func TestManagedDomainXMLUsesLossyVNCEmulator(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "qemu-vnc-lossy")
+	old := qemuVNCLossyPath
+	qemuVNCLossyPath = path
+	defer func() { qemuVNCLossyPath = old }()
+	v := managedTestVM()
+	b, err := testDomainXML(v, []protocol.NetworkRegistration{{Kind: "network", Source: "default"}}, []string{"/disk.qcow2"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "<emulator>"+path+"</emulator>") {
+		t.Fatalf("domain lacks lossy VNC emulator: %s", b)
+	}
+	if !strings.Contains(string(b), `mode="host-passthrough" check="none"`) {
+		t.Fatalf("host-passthrough must request check=none: %s", b)
+	}
+}
 func TestManagedStorageRejectsSymlinksAndUnsupportedFilesystems(t *testing.T) {
 	dir := t.TempDir()
 	link := filepath.Join(dir, "link")
@@ -338,13 +357,20 @@ func TestManagedDefinitionTampering(t *testing.T) {
 		})
 	}
 	// libvirt normalizes units and machine aliases, always reports currentMemory and adds its
-	// own controllers; none of that is tampering.
+	// own controllers; none of that is tampering. It also injects check="none" migratable="on"
+	// on host-passthrough when the domain omitted check.
 	normalized := strings.Replace(string(wanted), `unit="MiB">2048`, `unit="KiB">2097152`, 1)
 	normalized = strings.Replace(normalized, `machine="q35"`, `machine="pc-q35-10.0"`, 1)
 	normalized = strings.Replace(normalized, `</memory>`, `</memory><currentMemory unit="KiB">2097152</currentMemory>`, 1)
+	normalized = strings.Replace(normalized, `mode="host-passthrough" check="none"`, `mode="host-passthrough" check="none" migratable="on"`, 1)
 	normalized = strings.Replace(normalized, `</devices>`, `<controller type="usb" index="0" model="qemu-xhci"></controller></devices>`, 1)
 	if err = validateManagedDefinition([]byte(normalized), wanted); err != nil {
 		t.Fatalf("libvirt normalized definition rejected: %v", err)
+	}
+	// A domain that omitted check must still match libvirt's injected check="none".
+	omitCheck := strings.Replace(string(wanted), ` check="none"`, "", 1)
+	if err = validateManagedDefinition([]byte(wanted), []byte(omitCheck)); err != nil {
+		t.Fatalf("libvirt check=none against omitted check rejected: %v", err)
 	}
 	// A libvirt that does not echo freePageReporting must not fail every "maximum" VM.
 	if err = validateManagedDefinition([]byte(strings.Replace(string(wanted), ` freePageReporting="on"`, "", 1)), wanted); err != nil {
@@ -1090,4 +1116,23 @@ func TestDeploymentsListsApplianceOwnership(t *testing.T) {
 func testDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistration, disks []string, iso string) ([]byte, error) {
 	targets, media := managedTargets(v)
 	return managedDomainXML(v, nets, disks, targets, media, iso)
+}
+
+func TestLibvirtCPUCheckNoneAccepted(t *testing.T) {
+	v := managedTestVM()
+	wanted, err := testDomainXML(v, []protocol.NetworkRegistration{{Kind: "network", Source: "default"}}, []string{"/disk"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := strings.Replace(string(wanted), `mode="host-passthrough" check="none"`, `mode="host-passthrough" check="none" migratable="on"`, 1)
+	if live == string(wanted) {
+		t.Fatal("fixture did not mutate")
+	}
+	if err = validateManagedDefinition([]byte(live), wanted); err != nil {
+		t.Fatalf("libvirt migratable injection rejected: %v", err)
+	}
+	omit := strings.Replace(string(wanted), ` check="none"`, "", 1)
+	if err = validateManagedDefinition([]byte(wanted), []byte(omit)); err != nil {
+		t.Fatalf("check=none against omitted check rejected: %v", err)
+	}
 }

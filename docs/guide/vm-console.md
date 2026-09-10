@@ -53,7 +53,9 @@ in a disposable nested-KVM lab; see [Verification](#verification).
    the guest to change its resolution to the panel size. The last option is hidden for a VM
    whose host reports no VirtIO display, and takes effect in guests with a virtio-gpu
    driver (Linux, including text consoles; Windows with the virtio-win display driver). **Quality**
-   trades image detail for bandwidth. Both choices are remembered in this browser.
+   trades image detail for bandwidth on graphical content (photos, video, smooth gradients).
+   Flat text and solid UI panels stay sharp at every setting. Both choices are remembered in this
+   browser. Host consoles have no quality control — they only send raw text frames.
 5. Exchange text with the guest through **Clipboard**:
    - **Read my clipboard** loads the browser clipboard into the text box (the browser asks
      for permission once); you can also paste or type into the box.

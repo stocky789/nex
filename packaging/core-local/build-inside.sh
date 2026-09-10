@@ -20,6 +20,7 @@ printf '/etc/pam.d/nex-core-local\n/etc/nex/updates.conf\n' > "$pkg/DEBIAN/conff
 install -m755 /build/nex-root-auth "$pkg/usr/lib/nex/"
 install -m755 /build/nex-core-local "$pkg/usr/lib/nex/"
 install -m755 packaging/core-local/core-local-setup "$pkg/usr/lib/nex/"
+install -m755 packaging/core-local/qemu-vnc-lossy "$pkg/usr/lib/nex/"
 install -m755 appliance/host-recovery.py "$pkg/usr/lib/nex/host-recovery"
 install -m644 packaging/core-local/nex-core-local.service "$pkg/usr/lib/systemd/system/"
 install -m755 packaging/core-local/preinst packaging/core-local/postinst packaging/core-local/prerm "$pkg/DEBIAN/"

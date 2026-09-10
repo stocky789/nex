@@ -209,10 +209,11 @@ func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch f
 	}
 	j := managedJournal{Command: c, Result: result, Stage: "validating"}
 	// Reserve every resource ID, even when its operation was interrupted or failed. A failed
-	// vm-update is the exception: it changed nothing, and the revision it named is still the
-	// next one the Controller sends; update's revision check serialises the retries.
+	// or needs_attention vm-update is the exception: Applied does not treat either as the
+	// current definition (only succeeded revisions are), so the revision they named is still
+	// the next one the Controller sends; update's revision check serialises the retries.
 	for _, old := range js {
-		if old.Command.Kind == "vm-update" && old.Result.Status == "failed" {
+		if old.Command.Kind == "vm-update" && (old.Result.Status == "failed" || old.Result.Status == "needs_attention") {
 			continue
 		}
 		if managedResourceID(old.Command) == managedResourceID(c) {
@@ -997,6 +998,7 @@ type managedDomain struct {
 	Features      featuresXML `xml:"features"`
 	CPU           managedCPU  `xml:"cpu"`
 	Devices       struct {
+		Emulator    string              `xml:"emulator,omitempty"`
 		Disks       []managedDisk       `xml:"disk"`
 		Controllers []managedController `xml:"controller"`
 		Interfaces  []managedNIC        `xml:"interface"`
@@ -1085,9 +1087,10 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 		d.Devices.Memballoon = managedBalloon{Model: "virtio", FreePageReporting: "on"}
 	}
 	sockets, cores, threads := v.CPU.Topology()
-	d.CPU = managedCPU{Mode: v.CPU.Model, Topology: &managedTopology{sockets, cores, threads}}
+	d.CPU = managedCPU{Mode: v.CPU.Model, Check: "none", Topology: &managedTopology{sockets, cores, threads}}
 	if v.CPU.Model == "max" {
 		d.CPU.Mode = "maximum"
+		d.CPU.Check = ""
 	} else if v.CPU.Model != "host-passthrough" && v.CPU.Model != "host-model" {
 		// check=partial: KVM always exposes extras (hypervisor, x2apic, …) beyond a
 		// named baseline, so check=full refuses even models libvirt marks usable=yes.
@@ -1152,6 +1155,7 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 		d.Devices.Interfaces = append(d.Devices.Interfaces, nic)
 	}
 	consoleDevices(&d)
+	d.Devices.Emulator = qemuEmulator()
 	g := graphicsXML{Type: "vnc", Autoport: "no"}
 	g.Listen.Type = "socket"
 	d.Devices.Graphics = []graphicsXML{g}
@@ -1609,8 +1613,9 @@ func validateManagedDefinition(b, expected []byte) error {
 			return errors.New("VM disk assignment or boot order differs from requested ownership")
 		}
 	}
-	// libvirt expands a machine alias such as q35 to its versioned form.
-	if got.OS.Type.Arch != want.OS.Type.Arch || got.OS.Type.Value != want.OS.Type.Value || (got.OS.Type.Machine != want.OS.Type.Machine && !strings.HasPrefix(got.OS.Type.Machine, "pc-"+want.OS.Type.Machine+"-")) || got.CPU.Mode != want.CPU.Mode || got.CPU.Match != want.CPU.Match || got.CPU.Check != want.CPU.Check || (got.CPU.Model == nil) != (want.CPU.Model == nil) || (got.CPU.Model != nil && *got.CPU.Model != *want.CPU.Model) {
+	// libvirt expands a machine alias such as q35 to its versioned form, and injects
+	// check="none" (and migratable) on host-passthrough when the domain omitted check.
+	if got.OS.Type.Arch != want.OS.Type.Arch || got.OS.Type.Value != want.OS.Type.Value || (got.OS.Type.Machine != want.OS.Type.Machine && !strings.HasPrefix(got.OS.Type.Machine, "pc-"+want.OS.Type.Machine+"-")) || got.CPU.Mode != want.CPU.Mode || got.CPU.Match != want.CPU.Match || !sameCPUCheck(got.CPU.Check, want.CPU.Check) || (got.CPU.Model == nil) != (want.CPU.Model == nil) || (got.CPU.Model != nil && *got.CPU.Model != *want.CPU.Model) {
 		return errors.New("VM CPU or machine changed")
 	}
 	if want.CPU.Topology != nil && (got.CPU.Topology == nil || *got.CPU.Topology != *want.CPU.Topology) {
@@ -1648,6 +1653,11 @@ func validateManagedDefinition(b, expected []byte) error {
 		}
 	}
 	return nil
+}
+
+// sameCPUCheck tolerates libvirt injecting check="none" when the domain omitted the attribute.
+func sameCPUCheck(got, want string) bool {
+	return got == want || (want == "" && got == "none")
 }
 
 // diskFile is a disk's backing file, empty for an empty CD drive.

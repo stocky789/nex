@@ -11,7 +11,7 @@ import "./console.css";
 // hints the clipboard and display controls show, never whether input is allowed.
 export type Guest = { agent: string; os?: string; hostname?: string; addresses?: { interface: string; address: string }[] | null; clipboard: string; resize: boolean };
 export type ConsoleMedia = { currentID?: string; currentName?: string; options: { id: string; name: string }[]; busy?: boolean; note?: string; onInsert: (id: string) => void; onEject: () => void };
-type Props = { name: string; open: () => Promise<string>; disabled?: string; guest?: Guest | null; popout?: string; media?: ConsoleMedia };
+type Props = { name: string; open: () => Promise<string>; disabled?: string; guest?: Guest | null; popout?: string; media?: ConsoleMedia; quality?: boolean };
 type Phase = "idle" | "connecting" | "connected" | "closed";
 type View = "fit" | "actual" | "remote";
 type Quality = "auto" | "low" | "high";
@@ -21,7 +21,8 @@ const prefsKey = "nex-console-prefs";
 const fromVMLimit = 65536;
 const defaultPrefs: Prefs = { view: "fit", quality: "auto" };
 // Tight encoding levels noVNC negotiates with QEMU: JPEG quality 0-9 and zlib compression 0-9.
-const qualityLevels: Record<Quality, [number, number]> = { auto: [6, 2], low: [2, 9], high: [9, 1] };
+// QEMU only honours JPEG quality when the VNC server was started with lossy=on.
+const qualityLevels: Record<Quality, [number, number]> = { auto: [6, 2], low: [0, 9], high: [9, 0] };
 
 // X11 keysyms (noVNC sends the matching QEMU scancode when a KeyboardEvent code is given).
 const K = { ctrl: [0xffe3, "ControlLeft"], alt: [0xffe9, "AltLeft"], super: [0xffeb, "MetaLeft"], tab: [0xff09, "Tab"], esc: [0xff1b, "Escape"], del: [0xffff, "Delete"], f: (n: number): Key => [0xffbd + n, `F${n}`] } as const;
@@ -46,7 +47,7 @@ function loadPrefs(): Prefs {
 // keysym for typing one character: Latin-1 maps directly, everything else uses the Unicode keysym range.
 const keysym = (ch: string) => { const cp = ch.codePointAt(0) || 0; return cp === 10 ? 0xff0d : cp === 9 ? 0xff09 : cp < 0x100 ? cp : 0x01000000 | cp; };
 
-export function Console({ name, open, disabled, guest, popout, media }: Props) {
+export function Console({ name, open, disabled, guest, popout, media, quality: qualityControls = true }: Props) {
   const section = useRef<HTMLElement>(null);
   const screen = useRef<HTMLDivElement>(null);
   const rfb = useRef<RFB | null>(null);
@@ -70,13 +71,23 @@ export function Console({ name, open, disabled, guest, popout, media }: Props) {
   // A remembered "remote" view falls back to fit for a VM whose display cannot be resized.
   const resize = guest ? guest.resize : true;
   const effective = (p: Prefs): View => (p.view === "remote" && !resize ? "fit" : p.view);
-  function apply(client: RFB, p: Prefs) {
+  // Ask for a full framebuffer so a quality change is visible without waiting for guest redraws.
+  function refreshFrame(client: RFB) {
+    const c = client as RFB & { _sock?: object; _fbWidth?: number; _fbHeight?: number; _rfbConnectionState?: string };
+    if (c._rfbConnectionState !== "connected" || !c._sock || !c._fbWidth || !c._fbHeight) return;
+    RFB.messages.fbUpdateRequest(c._sock, false, 0, 0, c._fbWidth, c._fbHeight);
+  }
+  function apply(client: RFB, p: Prefs, refresh = false) {
     const view = effective(p);
     client.scaleViewport = view === "fit";
     client.clipViewport = false;
     client.resizeSession = view === "remote";
-    [client.qualityLevel, client.compressionLevel] = qualityLevels[p.quality];
+    const [quality, compression] = qualityLevels[p.quality];
+    // Set separately so each setter can renegotiate encodings with the other value already applied.
+    client.qualityLevel = quality;
+    client.compressionLevel = compression;
     client.viewOnly = readOnly.current;
+    if (refresh) refreshFrame(client);
   }
   async function connect() {
     if (busy.current || !screen.current || !mounted.current) return;
@@ -120,7 +131,7 @@ export function Console({ name, open, disabled, guest, popout, media }: Props) {
     const p = { ...prefs, ...next };
     setPrefs(p);
     try { localStorage.setItem(prefsKey, JSON.stringify(p)); } catch {}
-    if (rfb.current) apply(rfb.current, p);
+    if (rfb.current) apply(rfb.current, p, next.quality !== undefined && next.quality !== prefs.quality);
   }
   function toggleViewOnly(value: boolean) {
     readOnly.current = value;
@@ -210,13 +221,13 @@ export function Console({ name, open, disabled, guest, popout, media }: Props) {
           {resize && <option value="remote">Resize guest to window</option>}
         </select>
       </label>
-      <label className="console-option">Quality
+      {qualityControls && <label className="console-option">Quality
         <select aria-label="Image quality" value={prefs.quality} onChange={e => update({ quality: e.target.value as Quality })}>
           <option value="auto">Balanced</option>
           <option value="low">Low bandwidth</option>
           <option value="high">Best image</option>
         </select>
-      </label>
+      </label>}
       <label className="console-option"><input type="checkbox" checked={viewOnly} onChange={e => toggleViewOnly(e.target.checked)} /> View only</label>
       <button disabled={!live} onClick={screenshot}>Screenshot</button>
       <button disabled={Boolean(disabled) || phase === "connecting"} onClick={() => { stop(); void connect(); }}>Reconnect</button>
