@@ -78,6 +78,10 @@ func fakeController(t *testing.T, respond func(protocol.EnrollRequest) (int, pro
 			return
 		}
 		status, resp := respond(req)
+		if status == http.StatusOK && req.HostID != "" {
+			// Identity is host-owned: a real Controller adopts the presented host ID.
+			resp.HostID = req.HostID
+		}
 		if status == http.StatusOK {
 			block, _ := pem.Decode([]byte(req.CSRPEM))
 			csr, err := x509.ParseCertificateRequest(block.Bytes)
@@ -184,11 +188,12 @@ func TestEnrollmentSuccessPersistsAndReportsOnHost(t *testing.T) {
 	}
 	var v map[string]string
 	json.Unmarshal(w.Body.Bytes(), &v)
-	if v["host_id"] != "host-1" {
+	hostID := v["host_id"]
+	if hostID == "" {
 		t.Fatalf("unexpected host_id: %v", v)
 	}
 	host := hostLocal(t, s, cookie)
-	if host["host_id"] != "host-1" || host["controller"] != srv.URL {
+	if host["host_id"] != hostID || host["controller"] != srv.URL {
 		t.Fatalf("host did not report enrollment: %v", host)
 	}
 
@@ -198,7 +203,7 @@ func TestEnrollmentSuccessPersistsAndReportsOnHost(t *testing.T) {
 		t.Fatalf("re-enrollment without replace_host accepted: %d %s", w.Code, w.Body)
 	}
 	json.Unmarshal(w.Body.Bytes(), &v)
-	if v["host_id"] != "host-1" {
+	if v["host_id"] != hostID {
 		t.Fatalf("409 missing host_id: %v", v)
 	}
 
@@ -224,19 +229,20 @@ func TestEnrollmentReplaceHostSuccess(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("initial enrollment failed: %d %s", w.Code, w.Body)
 	}
+	hostID, _ := hostLocal(t, s, cookie)["host_id"].(string)
 
-	replace := map[string]string{"controller_url": srv.URL, "ca_pem": trust, "token": token, "replace_host": "host-1"}
+	replace := map[string]string{"controller_url": srv.URL, "ca_pem": trust, "token": token, "replace_host": hostID}
 	w = callLocal(s, "POST", "/api/local/v1/enrollment", replace, cookie, csrf, "https://core.test")
 	if w.Code != 200 {
 		t.Fatalf("re-enrollment with matching replace_host rejected: %d %s", w.Code, w.Body)
 	}
 	var v map[string]string
 	json.Unmarshal(w.Body.Bytes(), &v)
-	if v["host_id"] != "host-1" {
+	if v["host_id"] != hostID {
 		t.Fatalf("re-enrollment changed host identity: %v", v)
 	}
 	host := hostLocal(t, s, cookie)
-	if host["host_id"] != "host-1" || host["controller"] != srv.URL {
+	if host["host_id"] != hostID || host["controller"] != srv.URL {
 		t.Fatalf("host did not report re-enrollment: %v", host)
 	}
 }
@@ -275,13 +281,14 @@ func TestEnrollmentWithReplacementControllerSucceeds(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("first enrollment: %d %s", w.Code, w.Body)
 	}
+	hostID, _ := hostLocal(t, s, cookie)["host_id"].(string)
 	body := map[string]string{"controller_url": second.URL, "ca_pem": secondTrust, "token": "token-two"}
 	w = callLocal(s, "POST", "/api/local/v1/enrollment", body, cookie, csrf, "https://core.test")
 	if w.Code != 200 {
 		t.Fatalf("replacement Controller enrollment refused: %d %s", w.Code, w.Body)
 	}
 	host := hostLocal(t, s, cookie)
-	if host["host_id"] != "host-2" || host["controller"] != second.URL {
+	if host["host_id"] != hostID || host["controller"] != second.URL {
 		t.Fatalf("host did not switch Controller: %v", host)
 	}
 	w = callLocal(s, "POST", "/api/local/v1/enrollment", body, cookie, csrf, "https://core.test")

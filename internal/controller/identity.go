@@ -17,6 +17,7 @@ import (
 	"nex.local/nex/internal/protocol"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 )
 
@@ -146,15 +147,61 @@ func (c *Controller) enroll(w http.ResponseWriter, r *http.Request) {
 		write(w, 200, previous)
 		return
 	}
-	// A fresh host becomes the master of its own new pool; re-enrollment keeps the existing pool.
-	var pool string
+	// Identity is host-owned: the host presents the host and pool identity it generated and
+	// keeps, and any Controller adopts it unchanged. Agents from before host-owned identity
+	// present nothing and get Controller-minted IDs, which they then keep. A token bound to a
+	// revoked host re-issues that host's credential and keeps its pool; only that path may
+	// reuse a host ID already on record, so a token holder cannot claim an active host.
+	if (v.HostID != "" && !identityValid(v.HostID)) || (v.PoolID != "" && !identityValid(v.PoolID)) || (v.PoolName != "" && !nameValid(v.PoolName)) {
+		fail(w, 400, "host_id and pool_id must be UUIDs and pool_name a name")
+		return
+	}
+	var pool, poolName string
 	fresh := host == ""
 	if fresh {
-		host, pool = random(), random()
+		host, pool, poolName = v.HostID, v.PoolID, v.PoolName
+		if host == "" {
+			host = random()
+		}
+		if pool == "" {
+			pool = random()
+		}
+		if poolName == "" {
+			poolName = v.Hostname
+		}
+		// The same key is the same host: a retry after a lost response, even with a new
+		// token, gets the credential already recorded instead of a duplicate or a refusal.
+		previous := protocol.EnrollResponse{CAPEM: c.ca.pem}
+		if tx.QueryRow("SELECT c.host_id,h.pool_id,p.name,c.pem FROM certificates c JOIN hosts h ON h.id=c.host_id JOIN pools p ON p.id=h.pool_id WHERE c.csr=? AND c.expires>? AND h.revoked=0", digest(v.CSRPEM), time.Now().Unix()).Scan(&previous.HostID, &previous.PoolID, &previous.PoolName, &previous.CertificatePEM) == nil {
+			if (v.HostID != "" && v.HostID != previous.HostID) || (v.PoolID != "" && v.PoolID != previous.PoolID) {
+				fail(w, 409, "presented identity does not match the host holding this key")
+				return
+			}
+			b, _ := json.Marshal(previous)
+			if _, err = tx.Exec("UPDATE tokens SET csr=?,response=?,host_id=? WHERE hash=?", digest(v.CSRPEM), string(b), previous.HostID, digest(v.Token)); err != nil || c.audit(tx, "host:"+previous.HostID, "host.enroll", previous.HostID) != nil || tx.Commit() != nil {
+				fail(w, 500, "enrollment storage failed")
+				return
+			}
+			write(w, 200, previous)
+			return
+		}
+		var n int
+		if tx.QueryRow("SELECT count(*) FROM hosts WHERE id=?", host).Scan(&n) != nil || n != 0 {
+			fail(w, 409, "host identity already enrolled; revoke it and use a token targeting that host")
+			return
+		}
+		if tx.QueryRow("SELECT count(*) FROM pools WHERE id=?", pool).Scan(&n) != nil || n != 0 {
+			fail(w, 409, "pool identity already held by another master host")
+			return
+		}
 	} else {
 		var revoked bool
-		if tx.QueryRow("SELECT h.revoked,h.pool_id FROM hosts h JOIN pools p ON p.id=h.pool_id WHERE h.id=? AND p.site_id=?", host, site).Scan(&revoked, &pool) != nil || !revoked {
+		if tx.QueryRow("SELECT h.revoked,h.pool_id,p.name FROM hosts h JOIN pools p ON p.id=h.pool_id WHERE h.id=? AND p.site_id=?", host, site).Scan(&revoked, &pool, &poolName) != nil || !revoked {
 			fail(w, 409, "replacement host must still be revoked")
+			return
+		}
+		if (v.HostID != "" && v.HostID != host) || (v.PoolID != "" && v.PoolID != pool) {
+			fail(w, 409, "presented identity does not match the host this token replaces")
 			return
 		}
 	}
@@ -164,7 +211,7 @@ func (c *Controller) enroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if fresh {
-		if _, err = tx.Exec("INSERT INTO pools(id,site_id,name,master_host_id) VALUES(?,?,?,?)", pool, site, v.Hostname, host); err != nil || c.audit(tx, "host:"+host, "pool.create", pool) != nil {
+		if _, err = tx.Exec("INSERT INTO pools(id,site_id,name,master_host_id) VALUES(?,?,?,?)", pool, site, poolName, host); err != nil || c.audit(tx, "host:"+host, "pool.create", pool) != nil {
 			fail(w, 500, "pool storage failed")
 			return
 		}
@@ -182,7 +229,7 @@ func (c *Controller) enroll(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "certificate storage failed")
 		return
 	}
-	out := protocol.EnrollResponse{HostID: host, CertificatePEM: cert, CAPEM: c.ca.pem}
+	out := protocol.EnrollResponse{HostID: host, PoolID: pool, PoolName: poolName, CertificatePEM: cert, CAPEM: c.ca.pem}
 	b, _ := json.Marshal(out)
 	if _, err = tx.Exec("UPDATE tokens SET csr=?,response=?,host_id=? WHERE hash=?", digest(v.CSRPEM), string(b), host, digest(v.Token)); err != nil || c.audit(tx, "host:"+host, "host.enroll", host) != nil || tx.Commit() != nil {
 		fail(w, 500, "enrollment storage failed")
@@ -193,6 +240,10 @@ func (c *Controller) enroll(w http.ResponseWriter, r *http.Request) {
 	c.mu.Unlock()
 	write(w, 200, out)
 }
+
+// identityValid accepts a host-generated lowercase UUID or a Controller-minted 64-hex ID
+// issued to hosts enrolled before host-owned identity, which they keep.
+var identityValid = regexp.MustCompile(`^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$`).MatchString
 
 type agentHandler func(http.ResponseWriter, *http.Request, string)
 
