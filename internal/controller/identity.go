@@ -170,9 +170,10 @@ func (c *Controller) enroll(w http.ResponseWriter, r *http.Request) {
 			poolName = v.Hostname
 		}
 		// The same key is the same host: a retry after a lost response, even with a new
-		// token, gets the credential already recorded instead of a duplicate or a refusal.
+		// token from the same site, gets the credential already recorded instead of a
+		// duplicate or a refusal. A token from another site enrolls afresh under its own site.
 		previous := protocol.EnrollResponse{CAPEM: c.ca.pem}
-		if tx.QueryRow("SELECT c.host_id,h.pool_id,p.name,c.pem FROM certificates c JOIN hosts h ON h.id=c.host_id JOIN pools p ON p.id=h.pool_id WHERE c.csr=? AND c.expires>? AND h.revoked=0", digest(v.CSRPEM), time.Now().Unix()).Scan(&previous.HostID, &previous.PoolID, &previous.PoolName, &previous.CertificatePEM) == nil {
+		if tx.QueryRow("SELECT c.host_id,h.pool_id,p.name,c.pem FROM certificates c JOIN hosts h ON h.id=c.host_id JOIN pools p ON p.id=h.pool_id WHERE c.csr=? AND c.expires>? AND h.revoked=0 AND p.site_id=?", digest(v.CSRPEM), time.Now().Unix(), site).Scan(&previous.HostID, &previous.PoolID, &previous.PoolName, &previous.CertificatePEM) == nil {
 			if (v.HostID != "" && v.HostID != previous.HostID) || (v.PoolID != "" && v.PoolID != previous.PoolID) {
 				fail(w, 409, "presented identity does not match the host holding this key")
 				return

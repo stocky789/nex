@@ -88,6 +88,9 @@ func TestHostOwnedIdentity(t *testing.T) {
 		t.Fatalf("same-key retry did not replay: %+v", again)
 	}
 	a.enrollWith(protocol.EnrollRequest{Token: a.token(site, ""), CSRPEM: key, HostID: "1f1c2a3e-9b7d-4c5e-8a1b-0d2e3f4a5b6c"}, 409)
+	// A token from another site never replays a credential held under this one: the same key
+	// presenting the active host is refused like any other claim on it.
+	a.enrollWith(protocol.EnrollRequest{Token: a.token(a.site(), ""), CSRPEM: key, HostID: hostID, PoolID: poolID, PoolName: "Rack 1"}, 409)
 
 	// Another key claiming the active host, or its pool as a different master, is refused.
 	a.enrollWith(protocol.EnrollRequest{Token: a.token(site, ""), CSRPEM: csr(t), HostID: hostID}, 409)

@@ -511,19 +511,40 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 	if err = c.adoptAppliances(tx, host, pool, inv, attention, resolved); err != nil {
 		return err
 	}
-	for _, o := range m.Outcomes {
-		if !identifierValid(o.OperationID) || !managedKind(o.Kind) || (o.Status != "failed" && o.Status != "needs_attention") {
-			continue
+	// The host's operation ID is the Controller's when this Controller issued it; only a
+	// replaced Controller lacks the row. One query resolves every reported outcome.
+	// ponytail: two placeholders per outcome, so the 10000-entry journal ceiling stays under
+	// SQLite's 32766 variables; chunk the IN lists if the journal ceiling ever rises.
+	known := map[string]bool{}
+	if len(m.Outcomes) > 0 {
+		ids, requests := make([]any, 0, len(m.Outcomes)), make([]any, 0, len(m.Outcomes))
+		for _, o := range m.Outcomes {
+			ids, requests = append(ids, o.OperationID), append(requests, "adopt-outcome:"+host+":"+o.OperationID)
 		}
-		// The host's operation ID is the Controller's when this Controller issued it; only a
-		// replaced Controller lacks the row.
-		n, err := count("SELECT count(*) FROM operations WHERE id=? OR request_id=?", o.OperationID, "adopt-outcome:"+host+":"+o.OperationID)
-		if err != nil || n > 0 {
-			if err != nil {
+		marks := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+		rows, err := tx.Query("SELECT id,request_id FROM operations WHERE id IN ("+marks+") OR request_id IN ("+marks+")", append(ids, requests...)...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var id, request string
+			if err = rows.Scan(&id, &request); err != nil {
+				rows.Close()
 				return err
 			}
+			known[id], known[request] = true, true
+		}
+		rows.Close()
+	}
+	for _, o := range m.Outcomes {
+		// A creation's automatic start reports as <operation>:start.
+		if !identifierValid(strings.TrimSuffix(o.OperationID, ":start")) || !managedKind(o.Kind) || (o.Status != "failed" && o.Status != "needs_attention") {
 			continue
 		}
+		if known[o.OperationID] || known["adopt-outcome:"+host+":"+o.OperationID] {
+			continue
+		}
+		known[o.OperationID] = true
 		now := stamp()
 		if _, err = tx.Exec("INSERT INTO operations VALUES(?,?,?,?,?,?,?,?,?)", o.OperationID, host, o.Kind, "adopt-outcome:"+host+":"+o.OperationID, o.Status, clip(o.Error, 4096), now, now, "system"); err != nil {
 			return err
@@ -628,9 +649,6 @@ func auditDetail(tx *sql.Tx, action, id, detail string) error {
 	return err
 }
 
-// autoNetworks registers, once per host bridge that sits on a physical NIC or bond, the
-// pool's default untagged network (for example br0 on nex0), so a pool has a usable network
-// without operator action. Existing registrations for the bridge, in any state, are respected.
 // hostInventory returns the last observed inventory; an absent report decodes as empty.
 func hostInventory(tx *sql.Tx, host string) (protocol.Inventory, error) {
 	var raw sql.NullString
