@@ -40,6 +40,7 @@ func run() error {
 		heartbeat = f.Duration("heartbeat", 10*time.Second, "report interval")
 		interval = f.Duration("probe-interval", 10*time.Second, "probe interval")
 		timeout = f.Duration("probe-timeout", 3*time.Second, "independent probe deadline")
+		f.StringVar(&agent.ApplianceJournalDir, "appliance-journal-dir", agent.ApplianceJournalDir, "local appliance engine deploy journal, reported as this host's Controller appliances")
 	case "rotate", "status":
 	default:
 		return fmt.Errorf("unknown command %q", mode)

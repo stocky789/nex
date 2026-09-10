@@ -7,6 +7,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"nex.local/nex/internal/agent"
 	"nex.local/nex/internal/localcore"
 	"os"
 	"os/signal"
@@ -54,6 +55,8 @@ func main() {
 		log.Fatal("matching source archive required")
 	}
 	cfg.Engine.StateDir = cfg.DataDir + "/vmhost"
+	// The embedded agent reports the appliance engine's deployments from this journal.
+	agent.ApplianceJournalDir = cfg.Engine.StateDir
 	s, err := localcore.Open(cfg)
 	if err != nil {
 		log.Fatal(err)

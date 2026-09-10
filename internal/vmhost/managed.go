@@ -24,7 +24,11 @@ import (
 
 // ManagedEngine owns Controller-created guests separately from local appliance recovery.
 // Its journal survives Controller disconnects; no command ever starts a guest.
-type ManagedEngine struct{ stateDir, networkDir string }
+type ManagedEngine struct {
+	stateDir, networkDir string
+	// observe verifies an interrupted creation; nil selects observeCreated (tests stub it).
+	observe func(context.Context, managedJournal) error
+}
 
 func NewManaged(stateDir string) *ManagedEngine {
 	return &ManagedEngine{stateDir: stateDir, networkDir: "/etc/network"}
@@ -59,25 +63,63 @@ func (e *ManagedEngine) journals() ([]managedJournal, error) {
 		if len(out) >= 10000 {
 			return nil, errors.New("managed journal capacity exceeded")
 		}
-		b, err := readSmall(filepath.Join(e.stateDir, entry.Name()), 1<<20)
+		j, err := e.readJournal(entry.Name())
 		if err != nil {
 			return nil, err
-		}
-		var j managedJournal
-		if err = json.Unmarshal(b, &j); err != nil {
-			return nil, err
-		}
-		if err = validateManaged(j.Command); err != nil || entry.Name() != j.Command.OperationID+".json" || j.Result.OperationID != j.Command.OperationID {
-			return nil, errors.New("invalid managed journal identity or command")
-		}
-		switch j.Result.Status {
-		case "pending", "succeeded", "failed", "needs_attention":
-		default:
-			return nil, errors.New("invalid managed journal result")
 		}
 		out = append(out, j)
 	}
 	return out, nil
+}
+func (e *ManagedEngine) readJournal(name string) (managedJournal, error) {
+	var j managedJournal
+	b, err := readSmall(filepath.Join(e.stateDir, name), 1<<20)
+	if err != nil {
+		return j, err
+	}
+	if err = json.Unmarshal(b, &j); err != nil {
+		return j, err
+	}
+	if err = validateManaged(j.Command); err != nil || name != j.Command.OperationID+".json" || j.Result.OperationID != j.Command.OperationID {
+		return j, errors.New("invalid managed journal identity or command")
+	}
+	switch j.Result.Status {
+	case "pending", "succeeded", "failed", "needs_attention":
+	default:
+		return j, errors.New("invalid managed journal result")
+	}
+	return j, nil
+}
+
+// readable lists every journal entry that can be read and names the files that cannot.
+// Execute fails closed on one corrupt file; reporting must not, or a replaced Controller
+// would adopt nothing from a pool over one bad file.
+func (e *ManagedEngine) readable() ([]managedJournal, []string) {
+	entries, err := os.ReadDir(e.stateDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, []string{err.Error()}
+	}
+	var out []managedJournal
+	var bad []string
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		if len(out) >= 10000 {
+			bad = append(bad, "managed journal capacity exceeded")
+			break
+		}
+		j, err := e.readJournal(entry.Name())
+		if err != nil {
+			bad = append(bad, entry.Name()+": "+err.Error())
+			continue
+		}
+		out = append(out, j)
+	}
+	return out, bad
 }
 
 // Execute records intent before effects. Repeated IDs return the durable result;
@@ -421,19 +463,25 @@ func qemuCreateArgs(path string, d protocol.VMDisk) []string {
 	return append(args, path, fmt.Sprintf("%dG", d.SizeGiB))
 }
 
-// Applied lists the pool-scoped configuration this host has durably applied; a replaced
-// Controller mirrors it. Per-operation fields are cleared; journal errors yield an empty state.
-func (e *ManagedEngine) Applied() *protocol.ManagedState {
+// Applied lists the pool-scoped configuration this host has durably applied, for a replaced
+// Controller to mirror, with the checks that qualify it. Per-operation fields are cleared.
+// Entries that ended failed or needs_attention are reported as outcomes; interrupted creations
+// are re-observed first (see promote); VMs libvirt no longer defines are listed as missing.
+func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []protocol.Check) {
 	out := &protocol.ManagedState{}
-	js, err := e.journals()
-	if err != nil {
-		return out
-	}
+	js, bad := e.readable()
+	js = e.promote(ctx, js)
 	for _, j := range js {
+		c := j.Command
+		if j.Result.Status == "failed" || j.Result.Status == "needs_attention" {
+			id, name := managedIdentity(c)
+			out.Outcomes = append(out.Outcomes, protocol.ManagedOutcome{OperationID: c.OperationID, Kind: c.Kind, ID: id, Name: name, Status: j.Result.Status, Error: j.Result.Error})
+			continue
+		}
 		if j.Result.Status != "succeeded" {
 			continue
 		}
-		switch c := j.Command; c.Kind {
+		switch c.Kind {
 		case "storage-register":
 			s := *c.Storage
 			s.OperationID, s.Status, s.Error = "", "", ""
@@ -450,7 +498,105 @@ func (e *ManagedEngine) Applied() *protocol.ManagedState {
 			out.VMs = append(out.VMs, *c.VM)
 		}
 	}
+	now := time.Now().UTC()
+	journal := protocol.Check{Name: "managed-journal", Status: "healthy", ObservedAt: now}
+	if len(bad) > 0 {
+		journal.Status, journal.Error = "failed", "unreadable managed journal entries skipped: "+strings.Join(bad, "; ")
+	}
+	vms := protocol.Check{Name: "managed-vms", Status: "healthy", ObservedAt: now}
+	if len(out.VMs) > 0 {
+		if defined := domains(ctx); defined == nil {
+			vms.Status, vms.Error = "unknown", "libvirt did not list domains; VM definitions unverified"
+		} else {
+			for _, v := range out.VMs {
+				if !defined[strings.ToLower(v.ID)] {
+					out.MissingVMs = append(out.MissingVMs, v.ID)
+				}
+			}
+			if len(out.MissingVMs) > 0 {
+				vms.Status, vms.Error = "failed", "journaled VM definitions missing from libvirt: "+strings.Join(out.MissingVMs, ", ")
+			}
+		}
+	}
+	return out, []protocol.Check{journal, vms}
+}
+
+// managedIdentity is the resource ID and operator name a command addresses.
+func managedIdentity(c protocol.Command) (string, string) {
+	switch c.Kind {
+	case "storage-register":
+		return c.Storage.ID, c.Storage.Name
+	case "network-register":
+		return c.Network.ID, c.Network.Name
+	case "iso-import":
+		return c.Media.ID, c.Media.Name
+	case "vm-create":
+		return c.VM.ID, c.VM.Name
+	case "vm-power":
+		return c.Power.VMID, ""
+	case "vm-media":
+		return c.VMMedia.VMID, ""
+	}
+	return "", ""
+}
+
+// domains lists the persistent domains libvirt holds; nil when it cannot answer, which
+// proves nothing about any VM.
+func domains(ctx context.Context) map[string]bool {
+	b, err := managedVirsh(ctx, "list", "--all", "--uuid")
+	if err != nil {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, id := range strings.Fields(string(b)) {
+		out[strings.ToLower(id)] = true
+	}
 	return out
+}
+
+// promote settles vm-create entries an interruption left in needs_attention after the
+// definition step: when the persistent domain matches the journaled definition the creation
+// succeeded. reconcile does the same for a re-sent operation, which a replaced Controller
+// never sends. Each entry is re-observed at most once a minute; a running operation holds
+// the journal lock, in which case this round is skipped.
+func (e *ManagedEngine) promote(ctx context.Context, js []managedJournal) []managedJournal {
+	var due []int
+	for i, j := range js {
+		if j.Command.Kind == "vm-create" && j.Result.Status == "needs_attention" && (j.Stage == "defining" || j.Stage == "defined") && time.Since(j.Result.ObservedAt) >= time.Minute {
+			due = append(due, i)
+		}
+	}
+	if len(due) == 0 {
+		return js
+	}
+	lockCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	lock, err := (&Engine{config: Config{StateDir: e.stateDir}}).lock(lockCtx)
+	if err != nil {
+		return js
+	}
+	defer unlock(lock)
+	observe := e.observe
+	if observe == nil {
+		observe = e.observeCreated
+	}
+	for _, i := range due {
+		// Re-read under the lock: the entry may have moved on since it was listed.
+		j, err := e.readJournal(js[i].Command.OperationID + ".json")
+		if err != nil || j.Result.Status != "needs_attention" {
+			continue
+		}
+		if err = observe(ctx, j); err == nil {
+			j.Result.Status, j.Result.Error, j.Stage = "succeeded", "", "defined"
+		} else {
+			j.Result.Error = err.Error()
+		}
+		j.Result.ObservedAt = time.Now().UTC()
+		if e.save(j) == nil {
+			js[i] = j
+		}
+	}
+	return js
 }
 func managedSubdir(path string) error {
 	if err := trustedManagedPath(filepath.Dir(path)); err != nil {

@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"nex.local/nex/internal/protocol"
 	"nex.local/nex/internal/websecurity"
 	"os"
 	"os/exec"
@@ -1012,6 +1013,28 @@ func makeDomain(j journal, s DeploySpec) domainXML {
 	return d
 }
 
+// Deployments lists the Controller appliance VMs the local engine deployed under stateDir, the
+// host's durable ownership record the agent reports so a replaced Controller re-adopts them.
+// Unreadable entries are skipped; a missing directory means no deployments.
+func Deployments(stateDir string) []protocol.Appliance {
+	e := &Engine{config: Config{StateDir: stateDir}}
+	entries, err := os.ReadDir(stateDir)
+	if err != nil {
+		return nil
+	}
+	var out []protocol.Appliance
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		j, err := e.load(strings.TrimSuffix(entry.Name(), ".json"))
+		if err != nil || j.Kind != "deploy" || !uuidPattern.MatchString(j.VMID) {
+			continue
+		}
+		out = append(out, protocol.Appliance{ID: j.VMID, Name: j.Name, RequestID: j.ID, Role: "controller"})
+	}
+	return out
+}
 func (e *Engine) deployment(id string) (journal, error) {
 	js, err := e.journals()
 	if err != nil {

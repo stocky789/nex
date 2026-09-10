@@ -184,7 +184,7 @@ func TestGuestVLANNetns(t *testing.T) {
 
 func TestAppliedFromJournal(t *testing.T) {
 	e := &ManagedEngine{stateDir: t.TempDir(), networkDir: t.TempDir()}
-	if got := e.Applied(); got == nil || len(got.Networks) != 0 {
+	if got, _ := e.Applied(context.Background()); got == nil || len(got.Networks) != 0 {
 		t.Fatalf("empty journal must yield an empty state, got %+v", got)
 	}
 	n := vlanNet("nex0", 15)
@@ -203,7 +203,7 @@ func TestAppliedFromJournal(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got := e.Applied()
+	got, _ := e.Applied(context.Background())
 	if len(got.Storage) != 1 || len(got.Networks) != 1 || len(got.Media) != 1 || len(got.VMs) != 1 {
 		t.Fatalf("applied state %+v", got)
 	}
