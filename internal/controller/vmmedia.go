@@ -62,12 +62,12 @@ func (c *Controller) mediaVM(w http.ResponseWriter, r *http.Request, user, csrf 
 		return
 	}
 	var pending int
-	if err = tx.QueryRow("SELECT count(*) FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind='vm-media' AND r.name=? AND o.status IN ('queued','dispatched')", id).Scan(&pending); err != nil {
+	if err = tx.QueryRow("SELECT count(*) FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind IN ('vm-media','vm-update') AND r.name=? AND o.status IN ('queued','dispatched')", id).Scan(&pending); err != nil {
 		fail(w, 500, "media request lookup failed")
 		return
 	}
 	if pending > 0 {
-		fail(w, 409, "a media request for this VM is still pending; wait for its task")
+		fail(w, 409, "a media request for this VM or a change to it is still pending; wait for its task")
 		return
 	}
 	if v.Action == "insert" {

@@ -172,7 +172,7 @@ func TestManagedReferencesAndXML(t *testing.T) {
 		for _, firmware := range []string{"bios", "uefi"} {
 			v := managedTestVM()
 			v.Boot.Firmware = firmware
-			b, err := managedDomainXML(v, []protocol.NetworkRegistration{{Kind: kind, Source: "guest-net"}}, []string{"/disk&name"}, "/guest.iso")
+			b, err := testDomainXML(v, []protocol.NetworkRegistration{{Kind: kind, Source: "guest-net"}}, []string{"/disk&name"}, "/guest.iso")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -308,7 +308,7 @@ func TestManagedDefinitionTampering(t *testing.T) {
 	v.Disks = append(v.Disks, protocol.VMDisk{StorageID: "s", Name: "data", SizeGiB: 10, Bus: "scsi", BootOrder: 3})
 	v.NICs = append(v.NICs, protocol.VMNIC{NetworkID: "n2", Model: "e1000e", MAC: "52:54:00:aa:bb:cc"})
 	nets := []protocol.NetworkRegistration{{Kind: "network", Source: "default"}, {Kind: "bridge", Source: "br0"}}
-	wanted, err := managedDomainXML(v, nets, []string{"/disk-0", "/disk-1"}, "/iso")
+	wanted, err := testDomainXML(v, nets, []string{"/disk-0", "/disk-1"}, "/iso")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +439,7 @@ func TestManagedDomainXMLDevicesAndBootOrder(t *testing.T) {
 	v.NICs = []protocol.VMNIC{{NetworkID: "n", Model: "virtio"}, {NetworkID: "n2", Model: "e1000e", MAC: "52:54:00:aa:bb:cc"}, {NetworkID: "n", Model: "virtio"}}
 	nets := []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}, {Kind: "network", Source: "default"}, {Kind: "bridge", Source: "br0"}}
 	paths := []string{"/fast/disk-0.qcow2", "/bulk/disk-1.qcow2", "/fast/disk-2.qcow2"}
-	b, err := managedDomainXML(v, nets, paths, "/fast/nex-media/m.iso")
+	b, err := testDomainXML(v, nets, paths, "/fast/nex-media/m.iso")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,8 +462,8 @@ func TestManagedDomainXMLDevicesAndBootOrder(t *testing.T) {
 	if d.Devices.Disks[3].Device != "cdrom" || d.Devices.Disks[3].Readonly == nil {
 		t.Fatal("install ISO must be a read-only cdrom")
 	}
-	if len(d.Devices.Controllers) != 1 || d.Devices.Controllers[0].Model != "virtio-scsi" {
-		t.Fatalf("SCSI disks need a virtio-scsi controller: %s", b)
+	if len(d.Devices.Controllers) != 2+12 || d.Devices.Controllers[0].Model != "virtio-scsi" || d.Devices.Controllers[1].Model != "pcie-root" {
+		t.Fatalf("SCSI disks need a virtio-scsi controller beside pcie-root and the root ports: %s", b)
 	}
 	if len(d.OS.Boot) != 0 || strings.Contains(string(b), "<boot dev=") {
 		t.Fatalf("per-device boot order must not be mixed with an os boot list: %s", b)
@@ -481,12 +481,21 @@ func TestManagedDomainXMLDevicesAndBootOrder(t *testing.T) {
 	if d.Devices.Interfaces[2].MAC.Address != protocol.DerivedMAC(v.ID, 2) || d.Devices.Interfaces[2].MAC.Address == d.Devices.Interfaces[0].MAC.Address {
 		t.Fatalf("second derived NIC: %+v", d.Devices.Interfaces[2])
 	}
-	// A VM without install media has no cdrom at all.
+	// A VM without install media still has its CD drive, empty, so an ISO can be inserted later
+	// without hot-plugging a SATA device.
 	v.Boot.MediaBootOrder, v.MediaID = 0, ""
-	if b, err = managedDomainXML(v, nets, paths, ""); err != nil || strings.Contains(string(b), "cdrom") {
-		t.Fatalf("media-free VM: %v\n%s", err, b)
+	if b, err = testDomainXML(v, nets, paths, ""); err != nil {
+		t.Fatalf("media-free VM: %v", err)
 	}
-	if _, err = managedDomainXML(v, nets[:1], paths, ""); err == nil {
+	var empty managedDomain
+	if err = xml.Unmarshal(b, &empty); err != nil || len(empty.Devices.Disks) != 4 || empty.Devices.Disks[3].Device != "cdrom" || empty.Devices.Disks[3].Source != nil || empty.Devices.Disks[3].Boot != nil {
+		t.Fatalf("media-free VM must carry an empty CD drive: %v\n%s", err, b)
+	}
+	// q35 definitions carry spare PCIe root ports so VirtIO devices can be hot-plugged later.
+	if strings.Count(string(b), `model="pcie-root-port"`) != 12 {
+		t.Fatalf("expected spare root ports: %s", b)
+	}
+	if _, err = testDomainXML(v, nets[:1], paths, ""); err == nil {
 		t.Fatal("mismatched device lists accepted")
 	}
 }
@@ -499,7 +508,7 @@ func TestManagedDomainXMLMemoryModesAndTopology(t *testing.T) {
 		t.Run(tc.mode, func(t *testing.T) {
 			v := managedTestVM()
 			v.Memory = protocol.VMMemory{Mode: tc.mode, SizeMiB: 4096}
-			b, err := managedDomainXML(v, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, []string{"/disk-0.qcow2"}, "/m.iso")
+			b, err := testDomainXML(v, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, []string{"/disk-0.qcow2"}, "/m.iso")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -520,13 +529,13 @@ func TestManagedDomainXMLMemoryModesAndTopology(t *testing.T) {
 	}
 	v := managedTestVM()
 	v.CPU = protocol.VMCPU{Count: 4, Model: "host-model"}
-	b, _ := managedDomainXML(v, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, []string{"/disk-0.qcow2"}, "")
+	b, _ := testDomainXML(v, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, []string{"/disk-0.qcow2"}, "")
 	var d managedDomain
 	if xml.Unmarshal(b, &d) != nil || d.VCPU != 4 || d.CPU.Mode != "host-model" || d.CPU.Topology == nil || *d.CPU.Topology != (managedTopology{1, 4, 1}) {
 		t.Fatalf("default topology is one socket of Count cores: %s", b)
 	}
 	v.CPU = protocol.VMCPU{Count: 4, Sockets: 2, Cores: 2, Threads: 1, Model: "host-passthrough"}
-	b, _ = managedDomainXML(v, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, []string{"/disk-0.qcow2"}, "")
+	b, _ = testDomainXML(v, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, []string{"/disk-0.qcow2"}, "")
 	if xml.Unmarshal(b, &d) != nil || d.CPU.Topology == nil || *d.CPU.Topology != (managedTopology{2, 2, 1}) {
 		t.Fatalf("requested topology: %s", b)
 	}
@@ -660,7 +669,7 @@ func TestNICModelsAndMTUReachTheDomain(t *testing.T) {
 		if model == "virtio" {
 			v.NICs[0].MTU = 9000
 		}
-		b, err := managedDomainXML(v, []protocol.NetworkRegistration{{ID: "net-1", Kind: "bridge", Source: "br0"}}, []string{"/vms/disk-0.qcow2"}, "")
+		b, err := testDomainXML(v, []protocol.NetworkRegistration{{ID: "net-1", Kind: "bridge", Source: "br0"}}, []string{"/vms/disk-0.qcow2"}, "")
 		if err != nil {
 			t.Fatalf("%s: %v", model, err)
 		}
@@ -876,4 +885,10 @@ func TestDeploymentsListsApplianceOwnership(t *testing.T) {
 	if Deployments(filepath.Join(e.config.StateDir, "absent")) != nil {
 		t.Fatal("absent journal listed deployments")
 	}
+}
+
+// testDomainXML builds a definition with creation-time target names.
+func testDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistration, disks []string, iso string) ([]byte, error) {
+	targets, media := managedTargets(v)
+	return managedDomainXML(v, nets, disks, targets, media, iso)
 }

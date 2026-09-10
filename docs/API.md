@@ -725,6 +725,47 @@ capability gate, replay, pending-request conflict, dispatch payload, result, no 
 the VM list); the [console QA report](qa/console/checks.md) records the lab walkthrough
 of Start, Reboot and Force stop from the browser.
 
+## VM editing
+
+API impact: **new contract** — `updateVM` (`PUT /api/v1/vms/{id}`), the `vm-update` command
+carrying the full `VMCreateSpec` at the next `revision`, the `vm-update-v1` host capability and
+the `vm-update` operation/audit kind; **changed contract** — `VMCreateSpec` gains `revision`
+(0 at creation), the VM list reports every interface's effective MAC, `boot.media_boot_order`
+no longer requires `media_id`, and `Inventory.managed.vms` carries each VM's *current*
+definition. Schemas, statuses and limits are in the generated reference.
+
+Flow: an administrator puts the complete desired definition with a stable `request_id`.
+Controller validates it exactly like creation against the pool and host minus the VM itself
+(shape, references and observed capacity; name and MAC uniqueness against other VMs and dedicated-memory admission stay the host's, as for creation), refuses what no
+edit may change (an existing disk's storage, size or provisioning; moving the VM) and, when
+the VM is observed running, what needs it stopped; then freezes every automatic MAC into the
+definition and queues `vm-update` at revision current + 1. One edit, power or media request per VM
+is in flight at a time; a `vm-media` change updates the same current journal entry. Core classifies the difference from its journal with the shared
+`NeedsStop` rule: name, CPU, memory, firmware, machine type, any boot order, an existing
+disk's bus, an existing interface's network, model, MAC or MTU, and adding a SATA disk need a
+shut-off guest, which is then redefined from the regenerated XML after new disks are allocated
+and a `domrename`; a running guest takes disk and interface additions and removals
+(`attach-device`/`detach-device --persistent`; a live detach completes only when the guest
+releases the device, so a removal succeeds once persisted and the guest may keep the device
+until its next restart), ISO insert, swap or eject
+(`change-media --live --config`), description, guest OS hint and autostart. Disks are matched
+by name and keep the target names journaled at creation; interfaces by MAC. Every VM now
+carries one SATA CD drive, empty without an ISO, and q35 definitions carry spare PCIe root
+ports for hot-plug. Removed disk files are detached and retained, never deleted. The
+persistent definition and per-disk ownership are observed against the expected XML by device
+identity; an interrupted edit is reconciled by observation only and otherwise reported as
+`needs_attention`. The host's journal keeps every revision and reports the highest succeeded
+one as the current definition; Controller refreshes its mirror from each report, so the
+result is the host's word and a replaced Controller adopts the current definition and
+revision. Older Core without `vm-update-v1` is refused with 409 at request time.
+
+Checks: `internal/protocol` (classification), `internal/vmhost` (layout keeps existing
+disks and targets, revisions, live reconciliation argv, interrupted-edit reconciliation) and
+`internal/controller` (404/400/409 refusals, capability gate, immutable fields, MAC freezing,
+pending edit/power exclusion in both directions, replay, dispatch payload, mirror refresh and
+a failed edit leaving the mirror alone); the [edit QA report](qa/vm-edit/checks.md) records
+what ran in a browser and on a host.
+
 ## Browser VM console
 
 API impact: **new contract** — `openConsole` (`POST /api/v1/vms/{id}/console`),

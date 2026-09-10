@@ -6,6 +6,7 @@ Native mode: --config <private browser.json> --iso <guest.iso>.
 Neither mode changes host networking or starts a guest. Native mode creates one
 stopped VM and registers resources only in the selected disposable lab.
 """
+import re
 import argparse
 from datetime import datetime, timezone
 import hashlib
@@ -60,15 +61,20 @@ def simulated(lab):
     context.load_cert_chain(client_cert, client_key)
     stopped = threading.Event()
     failures = []
+    # control lets a walkthrough change what the simulated host observes and applies.
+    control = {'state': 'shut off'}
+    specs = {}
     def reports():
         sequence, results, vms = 0, [], []
         while not stopped.wait(.2):
             try:
                 sequence += 1
                 now = datetime.now(timezone.utc).isoformat()
-                payload = {'version': 1, 'sequence': sequence, 'capabilities': ['managed-vm-v1'], 'results': results,
+                for v in vms:
+                    v['state'] = control['state']
+                payload = {'version': 1, 'sequence': sequence, 'capabilities': ['managed-vm-v1', 'vm-update-v1'], 'results': results,
                     'inventory': {'observed_at': now, 'hostname': 'simulated-browser-host', 'cpu_count': 8,
-                        'memory_bytes': 16 * 1024**3, 'vms': vms, 'checks': [{'name': 'libvirt', 'status': 'healthy', 'observed_at': now, 'last_success': now}], 'nics': [{'name': 'nex1', 'mac': '52:54:00:00:00:11', 'kind': 'physical', 'state': 'up', 'addresses': []}], 'disks': []}}
+                        'memory_bytes': 16 * 1024**3, 'vms': vms, 'managed': {'vms': list(specs.values())}, 'checks': [{'name': 'libvirt', 'status': 'healthy', 'observed_at': now, 'last_success': now}], 'nics': [{'name': 'nex1', 'mac': '52:54:00:00:00:11', 'kind': 'physical', 'state': 'up', 'addresses': []}], 'disks': []}}
                 request = urllib.request.Request(lab.url + '/api/v1/agent/report', data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'})
                 with urllib.request.urlopen(request, context=context, timeout=5) as response:
                     answer = json.load(response)
@@ -77,8 +83,13 @@ def simulated(lab):
                     results.append({'operation_id': command['operation_id'], 'status': 'succeeded', 'observed_at': now})
                     if command.get('vm'):
                         vm = command['vm']
+                        # The host journals the definition and reports it as current; an edit
+                        # replaces the earlier revision, which is what the mirror follows.
+                        specs[vm['id']] = vm
                         if not any(v['id'] == vm['id'] for v in vms):
-                            vms.append({'id': vm['id'], 'name': vm['name'], 'state': 'shut off'})
+                            vms.append({'id': vm['id'], 'name': vm['name'], 'state': control['state']})
+                        else:
+                            next(v for v in vms if v['id'] == vm['id'])['name'] = vm['name']
             except Exception as exc:
                 failures.append(str(exc))
                 return
@@ -89,7 +100,7 @@ def simulated(lab):
     data = bytearray(65536)
     data[32768:32775] = b'\x01CD001\x01'
     iso.write_bytes(data)
-    return {'url': lab.url, 'pool_id': pool['id'], 'host_id': state['host_id'], 'storage_path': '/simulated/browser'}, password.read_text(), iso, stopped, thread, failures
+    return {'url': lab.url, 'pool_id': pool['id'], 'host_id': state['host_id'], 'storage_path': '/simulated/browser', 'control': control}, password.read_text(), iso, stopped, thread, failures
 
 
 def acceptance(config, password, iso, evidence, mode):
@@ -357,7 +368,8 @@ def acceptance(config, password, iso, evidence, mode):
         assert [d['name'] for d in spec['disks']] == ['system', 'data'] and [d['bus'] for d in spec['disks']] == ['virtio', 'sata'], spec
         assert spec['disks'][1]['thin'] is False and spec['cpu'] == {'count': 2, 'sockets': 2, 'cores': 1, 'threads': 1, 'model': 'host-model'}, spec
         assert spec['memory'] == {'mode': 'maximum', 'size_mib': 512} and spec['boot']['media_boot_order'] == 1, spec
-        assert [n['mac'] for n in spec['nics']] == ['', '52:54:00:ab:cd:ef'], spec
+        # An automatic MAC is listed as its effective derived address.
+        assert re.fullmatch(r'52:54:00:[0-9a-f]{2}:[0-9a-f]{2}:00', spec['nics'][0]['mac']) and spec['nics'][1]['mac'] == '52:54:00:ab:cd:ef', spec
         capture('created-desktop')
         page.set_viewport_size({'width': 360, 'height': 800})
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'details narrow page overflow'

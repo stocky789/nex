@@ -5,8 +5,8 @@
 This development workflow starts, shuts down, reboots and force-stops a virtual machine
 from Nex Controller. Each request becomes a durable task for the VM's assigned host;
 the host's next report shows the resulting state. Shut down and Reboot are ACPI requests
-that a guest without ACPI support, such as a firmware boot menu, ignores. Editing and
-deleting VMs are not yet available. Verified in a disposable nested-KVM lab; see
+that a guest without ACPI support, such as a firmware boot menu, ignores. Editing a VM is covered in
+[Edit a virtual machine](edit-virtual-machine.md); deleting VMs is not yet available. Verified in a disposable nested-KVM lab; see
 [Verification](#verification).
 
 ## Prerequisites

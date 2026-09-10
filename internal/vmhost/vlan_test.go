@@ -54,7 +54,7 @@ func TestVLANShapeAndRendering(t *testing.T) {
 		t.Fatal("host address ownership detection")
 	}
 	// Domain XML attaches VLAN networks as plain bridges.
-	b, err := managedDomainXML(protocol.VMCreateSpec{ID: "12345678-1234-4234-8234-123456789012", Name: "g", CPU: protocol.VMCPU{Count: 1, Model: "host-passthrough"}, Memory: protocol.VMMemory{Mode: "dedicated", SizeMiB: 512}, Disks: []protocol.VMDisk{{StorageID: "st-1", Name: "system", SizeGiB: 1, Bus: "virtio", BootOrder: 1}}, NICs: []protocol.VMNIC{{NetworkID: "net-1", Model: "virtio"}}, Boot: protocol.VMBoot{Firmware: "bios"}}, []protocol.NetworkRegistration{good}, []string{"/d"}, "")
+	b, err := testDomainXML(protocol.VMCreateSpec{ID: "12345678-1234-4234-8234-123456789012", Name: "g", CPU: protocol.VMCPU{Count: 1, Model: "host-passthrough"}, Memory: protocol.VMMemory{Mode: "dedicated", SizeMiB: 512}, Disks: []protocol.VMDisk{{StorageID: "st-1", Name: "system", SizeGiB: 1, Bus: "virtio", BootOrder: 1}}, NICs: []protocol.VMNIC{{NetworkID: "net-1", Model: "virtio"}}, Boot: protocol.VMBoot{Firmware: "bios"}}, []protocol.NetworkRegistration{good}, []string{"/d"}, "")
 	if err != nil || !strings.Contains(string(b), `<interface type="bridge">`) || !strings.Contains(string(b), `<source bridge="nex1v100">`) {
 		t.Fatalf("VLAN domain interface: %v\n%s", err, b)
 	}

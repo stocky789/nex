@@ -145,7 +145,7 @@ func TestValidateVMSpec(t *testing.T) {
 		}, true},
 		{"boot order negative", func(v *VMCreateSpec) { v.Disks[0].BootOrder = -1 }, false},
 		{"boot order absent", func(v *VMCreateSpec) { v.Disks[0].BootOrder, v.Boot.MediaBootOrder = 0, 0 }, false},
-		{"media boot order without media", func(v *VMCreateSpec) { v.MediaID = "" }, false},
+		{"empty CD drive keeps its boot order", func(v *VMCreateSpec) { v.MediaID = "" }, true},
 		{"no media without media boot order", func(v *VMCreateSpec) {
 			v.MediaID, v.Boot.MediaBootOrder, v.Disks[0].BootOrder = "", 0, 1
 		}, true},

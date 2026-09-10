@@ -18,7 +18,7 @@ import (
 
 func managedCommand(kind string) bool {
 	switch kind {
-	case "storage-register", "network-register", "iso-import", "vm-create", "vm-power", "vm-media":
+	case "storage-register", "network-register", "iso-import", "vm-create", "vm-update", "vm-power", "vm-media":
 		return true
 	}
 	return false
@@ -139,7 +139,7 @@ func commandHost(cmd protocol.Command) string {
 		if cmd.Media != nil {
 			return cmd.Media.HostID
 		}
-	case "vm-create":
+	case "vm-create", "vm-update":
 		if cmd.VM != nil {
 			return cmd.VM.HostID
 		}

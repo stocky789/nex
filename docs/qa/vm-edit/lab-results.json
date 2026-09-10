@@ -1,0 +1,90 @@
+{
+  "completed": true,
+  "lab": "/home/matt/Projects/Nex/.claude/worktrees/vm-edit/.cache/nex-managed-vm-lab.1op1kyzr",
+  "source": "/home/matt/Projects/Nex/.cache/nex-appliance-lab.2851um6a",
+  "passed": [
+    "Agent built from this tree reports vm-update-v1",
+    "Created with an ISO in the SATA CD drive and spare pcie-root-port controllers; libvirt accepted the definition",
+    "Edit while stopped: renamed, second disk allocated as disk-1.qcow2, second interface with frozen MAC, autostart enabled; revision 1 reported",
+    "Edit while running: third disk and third interface hot-plugged and persisted, ISO ejected; revision 2, VM still running",
+    "CPU change while running refused with 409 naming the CPU configuration",
+    "Removal while running: third disk and interface removed from the persistent definition, files retained, revision 3; guest has not released them yet (recorded limit)",
+    "Removal while stopped: second disk detached by redefine, its file retained and listed in the journal"
+  ],
+  "steps": {
+    "1-create": {
+      "name": "edit-qa-8g692ql0",
+      "root_ports": 9,
+      "cdrom": true,
+      "blklist": " Target   Source\n------------------------------------------------------------------------------------------------------------------------------------------\n vda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-0.qcow2\n sda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-media/dc6ef2cfc75afc17cd5947cd199ed1ff6eab19521f200ef092ab4fa7fe82b4f0.iso\n\n",
+      "dir": "total 196\n-rw------- 1 root root 196640 Sep 10 11:41 disk-0.qcow2\n"
+    },
+    "2-edit-stopped": {
+      "dominfo": "Id:             -\nName:           edit-qa-8g692ql0-ed\nUUID:           204c63dd-0dd2-49b7-afd4-d91d1e3188ca\nOS Type:        hvm\nState:          shut off\nCPU(s):         2\nMax memory:     1048576 KiB\nUsed memory:    1048576 KiB\nPersistent:     yes\nAutostart:      enable\nAutostart Once: disable\nManaged save:   no\nSecurity model: apparmor\nSecurity DOI:   0\n\n",
+      "dir": "total 392\n-rw------- 1 root root 196640 Sep 10 11:41 disk-0.qcow2\n-rw------- 1 root root 196624 Sep 10 11:41 disk-1.qcow2\n",
+      "iflist": " Interface   Type      Source    Model    MAC\n-------------------------------------------------------------\n -           network   default   virtio   52:54:00:c8:49:00\n -           network   default   virtio   52:54:00:c8:49:01\n\n",
+      "blklist": " Target   Source\n------------------------------------------------------------------------------------------------------------------------------------------\n vda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-0.qcow2\n vdb      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-1.qcow2\n sda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-media/dc6ef2cfc75afc17cd5947cd199ed1ff6eab19521f200ef092ab4fa7fe82b4f0.iso\n\n"
+    },
+    "3-edit-running": {
+      "op": {
+        "id": "fa7d43eb38fec8b60c79fe5e0d7bc7540226243c0e635d926d4a9e92256ee205",
+        "host_id": "846677f7c06d3b41b6c437859f44ad4408dedd1831294ce5d3ed572da53db333",
+        "kind": "vm-update",
+        "request_id": "edit-2",
+        "status": "succeeded",
+        "created_at": "2026-09-10T11:41:36.50018011Z",
+        "updated_at": "2026-09-10T11:41:38.117251422Z",
+        "actor": "admin"
+      },
+      "live_blklist": " Target   Source\n---------------------------------------------------------------------------------------------------------------------\n vda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-0.qcow2\n vdb      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-1.qcow2\n vdc      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-2.qcow2\n sda      -\n\n",
+      "live_iflist": " Interface   Type      Source    Model    MAC\n-------------------------------------------------------------\n vnet1       network   default   virtio   52:54:00:c8:49:00\n vnet2       network   default   virtio   52:54:00:c8:49:01\n vnet3       network   default   virtio   52:54:00:c8:49:02\n\n",
+      "media_ejected": true
+    },
+    "4-stop-first": {
+      "refused": {
+        "error": "stop the VM first to change the CPU configuration"
+      }
+    },
+    "5-remove-running": {
+      "op": {
+        "id": "3ba630d228dec15d14745fe03ba9853c3c3f7dd00abe0218933638198d368cf5",
+        "host_id": "846677f7c06d3b41b6c437859f44ad4408dedd1831294ce5d3ed572da53db333",
+        "kind": "vm-update",
+        "request_id": "edit-4",
+        "status": "succeeded",
+        "created_at": "2026-09-10T11:41:38.249125442Z",
+        "updated_at": "2026-09-10T11:41:49.2684501Z",
+        "actor": "admin"
+      },
+      "live_blklist": " Target   Source\n---------------------------------------------------------------------------------------------------------------------\n vda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-0.qcow2\n vdb      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-1.qcow2\n vdc      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-2.qcow2\n sda      -\n\n",
+      "live_iflist": " Interface   Type      Source    Model    MAC\n-------------------------------------------------------------\n vnet1       network   default   virtio   52:54:00:c8:49:00\n vnet2       network   default   virtio   52:54:00:c8:49:01\n vnet3       network   default   virtio   52:54:00:c8:49:02\n\n",
+      "retained": "total 600\n-rw------- 1 libvirt-qemu libvirt-qemu 196640 Sep 10 11:41 disk-0.qcow2\n-rw------- 1 libvirt-qemu libvirt-qemu 196624 Sep 10 11:41 disk-1.qcow2\n-rw------- 1 libvirt-qemu libvirt-qemu 196624 Sep 10 11:41 disk-2.qcow2\n",
+      "released_by_guest": false,
+      "persisted_blklist": " Target   Source\n---------------------------------------------------------------------------------------------------------------------\n vda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-0.qcow2\n vdb      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-1.qcow2\n sda      -\n\n",
+      "persisted_iflist": " Interface   Type      Source    Model    MAC\n-------------------------------------------------------------\n -           network   default   virtio   52:54:00:c8:49:00\n -           network   default   virtio   52:54:00:c8:49:01\n\n"
+    },
+    "6-remove-stopped": {
+      "retained": [
+        "/var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-1.qcow2"
+      ],
+      "dir": "total 588\n-rw------- 1 root root 196640 Sep 10 11:41 disk-0.qcow2\n-rw------- 1 root root 196624 Sep 10 11:41 disk-1.qcow2\n-rw------- 1 root root 196624 Sep 10 11:41 disk-2.qcow2\n",
+      "blklist": " Target   Source\n---------------------------------------------------------------------------------------------------------------------\n vda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-0.qcow2\n sda      -\n\n",
+      "stage": "defined"
+    }
+  },
+  "limits": [
+    "guest at the installer boot menu did not release the hot-unplugged disk and interface; they stay attached to the running domain until the guest releases them or the VM restarts (persistent definition already omits them)"
+  ],
+  "versions": {
+    "go": "go version go1.27.1 linux/amd64",
+    "host": "6.12.94+deb13-amd64\nCompiled against library: libvirt 11.3.0\nUsing library: libvirt 11.3.0\nUsing API: QEMU 11.3.0\nRunning hypervisor: QEMU 10.0.11\n\nNAME=\"Nex Core\"\nPRETTY_NAME=\"Nex Core 0.1.0-alpha1\"\n"
+  },
+  "artifacts": {
+    "controller": "0404fa48b74945c7d2fe41706375bf3852a82c613d697ea071e6212b0c25e8e9",
+    "agent": "720af37f4d0b1cad8ed4fa57b2e0df4607955d9264559d1bee349bca449691e4",
+    "debian-13.6.0-amd64-netinst.iso": "65273beed27b2df543b68b65630ba525cfbad8df2b12035732b2dff87d6664e7"
+  },
+  "vm_id": "204c63dd-0dd2-49b7-afd4-d91d1e3188ca",
+  "host_id": "846677f7c06d3b41b6c437859f44ad4408dedd1831294ce5d3ed572da53db333",
+  "pool_id": "4e2e9a57947c4705e662e760713312e389523778a774d19dafd5a08d1e1d6f0a"
+}

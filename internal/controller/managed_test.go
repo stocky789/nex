@@ -230,10 +230,11 @@ func TestManagedWorkflowScopeRetryAndMedia(t *testing.T) {
 	if len(list) != 1 || list[0].ID != created.VMID || list[0].Status != "needs_attention" || list[0].State != "shut off" || list[0].Guest != nil {
 		t.Fatalf("bad VM list %#v", list)
 	}
-	// The list exposes the shape the VM was created with, including its automatic MAC.
+	// The list exposes the shape the VM was created with; an automatic MAC is reported as the
+	// effective derived address so an edit can name the interface.
 	s := list[0].Spec
 	if s == nil || len(s.Disks) != 1 || s.Disks[0].Name != "system" || s.Disks[0].SizeGiB != 10 || s.Disks[0].Bus != "virtio" || !s.Disks[0].Thin || s.Disks[0].BootOrder != 2 ||
-		len(s.NICs) != 1 || s.NICs[0].NetworkID != network.ID || s.NICs[0].Model != "virtio" || s.NICs[0].MAC != "" ||
+		len(s.NICs) != 1 || s.NICs[0].NetworkID != network.ID || s.NICs[0].Model != "virtio" || s.NICs[0].MAC != protocol.DerivedMAC(created.VMID, 0) ||
 		s.CPU.Count != 2 || s.CPU.Model != "host-passthrough" || s.Memory.Mode != "dedicated" || s.Memory.SizeMiB != 1024 ||
 		s.Boot.Firmware != "uefi" || s.Boot.Machine != "q35" || s.Boot.MediaBootOrder != 1 || s.MediaID != media.ID || s.GuestOS != "linux" {
 		t.Fatalf("created shape missing from VM list %+v", s)
@@ -510,9 +511,9 @@ func TestCreateVMSpecificationReferencesAndScope(t *testing.T) {
 			addNICs(v, 1)
 			v.NICs[0].MAC, v.NICs[1].MAC = "52:54:00:12:34:56", "52:54:00:12:34:56"
 		},
-		"media boot order": func(v *protocol.VMCreateSpec) { v.Boot.MediaBootOrder = 2 },
-		"supplied id":      func(v *protocol.VMCreateSpec) { v.ID = "chosen-by-the-client" },
-		"invalid name":     func(v *protocol.VMCreateSpec) { v.Name = "Guest_1" },
+		"repeated boot": func(v *protocol.VMCreateSpec) { v.Boot.MediaBootOrder = v.Disks[0].BootOrder },
+		"supplied id":   func(v *protocol.VMCreateSpec) { v.ID = "chosen-by-the-client" },
+		"invalid name":  func(v *protocol.VMCreateSpec) { v.Name = "Guest_1" },
 	} {
 		v := l.spec("guest1")
 		bad(&v)

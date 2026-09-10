@@ -56,12 +56,12 @@ func (c *Controller) powerVM(w http.ResponseWriter, r *http.Request, user, csrf 
 	// Power rows carry the VM id as their name so one in-flight request per VM is enforced
 	// without JSON functions; a lookup failure refuses rather than allowing a duplicate.
 	var pending int
-	if err = tx.QueryRow("SELECT count(*) FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind='vm-power' AND r.name=? AND o.status IN ('queued','dispatched')", id).Scan(&pending); err != nil {
+	if err = tx.QueryRow("SELECT count(*) FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind IN ('vm-power','vm-update') AND r.name=? AND o.status IN ('queued','dispatched')", id).Scan(&pending); err != nil {
 		fail(w, 500, "power request lookup failed")
 		return
 	}
 	if pending > 0 {
-		fail(w, 409, "a power request for this VM is still pending; wait for its task")
+		fail(w, 409, "a power request for this VM or a change to it is still pending; wait for its task")
 		return
 	}
 	opID := random()
