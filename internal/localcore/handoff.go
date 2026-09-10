@@ -404,7 +404,7 @@ func Handoff(ctx context.Context, c HandoffConfig) error {
 	var session struct {
 		CSRF string `json:"csrf_token"`
 	}
-	if _, err = h.call(ctx, "POST", "/api/v1/session", map[string]string{"username": "admin", "password": c.AdminPassword}, &session); err != nil {
+	if _, err = h.call(ctx, "POST", "/api/v1/session", map[string]string{"username": "root", "password": c.AdminPassword}, &session); err != nil {
 		return err
 	}
 	h.csrf = session.CSRF

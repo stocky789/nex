@@ -24,12 +24,16 @@ Core version. This is the version the packages currently build as (`0.1.5~alpha1
 
 ### Minor Feature
 
-- ISO upload to Controller can be closed and continues in the background while the UI stays open; progress, rate and Cancel live under Recent tasks. Removed the fixed 8 GiB ISO size cap — staging is limited by free disk space (256 MiB reserved).
+- Hosts have a **Console** tab that uses the same browser console as VMs (a root shell on the host).
+- From a VM console you can insert or eject an ISO on the CD/DVD tray without leaving the console.
+
+- Controller deploy shows **Local storage** as a fixed, non-editable host path instead of a one-item dropdown.
+- ISO upload to Controller can be closed and continues in the background while the UI stays open; progress, rate and Cancel appear as the first row of Recent tasks (BUG-0048). Removed the fixed 8 GiB ISO size cap — staging is limited by free disk space (256 MiB reserved).
 - **Check** and **Update** now use the system package manager against the signed Nex repository, instead of downloading a single package file and installing it directly. Updates that need a new supporting component now install cleanly rather than failing part-way, and every package is signature-checked. Progress is reported in steps rather than as a download percentage, and the available-version check refreshes at most once every five minutes.
 - Nex Core is now installed only from its own ISO. Installing the Nex package onto an ordinary Debian system is refused with an explanation: Nex Core is a distribution, and the installer establishes the storage, networking, console identity and recovery paths that a supported host depends on. Existing hosts continue to update normally.
 - The Controller appliance now carries the Nex repository signing key and repository entry, which it previously lacked entirely.
 - Releases are now made by tagging. Pushing a version tag builds the ISO and both packages at that version and publishes them to the website automatically, and refuses to build at all if the tag and the changelog disagree. ISO downloads keep the newest three releases.
-- Controller deploy password now also signs in to the appliance VM console as **admin** (same credentials as the web UI).
+- Controller default administrator username is **root** (was admin), so it can match Core host credentials. The deploy password unlocks the appliance console as **root** too.
 - Every enrolled host gets a default local storage registration named **ISO** at `/var/lib/libvirt/images` (created on install), so ISO upload and VM disks work without manually registering storage.
 - Extended the VM console: send key combinations, fit/actual/resize-to-window display modes, quality presets, view-only mode, screenshots, reconnect, full screen with the toolbar and a console-only browser window.
 - Added console clipboard in both directions for guests running the guest tools, plus **Type into VM** for installers and text consoles; new VMs are defined with the clipboard channel, an absolute pointer and a resizable VirtIO display.
@@ -38,6 +42,12 @@ Core version. This is the version the packages currently build as (`0.1.5~alpha1
 
 ### Bug Fixes
 
+- Hardened the host console: it no longer opens a local socket that any process on the host could reach, idle consoles no longer stream full frames continuously, Ctrl+C/D/Z and arrow keys work, tab stops render correctly, and a Controller refuses the host console on an older Nex Core immediately instead of hanging.
+- Fixed VM media changes: an interrupted insert no longer reports the ISO as inserted with an empty tray, eject keeps the boot order the host actually holds and an ejected VM still re-adopts into a replacement Controller, ejecting an already-empty tray succeeds, and a media change no longer breaks idempotent replay of the original create request.
+- Fixed Create VM so reopening a draft in which every network interface had been removed no longer adds one back and blocks Next.
+- Fixed Create VM so the first disk name defaults from the pool and VM name, instead of staying as system and ignoring the name typed on the first step.
+- Fixed Create VM CPU topology so blank sockets no longer look like 1 while staying unset; filling cores or threads now starts from the default layout instead of rejecting 0 × cores × threads.
+- Fixed Create VM dropdowns (Bus and the rest) closing as soon as they opened.
 - Fixed local Core service shutdown so the embedded agent stops before the process exits, which had left CI TempDir cleanup racing agent state writes.
 - Shortened the notice after a VM power request so it no longer tells you to follow the task for the next host report.
 - Fixed a fresh Nex Core install having no Nex package repository: the host now ships the Nex archive signing key and configures `/etc/apt/sources.list.d/nex.sources`, so `apt update` lists the Nex repo out of the box (BUG-0042).

@@ -12,6 +12,7 @@ vendor/
 *~
 .DS_Store
 /tmp/
+.claude/
 
 # QA screenshot bulk (keep .md/.json/.txt under docs/qa)
 docs/qa/**/*.png

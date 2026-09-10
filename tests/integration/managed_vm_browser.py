@@ -39,7 +39,7 @@ def simulated(lab):
         '-admin-password-file', password, '-ui-dir', ROOT / 'web/dist', '-source-archive', source, '-stale-after', '2s')
     lab.client(cert)
     eventually(lambda: lab.api('/api/v1/sites', expected=401), 'controller ready')
-    lab.csrf = lab.api('/api/v1/session', {'username': 'admin', 'password': password.read_text()})['csrf_token']
+    lab.csrf = lab.api('/api/v1/session', {'username': 'root', 'password': password.read_text()})['csrf_token']
     site = lab.api('/api/v1/sites', {'name': 'Browser QA'}, expected=201)
     token = lab.path / 'token'
     token.write_text(lab.api('/api/v1/enrollment-tokens', {'site_id': site['id']}, expected=201)['token'])
@@ -113,7 +113,7 @@ def acceptance(config, password, iso, evidence, mode):
             page.goto(config['url'] + '/#/pools/' + config['pool_id'])
             page.get_by_role('navigation', name='Resource views').get_by_role('button', name=tab, exact=True).click()
         def wait_row(name):
-            row = page.locator('tr').filter(has_text=name)
+            row = page.locator('tr:not([aria-label="ISO upload to Controller"])').filter(has_text=name)
             expect(row).to_contain_text('succeeded', timeout=180000)
         pending = []
         page.route('**/api/v1/session', lambda route: pending.append(route))
@@ -124,7 +124,7 @@ def acceptance(config, password, iso, evidence, mode):
             route.continue_()
         page.unroute('**/api/v1/session')
         expect(page.get_by_label('Username')).to_be_focused()
-        page.keyboard.type('admin')
+        page.keyboard.type('root')
         page.keyboard.press('Tab')
         expect(page.get_by_label('Password', exact=True)).to_be_focused()
         page.keyboard.type('incorrect')
@@ -209,6 +209,13 @@ def acceptance(config, password, iso, evidence, mode):
         else:
             page.get_by_label('ISO file', exact=True).set_input_files(str(iso))
         page.get_by_role('button', name='Upload and transfer ISO').click()
+        # The browser->Controller upload is a row of the Recent tasks table, not a panel above it.
+        upload_row = page.locator('.activity-dock table tbody tr[aria-label="ISO upload to Controller"]')
+        expect(upload_row).to_be_visible()
+        expect(upload_row).to_contain_text(iso.name)
+        expect(upload_row.get_by_role('progressbar')).to_be_visible()
+        assert page.locator('.activity-dock section[aria-label="ISO upload to Controller"]').count() == 0
+        capture('iso-upload-row')
         wait_row(iso.name)
         capture('iso')
         page.get_by_role('button', name='Close', exact=True).click()
@@ -222,8 +229,15 @@ def acceptance(config, password, iso, evidence, mode):
         page.get_by_label('Placement host').select_option(config['host_id'])
         page.get_by_role('button', name='Next', exact=True).focus()
         page.keyboard.press('Enter')
-        # Step 2: an impossible topology must block Next and say why.
+        # Step 2: an impossible topology must block Next and say why. Filling only cores
+        # and threads must seed sockets (BUG-0049: blank sockets used to show placeholder
+        # "1" while staying 0, so 0×2×2 looked like a calculator bug).
         expect(page.get_by_role('heading', name='Create VM · 2 of 6:', exact=False)).to_be_focused()
+        page.get_by_label('Virtual CPUs', exact=True).fill('4')
+        page.get_by_label('Cores per socket', exact=True).fill('2')
+        page.get_by_label('Threads per core', exact=True).fill('2')
+        assert page.get_by_label('Sockets', exact=True).input_value() == '1'
+        expect(page.locator('#vm-topology-issue')).to_have_count(0)
         page.get_by_label('Virtual CPUs', exact=True).fill('2')
         page.get_by_label('Sockets', exact=True).fill('3')
         expect(page.locator('#vm-topology-issue')).to_be_visible()
@@ -271,8 +285,8 @@ def acceptance(config, password, iso, evidence, mode):
         # Step 4: a derived MAC and a manual one; a malformed manual MAC must block Next.
         expect(page.get_by_role('heading', name='Create VM · 4 of 6:', exact=False)).to_be_focused()
         def pick_network(group):
-            options = group.get_by_label('Network').locator('option').all_text_contents()
-            group.get_by_label('Network').select_option(label=next(t for t in options if t.startswith(network_name)))
+            options = group.get_by_role('combobox', name='Network').locator('option').all_text_contents()
+            group.get_by_role('combobox', name='Network').select_option(label=next(t for t in options if t.startswith(network_name)))
         pick_network(page.get_by_role('group', name='Network interface 1', exact=True))
         page.get_by_role('button', name='Add network interface', exact=True).click()
         second_nic = page.get_by_role('group', name='Network interface 2', exact=True)
@@ -298,7 +312,9 @@ def acceptance(config, password, iso, evidence, mode):
         page.get_by_role('button', name='Next', exact=True).click()
         expect(page.get_by_role('heading', name='Create VM · 6 of 6:', exact=False)).to_be_focused()
         expect(page.get_by_text('created stopped', exact=False)).to_be_visible()
-        page.get_by_role('button', name='Back', exact=True).click()  # entries survive stepping back
+        # Scoped to the wizard: the fixed toolbar also has a Back button (browser history), which
+        # would otherwise make this locator ambiguous in strict mode.
+        page.get_by_role('region', name='Create VM', exact=True).get_by_role('button', name='Back', exact=True).click()  # entries survive stepping back
         expect(page.get_by_role('group', name='Boot order', exact=True).locator('li').first).to_contain_text('Install media')
         expect(page.get_by_label('Firmware')).to_have_value('bios')
         page.get_by_role('button', name='Next', exact=True).click()
@@ -330,7 +346,7 @@ def acceptance(config, password, iso, evidence, mode):
         expect(page.locator('.details')).to_contain_text('succeeded', timeout=180000)
         expect(page.locator('.details')).to_contain_text('shut off', timeout=30000)
         for label, value in [('Virtual CPUs', '2'), ('Memory', '512 MiB'), ('Disks', 'system'), ('Disks', 'data'),
-                             ('Networks', 'Intel e1000e'), ('Networks', '52:54:00:ab:cd:ef'), ('Install ISO', iso.name),
+                             ('Networks', 'Intel E1000E'), ('Networks', '52:54:00:ab:cd:ef'), ('Install ISO', iso.name),
                              ('Firmware', 'BIOS'), ('Creation task', 'succeeded')]:
             expect(page.locator('dt').filter(has_text=label).locator('xpath=following-sibling::dd[1]')).to_contain_text(value)
         vms = page.request.get(config['url'] + '/api/v1/vms').json()

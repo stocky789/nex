@@ -126,8 +126,8 @@ def main():
                 else:
                     raise AssertionError('DHCP appliance not ready within 300 seconds')
                 results.append('Native DHCP assigned 10.0.2.15 to exact management MAC; pinned-hostname HTTPS ready marker valid')
-                assert request('/api/v1/session', {'username': 'admin', 'password': 'wrong'})[0] == 401
-                status, session = request('/api/v1/session', {'username': 'admin', 'password': 'a'})
+                assert request('/api/v1/session', {'username': 'root', 'password': 'wrong'})[0] == 401
+                status, session = request('/api/v1/session', {'username': 'root', 'password': 'a'})
                 assert status == 200 and session.get('csrf_token'), 'one-character admin login failed'
                 results.append('Actual Controller rejects incorrect password and accepts one-character bootstrap password')
                 command = ('systemctl is-active --quiet nex-controller qemu-guest-agent && '

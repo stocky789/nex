@@ -1,0 +1,32 @@
+{
+  "summary": "Roadmap status revision: record the VM creation slice as committed and independently reviewed, mark the documentation-gate item resolved, note the hosted phase1 browser walkthrough and its BUG-0047 failure, add a status line to the background ISO upload plan, and point the platform plan at Phase 2 progress.",
+  "paths": [
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-10-iso-upload-background.md",
+    "docs/plans/2026-09-10-vm-creation-system.md",
+    "docs/qa/vm-creation/checks.md",
+    "docs/changes/2026-09-10-roadmap-status-revision.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Plan and QA status text only; no operator-facing behaviour or instructions change.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Documentation status revision; no Controller, Core or client-facing contract is touched.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state is introduced by a plan status update.",
+    "record": ""
+  },
+  "verification": {
+    "method": "Statuses taken from git log (4a60e45, 38aa856, 8103af4), Gitea Actions runs 3798-3804 read via the API (documentation.yml and installer.yml green; phase1 job 4369 fails on BUG-0047), and python3 scripts/check_docs.py --all passing at HEAD.",
+    "evidence": [
+      "docs/qa/vm-creation/checks.md",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

@@ -33,6 +33,6 @@ def peer_throttle(page, session_url):
     origin = urlsplit(session_url)
     statuses = []
     for attempt in range(6):
-        response = page.context.request.post(session_url, data=json.dumps({'username': 'root' if origin.path.startswith('/api/local/') else 'admin', 'password': 'wrong-security-check'}), headers={'Content-Type': 'application/json', 'Origin': f'{origin.scheme}://{origin.netloc}', 'X-Forwarded-For': f'192.0.2.{attempt+1}'})
+        response = page.context.request.post(session_url, data=json.dumps({'username': 'root', 'password': 'wrong-security-check'}), headers={'Content-Type': 'application/json', 'Origin': f'{origin.scheme}://{origin.netloc}', 'X-Forwarded-For': f'192.0.2.{attempt+1}'})
         statuses.append(response.status)
     assert 429 in statuses and statuses[-1] == 429 and all(s in (401, 429) for s in statuses), 'peer throttle absent or spoofed forwarded IP bypassed it'

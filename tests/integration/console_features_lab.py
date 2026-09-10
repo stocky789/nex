@@ -146,7 +146,7 @@ def main():
             '-stale-after', '3s', '-ui-dir', ROOT / 'web/dist')
         lab.client(cert)
         eventually(lambda: lab.api('/api/v1/sites', expected=401), 'controller startup')
-        session = lab.api('/api/v1/session', {'username': 'admin', 'password': password.read_text()})
+        session = lab.api('/api/v1/session', {'username': 'root', 'password': password.read_text()})
         lab.csrf = session['csrf_token']
         site = lab.api('/api/v1/sites', {'name': 'Console features QA'}, expected=201)
         token = lab.api('/api/v1/enrollment-tokens', {'site_id': site['id']}, expected=201)['token']
@@ -310,7 +310,7 @@ def main():
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             page.goto(lab.url)
-            page.get_by_label('Username').fill('admin')
+            page.get_by_label('Username').fill('root')
             page.get_by_label('Password', exact=True).fill(password.read_text())
             page.get_by_role('button', name='Sign in').click()
             page.wait_for_load_state('networkidle')

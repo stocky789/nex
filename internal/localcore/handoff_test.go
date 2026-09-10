@@ -68,7 +68,7 @@ func TestHandoffDurableSecrets(t *testing.T) {
 // enrollment. Closing a real connection after commit simulates a lost response.
 // Native libvirt observation/appliance boot is intentionally outside this check.
 func TestHandoffControllerLostResponses(t *testing.T) {
-	ctl, err := controller.Open(controller.Config{DataDir: privateDir(t), Username: "admin", Password: "test-controller-password"})
+	ctl, err := controller.Open(controller.Config{DataDir: privateDir(t), Username: "root", Password: "test-controller-password"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestHandoffControllerLostResponses(t *testing.T) {
 	var session struct {
 		CSRF string `json:"csrf_token"`
 	}
-	if _, err = h.call(context.Background(), "POST", "/api/v1/session", map[string]string{"username": "admin", "password": "test-controller-password"}, &session); err != nil {
+	if _, err = h.call(context.Background(), "POST", "/api/v1/session", map[string]string{"username": "root", "password": "test-controller-password"}, &session); err != nil {
 		t.Fatal(err)
 	}
 	h.csrf = session.CSRF
@@ -200,7 +200,7 @@ func TestHandoffAdoptsObservedApplianceAndResumesOffline(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	ctl, err := controller.Open(controller.Config{DataDir: privateDir(t), Username: "admin", Password: "test-controller-password"})
+	ctl, err := controller.Open(controller.Config{DataDir: privateDir(t), Username: "root", Password: "test-controller-password"})
 	if err != nil {
 		t.Fatal(err)
 	}

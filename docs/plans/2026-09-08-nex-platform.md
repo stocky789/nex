@@ -1,7 +1,7 @@
 # Nex Controller and Nex Core implementation plan
 
 Date: 2026-09-08  
-Status: Standalone installer alpha and Phase 1 Controller/agent development foundation have lab evidence; remaining delivery gates are tracked below.
+Status: Standalone installer alpha and Phase 1 Controller/agent development foundation have lab evidence; Phase 2 creation, power, console and guest-tools slices are implemented, with stopped-VM editing, deletion with disk retention and the Phase 2 acceptance gate open (see the [VM creation system plan](2026-09-10-vm-creation-system.md)); remaining delivery gates are tracked below.
 
 Project planning files live in `docs/plans/`.
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { Guest } from "./console";
+import { Icon } from "./icons";
 import { VMWizard, adapterNames, busNames, cpuNames, describeNetwork, guestNames, readyHost, type DiskRow, type NICRow } from "./vm-create";
 
 export type Registration = { id: string; pool_id: string; host_id: string; name: string; operation_id: string; status: string; error?: string };
@@ -13,7 +14,7 @@ export type VM = Registration & { spec?: VMSpec; state: string; freshness: strin
 type NIC = { name: string; mac: string; kind?: string; master?: string; parent?: string; state: string; addresses?: string[] | null };
 export type Host = { id: string; pool_id: string; hostname: string; connection: string; revoked: boolean; capabilities?: string[]; inventory: { cpu_count: number; memory_bytes: number; nics?: NIC[] | null } | null };
 type API = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
-type Props = { account: string; poolID: string; poolName: string; tab: string; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[]; vms: VM[]; api: API; reload: () => Promise<void>; setTab: (tab: string) => void; unavailable: boolean; uploading: boolean; startIsoUpload: <T>(path: string, file: File) => Promise<T> };
+type Props = { account: string; poolID: string; poolName: string; tab: string; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[]; vms: VM[]; api: API; reload: () => Promise<void>; setTab: (tab: string) => void; unavailable: boolean; uploading: boolean; startIsoUpload: <T>(path: string, file: File) => Promise<T>; createVM: boolean; onCreateVMShown: () => void };
 const GiB = 1024 ** 3;
 const status = (value: string) => <span className={`badge ${value}`}>{value || "unknown"}</span>;
 const task = (value: Registration) => <>{status(value.status)}{value.error && <p className="task-error">{value.error}</p>}{value.operation_id && <small><a href="#/tasks">Task {value.operation_id}</a></small>}</>;
@@ -27,7 +28,7 @@ function pendingRequests(key: string): Pending {
   return {};
 }
 
-export function ManagedVMs({ account, poolID, poolName, tab, hosts: allHosts, storage: allStorage, networks: allNetworks, media: allMedia, vms: allVMs, api, reload, setTab, unavailable, uploading, startIsoUpload }: Props) {
+export function ManagedVMs({ account, poolID, poolName, tab, hosts: allHosts, storage: allStorage, networks: allNetworks, media: allMedia, vms: allVMs, api, reload, setTab, unavailable, uploading, startIsoUpload, createVM, onCreateVMShown }: Props) {
   const hosts = allHosts.filter(h => h.pool_id === poolID);
   const storage = allStorage.filter(s => s.pool_id === poolID);
   const networks = allNetworks.filter(n => n.pool_id === poolID);
@@ -96,6 +97,8 @@ export function ManagedVMs({ account, poolID, poolName, tab, hosts: allHosts, st
     finally { if (blocking) { lock.current = false; setBusy(false); } }
   }
   function open(name: string) { setForm(name); setError(""); setNotice(""); }
+  // The toolbar's New VM lands here after navigating to the pool; show the wizard once.
+  useEffect(() => { if (createVM) { setTab("Virtual machines"); open("vm"); onCreateVMShown(); } }, [createVM]);
   function chooseFile(value: File | null) {
     if (busy || uploading) return;
     setFile(null); setError("");
@@ -206,7 +209,7 @@ export function VMDetails({ vm, hosts, storage, networks, media }: { vm: VM; hos
   return <><section className="panel"><div className="section-heading"><h2>VM details</h2>{status(vm.freshness)}</div>
     {vm.freshness !== "fresh" && <p className="warning">Current execution state is unknown. Last reported state: {vm.state || "unknown"}. An unreachable host does not prove that this VM stopped.</p>}
     <dl className="details"><dt>VM identity</dt><dd>{vm.id}</dd><dt>Assigned host</dt><dd><a href={`#/hosts/${vm.host_id}`}>{hosts.find(h => h.id === vm.host_id)?.hostname || vm.host_id}</a></dd><dt>Observed state</dt><dd>{vm.state || "unknown"}</dd><dt>Role</dt><dd>{vm.protected ? "Protected Controller appliance" : "Guest VM"}</dd>{spec && <>{spec.description && <><dt>Description</dt><dd>{spec.description}</dd></>}<dt>Guest OS</dt><dd>{guestNames[spec.guest_os] || "Not recorded"}</dd><dt>Virtual CPUs</dt><dd>{spec.cpu.count}<small>{topology(spec.cpu)} · {cpuNames[spec.cpu.model] || spec.cpu.model}</small></dd><dt>Memory</dt><dd>{spec.memory.size_mib} MiB<small>{spec.memory.mode === "dedicated" ? "Dedicated · always reserved for this VM" : "Maximum · a ceiling only; free pages return to the host when the guest reports them"}</small></dd><dt>Disks</dt><dd>{spec.disks?.length ? <ul className="plain">{spec.disks.map((d, i) => <li key={i}>{d.name} · {d.size_gib} GiB · {busNames[d.bus] || d.bus} · {d.thin ? "Thin" : "Thick"}{d.boot_order > 0 ? ` · boot ${d.boot_order}` : ""}<small>{storage.find(s => s.id === d.storage_id)?.name || d.storage_id}</small></li>)}</ul> : "None recorded"}</dd><dt>Networks</dt><dd>{spec.nics?.length ? <ul className="plain">{spec.nics.map((n, i) => <li key={i}>{networks.find(x => x.id === n.network_id)?.name || n.network_id} · {adapterNames[n.model] || n.model}{n.mtu ? ` · MTU ${n.mtu}` : ""}<small className="mono">{n.mac || "MAC derived from the VM identity"}</small></li>)}</ul> : "None"}</dd><dt>Install ISO</dt><dd>{spec.media_id ? media.find(m => m.id === spec.media_id)?.name || spec.media_id : "None"}{spec.media_id && spec.boot.media_boot_order > 0 && <small>Boot order {spec.boot.media_boot_order}</small>}</dd><dt>Firmware</dt><dd>{spec.boot.firmware?.toUpperCase()}<small>Machine type {spec.boot.machine || "q35"}</small></dd><dt>Autostart</dt><dd>{spec.autostart ? "Starts when the host boots" : "Does not start when the host boots"}</dd></>}{vm.operation_id && <><dt>Creation task</dt><dd>{task(vm)}</dd></>}</dl>
-    {!vm.protected && <p className="panel-note">Creation provisions a stopped VM. Use the Power controls to start it, then open the Console tab.</p>}
+    {!vm.protected && <p className="panel-note">Creation provisions a stopped VM. Use Start in the toolbar to start it, then open the Console tab.</p>}
   </section>
   <GuestTools vm={vm} />
   </>;
@@ -292,46 +295,71 @@ export function HostISOs({ host, media, storage, unavailable }: { host: Host; me
 }
 
 const powerActions = [
-  { action: "start", label: "Start", when: (state: string) => state === "shut off", confirm: "" },
-  { action: "shutdown", label: "Shut down", when: (state: string) => state === "running", confirm: "Asks the guest to shut down (ACPI). A guest without ACPI support ignores it; use Force stop if it stays running." },
-  { action: "reboot", label: "Reboot", when: (state: string) => state === "running", confirm: "Asks the guest to reboot (ACPI). A guest without ACPI support ignores it." },
-  { action: "force-stop", label: "Force stop", when: (state: string) => state === "running", confirm: "Cuts power immediately, like pulling the plug. Unsaved guest data is lost." },
+  { action: "start", label: "Start", icon: "start", when: (state: string) => state === "shut off", confirm: "" },
+  { action: "shutdown", label: "Shut down", icon: "shutdown", when: (state: string) => state === "running", confirm: "Asks the guest to shut down (ACPI). A guest without ACPI support ignores it; use Force stop if it stays running." },
+  { action: "reboot", label: "Reboot", icon: "reboot", when: (state: string) => state === "running", confirm: "Asks the guest to reboot (ACPI). A guest without ACPI support ignores it." },
+  { action: "force-stop", label: "Force stop", icon: "stop", when: (state: string) => state === "running", confirm: "Cuts power immediately, like pulling the plug. Unsaved guest data is lost." },
 ] as const;
 
-// VMPower shows central power controls for one VM. Requests are durable host tasks; the
-// observed state, refreshed by host reports, tells what actually happened.
-export function VMPower({ vm, host, api, reload, busy, unavailable, onNotice }: { vm: VM; host?: Host; api: API; reload: () => Promise<void>; busy: boolean; unavailable: boolean; onNotice: (text: string) => void }) {
-  const [pending, setPending] = useState<typeof powerActions[number] | null>(null);
-  const [error, setError] = useState("");
-  const [working, setWorking] = useState(false);
-  const request = useRef<Record<string, string>>({});
-  const blocker = !host || host.revoked || host.connection !== "fresh" ? "Power controls need a freshly connected host."
+// powerBlocker explains why central power requests are unavailable for a VM now; an empty
+// result means they can be submitted.
+export function powerBlocker(vm: VM, host?: Host): string {
+  return !host || host.revoked || host.connection !== "fresh" ? "Power controls need a freshly connected host."
     : !host.capabilities?.includes("vm-power-v1") ? "The host agent does not support central power requests; upgrade Nex Core."
     : vm.freshness !== "fresh" ? "Current VM state is unknown; wait for a fresh host report."
     : vm.state !== "running" && vm.state !== "shut off" ? `The VM is ${vm.state || "unknown"}; resolve that state on its host before a power request.`
     : "";
+}
+
+// VMPower is the toolbar's power group: Start, Shut down, Reboot and Force stop for the selected
+// VM, greyed out with a reason when nothing is selected or the host cannot take the request.
+// Requests are durable host tasks; the observed state, refreshed by host reports, tells what
+// actually happened. Confirmations use a native modal dialog so they work from the toolbar.
+export function VMPower({ vm, host, api, reload, busy, unavailable, onNotice, describedBy }: { vm?: VM; host?: Host; api: API; reload: () => Promise<void>; busy: boolean; unavailable: boolean; onNotice: (text: string) => void; describedBy?: string }) {
+  const [pending, setPending] = useState<typeof powerActions[number] | null>(null);
+  const [error, setError] = useState("");
+  const [working, setWorking] = useState(false);
+  const request = useRef<Record<string, string>>({});
+  const dialog = useRef<HTMLDialogElement>(null);
+  // The opener is disabled while its request runs, so the dialog cannot restore focus by itself.
+  const opener = useRef<HTMLButtonElement | null>(null);
+  const blocker = vm ? powerBlocker(vm, host) : "Select a virtual machine in Resources.";
+  useEffect(() => {
+    const element = dialog.current;
+    if (!element) return;
+    if (pending && !element.open) element.showModal();
+    else if (!pending && element.open) element.close();
+  }, [pending]);
   async function submit(item: typeof powerActions[number]) {
+    if (!vm) return;
     setWorking(true); setError("");
     request.current[item.action] ??= crypto.randomUUID();
     try {
       await api(`vms/${encodeURIComponent(vm.id)}/power`, "POST", { request_id: request.current[item.action], action: item.action });
       delete request.current[item.action];
-      setPending(null);
       onNotice(`${item.label} requested for ${vm.name}.`);
       await reload();
-    } catch (e) { setError((e as Error).message); }
+      // Close only once the button can take focus back, so the dialog returns focus to it.
+      setPending(null);
+    } catch (e) {
+      // The dialog is the error surface for every action: it stays (or opens, for Start) with the
+      // message, and its confirm button retries with the same request identity.
+      setError((e as Error).message);
+      setPending(item);
+    }
     finally { setWorking(false); }
   }
-  return <section className="panel vm-power" aria-label={`Power controls for ${vm.name}`}>
-    <div className="section-heading"><h2>Power</h2><span className="muted">Observed: {vm.state || "unknown"} · {status(vm.freshness)}</span></div>
-    <div className="actions vm-power-actions">
-      {powerActions.map(item => <button key={item.action} className={item.action === "force-stop" ? "danger" : item.action === "start" ? "primary" : ""} aria-describedby={blocker ? `power-blocker-${vm.id}` : undefined} disabled={busy || working || unavailable || Boolean(blocker) || !item.when(vm.state)} onClick={() => { setError(""); if (item.confirm) setPending(item); else void submit(item); }}>{item.label}</button>)}
-      {blocker && <span className="help" id={`power-blocker-${vm.id}`}>{blocker}</span>}
-    </div>
-    {error && <p className="task-error" role="alert">{error}</p>}
-    {pending && <form className="confirm-power" aria-label={`Confirm ${pending.label.toLowerCase()}`} onSubmit={e => { e.preventDefault(); void submit(pending); }}>
-      <p><strong>{pending.label} {vm.name}?</strong> {pending.confirm}{vm.protected && " This is the Controller appliance: central management stops until it runs again; recover it from the host-local page."}</p>
-      <div className="actions"><button type="button" autoFocus disabled={working} onClick={() => setPending(null)}>Cancel</button><button className={pending.action === "force-stop" ? "danger" : "primary"} disabled={working}>{working ? "Requesting…" : `Confirm ${pending.label.toLowerCase()}`}</button></div>
-    </form>}
-  </section>;
+  return <div className="toolbar-group vm-power" role="group" aria-label="VM power">
+    {powerActions.map(item => <button key={item.action} type="button" className={`tool-${item.action}`} title={blocker || undefined} aria-describedby={describedBy}
+      disabled={busy || working || unavailable || !vm || Boolean(blocker) || !item.when(vm.state)}
+      onClick={e => { opener.current = e.currentTarget; setError(""); if (item.confirm) setPending(item); else void submit(item); }}><Icon kind={item.icon} />{item.label}</button>)}
+    <dialog ref={dialog} className="confirm-dialog" aria-labelledby="power-confirm-title" onCancel={e => { if (working) e.preventDefault(); }} onClose={() => { setPending(null); setError(""); opener.current?.focus(); }}>
+      {pending && vm && <form aria-label={`Confirm ${pending.label.toLowerCase()}`} onSubmit={e => { e.preventDefault(); void submit(pending); }}>
+        <h2 id="power-confirm-title">{pending.label} {vm.name}?</h2>
+        {(pending.confirm || vm.protected) && <p>{pending.confirm}{vm.protected && " This is the Controller appliance: central management stops until it runs again; recover it from the host-local page."}</p>}
+        {error && <p className="task-error" role="alert">{error}</p>}
+        <div className="actions"><button type="button" disabled={working} onClick={() => setPending(null)}>Cancel</button><button className={pending.action === "force-stop" ? "danger" : "primary"} disabled={working}>{working ? "Requesting…" : `Confirm ${pending.label.toLowerCase()}`}</button></div>
+      </form>}
+    </dialog>
+  </div>;
 }

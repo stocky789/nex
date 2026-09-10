@@ -55,7 +55,7 @@ with tempfile.TemporaryDirectory(prefix='nex-native-') as directory:
             '-stale-after', '2s')
         lab.client(cert)
         eventually(lambda: lab.api('/api/v1/sites', expected=401), 'controller start')
-        session = lab.api('/api/v1/session', {'username':'admin', 'password':password.read_text()})
+        session = lab.api('/api/v1/session', {'username':'root', 'password':password.read_text()})
         lab.csrf = session['csrf_token']
         site = lab.api('/api/v1/sites', {'name':'Debian smoke'}, expected=201)
         lab.api('/api/v1/pools', {'name':'Disposable', 'site_id':site['id']}, expected=404)

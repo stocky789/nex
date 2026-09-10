@@ -327,6 +327,15 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 				fail(w, 500, "result storage failed")
 				return
 			}
+			if res.Status == "succeeded" {
+				var kind string
+				if tx.QueryRow("SELECT kind FROM operations WHERE id=?", res.OperationID).Scan(&kind) == nil && kind == "vm-media" {
+					if err = c.mirrorVMMedia(tx, res.OperationID); err != nil {
+						fail(w, 500, "media mirror failed")
+						return
+					}
+				}
+			}
 		}
 		out.AcknowledgedResults = append(out.AcknowledgedResults, res.OperationID)
 	}

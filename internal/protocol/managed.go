@@ -219,11 +219,10 @@ func ValidateVMSpec(v VMCreateSpec) error {
 	if len(orders) == 0 {
 		return errors.New("at least one disk or the install media must have a boot order")
 	}
-	for i := 1; i <= len(orders); i++ {
-		if !orders[i] {
-			return errors.New("boot order must number the boot devices from 1 without gaps")
-		}
-	}
+	// Boot order values must be unique and positive, not contiguous: libvirt orders devices by
+	// bootindex and tolerates gaps. Ejecting media leaves one, because the domain keeps the
+	// disks' bootindex values and a media change never renumbers them; rejecting the gap would
+	// make a re-adopting Controller discard the VM over a boot order the host still holds.
 	macs := map[string]bool{}
 	for _, n := range v.NICs {
 		if n.NetworkID == "" {

@@ -42,7 +42,7 @@ func TestIncompleteLoginDoesNotReserveHashCapacity(t *testing.T) {
 		defer func() { close(b.release); <-done }()
 	}
 	time.Sleep(120 * time.Millisecond)
-	r := httptest.NewRequest("POST", "https://nex.test/api/v1/session", strings.NewReader(`{"username":"admin","password":"a-long-test-password"}`))
+	r := httptest.NewRequest("POST", "https://nex.test/api/v1/session", strings.NewReader(`{"username":"root","password":"a-long-test-password"}`))
 	r.RemoteAddr = "192.0.2.20:4000"
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -81,7 +81,7 @@ func TestSessionIdleAbsoluteAndLegacyCookie(t *testing.T) {
 func TestControllerLoginPeerIgnoresForwardedHeaders(t *testing.T) {
 	a := newClient(t)
 	attempt := func(peer, forward string) int {
-		r := httptest.NewRequest("POST", "https://nex.test/api/v1/session", strings.NewReader(`{"username":"admin","password":"wrong"}`))
+		r := httptest.NewRequest("POST", "https://nex.test/api/v1/session", strings.NewReader(`{"username":"root","password":"wrong"}`))
 		r.RemoteAddr = peer
 		r.Header.Set("Content-Type", "application/json")
 		r.Header.Set("X-Forwarded-For", forward)
@@ -105,14 +105,14 @@ func TestControllerLoginPeerIgnoresForwardedHeaders(t *testing.T) {
 func TestControllerSessionCapPrunesExpired(t *testing.T) {
 	a := newClient(t)
 	for i := 0; i < 63; i++ {
-		_, err := a.c.db.Exec("INSERT INTO sessions(token,username,csrf,expires,idle_expires) VALUES(?, 'admin','csrf',?,?)", strings.Repeat("x", i+1), time.Now().Add(time.Hour).Unix(), time.Now().Add(time.Minute).Unix())
+		_, err := a.c.db.Exec("INSERT INTO sessions(token,username,csrf,expires,idle_expires) VALUES(?, 'root','csrf',?,?)", strings.Repeat("x", i+1), time.Now().Add(time.Hour).Unix(), time.Now().Add(time.Minute).Unix())
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	a.call("POST", "/api/v1/session", map[string]string{"username": "admin", "password": "a-long-test-password"}, nil, 429)
+	a.call("POST", "/api/v1/session", map[string]string{"username": "root", "password": "a-long-test-password"}, nil, 429)
 	a.c.db.Exec("UPDATE sessions SET idle_expires=0")
-	a.call("POST", "/api/v1/session", map[string]string{"username": "admin", "password": "a-long-test-password"}, nil, 200)
+	a.call("POST", "/api/v1/session", map[string]string{"username": "root", "password": "a-long-test-password"}, nil, 200)
 	var count int
 	a.c.db.QueryRow("SELECT count(*) FROM sessions").Scan(&count)
 	if count != 1 {
@@ -139,7 +139,7 @@ func TestExistingDatabaseGetsIdleDeadlineAndKeepsPassword(t *testing.T) {
 	}
 	a.c = c
 	a.call("GET", "/api/v1/session", nil, nil, 401)
-	a.call("POST", "/api/v1/session", map[string]string{"username": "admin", "password": "old-password"}, nil, 200)
+	a.call("POST", "/api/v1/session", map[string]string{"username": "root", "password": "old-password"}, nil, 200)
 }
 
 // Short passwords must bootstrap and authenticate unchanged, including Unicode and spaces.
@@ -149,13 +149,13 @@ func TestControllerShortPasswordBootstrapAndLogin(t *testing.T) {
 		if err := os.Chmod(dir, 0700); err != nil {
 			t.Fatal(err)
 		}
-		c, err := Open(Config{DataDir: dir, Username: "admin", Password: password})
+		c, err := Open(Config{DataDir: dir, Username: "root", Password: password})
 		if err != nil {
 			t.Fatal("short password bootstrap failed:", err)
 		}
 		a := &testClient{t: t, c: c}
-		a.call("POST", "/api/v1/session", map[string]string{"username": "admin", "password": password + "wrong"}, nil, 401)
-		a.call("POST", "/api/v1/session", map[string]string{"username": "admin", "password": password}, nil, 200)
+		a.call("POST", "/api/v1/session", map[string]string{"username": "root", "password": password + "wrong"}, nil, 401)
+		a.call("POST", "/api/v1/session", map[string]string{"username": "root", "password": password}, nil, 200)
 		c.Close()
 	}
 }

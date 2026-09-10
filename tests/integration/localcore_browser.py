@@ -149,7 +149,8 @@ def main():
                     expect(page.get_by_label('IPv4 address / prefix',exact=True)).to_have_count(0)
                     page.get_by_role('button',name='Review deployment').click()
                     expect(page.get_by_role('heading',name='Deploy Nex Controller',exact=True)).to_be_visible()
-                    page.get_by_label('Local storage').select_option(simulated_host['storage_dir'])
+                    expect(page.get_by_label('Local storage')).to_have_value(simulated_host['storage_dir'])
+                    expect(page.get_by_label('Local storage')).to_be_disabled()
                     page.get_by_label('LAN bridge').select_option('nexbr0')
                     new_password=page.get_by_label('Controller administrator password',exact=True)
                     for accepted in ['x','😀','  ']:
@@ -252,7 +253,7 @@ def main():
                         button.click()
                         page.get_by_role('button',name='Review deployment').click()
                         expect(page.get_by_role('heading',name='Deploy Nex Controller',exact=True)).to_be_visible()
-                        page.get_by_label('Local storage').select_option(str(storage));page.get_by_label('LAN bridge').select_option(bridge)
+                        expect(page.get_by_label('Local storage')).to_have_value(str(storage));page.get_by_label('LAN bridge').select_option(bridge)
                         page.get_by_label('IP configuration',exact=True).select_option('static')
                         for label,value in [('IPv4 address / prefix','192.0.2.20/24'),('IPv4 gateway','192.0.2.1'),('DNS servers','192.0.2.1'),('Controller administrator password','x')]: page.get_by_label(label,exact=True).fill(value)
                         page.get_by_role('button',name='Review deployment').click()

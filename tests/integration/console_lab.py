@@ -63,7 +63,7 @@ def main():
         lab.start('controller', *controller_args)
         lab.client(cert)
         eventually(lambda: lab.api('/api/v1/sites', expected=401), 'controller startup')
-        session = lab.api('/api/v1/session', {'username': 'admin', 'password': password.read_text()})
+        session = lab.api('/api/v1/session', {'username': 'root', 'password': password.read_text()})
         lab.csrf = session['csrf_token']
         site = lab.api('/api/v1/sites', {'name': 'Console QA'}, expected=201)
         token = lab.api('/api/v1/enrollment-tokens', {'site_id': site['id']}, expected=201)['token']
@@ -163,7 +163,7 @@ def main():
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             page.goto(lab.url)
-            page.get_by_label('Username').fill('admin')
+            page.get_by_label('Username').fill('root')
             page.get_by_label('Password', exact=True).fill(password.read_text())
             page.get_by_role('button', name='Sign in').click()
             page.wait_for_load_state('networkidle')
@@ -186,7 +186,7 @@ def main():
             eventually(lambda: observed()['freshness'] == 'fresh' and observed()['state'] == 'running', 'running observation', timeout=60)
             capture(page, 'controller-power-started')
             audit = lab.api('/api/v1/audit')
-            assert any(a['action'] == 'vm-power' and a['actor'] == 'admin' for a in audit)
+            assert any(a['action'] == 'vm-power' and a['actor'] == 'root' for a in audit)
             lab.passed('Start from the Controller UI ran as a durable host task, the guest is observed running and the request is audited')
             # The Console tab was left open while the VM started: it must connect by itself.
             page.get_by_role('button', name='Console', exact=True).click()
@@ -196,7 +196,7 @@ def main():
             before = canvas_pixels(page)
             capture(page, 'controller-console-connected')
             audit = lab.api('/api/v1/audit')
-            assert any(a['action'] == 'console.open' and a['resource_id'] == vm_id and a['actor'] == 'admin' for a in audit)
+            assert any(a['action'] == 'console.open' and a['resource_id'] == vm_id and a['actor'] == 'root' for a in audit)
             lab.passed('Controller console connected through the host tunnel; guest boot screen rendered and console.open audited')
             page.locator('.console-screen canvas').click()
             page.keyboard.press('ArrowDown')

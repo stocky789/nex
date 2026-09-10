@@ -11,10 +11,6 @@ section.console { padding: 0; overflow: hidden; margin-bottom: 12px; }
 .console .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 12px; }
 .console h2 { margin: 0; font-size: 15px; }
 .console .badge { font-size: 11px; }
-.vm-power-actions { padding: 8px 10px; align-items: center; }
-.vm-power-actions .help { font-size: 11px; }
-.confirm-power { margin: 0; padding: 8px 10px; border-top: 1px solid #e0e3e7; background: #fffbeb; }
-.confirm-power p { margin: 0 0 8px; font-size: 12px; }
 .console-toolbar select, .console-toolbar input { font-size: 12px; }
 .console-option { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
 .console-popout { font-size: 12px; margin-left: auto; }

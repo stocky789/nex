@@ -115,6 +115,7 @@ type Command struct {
 	Media       *Media               `json:"media,omitempty"`
 	VM          *VMCreateSpec        `json:"vm,omitempty"`
 	Power       *VMPowerRequest      `json:"power,omitempty"`
+	VMMedia     *VMMediaRequest      `json:"vm_media,omitempty"`
 	OperationID string               `json:"operation_id"`
 	Kind        string               `json:"kind"`
 }

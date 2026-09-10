@@ -139,7 +139,7 @@ def main():
         eventually(lambda: lab.api('/api/v1/sites', expected=401), 'controller startup')
         for path in ('storage', 'networks', 'media', 'vms'):
             lab.api('/api/v1/' + path, expected=401)
-        session = lab.api('/api/v1/session', {'username': 'admin', 'password': password.read_text()})
+        session = lab.api('/api/v1/session', {'username': 'root', 'password': password.read_text()})
         lab.csrf = session['csrf_token']
         site = lab.api('/api/v1/sites', {'name': 'Managed VM QA'}, expected=201)
         token = lab.api('/api/v1/enrollment-tokens', {'site_id': site['id']}, expected=201)['token']

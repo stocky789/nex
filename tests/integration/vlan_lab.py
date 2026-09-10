@@ -110,7 +110,7 @@ def main():
             return response.json()
         page.goto(url)
         expect(page.get_by_label('Username', exact=True)).to_be_focused()
-        page.keyboard.type('admin')
+        page.keyboard.type('root')
         page.keyboard.press('Tab')
         page.get_by_label('Password', exact=True).fill(Path(config['controller_password_file']).read_text())
         page.keyboard.press('Enter')

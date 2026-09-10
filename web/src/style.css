@@ -118,8 +118,18 @@ small { display: block; color: var(--muted); font-size: 11px; line-height: 1.5; 
 }
 .toolbar button, .toolbar > a { display: inline-flex; align-items: center; gap: 6px; min-height: 31px; padding: 4px 9px; color: #262626; background: transparent; border: 1px solid transparent; border-radius: 2px; white-space: nowrap; }
 .toolbar button:hover, .toolbar > a:hover { background: #e3edff; border-color: #3478ff; text-decoration: none; }
-.toolbar-separator { height: 26px; width: 1px; background: #b9bec5; margin: 0 4px; }
+.toolbar button:disabled { color: #8a8f96; background: transparent; border-color: transparent; }
+.toolbar button:disabled .resource-icon { filter: grayscale(1); opacity: .5; }
+.toolbar-group { display: flex; align-items: center; gap: 2px; }
+.toolbar-group + .toolbar-group, .toolbar-group + .toolbar-end { position: relative; margin-left: 9px; }
+.toolbar-group + .toolbar-group::before, .toolbar-group + .toolbar-end::before { content: ""; position: absolute; left: -6px; height: 26px; width: 1px; background: #b9bec5; }
+.toolbar .toolbar-end { margin-left: auto; }
 .toolbar .resource-icon { width: 20px; height: 20px; }
+.confirm-dialog { width: min(440px, calc(100vw - 32px)); padding: 14px 16px; border: 1px solid #9da4ad; border-radius: 3px; box-shadow: 2px 4px 12px #0003; }
+.confirm-dialog::backdrop { background: #0006; }
+.confirm-dialog h2 { margin: 0 0 8px; font-size: 15px; }
+.confirm-dialog p { margin: 0 0 10px; }
+.confirm-dialog .actions { justify-content: flex-end; }
 .shell { display: grid; grid-template-columns: 238px minmax(0, 1fr); flex: 1; min-height: 0; }
 aside { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-right: 4px solid #d3d6da; background: #fff; overflow: auto; }
 .nav-title { position: sticky; top: 0; z-index: 1; padding: 5px 9px; font-size: 12px; font-weight: 600; background: linear-gradient(#f9f9f9, #e6e6e6); border-bottom: 1px solid var(--line); }
@@ -168,7 +178,9 @@ aside nav a.selected { background: #d4e3ff; border-color: #7ea6ff; color: #10306
 .metric.context { margin-left: auto; border: 0; align-items: center; padding-right: 3px; }
 .metric.context p { margin: 0; font-size: 11px; color: var(--muted); }
 .metric.context .tiny-label { display: none; }
-.panel { border: 1px solid #c1c6cc; background: #fff; margin-bottom: 12px; overflow: hidden; }
+/* overflow must stay visible: hidden clips native <select> menus in the desktop shell
+   (flex + nested overflow) so they open and close on the same click (BUG-0050). */
+.panel { border: 1px solid #c1c6cc; background: #fff; margin-bottom: 12px; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; gap: 12px; border-bottom: 1px solid #cbd0d6; background: linear-gradient(#fafafa, #ededed); }
 .section-heading > a, .section-heading .muted { font-size: 11px; }
 .scope-list { display: flex; flex-wrap: wrap; gap: 0; padding: 4px 8px; }
@@ -189,7 +201,8 @@ tbody tr:hover { background: #eef4ff; }
 .badge.fresh, .badge.healthy, .badge.ok, .badge.succeeded, .badge.up { color: #15803d; background: #dcfce7; }
 .badge.stale, .badge.degraded, .badge.timeout, .badge.dispatched, .badge.warning { color: #b45309; background: #fef3c7; }
 .badge.failed, .badge.error, .badge.revoked, .badge.down { color: #b91c1c; background: #fee2e2; }
-.badge.queued { color: #1d4ed8; background: #dbeafe; }
+.badge.queued, .badge.uploading { color: #1d4ed8; background: #dbeafe; }
+.badge.cancelled { color: #475569; background: #e2e8f0; }
 .panel-note { margin: 0; padding: 6px 10px; border-top: 1px solid #e0e3e7; background: #f8f9fa; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .empty { padding: 24px 16px; margin: 0; color: var(--muted); text-align: center; }
 .empty h2, .empty h3 { color: #303943; margin-bottom: 8px; }
@@ -261,6 +274,10 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f0f2f5; borde
   .menu > summary { padding: 5px 8px; }
   .menu-items { min-width: 150px; }
   .toolbar { flex-wrap: wrap; gap: 2px; padding: 4px; }
+  .toolbar-group { flex-wrap: wrap; }
+  .toolbar-group + .toolbar-group, .toolbar-group + .toolbar-end { margin-left: 4px; }
+  .toolbar-group + .toolbar-group::before, .toolbar-group + .toolbar-end::before { display: none; }
+  .toolbar .toolbar-end { margin-left: 0; }
   .toolbar button, .toolbar > a { padding: 4px 7px; min-height: 32px; }
   .shell { display: block; flex: 1; }
   aside { max-height: 190px; border-right: 0; border-bottom: 3px solid #bdc4cc; }

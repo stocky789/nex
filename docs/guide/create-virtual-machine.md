@@ -87,7 +87,9 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
    To check one host, select it in **Resources**, open **Storage**, and look under
    **Host ISO images**. Each row shows the ISO, destination storage/directory, size,
    availability and transfer task. Return to the pool to continue creating the VM.
-5. Open **Virtual machines**, then **Create VM**. The heading shows the current page, for
+5. Open **Virtual machines**, then **Create VM**; or select **New VM** in the toolbar or
+   **File** menu while the pool, one of its hosts or one of its VMs is selected, which opens
+   the pool's **Virtual machines** view with the wizard. The heading shows the current page, for
    example **Create VM · 1 of 6: Identity**. **Next** moves on, **Back** corrects an earlier
    page, and **Close** puts the wizard away. Nothing is submitted until the last page.
    1. **Identity**
@@ -109,10 +111,11 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
       - **Virtual CPUs** — 1 to 64, and no more than the host reports. This is the number of
         vCPUs the guest sees.
       - **Sockets**, **Cores per socket**, **Threads per core** — leave all three blank for
-        the default of **one socket, one core per vCPU and one thread per core**. If you set
-        them, their product must equal the vCPU count, and the page states the mismatch in
-        place until it does. Set a topology only when guest licensing or NUMA-aware software
-        needs a particular shape.
+        the default of **one socket, as many cores as vCPUs, and one thread per core**. If you
+        fill any one, the others start from that default so you can adjust; their product must
+        equal the vCPU count, and the page states the mismatch in place until it does. Clearing
+        any field clears all three. Set a topology only when guest licensing or NUMA-aware
+        software needs a particular shape.
       - **CPU model** — **Host passthrough** (the default) gives the guest this host's exact
         processor and the best instruction-set coverage. **Host model** presents a common
         processor instead, which is what will allow the VM to migrate later to a host whose

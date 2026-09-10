@@ -55,7 +55,7 @@ func TestConsoleAuthorizationPairingAndRelay(t *testing.T) {
 	}
 	var audit []protocol.Audit
 	readJSON(t, a.call("GET", "/api/v1/audit", nil, nil, 200), &audit)
-	if audit[0].Action != "console.open" || audit[0].ResourceID != vm || audit[0].Actor != "admin" {
+	if audit[0].Action != "console.open" || audit[0].ResourceID != vm || audit[0].Actor != "root" {
 		t.Fatalf("audit %+v", audit[0])
 	}
 	// The host learns about the request exactly once, on its next report.
@@ -68,7 +68,7 @@ func TestConsoleAuthorizationPairingAndRelay(t *testing.T) {
 	}
 	// Hijacking needs a real server: identity is injected the way the middleware would.
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/vms/{id}/console/{ticket}", func(w http.ResponseWriter, r *http.Request) { a.c.browserConsole(w, r, "admin", "") })
+	mux.HandleFunc("GET /api/v1/vms/{id}/console/{ticket}", func(w http.ResponseWriter, r *http.Request) { a.c.browserConsole(w, r, "root", "") })
 	mux.HandleFunc("POST /api/v1/agent/console/{token}", func(w http.ResponseWriter, r *http.Request) { a.c.agentConsole(w, r, host.HostID) })
 	mux.HandleFunc("POST /api/v1/other/console/{token}", func(w http.ResponseWriter, r *http.Request) { a.c.agentConsole(w, r, "other-host") })
 	server := httptest.NewServer(mux)
@@ -160,7 +160,7 @@ func readJSON(t *testing.T, w *httptest.ResponseRecorder, out any) { t.Helper();
 
 func TestConsoleBrowserTimesOutWithoutHost(t *testing.T) {
 	c := &Controller{consoles: consoleHub{sessions: map[string]*consoleSession{}}}
-	c.consoles.sessions["t"] = &consoleSession{vmID: "vm", hostID: "h", user: "admin", expires: time.Now().Add(time.Minute), agent: make(chan net.Conn, 1)}
+	c.consoles.sessions["t"] = &consoleSession{vmID: "vm", hostID: "h", user: "root", expires: time.Now().Add(time.Minute), agent: make(chan net.Conn, 1)}
 	old := consoleAgentWait
 	consoleAgentWait = 50 * time.Millisecond
 	defer func() { consoleAgentWait = old }()
@@ -169,7 +169,7 @@ func TestConsoleBrowserTimesOutWithoutHost(t *testing.T) {
 	r.SetPathValue("id", "vm")
 	r.SetPathValue("ticket", "t")
 	w := httptest.NewRecorder()
-	c.browserConsole(w, r, "admin", "")
+	c.browserConsole(w, r, "root", "")
 	if w.Code != 504 || c.consoles.sessions["t"] != nil {
 		t.Fatalf("timeout %d %v", w.Code, c.consoles.sessions)
 	}
@@ -180,5 +180,52 @@ func TestConsoleBrowserTimesOutWithoutHost(t *testing.T) {
 	c.agentConsole(w, r, "h")
 	if w.Code != 404 {
 		t.Fatalf("late tunnel %d", w.Code)
+	}
+}
+
+func TestHostConsoleTicket(t *testing.T) {
+	a := newClient(t)
+	site := a.site()
+	host := a.enroll(a.token(site, ""), csr(t))
+	cert := certificate(t, host.CertificatePEM)
+	read := func(w *httptest.ResponseRecorder) string { return w.Body.String() }
+	if body := read(a.call("POST", "/api/v1/hosts/"+host.HostID+"/console", map[string]any{}, nil, 409)); !strings.Contains(body, "not freshly connected") {
+		t.Fatal(body)
+	}
+	sequence := uint64(0)
+	report := func(caps []string) protocol.ReportResponse {
+		sequence++
+		now := time.Now().UTC()
+		inv := &protocol.Inventory{ObservedAt: now, Hostname: "core", CPUCount: 4, MemoryBytes: 8 << 30, Checks: []protocol.Check{{Name: "libvirt", Status: "healthy", ObservedAt: now}}}
+		return a.report(cert, protocol.ReportRequest{Version: 1, Sequence: sequence, Capabilities: caps, Inventory: inv})
+	}
+	report([]string{protocol.ManagedVMCapability})
+	if body := read(a.call("POST", "/api/v1/hosts/"+host.HostID+"/console", map[string]any{}, nil, 409)); !strings.Contains(body, "does not support browser consoles") {
+		t.Fatal(body)
+	}
+	// BUG-0056 regression: an old Core reporting console-v1 (VM consoles only, already
+	// deployed everywhere) must not pass the host console gate on its own — otherwise a
+	// new Controller issues a ticket the old agent can never fulfil and the browser hangs
+	// until the 504 timeout instead of getting an immediate upgrade refusal.
+	report([]string{protocol.ManagedVMCapability, protocol.ConsoleCapability})
+	if body := read(a.call("POST", "/api/v1/hosts/"+host.HostID+"/console", map[string]any{}, nil, 409)); !strings.Contains(body, "does not support browser consoles") {
+		t.Fatal(body)
+	}
+	report([]string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability})
+	var raw map[string]any
+	readJSON(t, a.call("POST", "/api/v1/hosts/"+host.HostID+"/console", map[string]any{}, nil, 201), &raw)
+	ticket, _ := raw["ticket"].(string)
+	ws, _ := raw["websocket"].(string)
+	if ticket == "" || ws != "/api/v1/hosts/"+host.HostID+"/console/"+ticket || raw["host_id"] != host.HostID {
+		t.Fatalf("ticket response %v", raw)
+	}
+	var audit []protocol.Audit
+	readJSON(t, a.call("GET", "/api/v1/audit", nil, nil, 200), &audit)
+	if audit[0].Action != "host.console.open" || audit[0].ResourceID != host.HostID {
+		t.Fatalf("audit %+v", audit[0])
+	}
+	first := report([]string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability})
+	if len(first.Consoles) != 1 || first.Consoles[0].Token != ticket || first.Consoles[0].VMID != "" {
+		t.Fatalf("console request %+v", first.Consoles)
 	}
 }

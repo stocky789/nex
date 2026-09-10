@@ -10,7 +10,8 @@ import "./console.css";
 // `guest` is the host's latest observation of the guest channels; it only decides which
 // hints the clipboard and display controls show, never whether input is allowed.
 export type Guest = { agent: string; os?: string; hostname?: string; addresses?: { interface: string; address: string }[] | null; clipboard: string; resize: boolean };
-type Props = { name: string; open: () => Promise<string>; disabled?: string; guest?: Guest | null; popout?: string };
+export type ConsoleMedia = { currentID?: string; currentName?: string; options: { id: string; name: string }[]; busy?: boolean; note?: string; onInsert: (id: string) => void; onEject: () => void };
+type Props = { name: string; open: () => Promise<string>; disabled?: string; guest?: Guest | null; popout?: string; media?: ConsoleMedia };
 type Phase = "idle" | "connecting" | "connected" | "closed";
 type View = "fit" | "actual" | "remote";
 type Quality = "auto" | "low" | "high";
@@ -28,6 +29,7 @@ type Key = readonly [number, string];
 const keyCombos: { label: string; keys: Key[] }[] = [
   ...[1, 2, 3, 4, 5, 6].map(n => ({ label: `Ctrl+Alt+F${n}`, keys: [K.ctrl, K.alt, K.f(n)] })),
   { label: "Ctrl+Alt+F7", keys: [K.ctrl, K.alt, K.f(7)] },
+  { label: "Ctrl+C", keys: [K.ctrl, [0x63, "KeyC"] as Key] }, // interrupt, most useful on the host shell console
   { label: "Alt+Tab", keys: [K.alt, K.tab] },
   { label: "Alt+F4", keys: [K.alt, K.f(4)] },
   { label: "Ctrl+Esc", keys: [K.ctrl, K.esc] },
@@ -44,7 +46,7 @@ function loadPrefs(): Prefs {
 // keysym for typing one character: Latin-1 maps directly, everything else uses the Unicode keysym range.
 const keysym = (ch: string) => { const cp = ch.codePointAt(0) || 0; return cp === 10 ? 0xff0d : cp === 9 ? 0xff09 : cp < 0x100 ? cp : 0x01000000 | cp; };
 
-export function Console({ name, open, disabled, guest, popout }: Props) {
+export function Console({ name, open, disabled, guest, popout, media }: Props) {
   const section = useRef<HTMLElement>(null);
   const screen = useRef<HTMLDivElement>(null);
   const rfb = useRef<RFB | null>(null);
@@ -192,6 +194,15 @@ export function Console({ name, open, disabled, guest, popout }: Props) {
         {keyCombos.map((combo, i) => <option key={combo.label} value={i}>{combo.label}</option>)}
       </select>
       <button disabled={!live} aria-pressed={clipboardOpen} onClick={() => setClipboardOpen(v => !v)}>Clipboard</button>
+      {media && <>
+        <label className="console-option">CD/DVD
+          <select aria-label="Attach ISO" disabled={media.busy || !media.options.length} value="" onChange={e => { if (e.target.value) media.onInsert(e.target.value); }}>
+            <option value="">{media.currentName ? media.currentName : "Empty"}</option>
+            {media.options.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </select>
+        </label>
+        <button type="button" disabled={media.busy || !media.currentID} onClick={() => media.onEject()}>Eject</button>
+      </>}
       <label className="console-option">View
         <select aria-label="Display scaling" value={view} onChange={e => update({ view: e.target.value as View })}>
           <option value="fit">Fit to window</option>
@@ -224,6 +235,7 @@ export function Console({ name, open, disabled, guest, popout }: Props) {
       <div className="actions"><button type="button" disabled={!fromVM} onClick={copyFromVM}>Copy</button></div>
       {clipNote && <p className="help" role="status">{clipNote}</p>}
     </div>}
+    {media?.note && <p className="console-status" role="status">{media.note}</p>}
     {disabled && <p className="warning">{disabled}</p>}
     {detail && <p className="console-status" role="status">{detail}</p>}
     <div ref={screen} className="console-screen" data-phase={phase} data-view={view} tabIndex={-1} />

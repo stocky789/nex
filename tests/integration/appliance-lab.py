@@ -114,7 +114,7 @@ def main():
             results.append('Modified signed manifest rejected before VM creation; original restored')
             if not existing:
                 page.get_by_role('button', name='Deploy Controller', exact=True).click()
-                page.get_by_label('Local storage', exact=True).select_option(host['storage_dir'])
+                expect(page.get_by_label('Local storage', exact=True)).to_have_value(host['storage_dir'])
                 page.get_by_label('LAN bridge', exact=True).select_option(host['bridge'])
                 page.get_by_label('IPv4 address / prefix', exact=True).fill('192.168.122.10/24')
                 page.get_by_label('IPv4 gateway', exact=True).fill('192.168.122.1')
@@ -198,7 +198,7 @@ def main():
                 page.wait_for_timeout(1000)
                 controller = context.new_page()
                 controller.goto(controller_url)
-                controller.get_by_label('Username', exact=True).fill('admin')
+                controller.get_by_label('Username', exact=True).fill('root')
                 controller.get_by_label('Password', exact=True).fill((lab / 'controller-password').read_text())
                 controller.get_by_role('button', name='Sign in', exact=True).click()
                 expect(controller.get_by_role('link', name='Main site', exact=True).first).to_be_visible()
@@ -295,7 +295,7 @@ def main():
                         statuses = []
                         for attempt in range(6):
                             response = context.request.post(endpoint, data={
-                                'username': 'admin', 'password': 'incorrect-disposable-password'},
+                                'username': 'root', 'password': 'incorrect-disposable-password'},
                                 headers={'Origin': endpoint.split('/api/')[0],
                                          'X-Forwarded-For': f'192.0.2.{attempt + 1}'})
                             statuses.append(response.status)

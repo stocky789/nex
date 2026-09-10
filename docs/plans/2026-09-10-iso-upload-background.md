@@ -1,5 +1,10 @@
 # Background ISO upload (activity dock)
 
+Date: 2026-09-10
+Status: Implemented in `38aa856`; Controller unit tests and UI typecheck only, no disposable-lab
+upload of a >8 GiB image yet (see the [guide's verification note](../guide/create-virtual-machine.md)).
+Parent: [Phase 2](2026-09-08-nex-platform.md#2-one-host-vm-management), item 3.
+
 ## Goal
 
 Operators can dismiss the Upload ISO form while a browser→Controller transfer continues,

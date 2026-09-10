@@ -33,13 +33,13 @@ func newClient(t *testing.T) *testClient {
 	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	c, err := Open(Config{DataDir: dir, Username: "admin", Password: "a-long-test-password"})
+	c, err := Open(Config{DataDir: dir, Username: "root", Password: "a-long-test-password"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	a := &testClient{t: t, c: c}
 	t.Cleanup(func() { a.c.Close() })
-	w := a.call("POST", "/api/v1/session", map[string]string{"username": "admin", "password": "a-long-test-password"}, nil, 200)
+	w := a.call("POST", "/api/v1/session", map[string]string{"username": "root", "password": "a-long-test-password"}, nil, 200)
 	cookies := w.Result().Cookies()
 	if len(cookies) != 1 {
 		t.Fatal("missing session cookie")
@@ -404,7 +404,7 @@ func TestOpenMigratesManualPools(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Close()
-	c, err := Open(Config{DataDir: dir, Username: "admin", Password: "a-long-test-password"})
+	c, err := Open(Config{DataDir: dir, Username: "root", Password: "a-long-test-password"})
 	if err != nil {
 		t.Fatal(err)
 	}

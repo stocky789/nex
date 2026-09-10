@@ -136,8 +136,13 @@ func TestValidateVMSpec(t *testing.T) {
 			v.Disks, v.Boot.MediaBootOrder = specDisks(2), 0
 			v.Disks[1].BootOrder = 1
 		}, false},
-		{"boot order gap", func(v *VMCreateSpec) { v.Disks[0].BootOrder = 3 }, false},
-		{"boot order not from one", func(v *VMCreateSpec) { v.Disks[0].BootOrder, v.Boot.MediaBootOrder = 3, 2 }, false},
+		// Gaps are accepted: libvirt orders devices by bootindex without requiring contiguity,
+		// and ejecting media leaves the disks holding the numbers the domain still has.
+		{"boot order gap", func(v *VMCreateSpec) { v.Disks[0].BootOrder = 3 }, true},
+		{"boot order not from one", func(v *VMCreateSpec) { v.Disks[0].BootOrder, v.Boot.MediaBootOrder = 3, 2 }, true},
+		{"boot order after eject", func(v *VMCreateSpec) {
+			v.MediaID, v.Boot.MediaBootOrder = "", 0
+		}, true},
 		{"boot order negative", func(v *VMCreateSpec) { v.Disks[0].BootOrder = -1 }, false},
 		{"boot order absent", func(v *VMCreateSpec) { v.Disks[0].BootOrder, v.Boot.MediaBootOrder = 0, 0 }, false},
 		{"media boot order without media", func(v *VMCreateSpec) { v.MediaID = "" }, false},

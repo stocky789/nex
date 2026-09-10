@@ -1,0 +1,47 @@
+{
+  "summary": "Fix VM media-change bugs found in two review rounds: an interrupted insert could reconcile as succeeded with an empty tray, an eject on an already-empty tray failed instead of succeeding, a media change broke idempotent replay of the original create request, and (round two) the record claimed boot orders libvirt does not hold, the eject short-circuit read only the persistent definition, and an interruption before anything was issued was reported as a permanent failure.",
+  "paths": [
+    "internal/protocol/vmmedia.go",
+    "internal/protocol/vmmedia_test.go",
+    "internal/protocol/managed.go",
+    "internal/protocol/managed_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/media_test.go",
+    "internal/controller/vmmedia.go",
+    "internal/controller/vmmedia_test.go",
+    "internal/controller/managed_test.go",
+    "docs/API.md",
+    "docs/changes/2026-09-10-vm-media-fixes.json",
+    "docs/api/openapi.json",
+    "docs/api/index.html"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "docs/guide/vm-console.md already documents Insert/Eject as working operator steps (\"Use CD/DVD ... to insert an ISO ... or Eject to clear the tray\"); these are bug fixes that make that already-documented behavior correct (an interrupted insert no longer reports success with an empty tray, eject on an already-empty tray now succeeds instead of failing, and the VM stays adoptable after an eject, with the boot order the host actually holds) rather than a new workflow, label, or error an operator must learn.",
+    "pages": []
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "API impact: existing contract, changed documented behaviour. The route, body, agent command and vm-media-v1 capability are unchanged, but what Core does behind them changed and docs/API.md's VM media section was rewritten to match: eject reads the live definition of a running domain (and treats <source dev> as loaded) before short-circuiting on an already-empty tray; a media change records no boot order at all, because virsh change-media adds and removes none, so the journal and the Controller mirror no longer publish a boot device the domain does not have; protocol.ValidateVMSpec now requires boot order values to be unique and positive but not contiguous, so the gap an eject leaves cannot make a re-adopting Controller skip a VM still running on the host (recorded there as a decision for Matt to confirm); and stage changing-media is journalled together with the resolved media path immediately before the virsh call, so an interruption before anything was issued is re-applied instead of reported as a permanent failure. Both sides mirror through one shared protocol.ApplyVMMedia helper. docs/api/openapi.json now carries the VMMediaRequest schema, the Command.vm_media field and the vm-media x-commands entry that the staged media work had omitted (tests/test_api_contract.py failed on both), and its boot-order wording matches the relaxed rule.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json"
+    ]
+  },
+  "state": {
+    "owner": "core",
+    "reason": "A VM's current install media remains part of the vm-create journal entry on the pool master's Nex Core (internal/vmhost managed journal), the durable record recordVMMedia updates. The Controller's managed_resources command column is only a mirror of that host-reported state, refreshed by mirrorVMMedia after each successful vm-media operation and rebuilt from the host's own inventory by adoptManaged when a fresh Controller re-adopts the pool; the Controller's stored create-request payload is not touched by a media change and is not the source of truth for current media or boot order.",
+    "record": "internal/vmhost managed journal entry <operation-id>.json for the vm-create command, field command.vm.media_id (boot order is written at creation only and is never rewritten by a media change), as reported through Applied()/adoptManaged."
+  },
+  "verification": {
+    "method": "go build ./...; go vet ./internal/vmhost/ ./internal/controller/ ./internal/protocol/; go test -race -count=1 ./internal/vmhost/ ./internal/controller/ ./internal/protocol/ \u2014 all ok. For each fix, the fix's own lines were reverted by hand (not via git), its regression test rerun to confirm it fails on the pre-fix code, then the fix restored and the test rerun green. Round one: reverting the eject-on-empty short-circuit makes TestManagedMediaChange fail at its already-empty-tray eject with 'libvirt refused the media change'; reverting the payload-immutability fix in mirrorVMMedia makes TestVMCreateReplayStaysIdempotentAfterMediaChange fail with 409 'request_id already used with another payload'. Round two: reverting ApplyVMMedia to the renumbering version fails TestApplyVMMediaKeepsBootOrder, TestManagedRecordVMMediaKeepsBootOrderOnEject and TestMirrorVMMediaKeepsBootOrderOnEject (disk boot order 1 where the domain still holds 2); reverting cdromSource to the persistent definition and <source file> only fails TestManagedMediaEjectReadsLiveDefinition (virsh log shows only 'dumpxml ... --inactive' and no change-media for a running VM whose live tray holds media as <source dev>); reverting the stage move (Stage set in apply() before the media path is resolved) fails TestManagedMediaChange at its interrupted-insert case, the journal claiming Stage 'changing-media' after a request that never reached virsh. python3 scripts/check_docs.py --worktree passes. Both .github/workflows/phase1.yml and .gitea/workflows/phase1.yml run `go test -race ./...` on push and pull_request, covering these packages; no workflow change was needed.",
+    "evidence": [
+      "internal/protocol/vmmedia_test.go",
+      "internal/protocol/managed_test.go",
+      "internal/vmhost/media_test.go",
+      "internal/vmhost/managed_test.go",
+      "internal/controller/vmmedia_test.go"
+    ]
+  }
+}

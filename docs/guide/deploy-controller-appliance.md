@@ -44,10 +44,9 @@ Controller failover remain outside this slice. This page does not establish Phas
   to reach Controller. A DHCP reservation keeps its address stable.
 - At least the default guest allocation of **2 virtual CPUs, 4 GiB RAM and a 32 GiB disk**,
   plus capacity for the host and existing workloads. Preflight can reject insufficient capacity.
-- A new Controller administrator password, separate from the host root password.
-  Any nonempty password is accepted, up to 1024 UTF-8 bytes without line breaks or NUL.
-  The same password signs in to Nex Controller as **admin** and to the appliance VM
-  console as **admin**. Keep both credentials in a password manager.
+- A Controller password for username **root**. Any nonempty password is accepted, up to
+  1024 UTF-8 bytes without line breaks or NUL. Same password for the web UI and the
+  appliance console. You can reuse this host's root password if you want.
 
 ## Steps
 
@@ -88,11 +87,11 @@ Controller failover remain outside this slice. This page does not establish Phas
    fingerprint with the trusted console before accepting the self-signed certificate.
    Sign in as **root** using the password set during Nex Core installation. If you changed
    the host root password afterwards, use its current value. There is no separate local
-   web password; Controller access still uses its own **admin** account.
+   web password; Controller access still uses its own **root** account.
 
 3. In **Overview**, inspect host observations and any **Deployment needs attention** blockers.
    Select **Deploy Controller**. Keep the resource defaults unless the host can support a
-   larger allocation, then explicitly select **Local storage** and **LAN bridge**.
+   larger allocation. **Local storage** is fixed to the host path; select **LAN bridge**.
 
 4. Enter **Controller hostname** under **Appliance resources**. In **Network settings**,
    choose **Automatic (DHCP)** or **Static IPv4** under **IP configuration**.
@@ -101,14 +100,14 @@ Controller failover remain outside this slice. This page does not establish Phas
    separate DNS addresses with commas. Enter the first **Site name** and
    **Controller administrator password**. There is no pool name: this host becomes the
    pool master of a pool created automatically and named after its hostname. The account is
-   **admin** for both the Controller web UI and the appliance console.
+   **root** for both the Controller web UI and the appliance console.
 
 5. Select **Review deployment**, check the host, storage, address and resources, then select
    **Create VM & install Controller**. Follow **Deployment progress**. Progress is saved on
    the host; closing or refreshing the browser does not cancel deployment. Wait for readiness,
    including initialization, host enrollment and adoption of the already-created appliance.
 
-6. When the operation is **ready**, select **Open Nex Controller** and sign in as **admin**
+6. When the operation is **ready**, select **Open Nex Controller** and sign in as **root**
    with the password you set. The same credentials work at the appliance VM console.
    The host verifies the provisioned Controller TLS identity during
    handoff. Compare the browser certificate's SHA-256 fingerprint with the value shown
@@ -175,8 +174,12 @@ prevents local starts.
 Controller recovery exports contain database state, identity, TLS private keys and other
 secrets. Store a protected copy outside the hosting server; a same-host VM snapshot is not
 an independent recovery copy. Use the package's host-root recovery helper, which talks to
-this appliance's guest agent; SSH password login stays disabled and guest root stays locked.
-The deploy **admin** password also unlocks the appliance console as **admin** when you need a guest shell.
+this appliance's guest agent; SSH password login stays disabled. First boot unlocks the guest
+**root** console account with the deploy password and, where a `sudo` group exists on the
+image, adds it to that group, so anyone who knows the Controller administrator password (or
+reads it from the bootstrap record before first boot) has a full root shell at the appliance
+console, not only Controller web access; treat that password and console/hypervisor access
+with the same care as host root.
 
 1. At the hosting Core server's root console, select the appliance's exact VM UUID from
    `virsh list --all --uuid` and its recorded deployment. Replace `CONTROLLER_UUID` and
@@ -323,7 +326,7 @@ its original artifact version.
 
 [Deployment usability checks](../qa/appliance/deployment-usability.md) record the current
 DHCP/password/power UI changes, simulated browser checks and artifact availability limits.
-Unit tests cover firstboot applying the deploy password to the guest **admin** console
+Unit tests cover firstboot applying the deploy password to the guest **root** console
 account; a live appliance console login walkthrough after deploy is not yet recorded.
 
 [Root-login verification](../qa/appliance/root-auth.md) records the current root-authentication

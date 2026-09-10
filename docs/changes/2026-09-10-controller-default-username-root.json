@@ -1,0 +1,70 @@
+{
+  "summary": "Controller default bootstrap username is root (was admin); appliance console and deploy handoff login match. API impact: existing contract \u2014 LoginRequest.username unchanged; default seed and examples updated.",
+  "paths": [
+    "cmd/nex-controller/main.go",
+    "appliance/firstboot.py",
+    "appliance/README.md",
+    "internal/localcore/handoff.go",
+    "internal/localcore/handoff_test.go",
+    "internal/controller/controller_test.go",
+    "internal/controller/console_test.go",
+    "internal/controller/monitor_test.go",
+    "internal/controller/web_security_test.go",
+    "web/src/local.tsx",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/guide/manage-controller.md",
+    "docs/guide/secure-web-access.md",
+    "tests/test_appliance_build.py",
+    "tests/integration/add_host_lab.py",
+    "tests/integration/appliance-dhcp-boot.py",
+    "tests/integration/appliance-lab.py",
+    "tests/integration/console_features_lab.py",
+    "tests/integration/console_lab.py",
+    "tests/integration/controller_replacement.py",
+    "tests/integration/fresh_install_browser.py",
+    "tests/integration/host_iso_browser.py",
+    "tests/integration/managed_vm.py",
+    "tests/integration/managed_vm_browser.py",
+    "tests/integration/phase1-debian.sh",
+    "tests/integration/phase1.py",
+    "tests/integration/phase1_browser.py",
+    "tests/integration/vlan_lab.py",
+    "tests/integration/web_security.py",
+    "tests/integration/website_controller_captures.py",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operator sign-in and console login instructions now use root instead of admin for Controller.",
+    "pages": [
+      "docs/guide/deploy-controller-appliance.md",
+      "docs/guide/manage-controller.md",
+      "docs/guide/secure-web-access.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "POST /api/v1/session still takes a free-form username; only the default first-admin seed, OpenAPI examples, and handoff login username changed to root.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "state": {
+    "owner": "controller",
+    "reason": "Administrator accounts are Controller-scoped; the bootstrap username is stored in the Controller admins table.",
+    "record": "Controller SQLite admins row seeded from -admin-username (default root). Fresh Controllers recover nothing from Core for this credential; existing Controllers keep their seeded username."
+  },
+  "verification": {
+    "method": "go test ./internal/controller ./internal/localcore; python3 -m unittest tests.test_appliance_build; python3 scripts/generate_api.py --check.",
+    "evidence": [
+      "internal/controller/web_security_test.go",
+      "tests/test_appliance_build.py",
+      "docs/api/openapi.json"
+    ]
+  }
+}

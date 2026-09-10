@@ -124,6 +124,8 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 		return v
 	case cmd.Power != nil:
 		return map[string]any{"vm_id": cmd.Power.VMID, "action": cmd.Power.Action, "operation": op}
+	case cmd.VMMedia != nil:
+		return map[string]any{"vm_id": cmd.VMMedia.VMID, "action": cmd.VMMedia.Action, "media_id": cmd.VMMedia.MediaID, "operation": op}
 	default:
 		return map[string]any{"vm_id": cmd.VM.ID, "operation": op}
 	}

@@ -62,7 +62,7 @@ def main():
             assert response.status == expected, f'{method} {path}: {response.status} {response.text()[:300]}'
             return response.json() if response.text() else {}
 
-        csrf = api('POST', '/api/v1/session', {'username': 'admin', 'password': admin_password})['csrf_token']
+        csrf = api('POST', '/api/v1/session', {'username': 'root', 'password': admin_password})['csrf_token']
         sites = api('GET', '/api/v1/sites')
         hosts_before = [h for h in api('GET', '/api/v1/hosts') if not h['revoked']]
         assert len(sites) == 1 and len(hosts_before) == 1, 'lab must have exactly one site and one active host'
@@ -116,7 +116,7 @@ def main():
 
         page.goto(url + '/#/hosts/' + host['id'])
         expect(page.get_by_label('Username', exact=True)).to_be_focused()
-        page.keyboard.type('admin')
+        page.keyboard.type('root')
         page.keyboard.press('Tab')
         page.get_by_label('Password', exact=True).fill(admin_password)
         page.keyboard.press('Enter')

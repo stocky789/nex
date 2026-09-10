@@ -1,0 +1,47 @@
+{
+  "summary": "Fixed desktop-console toolbar: Back/Forward, creation buttons including New VM, VM power group with a confirmation dialog, host actions in a Host menu.",
+  "paths": [
+    "web/src/icons.tsx",
+    "web/src/main.tsx",
+    "web/src/managed.tsx",
+    "web/src/style.css",
+    "tests/integration/phase1_browser.py",
+    "docs/guide/manage-controller.md",
+    "docs/guide/vm-power.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/vm-console.md",
+    "docs/plans/2026-09-09-controller-desktop-layout.md",
+    "docs/qa/controller-toolbar/checks.md",
+    "docs/qa/controller-toolbar/results.json",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-10-controller-toolbar.json",
+    "web/src/console.css"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operator-visible navigation changed: fixed toolbar groups with greyed reasons, New VM entry point, power confirmation dialog, and host actions moved to a Host menu.",
+    "pages": [
+      "docs/guide/manage-controller.md",
+      "docs/guide/vm-power.md",
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/vm-console.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Existing contract, no reference change: the toolbar calls the existing site, enrollment, refresh-inventory, revoke and VM power contracts with unchanged requests, request identities and results; no Core command, client schema or API page changed.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state. Toolbar enablement is derived from the hosts' reported inventory each render; the New VM handoff is transient UI state.",
+    "record": ""
+  },
+  "verification": {
+    "method": "npm typecheck and build; tests/integration/phase1.py --browser against a disposable HTTPS Controller with the real agent, including a new fixed-toolbar group and a labeled simulated-VM power dialog group; captures inspected.",
+    "evidence": [
+      "docs/qa/controller-toolbar/checks.md",
+      "docs/qa/controller-toolbar/results.json"
+    ]
+  }
+}

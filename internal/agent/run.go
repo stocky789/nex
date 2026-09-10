@@ -83,7 +83,7 @@ func report(ctx context.Context, s *Store, m *Monitor, cfg RunConfig) error {
 		return errors.New("report sequence exhausted")
 	}
 	s.State.Sequence++
-	req := protocol.ReportRequest{Capabilities: []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.PowerCapability}, Version: protocol.Version, Sequence: s.State.Sequence, Inventory: inv, Results: []protocol.Result{}}
+	req := protocol.ReportRequest{Capabilities: []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.MediaCapability}, Version: protocol.Version, Sequence: s.State.Sequence, Inventory: inv, Results: []protocol.Result{}}
 	for id, e := range s.State.Journal {
 		if e.Status != "pending" && !e.Acknowledged {
 			req.Results = append(req.Results, protocol.Result{OperationID: id, Status: e.Status, Error: resultError(e.Error), ObservedAt: e.ObservedAt})
@@ -110,7 +110,11 @@ func report(ctx context.Context, s *Store, m *Monitor, cfg RunConfig) error {
 	for _, console := range response.Consoles {
 		go func(req protocol.ConsoleRequest) {
 			if err := serveConsole(ctx, s.State, req); err != nil {
-				log.Printf("console for VM %s: %v", req.VMID, err)
+				if req.VMID == "" {
+					log.Printf("host console: %v", err)
+				} else {
+					log.Printf("console for VM %s: %v", req.VMID, err)
+				}
 			}
 		}(console)
 	}

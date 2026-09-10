@@ -52,7 +52,7 @@ is separate from the historical Phase 1 evidence below.
      -listen :8443 \
      -tls-cert controller.pem \
      -tls-key controller-key.pem \
-     -admin-username admin \
+     -admin-username root \
      -admin-password-file admin-password \
      -ui-dir dist/web \
      -docs-dir dist/api \
@@ -65,10 +65,16 @@ is separate from the historical Phase 1 evidence below.
    certificate authority is separate from the HTTPS server CA; never copy its private key
    to an enrolling host.
 2. Open the Controller HTTPS address in a browser that trusts its server certificate.
-   Choose **Sign in** with the administrator account. The desktop layout has a command
-   toolbar across the top, a **Resources** pane on the left, and details for the selected
-   resource on the right. Select **Create site** and enter its name. Do not look for a
-   pool-creation action: pools are created automatically when a host enrolls.
+   Choose **Sign in** with the administrator account. The desktop layout has a menu row and
+   a fixed command toolbar across the top, a **Resources** pane on the left, and details for
+   the selected resource on the right. The toolbar always shows the same buttons, in groups:
+   **Back** and **Forward** move through pages you visited; **Create site**, **Add host** and
+   **New VM** create resources; **Start**, **Shut down**, **Reboot** and **Force stop**
+   control the selected VM (see [Control VM power](vm-power.md)); **Refresh view** at the
+   right end reloads Controller's records. A button that does not apply to the selected
+   resource is greyed out, and hovering it shows why, for example
+   `Select a virtual machine in Resources.` Select **Create site** and enter its name. Do not
+   look for a pool-creation action: pools are created automatically when a host enrolls.
    Open the site dropdown directly below **Resources**. Its **Search sites** field
    narrows the choices inside the menu; choose a result to switch sites. The closed
    control shows only the selected site. The resource tree starts with that site's pools,
@@ -80,8 +86,11 @@ is separate from the historical Phase 1 evidence below.
    Clear a search to restore its choices; switching sites changes the tree's scope.
    In the site menu, use Up/Down and Enter to choose a result. Escape closes the
    menu and returns focus to the site control; Tab moves to the next control.
-   The **File** menu also provides creation/enrollment actions for the selected scope;
-   **View** opens the overview or task history and refreshes the displayed inventory.
+   The **File** menu repeats the creation actions (**Create site**, **Add host**, **New VM**)
+   for the selected scope; **View** opens the overview or task history and refreshes the
+   displayed inventory; **Host** holds the actions for the selected host: **Refresh
+   inventory**, **Re-enroll host** and **Revoke access**. Menu items that do not apply to
+   the current selection are greyed out.
    Use Tab to reach menus and controls, Enter to open a menu, and Escape to close it.
    On narrow screens the resource pane is above the details area.
 3. With the site selected, choose **Add host** (toolbar, File menu or the empty-state button).
@@ -135,8 +144,8 @@ is separate from the historical Phase 1 evidence below.
    disks; these are read-only observations. **Activity** shows recorded changes for the
    selected resource. Selecting another resource returns to **General**.
    Connection warnings remain visible on the host's General, Networking and Storage views.
-   Select **Refresh inventory** and follow its durable task in **Task history** to its
-   reported outcome. **Recent tasks** at the bottom also shows up to five tasks for the
+   Open the **Host** menu, select **Refresh inventory** and follow its durable task in
+   **Task history** to its reported outcome. **Recent tasks** at the bottom also shows up to five tasks for the
    selected scope; select its heading to collapse or expand it. **Refresh view** reloads
    Controller's records; **Refresh inventory** sends the existing read-only request to
    the selected host. Neither control changes VM power.
@@ -163,10 +172,11 @@ is separate from the historical Phase 1 evidence below.
    do not remove the pending identity state. After that overlap expires, use the deliberate
    revoke/re-enroll procedure below. Certificates last ninety
    days; rotation is manual, so use `status` to check expiry and rotate before that date.
-8. To revoke a host, select that exact host in Controller, choose **Revoke access**, type
-   its hostname, then select **Confirm revoke access**.
+8. To revoke a host, select that exact host in Controller, choose **Revoke access** from the
+   **Host** menu, type its hostname, then select **Confirm revoke access**.
    Revocation withdraws its management credential; it does not stop its VMs or erase disks.
-   For deliberate re-enrollment, select **Re-enroll host**: the same Add host panel opens,
+   For deliberate re-enrollment, select **Re-enroll host** from the **Host** menu (it is
+   greyed out until the host is revoked): the same Add host panel opens,
    titled **Re-enroll** with the host's name. If the host is reachable, enter its address
    and root password and use **Connect** / **Confirm and add host** as in step 3 — the
    revoked host keeps its existing pool, and Controller includes the host's ID automatically

@@ -1,0 +1,34 @@
+{
+  "summary": "BUG-0049: Create VM topology no longer mistakes blank sockets (placeholder 1) for a set value; first field seeds the default layout.",
+  "paths": [
+    "web/src/vm-create.tsx",
+    "tests/integration/managed_vm_browser.py",
+    "docs/guide/create-virtual-machine.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-10-vm-cpu-topology-placeholder.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operator steps for optional sockets/cores/threads now match seed-on-first-fill and clear-all behaviour.",
+    "pages": ["docs/guide/create-virtual-machine.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "UI draft editing only; create-VM CPU request shape and host ValidateVMSpec/Topology are unchanged.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Client-side wizard field behaviour only; durable CPU topology still comes from the submitted specification on the pool master.",
+    "record": ""
+  },
+  "verification": {
+    "method": "Root cause confirmed from screenshots (error 0×2×2 with sockets placeholder 1). npm run typecheck passes. managed_vm_browser.py asserts cores+threads seed sockets=1 for count 4; Playwright not re-executed locally.",
+    "evidence": [
+      "web/src/vm-create.tsx",
+      "tests/integration/managed_vm_browser.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

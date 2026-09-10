@@ -1,0 +1,37 @@
+{
+  "summary": "Controller deploy form shows Local storage as a disabled fixed path from the host instead of a one-option dropdown.",
+  "paths": [
+    "web/src/local.tsx",
+    "web/src/local.css",
+    "docs/guide/deploy-controller-appliance.md",
+    "tests/integration/localcore_browser.py",
+    "tests/integration/fresh_install_browser.py",
+    "tests/integration/appliance-lab.py",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Deploy steps no longer ask operators to pick Local storage from a dropdown.",
+    "pages": [
+      "docs/guide/deploy-controller-appliance.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Same storage_dir field on the existing local deployment request; only the local UI default and control type changed.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "UI presentation of the host-reported storage path; durable deployment state remains on the host.",
+    "record": ""
+  },
+  "verification": {
+    "method": "npm run typecheck in web/; python3 scripts/check_docs.py --worktree; browser integration scripts updated to assert the fixed Local storage value instead of select_option.",
+    "evidence": [
+      "web/src/local.tsx",
+      "tests/integration/localcore_browser.py",
+      "docs/guide/deploy-controller-appliance.md"
+    ]
+  }
+}

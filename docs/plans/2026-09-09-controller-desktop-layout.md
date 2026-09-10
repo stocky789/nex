@@ -134,3 +134,23 @@ Final browser checks cover transfer/status isolation, the searchable 500-site
 fixture, keyboard focus and eight selector groups; all 16 existing Controller
 walkthrough groups also passed. The local UI/source update preserves the backend
 binary and is not a rebuilt installation/release image.
+
+## Fixed command toolbar — 2026-09-10
+
+Matt asked for the menu/toolbar band to work like a desktop management console's:
+a fixed toolbar whose buttons stay in place and grey out when they do not apply,
+with VM power control directly in the bar. Delivered layout, left to right:
+**Back**/**Forward** (browser history), **Create site**/**Add host**/**New VM**,
+**Start**/**Shut down**/**Reboot**/**Force stop** for the selected VM, and
+**Refresh view** at the right end. Greyed buttons carry their reason as a tooltip; the
+VM page repeats the observed state and blocker under its name. Power confirmations use a
+native modal dialog so they work from the toolbar; a rejected request keeps the dialog
+open with its error. **New VM** from a pool, host or VM opens the pool's wizard. Host
+actions moved out of the toolbar into a new **Host** menu (**Refresh inventory**,
+**Re-enroll host**, **Revoke access**) so the bar stays static; **File** keeps the three
+creation actions. Not added: a VM menu duplicating the power group, storage/network
+creation buttons, and icon-only narrow layouts (the bar wraps at phone width).
+
+API impact: **existing contract** — the same site, enrollment, refresh-inventory, revoke
+and VM power requests, identities and results. Guide impact: **updated**. Evidence:
+[toolbar QA report](../qa/controller-toolbar/checks.md).

@@ -19,15 +19,20 @@ deleting VMs are not yet available. Verified in a disposable nested-KVM lab; see
 
 ## Steps
 
-1. Sign in, select the VM in **Resources**. The **Power** panel at the top of its page shows
-   the observed state and its freshness.
+1. Sign in, select the VM in **Resources**. The line under the VM's name shows the observed
+   state and its freshness, for example `Observed running · fresh`, followed by the reason
+   when power requests are unavailable. The toolbar's **Start**, **Shut down**, **Reboot**
+   and **Force stop** buttons act on this VM; only the ones that fit the observed state are
+   enabled, and hovering a greyed button shows the same reason.
 2. Select **Start** for a stopped VM. The request is submitted immediately and the notice
    says it was requested.
-3. For a running VM, select **Shut down**, **Reboot** or **Force stop**. Read the
-   confirmation, then select **Confirm shut down**, **Confirm reboot** or **Confirm force
-   stop**. **Cancel** closes the confirmation without any request.
+3. For a running VM, select **Shut down**, **Reboot** or **Force stop**. A confirmation
+   dialog opens; read it, then select **Confirm shut down**, **Confirm reboot** or
+   **Confirm force stop**. **Cancel** or Escape closes the dialog without any request. If
+   the Controller rejects a request the dialog stays open (for Start, it opens) and shows
+   the error; confirming again retries the same request.
 4. Follow the `vm-power` task under **Recent tasks** or **Task history**, then check the
-   **Observed** state in the Power panel after the next host report.
+   observed state under the VM's name after the next host report.
 
 ## Expected result
 
@@ -39,6 +44,8 @@ records `vm-power` with the administrator.
 
 ## Troubleshooting
 
+- **All four buttons are greyed with "Select a virtual machine in Resources.":** no VM is
+  selected; the toolbar is fixed and only acts on the selected VM.
 - **Buttons are disabled with "Power controls need a freshly connected host":** the host
   has not reported within the freshness window. Restore host connectivity; the VM's actual
   state is unchanged by the Controller connection.
@@ -61,7 +68,9 @@ records `vm-power` with the administrator.
 
 ## Verification
 
-Executed checks are recorded in the [console QA report](../qa/console/checks.md): Go tests
+The toolbar placement and confirmation dialog were exercised in the
+[toolbar QA report](../qa/controller-toolbar/checks.md). The power behavior itself is
+recorded in the [console QA report](../qa/console/checks.md): Go tests
 for the host power execution, interruption reconciliation and Controller authorization,
 replay and dispatch; contract and documentation checks; and the browser walkthrough of
 Start, Reboot (ignored by the boot menu) and Force stop against a real guest in a

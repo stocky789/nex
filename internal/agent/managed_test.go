@@ -158,7 +158,7 @@ func TestManagedSlowCommandKeepsReportingAndCancels(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		if !slices.Contains(req.Capabilities, protocol.ManagedVMCapability) || !slices.Contains(req.Capabilities, protocol.ConsoleCapability) || !slices.Contains(req.Capabilities, protocol.PowerCapability) {
+		if !slices.Contains(req.Capabilities, protocol.ManagedVMCapability) || !slices.Contains(req.Capabilities, protocol.ConsoleCapability) || !slices.Contains(req.Capabilities, protocol.PowerCapability) || !slices.Contains(req.Capabilities, protocol.MediaCapability) {
 			t.Error("managed capability missing")
 		}
 		count := reports.Add(1)

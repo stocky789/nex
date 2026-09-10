@@ -20,21 +20,38 @@ import (
 // consoleSocket is replaced by tests; production resolves the VM on system libvirt.
 var consoleSocket = vmhost.ConsoleSocket
 
-// serveConsole attaches one running VM's local VNC socket to the Controller console
-// session named by the request. The connection is outbound over the enrolled mTLS
-// identity, so no listener is opened and raw VNC never leaves the host unprotected.
+// hostConsoleSession is replaced by tests; production starts the host RFB session
+// in-process. It returns a net.Conn directly rather than a socket to dial: the host
+// console has no legitimate consumer besides this process, so it is never exposed
+// on any listener a second local process could reach (see internal/vmhost/hostconsole.go).
+var hostConsoleSession = vmhost.HostConsoleSession
+
+// serveConsole attaches one local RFB endpoint (VM VNC, or the host console when
+// VMID is empty) to the Controller session. The connection is outbound over the
+// enrolled mTLS identity, so no listener is opened on the network and raw RFB
+// never leaves the host unprotected.
 func serveConsole(ctx context.Context, s State, req protocol.ConsoleRequest) error {
 	if req.Token == "" || len(req.Token) > 128 || strings.ContainsAny(req.Token, "/\\?#% \r\n") {
 		return errors.New("invalid console token")
 	}
-	socket, err := consoleSocket(ctx, req.VMID)
-	if err != nil {
-		return err
-	}
-	dialer := net.Dialer{Timeout: 5 * time.Second}
-	vnc, err := dialer.DialContext(ctx, "unix", socket)
-	if err != nil {
-		return fmt.Errorf("VM console socket: %w", err)
+	var vnc net.Conn
+	var err error
+	if req.VMID == "" {
+		vnc, err = hostConsoleSession()
+		if err != nil {
+			return err
+		}
+	} else {
+		var socket string
+		socket, err = consoleSocket(ctx, req.VMID)
+		if err != nil {
+			return err
+		}
+		dialer := net.Dialer{Timeout: 5 * time.Second}
+		vnc, err = dialer.DialContext(ctx, "unix", socket)
+		if err != nil {
+			return fmt.Errorf("console socket: %w", err)
+		}
 	}
 	defer vnc.Close()
 	config, err := tlsConfig(s, true)

@@ -860,3 +860,465 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
   already run `go test -race ./...` on push/PR.
 - Avoid: treating testing.TempDir cleanup failures as flakes when a background goroutine still owns
   files under that tree; shut the owner down in Close (or an explicit stop) before returning.
+
+## BUG-0047 — Create VM kept a blank "system" disk name instead of the derived default
+
+- Date: 2026-09-10.
+- Symptom: Gitea `phase1` failed `managed_vm_browser.py` with
+  `AssertionError: disk name 'system' does not derive from VM name 'browser-vm-…'`
+  (run 3804 job 4369) after the disk-name default feature landed.
+- Root cause: `VMWizard` built `started` disks with `autoDiskName`, then discarded them
+  whenever `blank.disks` was present — which it always is after `{...blank, ...restored}`.
+  Fresh wizards therefore kept the template name `system`, so renaming the VM never
+  matched `autoDiskName(pool, "", i)` and never updated the field.
+- Fix: only keep restored disks when the restore payload itself supplies them; otherwise
+  start from `autoDiskName`. `managed_vm_browser.py` already asserts the derived default
+  and the suffixed second disk.
+- Regression evidence: the failing assertion in `tests/integration/managed_vm_browser.py`
+  is the detector; it runs in both GitHub and Gitea phase1 workflows. `npm run typecheck`
+  passes after the init fix. Full Playwright was not re-run on this workstation.
+- Avoid: treating a spread of a non-empty blank draft as "restored state"; check the
+  restore payload, not the merged draft, before skipping generated defaults.
+
+## BUG-0048 — Background ISO upload rendered as a panel above Recent tasks
+
+- Date: 2026-09-10.
+- Symptom: while an ISO uploaded to the Controller, the activity dock showed a separate
+  "ISO upload to Controller" panel stacked on top of the Recent tasks heading and table, so the
+  upload looked like a second widget instead of a current task.
+- Root cause: `UploadStatus` was a standalone `section.panel` rendered beside `<Tasks>` rather
+  than inside its table.
+- Fix: replaced it with `UploadRow`, a row that `Tasks` renders first (kind `iso-upload`,
+  progress/rate and Cancel in the Status cell, actor and timestamp like any task). Upload state
+  now records `actor` and `updated_at`; the table also renders when only the upload exists.
+- Regression evidence: `tests/integration/managed_vm_browser.py` now asserts the upload appears
+  as a `tr` inside `.activity-dock table tbody` with a progressbar and that no upload `section`
+  exists; it runs in both phase1 workflows. Local simulated run passed that assertion and
+  captured `browser-simulated-iso-upload-row.png`; the run then stopped on the uncommitted
+  toolbar work's ambiguous **Back** button, which is outside this fix.
+- Avoid: adding a transient client-side item as a sibling panel of a list it conceptually
+  belongs to; render it as an entry of that list.
+
+## BUG-0049 — Create VM topology treated blank sockets as zero while showing "1"
+
+- Date: 2026-09-10.
+- Symptom: with Virtual CPUs 4, Sockets looking like 1, Cores 2 and Threads 2, the wizard
+  blocked with `0 × 2 × 2 does not`, even though 1×2×2 equals 4. The working 1×1×4 case
+  looked identical except sockets had actually been typed.
+- Root cause: blank topology fields used `value={n || ""}` with placeholders `"1"` /
+  vCPU count / `"1"`. Empty sockets stayed 0 in state while the placeholder looked filled;
+  filling only cores and threads tripped validation on the still-zero sockets.
+- Fix: remove the misleading placeholders; filling the first topology field seeds the other
+  two from the documented default (1 × count × 1); clearing any field clears all three;
+  incomplete vs product-mismatch errors are distinct. `applyTopology` / `topologyIssue`
+  own the behaviour.
+- Regression evidence: `tests/integration/managed_vm_browser.py` fills cores then threads
+  with count 4 and asserts sockets becomes `1` with no topology error before the existing
+  invalid-product check; both phase1 workflows run it. `npm run typecheck` passes.
+- Avoid: using numeric placeholders on optional number fields whose empty state is stored
+  as 0 — operators cannot tell placeholder from value.
+
+## BUG-0050 — Create VM dropdowns flickered closed on click
+
+- Date: 2026-09-10.
+- Symptom: every native `<select>` in Create VM (Bus, Storage, guest OS, and the rest)
+  opened and immediately closed, so the menu could not be used.
+- Root cause: `.panel { overflow: hidden }` combined with the desktop shell's nested
+  overflow (`desktop-app` / `#main` / `workspace-content`) made Chromium dismiss the
+  native select popup on the same click that opened it.
+- Fix: stop clipping `.panel` overflow; table scrolling stays on `.table-scroll`.
+- Regression evidence: `tests/integration/form_select_overflow.py` fails when `.panel`
+  sets a clipping overflow and passes with the fix; headed run requires the Bus menu
+  highlight below the control. Both GitHub and Gitea phase1 workflows run it.
+  Local headed: Bus menu stayed open (834 highlight pixels).
+- Avoid: putting `overflow: hidden` on form panels inside the desktop shell; use a
+  dedicated scroll container when clipping is required.
+
+## BUG-0051 — Host console listener let any local uid connect and get an unauthenticated root shell
+
+- Date: 2026-09-10.
+- Symptom: independent code review of the staged host console found `HostConsoleSocket`
+  listening on the abstract UNIX socket `@nex-core-host-console` with RFB security type
+  None and spawning `/bin/bash -l` as root for every accepted connection. Any local
+  process — including a QEMU guest process on the same host — could dial that address
+  and get a root shell with no Controller ticket, no authentication of any kind.
+- Root cause: the host console was built on the same real-listener shape as a normal RFB
+  server, but its only legitimate caller is `internal/agent/console.go` in the very same
+  process (it dials the returned address and pipes it straight to the Controller). A real
+  listener therefore had no legitimate second caller and no reason to be reachable by
+  anything else on the host.
+- Fix: replaced `HostConsoleSocket() (string, error)` with
+  `HostConsoleSession() (net.Conn, error)` in `internal/vmhost/hostconsole.go`, which
+  starts the RFB/PTY session on the server half of an in-process `net.Pipe` and returns
+  the client half directly — no socket, abstract or otherwise, is ever opened. Updated
+  `internal/agent/console.go` (`hostConsoleSession` var) to use the returned `net.Conn`
+  directly instead of dialing a socket path.
+- Regression evidence: `go test ./internal/vmhost -run TestHostConsoleHasNoLocalListener`
+  and `go test ./internal/agent -run TestServeConsoleUsesHostSessionDirectly` pass; the
+  first asserts the old socket address is unreachable, the second confirms `serveConsole`
+  relays the hook's `net.Conn` without dialing anything. Both run under `go test -race
+  ./...` in `.github/workflows/phase1.yml` and `.gitea/workflows/phase1.yml`.
+- Avoid: giving an in-process-only consumer a real OS-level listener "because that's how
+  RFB servers are normally built" — a listener is reachable by every local uid unless
+  something else (peer-credential checks, a network namespace) narrows that, and an
+  abstract UNIX socket narrows nothing.
+
+## BUG-0052 — Host console streamed a full frame on every FramebufferUpdateRequest, ignoring incremental
+
+- Date: 2026-09-10.
+- Symptom: code review found `serveHostRFB` answered every `FramebufferUpdateRequest`
+  (encoding a fresh 1,024,000-byte raw frame) regardless of the request's incremental
+  flag; noVNC re-requests immediately after each update, so an idle host console
+  streamed full frames back-to-back forever.
+- Root cause: the handler discarded the whole 9-byte request body (`io.CopyN(io.Discard,
+  c, 9)`) instead of reading the incremental flag, and always called `send()`. The PTY
+  reader goroutine made this worse by calling `send()` (a full frame) after every read
+  chunk instead of just marking the terminal dirty.
+- Fix: track `dirty`/`wantUpdate` in `serveHostRFB`; a non-incremental request always
+  gets a frame, an incremental request only gets one immediately if the terminal
+  changed since the last frame sent, and otherwise the PTY reader pushes the deferred
+  frame itself the next time it marks the terminal dirty. Second review round: `sendFrame`
+  now clears `wantUpdate` (under the same mutex as `dirty`), because a deferred
+  incremental request later satisfied by a full request otherwise left the flag set and
+  the PTY reader pushed one unsolicited full frame on the next output.
+- Regression evidence: `go test -race -count=1 ./internal/vmhost -run
+  TestHostConsoleIncrementalUpdateOnlyOnChange` drives the real RFB protocol against
+  `HostConsoleSession()` (a real `/bin/bash -l` PTY): confirms an incremental request
+  with nothing changed gets no reply within 300ms (asserts `os.ErrDeadlineExceeded`),
+  then confirms typing a character (which the PTY echoes) causes the deferred frame to
+  arrive without a further request. Extended in the second review round with a deferred
+  incremental request satisfied by a full request, after which new PTY output must
+  produce no unsolicited frame within 500ms; that assertion fails with
+  "output pushed an unsolicited frame after a satisfied incremental request" when the
+  `wantUpdate = false` line in `sendFrame` is removed, and passes with it. Runs under
+  `go test -race ./...` in both phase1 workflows.
+- Avoid: treating "send a frame" and "the client asked for one" as the same event when
+  the protocol has an explicit incremental flag for exactly this case.
+
+## BUG-0053 — Host console KeyEvent handling dropped Ctrl+C/D/Z and arrow keys
+
+- Date: 2026-09-10.
+- Symptom: code review found `keysymByte` had a literal dead branch
+  (`if sym >= 0x61 && sym <= 0x7a { return nil }`) that could never execute because the
+  `0x20..0x7e` Latin-1 range above it already covered lowercase letters and returned
+  first. Ctrl+C/D/Z therefore arrived at the shell as plain `c`/`d`/`z`, and arrow keys
+  (not in any handled range) were silently dropped.
+- Root cause: the handler never tracked Control key state (it also skipped every
+  key-up event outright with `if body[0] == 0 { continue }`, so a held Control_L could
+  never be observed), and `keysymByte` had no case for arrow/Home/End keysyms.
+- Fix: `serveHostRFB` now tracks a per-connection `keyState.ctrl` set by Control_L/R
+  (0xffe3/0xffe4) down/up events; `keysymByte(sym, ctrl)` maps a held-Ctrl keysym in
+  0x40..0x5f to `sym & 0x1f` (Ctrl+@ -> 0x00, Ctrl+A..Z -> 0x01..0x1a,
+  Ctrl+`[`/`\`/`]`/`^`/`_` -> 0x1b..0x1f), lowercase letters the same way, Ctrl+Space to
+  NUL, and adds Left/Up/Right/Down/Home/End escape sequences. The non-letter control
+  codes were missed in the first round: Ctrl+\ (SIGQUIT) and Ctrl+] reached the shell as
+  literal characters.
+  
+- Regression evidence: `go test -race -count=1 ./internal/vmhost -run
+  TestKeysymByteCtrlAndArrows` (pure-function table test) passes; the table covers
+  Ctrl+C/D/Z, the arrow/Home/End sequences, and — added in the second review round —
+  Ctrl+`\` (0x1c), Ctrl+`[` (0x1b), Ctrl+@ and Ctrl+Space (0x00), plus plain `\` to show
+  the unmodified path is unchanged. Runs under `go test -race ./...` in both phase1
+  workflows. Optionally added a Ctrl+C entry to the `Send key…` menu in
+  `web/src/console.tsx` (`npm run typecheck` passes) since the backend now honours it.
+- Avoid: leaving an unreachable branch in review as "the intended hook" without wiring
+  the modifier state that would make it reachable — dead code here was a working sign
+  the feature was incomplete, not defensive coverage.
+
+## BUG-0054 — Host console tab expansion emitted roughly half the intended spaces
+
+- Date: 2026-09-10.
+- Symptom: a scratch test confirmed `"\t"` from column 0 left `t.cur == 4` (expected 8),
+  and `"abc\t"` left `t.cur == 6` (expected 8).
+- Root cause: `for i := 0; i < 8-(t.cur%hostCols)%8; i++ { t.put(' ') }` re-evaluated the
+  loop bound every iteration; `put()` advances `t.cur`, so the bound shrank as the loop
+  ran and the loop stopped roughly halfway to the next tab stop.
+- Fix: compute the space count once before the loop in `hostTerm.write` (case `'\t'`).
+- Regression evidence: `go test ./internal/vmhost -run
+  TestHostTermTabStopsAtNextMultipleOfEight` reproduces both cases from the scratch test
+  and passes with the fix; runs under `go test -race ./...` in both phase1 workflows.
+- Avoid: writing a `for` loop bound as an expression over mutable state the loop body
+  itself advances; compute it once, or iterate to an absolute target instead of a count.
+
+## BUG-0055 — HostConsoleSocket cached a one-time Listen failure for the process lifetime
+
+- Date: 2026-09-10.
+- Symptom: code review found `hostConsoleOnce sync.Once` meant a failed `net.Listen` on
+  first use (e.g. address already in use, resource limits during startup) would return
+  the same cached error forever, with no way to recover without restarting the agent.
+- Root cause/fix: moot — BUG-0051's fix removed the listener (and the `sync.Once`/cached
+  error with it) entirely in favor of `HostConsoleSession()`, which starts a fresh
+  `net.Pipe` and PTY session on every call and has no persistent failure state to cache.
+  No separate code change was needed beyond BUG-0051's.
+- Regression evidence: covered by BUG-0051's tests (`TestHostConsoleSessionRFBHandshake`
+  and `TestHostConsoleHasNoLocalListener` both call `HostConsoleSession()` fresh and pass
+  repeatedly).
+- Avoid: n/a — recorded for traceability since it was a separate finding in review, not
+  because it needed its own fix.
+
+## BUG-0056 — openHostConsole let an old Core hang the browser instead of refusing it
+
+- Date: 2026-09-10.
+- Symptom: code review found `openHostConsole` gated on `protocol.ConsoleCapability`
+  (`console-v1`), the same capability every agent old enough to support VM consoles
+  already reports — including one that predates the host console feature entirely. A new
+  Controller would enable the host console tab, issue a ticket, and the browser would
+  wait the full 20 seconds for a tunnel the old agent can never open before showing a
+  504, instead of an immediate "upgrade Nex Core" refusal. The 409 branch for that
+  message existed but was unreachable in this scenario.
+- Root cause: host console reused the VM console's capability constant instead of
+  advertising its own, so "reports console-v1" was not proof the agent's host console
+  RFB endpoint existed.
+- Fix: added `protocol.HostConsoleCapability = "host-console-v1"` in
+  `internal/protocol/console.go`; `internal/agent/run.go` now reports it alongside
+  `console-v1`; `internal/controller/console.go`'s `openHostConsole` gates on it instead
+  of `console-v1`, and `hostConsoleBlocker` in `web/src/main.tsx` checks the same
+  capability so the host Console tab is disabled (with the "upgrade Nex Core" reason)
+  rather than auto-connecting into a 409 the console component retries forever — the UI
+  half was missed in the first round and still checked `console-v1`. `docs/API.md` and
+  `docs/api/openapi.json` document the new capability and compatibility behavior; the
+  host console endpoints' 404/409 response wording and the ticket parameter description
+  were also corrected from copy-pasted VM-console text ("VM not found" / "another VM" /
+  "Ticket from openConsole") to host wording.
+- Regression evidence: extended `TestHostConsoleTicket` in
+  `internal/controller/console_test.go` to report only `console-v1` (no
+  `host-console-v1`) and assert the 409 "does not support browser consoles" refusal,
+  then report both and assert the ticket succeeds. `go test ./internal/controller -run
+  TestHostConsoleTicket` passes; runs under `go test -race ./...` in both phase1
+  workflows. The `web/src/main.tsx` gate has no unit test (the UI suite has no component
+  harness); it was verified by `npm run typecheck` and `npm run build` and by inspection
+  against `openHostConsole` — recorded as a coverage limit in
+  `docs/changes/2026-09-10-host-console-hardening.json`.
+- Avoid: reusing a capability constant across two features just because one grew out of
+  the other's code path — if an old deployment can advertise the shared capability
+  without supporting the new feature, gate on a capability that is actually proof of the
+  new feature.
+
+---
+
+## BUG-0057 — Interrupted VM media insert could reconcile as succeeded with an empty tray
+
+- Date: 2026-09-10.
+- Symptom: if the agent died before or during `virsh change-media` for an insert, restarting and
+  reconciling the operation reported `succeeded` and mirrored the ISO as inserted (Controller UI
+  showed the media attached), while the VM's CD tray was actually still empty.
+- Root cause: `apply()` persisted the vm-media journal at stage `changing-media` with
+  `MediaPath` empty; `changeMedia` only set the resolved media path in memory
+  (`j.MediaPath = path`) and never saved the journal again before calling `virsh change-media`.
+  On restart, `mediaObserved` compared the domain's current tray (`got`, empty) against `want`,
+  which it also computed as empty for an insert whose journaled `MediaPath` was empty — an empty
+  tray therefore satisfied "empty want" and reconciliation reported success regardless of what
+  actually happened.
+- Fix: root cause was the stage bookkeeping, not the comparison. `apply()` persisted Stage
+  `changing-media` before `changeMedia` had resolved anything, so a crash in the window before
+  the virsh call (ISO verification, tray attach) looked like an issued change and reconciled as
+  a permanent failure or, worse, matched an empty tray. `changeMedia` now writes Stage
+  `changing-media` and the resolved `MediaPath` in one journal save immediately before the
+  `virsh change-media` call (both insert and eject); `apply()` sets no stage. A pending journal
+  without that stage issued nothing, so `reconcile`'s `Stage != "changing-media"` branch simply
+  re-applies the request. The empty-path special case in `mediaObserved` is removed: an insert
+  reaching observation always has its path.
+- Regression evidence: `go test -race -count=1 ./internal/vmhost -run TestManagedMediaChange`.
+  The m11 case executes an insert that cannot resolve its ISO (the same window a crash during
+  ISO verification falls in), asserts the journal on disk does not claim Stage
+  `changing-media`, then re-executes that journal as pending and asserts it re-applies and
+  issues `change-media ... --update`. Hand-reverting the stage move (Stage set in `apply()`
+  before the path is resolved, without `git`) fails it with
+  `nothing was issued, so the journal must not claim a media change was in flight: ... Stage:changing-media`;
+  restoring the fix passes.
+- Avoid: persisting only in memory before an external side-effecting call (`virsh`) that can be
+  interrupted; anything reconciliation depends on to tell "succeeded" from "empty" apart must be
+  durable before that call, not just after it returns.
+
+## BUG-0058 — VM media eject zeroed the boot order without renumbering, orphaning boot-order-dependent VMs on re-adoption
+
+- Date: 2026-09-10.
+- Symptom: a VM created with the install ISO first in boot order (`media_boot_order=1`,
+  disk `boot_order=2`, the shape `vmSpec`/`managedTestVM` use when media is given) that then had
+  its media ejected ended up with a disk boot order of 2 and nothing at 1.
+  `protocol.ValidateVMSpec` rejects that shape ("boot order must number the boot devices from 1
+  without gaps"), so on Core the VM's own managed journal failed its own re-validation in
+  `journals()` and vanished from `Applied()`; on the Controller, `adoptManaged` `continue`d past
+  it during host-report adoption. A replacement Controller reconnecting to the pool master would
+  never re-adopt the VM, even though it was still running on the host.
+- Root cause: both `recordVMMedia` (`internal/vmhost/managed.go`) and `mirrorVMMedia`
+  (`internal/controller/vmmedia.go`) independently zeroed `MediaID`/`Boot.MediaBootOrder` on
+  eject without shifting the remaining disk boot orders down to close the gap, and neither gave
+  a re-inserted ISO a boot order.
+- Fix: the round-one renumbering made the durable record lie. `virsh change-media` never
+  touches `bootindex`: an inserted ISO gets no boot element, and an eject leaves the (now
+  empty) CD drive and every disk with the bootindex they had. `protocol.ApplyVMMedia` therefore
+  records only `media_id` — insert invents no media boot order, eject clears `media_id` with
+  `media_boot_order` and leaves the disks' `boot_order` untouched. So that the gap an eject
+  leaves cannot make a re-adopting Controller reject and silently skip a running VM
+  (`internal/controller/managed.go` adoption drops any spec failing `ValidateVMSpec`),
+  `ValidateVMSpec` now requires boot order values to be unique, positive and at least one, but
+  no longer contiguous — libvirt orders devices by bootindex and tolerates gaps. **Decision for
+  Matt to confirm:** relaxing the contiguity rule. Nothing promises 1..N numbering to
+  operators: `web/src/vm-create.tsx` renumbers its own list to 1..N before submitting, the VM
+  details page prints each device's own number, and `docs/guide/create-virtual-machine.md` says
+  only "an explicit boot order". The alternative (rewriting the domain's bootindex values in the
+  same virsh step) was rejected as far more code for no operator-visible gain.
+- Regression evidence: `go test -race -count=1 ./internal/protocol ./internal/vmhost ./internal/controller`.
+  New `TestApplyVMMediaKeepsBootOrder` (protocol) asserts eject keeps disk order 2, clears the
+  media order, validates the ejected spec, and that a re-insert invents nothing;
+  `TestManagedRecordVMMediaKeepsBootOrderOnEject` (vmhost) and
+  `TestMirrorVMMediaKeepsBootOrderOnEject` (controller) assert the same for Core's journal and
+  the Controller mirror, both still passing `ValidateVMSpec`; `protocol/managed_test.go` covers
+  the accepted gap ("boot order gap", "boot order not from one", "boot order after eject").
+  Hand-reverting `ApplyVMMedia` to the renumbering version fails all three
+  (`eject must not renumber the disk boot order libvirt still holds: ... BootOrder:1`).
+- Avoid: mutating a derived, order-dependent field (boot order) independently on two sides
+  (Core and Controller) that must never diverge, and mutating it without maintaining the
+  invariant (contiguous numbering from 1) the rest of the system assumes holds.
+
+## BUG-0059 — Ejecting an already-empty CD tray failed instead of succeeding, and could attach a tray just to fail ejecting from it
+
+- Date: 2026-09-10.
+- Symptom: an eject request on a VM whose tray was already empty (a fresh eject retried after
+  the mirror was already cleared, an eject following an out-of-band `virsh` eject on the host, or
+  eject on a stopped VM with no CD drive defined at all) failed with "libvirt refused the media
+  change; inspect the VM on its host". A stopped VM without a drive at all would first get an
+  empty tray persistently attached by `ensureCDROM`, and the eject would then still fail on that
+  freshly attached, already-empty tray. There was no way to clear a stale `media_id` mirror this
+  way.
+- Root cause: `changeMedia` always called `ensureCDROM` (which attaches an empty tray if none
+  exists) and then unconditionally ran `virsh change-media ... --eject` for every eject request,
+  without checking whether the drive already had no media. Real `virsh` refuses to eject a
+  source-less cdrom ("doesn't have media"); `--force` does not bypass that.
+- Fix: the short-circuit decided "already empty" from the persistent definition only and only
+  looked at `<source file>`, so a running VM whose tray was changed outside Nex, or whose media
+  is attached as `<source dev>`, was reported ejected while the guest still held the ISO.
+  `cdromSource` now takes the `running` flag and reads the live definition for a running domain
+  (the same `dumpManagedDomain` call `ensureCDROM` uses), and treats either `<source file>` or
+  `<source dev>` as media present. `mediaObserved` uses the same helper instead of its own
+  `dumpxml --inactive` + unmarshal + first-cdrom scan, and one args builder now serves both
+  insert and eject (branching only on `--eject` vs `path --update`).
+- Regression evidence: `go test -race -count=1 ./internal/vmhost -run 'TestManagedMediaChange|TestManagedMediaEjectReadsLiveDefinition'`.
+  New `TestManagedMediaEjectReadsLiveDefinition` uses a fake virsh whose `dumpxml --inactive`
+  shows an empty tray while the live `dumpxml` shows `<source dev="/dev/sr0">` on a running VM,
+  and asserts the eject issues `change-media <vm> sda --force --live --config --eject`.
+  Hand-reverting `cdromSource` to the inactive definition and `<source file>` only fails it:
+  the virsh log holds `dumpxml ... --inactive` and no `change-media`.
+- Avoid: calling a side-effecting host command unconditionally for an operation that may already
+  be satisfied; read the current observed state first when the API allows a cheap read-only check.
+
+## BUG-0060 — A VM media change broke idempotent replay of the original create request
+
+- Date: 2026-09-10.
+- Symptom: create a VM with request_id `R`; later insert or eject its media; then replay the
+  original create request with the same request_id `R` (the documented idempotent-retry
+  behavior) — the replay returned 409 "request_id already used with another payload" instead of
+  200 with the original VM.
+- Root cause: `mirrorVMMedia` (`internal/controller/vmmedia.go`) rewrote both the `command` and
+  the `payload` columns of the vm-create `managed_resources` row after a successful media change.
+  `replayResource` (`internal/controller/managed.go`) looks up a request solely by `request_id`
+  and treats it as a replay only if the stored `payload` matches the replayed request byte for
+  byte; once `mirrorVMMedia` had rewritten `payload` with the new `media_id`/boot order, the
+  original create request's payload no longer matched, so the replay was rejected as "another
+  payload" instead of recognized as the same request.
+- Fix: `mirrorVMMedia` now updates only the `command` column (the live mirror of the VM's current
+  state, already read from the `command` column by `poolMACs`, `hostMemory`, `adoptManaged`, and
+  `listResources`) and leaves `payload` (the original request body, which only backs idempotent
+  replay of that specific request_id) untouched.
+- Regression evidence: `internal/controller/vmmedia_test.go`,
+  `TestVMCreateReplayStaysIdempotentAfterMediaChange` (create a VM, eject its media, then replay
+  the original create request_id and assert 200 with the same VM ID/operation ID). Manually
+  reverted `mirrorVMMedia` back to also rewriting `payload` (not via git) and reran: failed with
+  `POST /api/v1/vms: got 409 want 200: {"error":"request_id already used with another payload"}`
+  — the exact symptom described above. Restored the fix and reran: passes. Runs in
+  `go test`/`go test -race ./internal/controller/`, which both phase1 workflows already execute
+  on push/PR.
+- Avoid: treating a stored request payload (the input a request_id owns for idempotent replay)
+  as if it were the same thing as a live mirror of current resource state; when both need to be
+  derived from the same event, update only the one that is supposed to change.
+
+## BUG-0061 — Playwright Back locator ambiguous against the new fixed toolbar
+
+- Date: 2026-09-10
+- Symptom: `tests/integration/managed_vm_browser.py` failed Playwright strict-mode resolution
+  at the Create VM wizard's "back to review the last step" assertion; both phase1 CI
+  workflows (`.github/workflows/phase1.yml`, `.gitea/workflows/phase1.yml`) that run this
+  script would go red. `docs/changes/2026-09-10-iso-upload-task-row.json` already recorded
+  the run failing on this ambiguity.
+- Root cause: `web/src/main.tsx`'s new always-visible toolbar added a second button whose
+  accessible name is exactly "Back" (browser history navigation, icon `aria-hidden`),
+  alongside the Create VM wizard's own step-back "Back" button
+  (`web/src/vm-create.tsx`). `page.get_by_role('button', name='Back', exact=True)` on the
+  whole page then matched two elements.
+- Fix: scoped the wizard's locator to the wizard's own landmark
+  (`page.get_by_role('region', name='Create VM', exact=True).get_by_role('button',
+  name='Back', exact=True)`) instead of renaming the toolbar button. Renaming the toolbar
+  button's accessible name was rejected: `tests/integration/phase1_browser.py` (not in this
+  agent's write set) already asserts `toolbar.get_by_role('button', name='Back',
+  exact=True)` for that same button, so changing its name would have broken that file
+  instead.
+- Regression evidence: ran the real simulated Playwright acceptance end-to-end —
+  `.cache/phase1-qa-venv/bin/python tests/integration/managed_vm_browser.py --simulated
+  --evidence <scratchpad>/managed-vm-browser-run2` — all 5 phases PASS, including the
+  six-step wizard's step-back assertion that previously threw in strict mode. Both phase1
+  workflows already run this script.
+- Avoid: adding an unscoped `page.get_by_role(..., name='Back')` locator anywhere the fixed
+  toolbar is present; scope to the relevant landmark/region instead, since "Back" is a
+  generic label likely to recur.
+
+## BUG-0062 — Create VM draft restore replaced an explicit empty NIC list with one blank NIC
+
+- Date: 2026-09-10
+- Symptom: an operator removes every network interface in the Create VM wizard (the
+  protocol allows 0 NICs) and submits. If the submission response is lost (uncertain
+  outcome) the draft persists with `nics: []`. Reopening the wizard shows one NIC with an
+  empty required Network select, blocking Next; choosing a network there then makes
+  `web/src/managed.tsx`'s retry throw because the resubmitted payload no longer matches the
+  original stored request.
+- Root cause: `web/src/vm-create.tsx`'s draft-restore logic used
+  `Array.isArray(r.nics) && r.nics.length ? r.nics : blank.nics`, so a legitimate empty
+  array was treated the same as a missing/absent field and replaced by the one-NIC blank
+  template.
+- Fix: extracted the restore rule into a pure exported function,
+  `restoredNICs(nics: unknown): NICRow[]`, that falls back to `blank.nics` only when the
+  value is not an array at all (`Array.isArray(nics) ? nics : blank.nics`), preserving an
+  explicit `[]`. `VMWizard`'s initial-draft `useState` now calls `restoredNICs(r.nics)`.
+- Regression evidence: no unit-test harness existed in `web/` (no vitest/jest). Added
+  `web/src/vm-create.test.mjs` as `npm --prefix web run test`, which both phase1 workflows
+  (`.github/workflows/phase1.yml`, `.gitea/workflows/phase1.yml`) now run after typecheck:
+  it uses the already-installed `esbuild` to transform-and-import `vm-create.tsx` directly
+  (stubbing the `react` and `./managed` imports, which the pure functions under test do not
+  need) and asserts `restoredNICs([])` stays `[]`, `restoredNICs(undefined)` and
+  `restoredNICs('not-an-array')` fall back to the one-NIC template, and a populated array is
+  preserved unchanged. Confirmed the check fails against the original
+  `Array.isArray(r.nics) && r.nics.length` logic and passes after the fix. Run with:
+  `node web/src/vm-create.test.mjs`. `cd web && npm run typecheck && npm run build` both
+  pass.
+- Avoid: treating "empty array" the same as "field absent" when restoring a persisted
+  draft/form whose protocol allows a legitimately empty collection (here, 0 NICs); check
+  `Array.isArray` alone, not truthiness/length, to distinguish "never set" from
+  "deliberately cleared."
+
+## BUG-0063 — Deploy guide claimed guest root console login stays locked
+
+- Date: 2026-09-10
+- Symptom: `docs/guide/deploy-controller-appliance.md` said "SSH password login stays
+  disabled and guest root stays locked" in the recovery section, directly contradicted by
+  the very next sentence on the same page ("The deploy password also unlocks the appliance
+  console as root...") and by the staged `appliance/firstboot.py` behavior.
+- Root cause: the guide was not updated when `firstboot.py`'s
+  `provision_console_login()` was added/changed to unlock the guest `root` account with the
+  deploy/admin password (`chpasswd -e` then `passwd -u`) and add it to the `sudo` group
+  where one exists on the image; the "stays locked" clause went stale.
+- Fix: read `appliance/firstboot.py` (read-only) to confirm current behavior, then
+  corrected the guide paragraph to state that first boot unlocks the guest root console
+  account with the deploy password and may grant it `sudo`, and to spell out the security
+  implication (knowing the Controller administrator password gives a full root shell at the
+  console, not only web access; treat it like host root). SSH password login staying
+  disabled was left as-is (unaffected by `firstboot.py`, which never touches sshd config).
+- Regression evidence: this is a documentation-accuracy fix, not executable logic; no
+  automated regression check applies. Verification: re-read `appliance/firstboot.py` in
+  full and confirmed every clause of the corrected paragraph matches its actual behavior
+  (useradd/usermod into `sudo` when present, `openssl passwd -6` + `chpasswd -e` +
+  `passwd -u` for the deploy password, no sshd changes). `python3 scripts/check_docs.py
+  --worktree` passes with the updated page correctly declared in
+  `docs/changes/2026-09-10-wizard-draft-back-locator.json` (guide impact: updated).
+- Avoid: letting a guide correctness claim ("X stays locked/disabled") drift from a
+  security-relevant script it describes; grep the guide for the changed behavior whenever
+  `appliance/firstboot.py` (or any onboarding/bootstrap script) changes what it provisions.

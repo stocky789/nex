@@ -237,6 +237,38 @@ func TestManagedMediaInterruptedReconciliation(t *testing.T) {
 		t.Fatalf("%+v %v", r, err)
 	}
 }
+
+// A VM created install-media-first (media_boot_order 1, disk boot_order 2, the shape
+// managedTestVM returns) keeps its disk boot order after an eject: virsh change-media leaves
+// every bootindex in the domain alone, so renumbering the record would make it describe a
+// domain that does not exist. The gap this leaves must still validate, or a replacement
+// Controller would skip adopting a still-running VM.
+func TestManagedRecordVMMediaKeepsBootOrderOnEject(t *testing.T) {
+	e := NewManaged(t.TempDir())
+	v := managedTestVM()
+	if v.Boot.MediaBootOrder != 1 || v.Disks[0].BootOrder != 2 {
+		t.Fatalf("fixture must be install-media-first: %+v", v.Boot)
+	}
+	c := protocol.Command{OperationID: "create", Kind: "vm-create", VM: &v}
+	j := managedJournal{Command: c, Result: protocol.Result{OperationID: "create", Status: "succeeded"}}
+	if err := e.save(j); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.recordVMMedia(protocol.VMMediaRequest{VMID: v.ID, PoolID: v.PoolID, HostID: v.HostID, Action: "eject"}); err != nil {
+		t.Fatal(err)
+	}
+	applied := e.Applied()
+	if len(applied.VMs) != 1 {
+		t.Fatalf("VM missing after eject: %+v", applied.VMs)
+	}
+	got := applied.VMs[0]
+	if err := protocol.ValidateVMSpec(got); err != nil {
+		t.Fatalf("post-eject spec fails validation, a fresh Controller could not adopt this VM: %v (%+v)", err, got)
+	}
+	if got.MediaID != "" || got.Boot.MediaBootOrder != 0 || got.Disks[0].BootOrder != 2 {
+		t.Fatalf("eject must not renumber the disk boot order libvirt still holds: %+v", got)
+	}
+}
 func TestManagedVMInterruptedAllocationNeverReplays(t *testing.T) {
 	e := NewManaged(t.TempDir())
 	v := managedTestVM()

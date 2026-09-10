@@ -88,3 +88,57 @@ func TestServeConsoleTunnelsVNCSocketToController(t *testing.T) {
 		t.Fatalf("tunnel request %q", request)
 	}
 }
+
+// BUG-0051 regression: serveConsole must use the host console session handed to it
+// directly rather than dialing a socket address, since internal/vmhost.HostConsoleSession
+// no longer exposes one (a socket any local uid could reach used to hand out an
+// unauthenticated root shell). This fakes the hook with an in-process net.Pipe, the
+// same shape the real implementation returns, and confirms serveConsole relays it
+// without trying to dial anything.
+func TestServeConsoleUsesHostSessionDirectly(t *testing.T) {
+	agentSide, serverSide := net.Pipe()
+	old := hostConsoleSession
+	calls := 0
+	hostConsoleSession = func() (net.Conn, error) {
+		calls++
+		return agentSide, nil
+	}
+	defer func() { hostConsoleSession = old }()
+	go func() {
+		io.Copy(serverSide, serverSide)
+		serverSide.Close()
+	}()
+
+	relayed := make(chan string, 1)
+	_, identity := testManagedIdentity(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, rw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: nex-console\r\n\r\n")
+		rw.Flush()
+		conn.Write([]byte("host shell\n"))
+		echoed, err := bufio.NewReader(conn).ReadString('\n')
+		conn.Close()
+		if err == nil {
+			relayed <- echoed
+		}
+	}))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := serveConsole(ctx, identity, protocol.ConsoleRequest{Token: "ticket", VMID: ""}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("hostConsoleSession called %d times, want 1", calls)
+	}
+	select {
+	case got := <-relayed:
+		if got != "host shell\n" {
+			t.Fatalf("relayed %q", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("bytes were not relayed through the host console session")
+	}
+}

@@ -1857,7 +1857,7 @@
       "post": {
         "operationId": "createVM",
         "summary": "Create a stopped guest VM",
-        "description": "Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Shared bounds, enforced identically on Controller and Core: 1\u20138 disks of 1\u20132048 GiB on virtio, sata or scsi with names unique in the VM; at most 8 NICs on virtio or e1000e with unicast lower-case manual MACs; at least 1 vCPU with sockets \u00d7 cores \u00d7 threads equal to the count when a topology is given; at least 512 MiB in memory mode dedicated or maximum; uefi or bios; boot orders unique across disks and install media, numbered from 1 without gaps, with at least one boot device. Controller additionally caps CPU at 64 and memory at 262144 MiB, enforces MAC uniqueness across the pool, assigns the UUID and reserves the name within the pool before dispatch. Host observed capacity and Core current capacity must suffice, using the memory ceiling in both modes. Storage, network and ISO must have succeeded on this host and pool, and the install ISO must reside on a storage target this VM uses. Core journals effects and reconciles per-disk ownership before replay; needs_attention preserves uncertain resources for manual recovery. Creation never boots a guest: start_after_create makes Controller issue the separate vm-power start only after creation succeeds, and autostart is a libvirt property set while the stopped VM is defined. No console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64 and machine-type libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint.",
+        "description": "Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Shared bounds, enforced identically on Controller and Core: 1\u20138 disks of 1\u20132048 GiB on virtio, sata or scsi with names unique in the VM; at most 8 NICs on virtio or e1000e with unicast lower-case manual MACs; at least 1 vCPU with sockets \u00d7 cores \u00d7 threads equal to the count when a topology is given; at least 512 MiB in memory mode dedicated or maximum; uefi or bios; boot orders unique and positive across disks and install media (gaps are allowed, since ejecting media leaves one), with at least one boot device. Controller additionally caps CPU at 64 and memory at 262144 MiB, enforces MAC uniqueness across the pool, assigns the UUID and reserves the name within the pool before dispatch. Host observed capacity and Core current capacity must suffice, using the memory ceiling in both modes. Storage, network and ISO must have succeeded on this host and pool, and the install ISO must reside on a storage target this VM uses. Core journals effects and reconciles per-disk ownership before replay; needs_attention preserves uncertain resources for manual recovery. Creation never boots a guest: start_after_create makes Controller issue the separate vm-power start only after creation succeeds, and autostart is a libvirt property set while the stopped VM is defined. No console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64 and machine-type libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint.",
         "security": [
           {
             "AdminSession": []
@@ -3216,6 +3216,375 @@
           }
         }
       }
+    },
+    "/api/v1/hosts/{id}/console": {
+      "post": {
+        "operationId": "openHostConsole",
+        "summary": "Issue a single-use console ticket for a host",
+        "description": "Requires an administrator session, same Origin and X-CSRF-Token, and an empty JSON object body. The host must be freshly connected, unrevoked and report capability host-console-v1 (distinct from console-v1, which only ever covers VM consoles; an agent without host-console-v1 gets 409 rather than a ticket it can never fulfil). The ticket is bound to the requesting session user and host, lives 60 seconds in Controller memory only, is delivered once to the host in its next report response with an empty vm_id (host console), and is consumed by the first matching WebSocket. Audited as host.console.open.",
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Host ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              },
+              "example": {}
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Console ticket issued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleTicket"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON, unknown field, or body over 1 MiB.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authorization, origin, or CSRF validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Host not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Host not freshly connected, revoked, or the host agent does not report host-console-v1.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many open console sessions (32).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller persistence or internal failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hosts/{id}/console/{ticket}": {
+      "get": {
+        "operationId": "hostConsoleStream",
+        "summary": "Browser WebSocket for a host console ticket",
+        "description": "Upgrades to a WebSocket that relays raw RFB for the host console. Requires the same session user, matching host id, unconsumed ticket and same-origin Origin. Pairs with the agent nex-console tunnel.",
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Host ID."
+          },
+          {
+            "name": "ticket",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Ticket from openHostConsole."
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "WebSocket established; binary frames relay the VM display stream."
+          },
+          "200": {
+            "description": "Not returned; listed so tooling that requires a 2xx documents the upgrade. The stream is the 101 response."
+          },
+          "400": {
+            "description": "Missing or invalid WebSocket upgrade headers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin does not match the Controller origin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Ticket unknown, expired, for another host, or issued to another session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ticket already used.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The host did not attach the console within 20 seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vms/{id}/media": {
+      "post": {
+        "operationId": "mediaVM",
+        "summary": "Insert or eject ISO media on a VM CDROM",
+        "description": "Queues a durable vm-media command on the VM assigned host. Requires administrator session, CSRF, stable request_id, action insert|eject, and media_id for insert of a verified ISO on that host. Host must report vm-media-v1. Audited; operation appears in the operations list.",
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "VM UUID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "request_id",
+                  "action"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "request_id": {
+                    "type": "string",
+                    "description": "Stable client request identity."
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "insert",
+                      "eject"
+                    ]
+                  },
+                  "media_id": {
+                    "type": "string",
+                    "description": "Required for insert; forbidden for eject."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Power request queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PowerVMResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Replay of an existing request_id with the same VM and action.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PowerVMResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON, unknown field, invalid request_id or unsupported action.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, invalid, or revoked credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authorization, origin, or CSRF validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "VM not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Host not fresh, revoked, outside the pool or without vm-power-v1; request_id reused with different input; or another power request for this VM is pending.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller persistence or internal failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3745,7 +4114,8 @@
               "network-register",
               "iso-import",
               "vm-create",
-              "vm-power"
+              "vm-power",
+              "vm-media"
             ]
           },
           "storage": {
@@ -3792,6 +4162,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/VMPowerRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "vm_media": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VMMediaRequest"
               },
               {
                 "type": "null"
@@ -4350,7 +4730,8 @@
               "network-register",
               "iso-import",
               "vm-create",
-              "vm-power"
+              "vm-power",
+              "vm-media"
             ]
           },
           "request_id": {
@@ -4400,7 +4781,7 @@
           "status": "queued",
           "created_at": "2026-09-08T10:00:00Z",
           "updated_at": "2026-09-08T10:00:00Z",
-          "actor": "admin"
+          "actor": "root"
         }
       },
       "Audit": {
@@ -4437,7 +4818,7 @@
         "x-go-type": "protocol.Audit",
         "example": {
           "id": 1,
-          "actor": "admin",
+          "actor": "root",
           "action": "site.create",
           "resource_id": "<site-id>",
           "created_at": "2026-09-08T10:00:00Z"
@@ -4471,7 +4852,7 @@
         ],
         "additionalProperties": false,
         "example": {
-          "username": "admin",
+          "username": "root",
           "csrf_token": "<session-csrf-token>"
         }
       },
@@ -4496,7 +4877,7 @@
         ],
         "additionalProperties": false,
         "example": {
-          "username": "admin",
+          "username": "root",
           "password": "<your-administrator-password>"
         }
       },
@@ -5282,7 +5663,7 @@
           "media_boot_order": {
             "type": "integer",
             "minimum": 0,
-            "description": "0 keeps the install ISO out of the boot order; any other value joins the disks' contiguous 1..N numbering and requires media_id."
+            "description": "0 keeps the install ISO out of the boot order; any other value must be unique among the disks' orders and requires media_id."
           }
         },
         "required": [
@@ -5666,12 +6047,12 @@
             "description": "Single-use pairing secret; the host presents it on POST /api/v1/agent/console/{token} within the ticket lifetime."
           },
           "vm_id": {
-            "type": "string"
+            "type": "string",
+            "description": "VM UUID; omit or empty for the host console."
           }
         },
         "required": [
-          "token",
-          "vm_id"
+          "token"
         ],
         "x-go-type": "protocol.ConsoleRequest",
         "example": {
@@ -5936,6 +6317,45 @@
         ],
         "x-go-type": "protocol.GuestInfo",
         "description": "Observed inside a running VM by its host through host-local virtio channels: guest agent facts and console channel states. Observation only; a connected agent is not proof of application health."
+      },
+      "VMMediaRequest": {
+        "type": "object",
+        "properties": {
+          "vm_id": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "host_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "insert",
+              "eject"
+            ]
+          },
+          "media_id": {
+            "type": "string",
+            "description": "ISO media ID already imported on the assigned host. Required for insert; omitted for eject."
+          }
+        },
+        "required": [
+          "vm_id",
+          "pool_id",
+          "host_id",
+          "action"
+        ],
+        "x-go-type": "protocol.VMMediaRequest",
+        "example": {
+          "vm_id": "<vm-uuid>",
+          "pool_id": "<pool-id>",
+          "host_id": "<host-id>",
+          "action": "insert",
+          "media_id": "<media-id>"
+        }
       }
     }
   },
@@ -6004,6 +6424,17 @@
         "$ref": "#/components/schemas/Result"
       },
       "semantics": "Issue one libvirt start/shutdown/reboot/destroy for the named VM on this host. start and force-stop are idempotent against the observed state; shutdown and reboot are ACPI requests the guest may ignore; paused or transitional states are refused. The stage is journaled before the single request so an interruption is reconciled by observation only: succeeded when the observed state proves the outcome, otherwise needs_attention; never a second request."
+    },
+    "vm-media": {
+      "transport": "POST /api/v1/agent/report response.commands",
+      "capability": "vm-media-v1",
+      "payload": {
+        "$ref": "#/components/schemas/VMMediaRequest"
+      },
+      "result": {
+        "$ref": "#/components/schemas/Result"
+      },
+      "semantics": "Insert a verified ISO into, or eject media from, the named VM's CD drive on this host with one libvirt change-media (live and persistent). Insert attaches an empty CD drive first when the domain has none; eject on a drive that is already empty (checked against the live definition of a running VM) succeeds without any libvirt call and never attaches a drive. The resolved media path and the changing-media stage are journaled in one write immediately before the change, so an interruption before that write is simply re-applied and one after it is reconciled by observing the domain: succeeded when the drive holds the requested media (or none, for eject), otherwise needs_attention. Core records only media_id in the VM's journaled specification; boot order values are never rewritten because change-media leaves every device's bootindex as it is."
     }
   }
 }

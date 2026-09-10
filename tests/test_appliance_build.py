@@ -115,16 +115,16 @@ class ApplianceTests(unittest.TestCase):
             self.assertEqual(input, password.encode())
             return b'$6$salt$hashed\n'
 
-        with patch.object(firstboot.pwd, 'getpwnam', side_effect=KeyError), \
+        with patch.object(firstboot.pwd, 'getpwnam', return_value=MagicMock()), \
                 patch.object(firstboot.grp, 'getgrnam', return_value=MagicMock()), \
                 patch.object(firstboot.subprocess, 'run', side_effect=run), \
                 patch.object(firstboot.subprocess, 'check_output', side_effect=check_output):
             firstboot.provision_console_login(password)
-        self.assertEqual(calls[0][0], ['useradd', '--create-home', '--shell', '/bin/bash', '-G', 'sudo', 'admin'])
+        self.assertEqual(calls[0][0], ['usermod', '-aG', 'sudo', 'root'])
         self.assertEqual(calls[1][0], ['openssl', 'passwd', '-6', '-stdin'])
         self.assertEqual(calls[2][0], ['chpasswd', '-e'])
-        self.assertEqual(calls[2][1], b'admin:$6$salt$hashed\n')
-        self.assertEqual(calls[3][0], ['passwd', '-u', 'admin'])
+        self.assertEqual(calls[2][1], b'root:$6$salt$hashed\n')
+        self.assertEqual(calls[3][0], ['passwd', '-u', 'root'])
 
     def test_firstboot_applies_console_login_from_bootstrap_password(self):
         firstboot = module('firstboot')

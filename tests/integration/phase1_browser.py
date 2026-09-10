@@ -24,6 +24,12 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         def capture(name):
             page.screenshot(path=str(captures / (name + '.png')), full_page=True)
 
+        def menu_item(label, item):
+            menu = page.locator('details.menu').filter(has=page.locator('summary', has_text=label))
+            if menu.get_attribute('open') is None:
+                menu.locator('summary').click()
+            return menu.get_by_role('button', name=item, exact=True)
+
         def refresh_route(route):
             page.goto(lab.url + '/#/' + route)
             page.reload()
@@ -39,7 +45,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.unroute('**/api/v1/session')
         page.wait_for_load_state('networkidle')
         expect(page.get_by_label('Username')).to_be_focused()
-        page.get_by_label('Username').fill('admin')
+        page.get_by_label('Username').fill('root')
         page.keyboard.press('Tab')
         expect(page.get_by_label('Password', exact=True)).to_be_focused()
         page.keyboard.type('wrong')
@@ -60,7 +66,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         session_idle(idle_deadline)
         assert page.request.get(lab.url + '/api/v1/session').status == 200
         assert session_idle() == idle_deadline, 'GET polling extended idle session'
-        for label, item in [('File', 'Create site'), ('View', 'Overview'), ('Help', 'API reference')]:
+        for label, item in [('File', 'Create site'), ('View', 'Overview'), ('Host', 'Refresh inventory'), ('Help', 'API reference')]:
             menu = page.locator('details.menu').filter(has=page.locator('summary', has_text=label))
             summary = menu.locator('summary')
             summary.focus()
@@ -155,7 +161,8 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
 
         refresh_route('hosts/missing-browser-resource')
         expect(page.get_by_role('heading', name='Object not found', exact=True)).to_be_visible()
-        expect(page.get_by_role('button', name='Refresh inventory', exact=True)).to_have_count(0)
+        expect(menu_item('Host', 'Refresh inventory')).to_be_disabled()
+        page.keyboard.press('Escape')
         capture('invalid-object-desktop')
         page.get_by_role('link', name='Return to overview', exact=True).click()
         expect(page.get_by_role('heading', name='Your workspace', exact=True)).to_be_visible()
@@ -240,7 +247,105 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         assert chrome['tabs']['y'] < chrome['dock']['y'] < chrome['status']['y'], 'tasks and status must sit below resource tabs'
         assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), 'desktop page overflow'
         capture('desktop-shell')
-        lab.passed('browser keyboard File/View/Help menus and Escape, menu creation, resource search with ancestors, collapsible tree and current selection, scoped General/Networking/Storage/Activity views, task dock and desktop shell')
+        lab.passed('browser keyboard File/View/Host/Help menus and Escape, menu creation, resource search with ancestors, collapsible tree and current selection, scoped General/Networking/Storage/Activity views, task dock and desktop shell')
+        # Fixed toolbar: VM power buttons stay in place, greyed with a reason, until a VM is selected.
+        toolbar = page.locator('.toolbar')
+        for name in ['Start', 'Shut down', 'Reboot', 'Force stop']:
+            button = toolbar.get_by_role('button', name=name, exact=True)
+            expect(button).to_be_disabled()
+            expect(button).to_have_attribute('title', 'Select a virtual machine in Resources.')
+        expect(toolbar.get_by_role('button', name='New VM', exact=True)).to_be_enabled()
+        expect(toolbar.get_by_role('button', name='Add host', exact=True)).to_be_disabled()
+        expect(page.locator('.toolbar dialog')).not_to_be_visible()
+        page.get_by_role('link', name='Task history', exact=True).click()
+        expect(page.get_by_role('heading', name='Task history', exact=True)).to_be_visible()
+        expect(toolbar.get_by_role('button', name='New VM', exact=True)).to_be_disabled()
+        toolbar.get_by_role('button', name='Back', exact=True).click()
+        expect(page.get_by_role('heading', name='Health checks', exact=True)).to_be_visible()
+        toolbar.get_by_role('button', name='Forward', exact=True).click()
+        expect(page.get_by_role('heading', name='Task history', exact=True)).to_be_visible()
+        toolbar.get_by_role('button', name='Back', exact=True).click()
+        expect(page.get_by_role('heading', name='Health checks', exact=True)).to_be_visible()
+        toolbar.get_by_role('button', name='New VM', exact=True).click()
+        expect(page.get_by_role('heading', name=re.compile(r'^Create VM · 1 of 6'))).to_be_visible()
+        expect(page.get_by_role('heading', name=pool['name'], exact=True)).to_be_visible()
+        capture('toolbar-new-vm')
+        page.get_by_role('button', name='Close', exact=True).click()
+        lab.passed('browser fixed toolbar: greyed VM power buttons with reasons, Back/Forward history, contextual New VM opening the pool wizard')
+        # Simulated VM on the real host: the toolbar power group, its confirmation dialog and the
+        # rejected/accepted request paths are exercised without a guest. Labeled simulation.
+        fixture_vm = {'id': 'fixture-vm', 'pool_id': pool_id, 'host_id': host_id, 'name': 'Toolbar fixture', 'operation_id': '',
+                      'status': 'succeeded', 'state': 'running', 'freshness': 'fresh', 'role': 'guest', 'protected': False}
+        page.route('**/api/v1/vms', lambda route: route.fulfill(json=[fixture_vm]))
+
+        def with_power(route):
+            hosts = route.fetch().json()
+            for h in hosts:
+                h['capabilities'] = sorted(set(h.get('capabilities') or []) | {'vm-power-v1'})
+            route.fulfill(json=hosts)
+        page.route('**/api/v1/hosts', with_power)
+        power_requests = []
+        reject_next = [True]
+
+        def power(route):
+            power_requests.append(route.request.post_data_json)
+            if reject_next:
+                reject_next.pop()
+                route.fulfill(status=409, json={'error': 'a power request for this VM is still pending'})
+            else:
+                route.fulfill(json={'id': 'fixture-power', 'status': 'queued'})
+        page.route('**/api/v1/vms/fixture-vm/power', power)
+        refresh_route('vms/fixture-vm')
+        expect(page.get_by_role('heading', name='Toolbar fixture', exact=True)).to_be_visible()
+        expect(page.locator('#vm-power-status')).to_contain_text('Observed running · fresh')
+        expect(toolbar.get_by_role('button', name='Start', exact=True)).to_be_disabled()
+        for name in ['Shut down', 'Reboot', 'Force stop']:
+            expect(toolbar.get_by_role('button', name=name, exact=True)).to_be_enabled()
+        expect(page.locator('.vm-power dialog')).not_to_be_visible()
+        toolbar.get_by_role('button', name='Force stop', exact=True).click()
+        dialog = page.get_by_role('dialog')
+        expect(dialog).to_be_visible()
+        expect(dialog).to_contain_text('Force stop Toolbar fixture?')
+        expect(dialog).to_contain_text('Unsaved guest data is lost')
+        capture('power-confirm-dialog')
+        dialog.get_by_role('button', name='Cancel', exact=True).click()
+        expect(dialog).not_to_be_visible()
+        assert power_requests == [], 'cancel must not submit'
+        toolbar.get_by_role('button', name='Reboot', exact=True).click()
+        expect(dialog).to_contain_text('Reboot Toolbar fixture?')
+        page.keyboard.press('Escape')
+        expect(dialog).not_to_be_visible()
+        assert power_requests == [], 'escape must not submit'
+        toolbar.get_by_role('button', name='Force stop', exact=True).click()
+        dialog.get_by_role('button', name='Confirm force stop', exact=True).click()
+        expect(dialog.get_by_role('alert')).to_contain_text('still pending')
+        expect(dialog).to_be_visible()
+        capture('power-confirm-rejected')
+        dialog.get_by_role('button', name='Confirm force stop', exact=True).click()
+        expect(dialog).not_to_be_visible()
+        expect(page.get_by_role('status')).to_contain_text('Force stop requested for Toolbar fixture')
+        assert [r['action'] for r in power_requests] == ['force-stop', 'force-stop']
+        assert power_requests[0]['request_id'] == power_requests[1]['request_id'], 'retry must reuse the request identity'
+        # Start has no confirmation; a rejected Start opens the dialog as its error surface and retries from there.
+        fixture_vm['state'] = 'shut off'
+        power_requests.clear()
+        reject_next.append(True)
+        toolbar.get_by_role('button', name='Refresh view', exact=True).click()
+        expect(page.locator('#vm-power-status')).to_contain_text('Observed shut off')
+        expect(toolbar.get_by_role('button', name='Force stop', exact=True)).to_be_disabled()
+        toolbar.get_by_role('button', name='Start', exact=True).click()
+        expect(dialog).to_contain_text('Start Toolbar fixture?')
+        expect(dialog.get_by_role('alert')).to_contain_text('still pending')
+        capture('power-start-rejected')
+        dialog.get_by_role('button', name='Confirm start', exact=True).click()
+        expect(dialog).not_to_be_visible()
+        expect(page.get_by_role('status')).to_contain_text('Start requested for Toolbar fixture')
+        expect(toolbar.get_by_role('button', name='Start', exact=True)).to_be_focused()
+        assert [r['action'] for r in power_requests] == ['start', 'start'] and power_requests[0]['request_id'] == power_requests[1]['request_id']
+        page.unroute('**/api/v1/vms/fixture-vm/power')
+        page.unroute('**/api/v1/hosts')
+        page.unroute('**/api/v1/vms')
+        lab.passed('browser simulated VM power from the toolbar: state-dependent enablement, confirmation dialog cancel/escape, rejected request kept in the dialog, accepted retry with the same request identity, rejected Start opening the dialog and returning focus')
         refresh_route('pools/' + pool_id)
         expect(page.get_by_role('heading', name=pool['name'], exact=True)).to_be_visible()
         expect(page.get_by_text('The pool master controls the pool.', exact=False)).to_be_visible()
@@ -267,15 +372,15 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.reload()
         expect(libvirt.locator('.badge.healthy')).to_be_visible()
         lab.passed('browser pool aggregate healthy enum, failed libvirt and timed-out probe distinct from fresh heartbeat; recovered checks')
-        page.get_by_role('button', name='Refresh inventory', exact=True).click()
+        menu_item('Host', 'Refresh inventory').click()
         expect(page.get_by_role('status')).to_contain_text('Inventory refresh')
         page.get_by_role('link', name='Task history', exact=True).click()
         expect(page.get_by_role('heading', name='Task history', exact=True)).to_be_visible()
-        expect(page.locator('table').first).to_contain_text('admin')
+        expect(page.locator('table').first).to_contain_text('root')
         capture('tasks-desktop')
 
         refresh_route('hosts/' + host_id)
-        page.get_by_role('button', name='Revoke access', exact=True).click()
+        menu_item('Host', 'Revoke access').click()
         page.get_by_label('Type the hostname to confirm').fill('incorrect host')
         page.get_by_role('button', name='Confirm revoke access', exact=True).click()
         expect(page.get_by_label('Type the hostname to confirm')).to_be_visible()
@@ -284,7 +389,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
 
         page.set_viewport_size({'width': 360, 'height': 800})
         capture('host-360')
-        for label in ['File', 'View', 'Help']:
+        for label in ['File', 'View', 'Host', 'Help']:
             menu = page.locator('details.menu').filter(has=page.locator('summary', has_text=label))
             menu.locator('summary').click()
             bounds = menu.locator('.menu-items').bounding_box()
@@ -330,17 +435,19 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.route('**/api/v1/hosts', hold_first)
         page.wait_for_timeout(10500)
         assert len(older) == 1
-        page.get_by_role('button', name='Revoke access', exact=True).click()
+        menu_item('Host', 'Revoke access').click()
         hostname = page.locator('h1').inner_text()
         page.get_by_label('Type the hostname to confirm').fill(hostname)
         page.get_by_role('button', name='Confirm revoke access', exact=True).click()
-        expect(page.get_by_role('button', name='Re-enroll host', exact=True)).to_be_visible()
+        expect(menu_item('Host', 'Re-enroll host')).to_be_enabled()
+        page.keyboard.press('Escape')
         older[0][0].fulfill(response=older[0][1])
         page.unroute('**/api/v1/hosts')
         page.wait_for_timeout(200)
-        expect(page.get_by_role('button', name='Re-enroll host', exact=True)).to_be_visible()
+        expect(menu_item('Host', 'Re-enroll host')).to_be_enabled()
+        expect(menu_item('Host', 'Refresh inventory')).to_be_disabled()
         capture('revoked-host-360')
-        page.get_by_role('button', name='Re-enroll host', exact=True).click()
+        menu_item('Host', 'Re-enroll host').click()
         page.get_by_text('Manual enrollment', exact=True).click()
         expect(page.get_by_role('button', name='Generate enrollment token', exact=True)).to_be_visible()
         page.get_by_role('button', name='Close', exact=True).click()
@@ -349,7 +456,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.reload()
         expect(page.get_by_label('Username')).to_be_visible()
         capture('idle-expired-login')
-        page.get_by_label('Username').fill('admin')
+        page.get_by_label('Username').fill('root')
         page.get_by_label('Password', exact=True).fill(password)
         page.get_by_role('button', name='Sign in', exact=True).click()
         expect(page.get_by_role('button', name='Sign out', exact=True)).to_be_visible()

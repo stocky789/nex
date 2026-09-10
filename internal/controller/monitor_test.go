@@ -37,7 +37,7 @@ func TestHealthDebounceAndDurability(t *testing.T) {
 	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	c, err := Open(Config{DataDir: dir, Username: "admin", Password: "long-test-password", AlertDebounce: time.Second})
+	c, err := Open(Config{DataDir: dir, Username: "root", Password: "long-test-password", AlertDebounce: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestPrivateStateAndSingleWriter(t *testing.T) {
 	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	c, err := Open(Config{DataDir: dir, Username: "admin", Password: "long-test-password"})
+	c, err := Open(Config{DataDir: dir, Username: "root", Password: "long-test-password"})
 	if err != nil {
 		t.Fatal(err)
 	}

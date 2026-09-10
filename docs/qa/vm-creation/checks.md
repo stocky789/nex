@@ -1,9 +1,11 @@
 # Full VM creation system checks
 
 Date: 2026-09-10. Status: Go, contract and UI checks passed on the workstation; the documentation
-gate passes in `--all` mode but **fails in the range mode CI actually runs**; the browser
-walkthrough, the disposable-lab integration runs and the Phase 2 acceptance gate were **not run**.
-This is a workstation QA pass over an uncommitted working tree, not an independent review.
+gate failures below were corrected in the [independent review round](#independent-review-round--2026-09-10)
+and `documentation.yml` is green on the committed slice. Hosted `phase1` runs the simulated browser
+walkthrough and currently fails on BUG-0047 (disk-name default); the disposable-lab integration
+runs and the Phase 2 acceptance gate remain **not run**. Sections before the review round describe
+the pre-review working tree and are kept as the record of what was found.
 
 ## Scope
 

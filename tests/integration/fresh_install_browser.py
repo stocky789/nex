@@ -59,7 +59,7 @@ def main():
                 expect(page.get_by_label('Password', exact=True)).to_be_focused()
             else:
                 expect(page.get_by_label('Username', exact=True)).to_be_focused()
-                page.keyboard.type('admin')
+                page.keyboard.type('root')
                 page.keyboard.press('Tab')
             page.get_by_label('Password', exact=True).fill(password('root' if local else 'controller'))
             page.keyboard.press('Enter')
@@ -90,7 +90,7 @@ def main():
                 assert not api('/api/local/v1/vms', True), 'fresh host must have no domains'
                 assert host['preflight']['ready'], host['preflight']
                 page.get_by_role('button', name='Deploy Controller', exact=True).click()
-                page.get_by_label('Local storage', exact=True).select_option('/var/lib/libvirt/images')
+                expect(page.get_by_label('Local storage', exact=True)).to_have_value('/var/lib/libvirt/images')
                 page.get_by_label('LAN bridge', exact=True).select_option('br0')
                 page.get_by_label('IP configuration', exact=True).select_option('static')
                 for label, value in [('IPv4 address / prefix', '10.0.2.20/24'), ('IPv4 gateway', '10.0.2.2'), ('DNS servers', '10.0.2.3'), ('Site name', 'Fresh install site')]:

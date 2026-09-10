@@ -1,0 +1,59 @@
+{
+  "summary": "Add a Console tab on hosts using the same noVNC ticket/tunnel path as VMs (empty vm_id asks Core for a local host RFB shell), and CD/DVD insert/eject from the VM console via durable vm-media. API impact: changed contract (openHostConsole, host consoleStream, optional ConsoleRequest.vm_id) and new contract (mediaVM, vm-media command, vm-media-v1).",
+  "paths": [
+    "internal/protocol/console.go",
+    "internal/protocol/vmmedia.go",
+    "internal/protocol/protocol.go",
+    "internal/vmhost/hostconsole.go",
+    "internal/vmhost/hostconsole_font.go",
+    "internal/vmhost/hostconsole_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/media_test.go",
+    "internal/agent/console.go",
+    "internal/agent/run.go",
+    "internal/agent/managed.go",
+    "internal/agent/managed_test.go",
+    "internal/controller/console.go",
+    "internal/controller/console_test.go",
+    "internal/controller/controller.go",
+    "internal/controller/vmmedia.go",
+    "internal/controller/vmmedia_test.go",
+    "internal/controller/identity.go",
+    "internal/controller/managed.go",
+    "web/src/console.tsx",
+    "web/src/main.tsx",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/README.md",
+    "docs/guide/vm-console.md",
+    "CHANGELOG.md",
+    ".gitignore",
+    "docs/changes/2026-09-10-host-console-and-vm-media.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Hosts gain a Console tab; VM console toolbar gains CD/DVD insert and eject with guest device notes.",
+    "pages": ["docs/guide/vm-console.md", "docs/guide/README.md"]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Host console reuses console-v1 with openHostConsole and empty-vm_id console requests; mediaVM adds vm-media / vm-media-v1 for insert and eject (new/changed contracts).",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/index.html"]
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Current VM media_id is journaled on the pool-master managed VM record and re-adopted with the VM; host console sessions are in-memory tickets only (same as VM consoles).",
+    "record": "managed_resources vm-create command/spec.media_id updated by vm-media success; inventory/adoption recovers it with the VM"
+  },
+  "verification": {
+    "method": "go test ./internal/controller -run 'Console|HostConsole|Media'; go test ./internal/vmhost -run 'HostConsole|Media'; go test ./internal/agent -run Console; web tsc --noEmit; python3 scripts/check_docs.py --worktree",
+    "evidence": [
+      "internal/controller/console_test.go",
+      "internal/controller/vmmedia_test.go",
+      "internal/vmhost/hostconsole_test.go",
+      "internal/vmhost/media_test.go"
+    ],
+    "limits": "Browser walkthrough of host console and CD/DVD insert/eject against a disposable lab host is not yet recorded."
+  }
+}

@@ -20,7 +20,7 @@ from phase1 import Lab, ROOT, eventually
 def login(page, url, password):
     from playwright.sync_api import expect
     page.goto(url)
-    page.get_by_label('Username', exact=True).fill('admin')
+    page.get_by_label('Username', exact=True).fill('root')
     page.get_by_label('Password', exact=True).fill(password)
     page.keyboard.press('Enter')
     expect(page.get_by_role('button', name='Sign out', exact=True)).to_be_visible()

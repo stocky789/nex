@@ -29,7 +29,7 @@ regulatory certification or unrestricted production readiness.
   self-signed certificate warning; do not disable TLS checks.
 - For host-local access, the current OS **root** password, initially set during installation.
   No separate local web password is created.
-- For Controller access, its separate **admin** password. Controller passwords have no
+- For Controller access, its **root** password. Controller passwords have no
   minimum length or complexity rule; use a nonempty value of at most 1024 UTF-8 bytes without line breaks or NUL. Existing Controller
   password hashes remain valid.
 
@@ -39,7 +39,7 @@ regulatory certification or unrestricted production readiness.
    Use the [Controller setup](manage-controller.md) or
    [host-local appliance procedure](deploy-controller-appliance.md) to establish certificate
    trust. Sign in to a Core host as **root** with its OS password, and to Controller as
-   **admin** with the Controller password.
+   **root** with the Controller password.
 
 2. After installing the security development build, sign in again in each interface.
    Old browser sessions are not reused: the protected session-cookie names changed.
@@ -89,7 +89,7 @@ Additional bounded server-wide admission can reject a login while password check
 - **Session limit reached / HTTP 429:** sign out of sessions you no longer need, or let
   their idle/absolute deadlines expire, then sign in again. This is a per-service limit.
 - **An upgraded browser is sent back to login:** expected for old session cookies; use the
-  current root password for local access or the existing Controller admin credential.
+  current root password for local access or the existing Controller root credential.
   The former local admin credential is no longer accepted. Controller state is preserved.
 - **Certificate warning, changed identity or expired certificate:** verify the address,
   certificate and host clock through independent access. Follow the selected deployment's

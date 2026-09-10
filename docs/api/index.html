@@ -42,6 +42,9 @@
 <li><a href="#getUpdates">GET /api/v1/updates</a></li>
 <li><a href="#applyUpdates">POST /api/v1/updates/apply</a></li>
 <li><a href="#powerVM">POST /api/v1/vms/{id}/power</a></li>
+<li><a href="#openHostConsole">POST /api/v1/hosts/{id}/console</a></li>
+<li><a href="#hostConsoleStream">GET /api/v1/hosts/{id}/console/{ticket}</a></li>
+<li><a href="#mediaVM">POST /api/v1/vms/{id}/media</a></li>
 </ul></nav>
 <section><h2>storage-register</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -97,6 +100,17 @@
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
   &quot;semantics&quot;: &quot;Issue one libvirt start/shutdown/reboot/destroy for the named VM on this host. start and force-stop are idempotent against the observed state; shutdown and reboot are ACPI requests the guest may ignore; paused or transitional states are refused. The stage is journaled before the single request so an interruption is reconciled by observation only: succeeded when the observed state proves the outcome, otherwise needs_attention; never a second request.&quot;
+}</pre></section>
+<section><h2>vm-media</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;capability&quot;: &quot;vm-media-v1&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/VMMediaRequest&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Insert a verified ISO into, or eject media from, the named VM&#x27;s CD drive on this host with one libvirt change-media (live and persistent). Insert attaches an empty CD drive first when the domain has none; eject on a drive that is already empty (checked against the live definition of a running VM) succeeds without any libvirt call and never attaches a drive. The resolved media path and the changing-media stage are journaled in one write immediately before the change, so an interruption before that write is simply re-applied and one after it is reconciled by observing the domain: succeeded when the drive holds the requested media (or none, for eject), otherwise needs_attention. Core records only media_id in the VM&#x27;s journaled specification; boot order values are never rewritten because change-media leaves every device&#x27;s bootindex as it is.&quot;
 }</pre></section>
 <section><h2>GET /appliance-ready.json</h2><pre>{
   &quot;description&quot;: &quot;Appliance-only public JSON file served by the existing Controller UI file handler, not a separately registered API route. First boot atomically publishes it after initialization, verified local HTTPS UI HTTP 200, and guest bootstrap-secret cleanup. It must be absent from a pristine appliance image and may return 404 before preparation or on non-appliance deployments. A persisted marker records first-boot completion; it is not continuous health or successful host enrollment/adoption.&quot;,
@@ -1979,12 +1993,12 @@
   }
 }</pre></details></section>
 <section id="createVM"><h2>POST <code>/api/v1/vms</code></h2>
-<p>Create a stopped guest VM</p><p>Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Shared bounds, enforced identically on Controller and Core: 1–8 disks of 1–2048 GiB on virtio, sata or scsi with names unique in the VM; at most 8 NICs on virtio or e1000e with unicast lower-case manual MACs; at least 1 vCPU with sockets × cores × threads equal to the count when a topology is given; at least 512 MiB in memory mode dedicated or maximum; uefi or bios; boot orders unique across disks and install media, numbered from 1 without gaps, with at least one boot device. Controller additionally caps CPU at 64 and memory at 262144 MiB, enforces MAC uniqueness across the pool, assigns the UUID and reserves the name within the pool before dispatch. Host observed capacity and Core current capacity must suffice, using the memory ceiling in both modes. Storage, network and ISO must have succeeded on this host and pool, and the install ISO must reside on a storage target this VM uses. Core journals effects and reconciles per-disk ownership before replay; needs_attention preserves uncertain resources for manual recovery. Creation never boots a guest: start_after_create makes Controller issue the separate vm-power start only after creation succeeds, and autostart is a libvirt property set while the stopped VM is defined. No console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64 and machine-type libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint.</p>
+<p>Create a stopped guest VM</p><p>Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Shared bounds, enforced identically on Controller and Core: 1–8 disks of 1–2048 GiB on virtio, sata or scsi with names unique in the VM; at most 8 NICs on virtio or e1000e with unicast lower-case manual MACs; at least 1 vCPU with sockets × cores × threads equal to the count when a topology is given; at least 512 MiB in memory mode dedicated or maximum; uefi or bios; boot orders unique and positive across disks and install media (gaps are allowed, since ejecting media leaves one), with at least one boot device. Controller additionally caps CPU at 64 and memory at 262144 MiB, enforces MAC uniqueness across the pool, assigns the UUID and reserves the name within the pool before dispatch. Host observed capacity and Core current capacity must suffice, using the memory ceiling in both modes. Storage, network and ISO must have succeeded on this host and pool, and the install ISO must reside on a storage target this VM uses. Core journals effects and reconciles per-disk ownership before replay; needs_attention preserves uncertain resources for manual recovery. Creation never boots a guest: start_after_create makes Controller issue the separate vm-power start only after creation succeeds, and autostart is a libvirt property set while the stopped VM is defined. No console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64 and machine-type libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;createVM&quot;,
   &quot;summary&quot;: &quot;Create a stopped guest VM&quot;,
-  &quot;description&quot;: &quot;Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Shared bounds, enforced identically on Controller and Core: 1\u20138 disks of 1\u20132048 GiB on virtio, sata or scsi with names unique in the VM; at most 8 NICs on virtio or e1000e with unicast lower-case manual MACs; at least 1 vCPU with sockets \u00d7 cores \u00d7 threads equal to the count when a topology is given; at least 512 MiB in memory mode dedicated or maximum; uefi or bios; boot orders unique across disks and install media, numbered from 1 without gaps, with at least one boot device. Controller additionally caps CPU at 64 and memory at 262144 MiB, enforces MAC uniqueness across the pool, assigns the UUID and reserves the name within the pool before dispatch. Host observed capacity and Core current capacity must suffice, using the memory ceiling in both modes. Storage, network and ISO must have succeeded on this host and pool, and the install ISO must reside on a storage target this VM uses. Core journals effects and reconciles per-disk ownership before replay; needs_attention preserves uncertain resources for manual recovery. Creation never boots a guest: start_after_create makes Controller issue the separate vm-power start only after creation succeeds, and autostart is a libvirt property set while the stopped VM is defined. No console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64 and machine-type libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint.&quot;,
+  &quot;description&quot;: &quot;Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Shared bounds, enforced identically on Controller and Core: 1\u20138 disks of 1\u20132048 GiB on virtio, sata or scsi with names unique in the VM; at most 8 NICs on virtio or e1000e with unicast lower-case manual MACs; at least 1 vCPU with sockets \u00d7 cores \u00d7 threads equal to the count when a topology is given; at least 512 MiB in memory mode dedicated or maximum; uefi or bios; boot orders unique and positive across disks and install media (gaps are allowed, since ejecting media leaves one), with at least one boot device. Controller additionally caps CPU at 64 and memory at 262144 MiB, enforces MAC uniqueness across the pool, assigns the UUID and reserves the name within the pool before dispatch. Host observed capacity and Core current capacity must suffice, using the memory ceiling in both modes. Storage, network and ISO must have succeeded on this host and pool, and the install ISO must reside on a storage target this VM uses. Core journals effects and reconciles per-disk ownership before replay; needs_attention preserves uncertain resources for manual recovery. Creation never boots a guest: start_after_create makes Controller issue the separate vm-power start only after creation succeeds, and autostart is a libvirt property set while the stopped VM is defined. No console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64 and machine-type libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint.&quot;,
   &quot;security&quot;: [
     {
       &quot;AdminSession&quot;: []
@@ -3362,6 +3376,378 @@
     }
   }
 }</pre></details></section>
+<section id="openHostConsole"><h2>POST <code>/api/v1/hosts/{id}/console</code></h2>
+<p>Issue a single-use console ticket for a host</p><p>Requires an administrator session, same Origin and X-CSRF-Token, and an empty JSON object body. The host must be freshly connected, unrevoked and report capability host-console-v1 (distinct from console-v1, which only ever covers VM consoles; an agent without host-console-v1 gets 409 rather than a ticket it can never fulfil). The ticket is bound to the requesting session user and host, lives 60 seconds in Controller memory only, is delivered once to the host in its next report response with an empty vm_id (host console), and is consumed by the first matching WebSocket. Audited as host.console.open.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;openHostConsole&quot;,
+  &quot;summary&quot;: &quot;Issue a single-use console ticket for a host&quot;,
+  &quot;description&quot;: &quot;Requires an administrator session, same Origin and X-CSRF-Token, and an empty JSON object body. The host must be freshly connected, unrevoked and report capability host-console-v1 (distinct from console-v1, which only ever covers VM consoles; an agent without host-console-v1 gets 409 rather than a ticket it can never fulfil). The ticket is bound to the requesting session user and host, lives 60 seconds in Controller memory only, is delivered once to the host in its next report response with an empty vm_id (host console), and is consumed by the first matching WebSocket. Audited as host.console.open.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Host ID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;additionalProperties&quot;: false
+        },
+        &quot;example&quot;: {}
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;201&quot;: {
+      &quot;description&quot;: &quot;Console ticket issued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ConsoleTicket&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed JSON, unknown field, or body over 1 MiB.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Host not found.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Host not freshly connected, revoked, or the host agent does not report host-console-v1.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;429&quot;: {
+      &quot;description&quot;: &quot;Too many open console sessions (32).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller persistence or internal failure.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="hostConsoleStream"><h2>GET <code>/api/v1/hosts/{id}/console/{ticket}</code></h2>
+<p>Browser WebSocket for a host console ticket</p><p>Upgrades to a WebSocket that relays raw RFB for the host console. Requires the same session user, matching host id, unconsumed ticket and same-origin Origin. Pairs with the agent nex-console tunnel.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;hostConsoleStream&quot;,
+  &quot;summary&quot;: &quot;Browser WebSocket for a host console ticket&quot;,
+  &quot;description&quot;: &quot;Upgrades to a WebSocket that relays raw RFB for the host console. Requires the same session user, matching host id, unconsumed ticket and same-origin Origin. Pairs with the agent nex-console tunnel.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Host ID.&quot;
+    },
+    {
+      &quot;name&quot;: &quot;ticket&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Ticket from openHostConsole.&quot;
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;101&quot;: {
+      &quot;description&quot;: &quot;WebSocket established; binary frames relay the VM display stream.&quot;
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Not returned; listed so tooling that requires a 2xx documents the upgrade. The stream is the 101 response.&quot;
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid WebSocket upgrade headers.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin does not match the Controller origin.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Ticket unknown, expired, for another host, or issued to another session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Ticket already used.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;504&quot;: {
+      &quot;description&quot;: &quot;The host did not attach the console within 20 seconds.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="mediaVM"><h2>POST <code>/api/v1/vms/{id}/media</code></h2>
+<p>Insert or eject ISO media on a VM CDROM</p><p>Queues a durable vm-media command on the VM assigned host. Requires administrator session, CSRF, stable request_id, action insert|eject, and media_id for insert of a verified ISO on that host. Host must report vm-media-v1. Audited; operation appears in the operations list.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;mediaVM&quot;,
+  &quot;summary&quot;: &quot;Insert or eject ISO media on a VM CDROM&quot;,
+  &quot;description&quot;: &quot;Queues a durable vm-media command on the VM assigned host. Requires administrator session, CSRF, stable request_id, action insert|eject, and media_id for insert of a verified ISO on that host. Host must report vm-media-v1. Audited; operation appears in the operations list.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;VM UUID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;required&quot;: [
+            &quot;request_id&quot;,
+            &quot;action&quot;
+          ],
+          &quot;additionalProperties&quot;: false,
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;description&quot;: &quot;Stable client request identity.&quot;
+            },
+            &quot;action&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;enum&quot;: [
+                &quot;insert&quot;,
+                &quot;eject&quot;
+              ]
+            },
+            &quot;media_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;description&quot;: &quot;Required for insert; forbidden for eject.&quot;
+            }
+          }
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Power request queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PowerVMResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Replay of an existing request_id with the same VM and action.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PowerVMResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed JSON, unknown field, invalid request_id or unsupported action.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;VM not found.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Host not fresh, revoked, outside the pool or without vm-power-v1; request_id reused with different input; or another power request for this VM is pending.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller persistence or internal failure.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
 <section id="schemas"><h2>Schemas and authentication</h2>
 <h3>securitySchemes</h3>
 <details id="AdminSession"><summary>AdminSession</summary><pre>{
@@ -3888,7 +4274,8 @@
         &quot;network-register&quot;,
         &quot;iso-import&quot;,
         &quot;vm-create&quot;,
-        &quot;vm-power&quot;
+        &quot;vm-power&quot;,
+        &quot;vm-media&quot;
       ]
     },
     &quot;storage&quot;: {
@@ -3935,6 +4322,16 @@
       &quot;anyOf&quot;: [
         {
           &quot;$ref&quot;: &quot;#/components/schemas/VMPowerRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;vm_media&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/VMMediaRequest&quot;
         },
         {
           &quot;type&quot;: &quot;null&quot;
@@ -4493,7 +4890,8 @@
         &quot;network-register&quot;,
         &quot;iso-import&quot;,
         &quot;vm-create&quot;,
-        &quot;vm-power&quot;
+        &quot;vm-power&quot;,
+        &quot;vm-media&quot;
       ]
     },
     &quot;request_id&quot;: {
@@ -4543,7 +4941,7 @@
     &quot;status&quot;: &quot;queued&quot;,
     &quot;created_at&quot;: &quot;2026-09-08T10:00:00Z&quot;,
     &quot;updated_at&quot;: &quot;2026-09-08T10:00:00Z&quot;,
-    &quot;actor&quot;: &quot;admin&quot;
+    &quot;actor&quot;: &quot;root&quot;
   }
 }</pre></details>
 <details id="Audit"><summary>Audit</summary><pre>{
@@ -4580,7 +4978,7 @@
   &quot;x-go-type&quot;: &quot;protocol.Audit&quot;,
   &quot;example&quot;: {
     &quot;id&quot;: 1,
-    &quot;actor&quot;: &quot;admin&quot;,
+    &quot;actor&quot;: &quot;root&quot;,
     &quot;action&quot;: &quot;site.create&quot;,
     &quot;resource_id&quot;: &quot;&lt;site-id&gt;&quot;,
     &quot;created_at&quot;: &quot;2026-09-08T10:00:00Z&quot;
@@ -4614,7 +5012,7 @@
   ],
   &quot;additionalProperties&quot;: false,
   &quot;example&quot;: {
-    &quot;username&quot;: &quot;admin&quot;,
+    &quot;username&quot;: &quot;root&quot;,
     &quot;csrf_token&quot;: &quot;&lt;session-csrf-token&gt;&quot;
   }
 }</pre></details>
@@ -4639,7 +5037,7 @@
   ],
   &quot;additionalProperties&quot;: false,
   &quot;example&quot;: {
-    &quot;username&quot;: &quot;admin&quot;,
+    &quot;username&quot;: &quot;root&quot;,
     &quot;password&quot;: &quot;&lt;your-administrator-password&gt;&quot;
   }
 }</pre></details>
@@ -5425,7 +5823,7 @@
     &quot;media_boot_order&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
       &quot;minimum&quot;: 0,
-      &quot;description&quot;: &quot;0 keeps the install ISO out of the boot order; any other value joins the disks&#x27; contiguous 1..N numbering and requires media_id.&quot;
+      &quot;description&quot;: &quot;0 keeps the install ISO out of the boot order; any other value must be unique among the disks&#x27; orders and requires media_id.&quot;
     }
   },
   &quot;required&quot;: [
@@ -5809,12 +6207,12 @@
       &quot;description&quot;: &quot;Single-use pairing secret; the host presents it on POST /api/v1/agent/console/{token} within the ticket lifetime.&quot;
     },
     &quot;vm_id&quot;: {
-      &quot;type&quot;: &quot;string&quot;
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;VM UUID; omit or empty for the host console.&quot;
     }
   },
   &quot;required&quot;: [
-    &quot;token&quot;,
-    &quot;vm_id&quot;
+    &quot;token&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.ConsoleRequest&quot;,
   &quot;example&quot;: {
@@ -6079,5 +6477,44 @@
   ],
   &quot;x-go-type&quot;: &quot;protocol.GuestInfo&quot;,
   &quot;description&quot;: &quot;Observed inside a running VM by its host through host-local virtio channels: guest agent facts and console channel states. Observation only; a connected agent is not proof of application health.&quot;
+}</pre></details>
+<details id="VMMediaRequest"><summary>VMMediaRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;action&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;insert&quot;,
+        &quot;eject&quot;
+      ]
+    },
+    &quot;media_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;ISO media ID already imported on the assigned host. Required for insert; omitted for eject.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;vm_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;action&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.VMMediaRequest&quot;,
+  &quot;example&quot;: {
+    &quot;vm_id&quot;: &quot;&lt;vm-uuid&gt;&quot;,
+    &quot;pool_id&quot;: &quot;&lt;pool-id&gt;&quot;,
+    &quot;host_id&quot;: &quot;&lt;host-id&gt;&quot;,
+    &quot;action&quot;: &quot;insert&quot;,
+    &quot;media_id&quot;: &quot;&lt;media-id&gt;&quot;
+  }
 }</pre></details>
 </section></main></html>

@@ -126,13 +126,13 @@ def acceptance(lab, args):
     password.chmod(0o600)
     controller_args = [controller, '-data-dir', lab.path / 'controller-state',
         '-listen', f'127.0.0.1:{lab.port}', '-tls-cert', cert, '-tls-key', key,
-        '-admin-username', 'admin', '-admin-password-file', password,
+        '-admin-username', 'root', '-admin-password-file', password,
         '-stale-after', '2s', '-ui-dir', ROOT / 'web/dist', '-source-archive', source]
     cp = lab.start('controller', *controller_args)
     lab.client(cert)
     eventually(lambda: lab.api('/api/v1/sites', expected=401), 'controller startup')
-    lab.api('/api/v1/session', {'username': 'admin', 'password': 'wrong'}, expected=401)
-    session = lab.api('/api/v1/session', {'username': 'admin', 'password': password.read_text()})
+    lab.api('/api/v1/session', {'username': 'root', 'password': 'wrong'}, expected=401)
+    session = lab.api('/api/v1/session', {'username': 'root', 'password': password.read_text()})
     lab.csrf = session['csrf_token']
     lab.api('/api/v1/sites', {'name': 'Denied'}, expected=403, headers={'X-CSRF-Token': ''})
     lab.api('/api/v1/sites', {'name': ''}, expected=400)
@@ -263,7 +263,7 @@ def acceptance(lab, args):
     eventually(lambda: check_status('libvirt', 'healthy'), 're-enrolled host reconnects')
     assert len(lab.api('/api/v1/hosts')) == 1 and len(lab.api('/api/v1/pools')) == 1
     assert host()['pool_id'] == pool['id'] and next(p for p in lab.api('/api/v1/pools'))['master_host_id'] == host_id
-    assert any(a['actor'] == 'admin' and a['action'] == 'host.revoke' for a in lab.api('/api/v1/audit'))
+    assert any(a['actor'] == 'root' and a['action'] == 'host.revoke' for a in lab.api('/api/v1/audit'))
     lab.passed('revocation rejects credential use and operations; explicit re-enrollment preserves identity; audit attribution')
     if args.evidence:
         args.evidence.parent.mkdir(parents=True, exist_ok=True)

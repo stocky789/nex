@@ -60,11 +60,11 @@ def controller(lab, binary, source, name):
     password.chmod(0o600)
     data = lab.path / f'{name}-data'
     process = lab.start(name, binary, '-data-dir', data, '-listen', f'127.0.0.1:{lab.port}', '-tls-cert', cert,
-                        '-tls-key', key, '-admin-username', 'admin', '-admin-password-file', password,
+                        '-tls-key', key, '-admin-username', 'root', '-admin-password-file', password,
                         '-stale-after', '3s', '-ui-dir', ROOT / 'web/dist', '-source-archive', source)
     lab.client(cert)
     eventually(lambda: lab.api('/api/v1/sites', expected=401), name + ' startup')
-    lab.csrf = lab.api('/api/v1/session', {'username': 'admin', 'password': password.read_text()})['csrf_token']
+    lab.csrf = lab.api('/api/v1/session', {'username': 'root', 'password': password.read_text()})['csrf_token']
     site = lab.api('/api/v1/sites', {'name': name + ' site'}, expected=201)
     token = lab.path / f'{name}-token'
     token.write_text(lab.api('/api/v1/enrollment-tokens', {'site_id': site['id']}, expected=201)['token'])

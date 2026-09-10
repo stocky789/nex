@@ -50,6 +50,33 @@ const staleText = "Some selections are no longer validated on this host. Reselec
 const num = (v: number) => Number.isNaN(v) ? "" : v;
 const whole = (v: number) => Number.isNaN(v) ? 0 : v;
 
+// Topology fields are optional as a group: all 0 means the host default (1 × count × 1).
+// Filling the first field seeds the other two from that default so a blank sockets box
+// with a "1" placeholder cannot be mistaken for a real value while cores/threads are set.
+export function applyTopology(cpu: Draft["cpu"], field: "sockets" | "cores" | "threads", raw: number): Draft["cpu"] {
+  const v = whole(raw);
+  if (v < 1) return { ...cpu, sockets: 0, cores: 0, threads: 0 };
+  let { sockets, cores, threads } = cpu;
+  if (!sockets && !cores && !threads) {
+    sockets = 1;
+    cores = cpu.count || 1;
+    threads = 1;
+  }
+  return { ...cpu, sockets, cores, threads, [field]: v };
+}
+
+export function topologyIssue(cpu: Draft["cpu"]): string {
+  const { count, sockets, cores, threads } = cpu;
+  if (!(sockets || cores || threads)) return "";
+  if (sockets < 1 || cores < 1 || threads < 1) {
+    return "Set sockets, cores and threads together, or clear any of them for the default.";
+  }
+  if (sockets * cores * threads !== count) {
+    return `Sockets × cores × threads must equal ${count || "the"} vCPUs; ${sockets} × ${cores} × ${threads} = ${sockets * cores * threads}.`;
+  }
+  return "";
+}
+
 // bootKeys lists the boot devices in their current order; renumber writes that order back as the
 // contiguous 1..N the protocol requires, leaving a removed device or absent media at 0.
 function bootKeys(d: Draft) {
@@ -60,6 +87,13 @@ function bootKeys(d: Draft) {
 }
 function renumber(d: Draft, keys = bootKeys(d)): Draft {
   return { ...d, disks: d.disks.map((disk, i) => ({ ...disk, boot_order: keys.indexOf(`disk-${i}`) + 1 })), boot: { ...d.boot, media_boot_order: d.media_id ? keys.indexOf("media") + 1 : 0 } };
+}
+
+// A restored draft's nics may legitimately be [] (an operator removed every interface, which
+// the protocol allows). Only fall back to the blank template when the field is missing or not
+// an array, never because it is empty, or a deliberate zero-NIC draft grows one back on reopen.
+export function restoredNICs(nics: unknown): NICRow[] {
+  return Array.isArray(nics) ? (nics as NICRow[]) : blank.nics;
 }
 
 // A disk name is an operator label: the host writes disk-<n>.qcow2 inside the VM's own
@@ -79,8 +113,13 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
   const [draft, setDraft] = useState<Draft>(() => {
     const r = restored();
     const d = { ...blank, ...r, cpu: { ...blank.cpu, ...r.cpu }, memory: { ...blank.memory, ...r.memory }, boot: { ...blank.boot, ...r.boot } };
+    // blank.disks is only a shape template (name "system"); a fresh wizard must start from
+    // autoDiskName so renameVM can carry the label with the VM name. Restored drafts keep
+    // their own disks, including an operator override.
     const started = blank.disks.map((disk, i) => ({ ...disk, name: autoDiskName(poolName, d.name, i) }));
-    return renumber({ ...d, disks: Array.isArray(d.disks) && d.disks.length ? d.disks : started, nics: Array.isArray(d.nics) ? d.nics : blank.nics });
+    const disks = Array.isArray(r.disks) && r.disks.length ? r.disks : started;
+    const nics = restoredNICs(r.nics);
+    return renumber({ ...d, disks, nics });
   });
   const heading = useRef<HTMLHeadingElement>(null);
   const go = (to: number) => { setStep(to); setTimeout(() => heading.current?.focus(), 0); };
@@ -103,8 +142,7 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
   const bootLabel = (k: string) => k === "media" ? `Install media · ${selectedMedia?.name || "ISO"}` : `Disk ${Number(k.slice(5)) + 1} · ${draft.disks[Number(k.slice(5))]?.name || "unnamed"}`;
 
   const { count, sockets, cores, threads } = draft.cpu;
-  const topologyIssue = (sockets || cores || threads) !== 0 && (sockets < 1 || cores < 1 || threads < 1 || sockets * cores * threads !== count)
-    ? `Sockets × cores × threads must equal ${count || "the"} vCPUs; ${sockets || 0} × ${cores || 0} × ${threads || 0} does not. Leave all three blank for the default.` : "";
+  const topoIssue = topologyIssue(draft.cpu);
   const names = draft.disks.map(d => d.name);
   const diskIssue = names.some((n, i) => names.indexOf(n) !== i) ? "Disk names must be unique within this VM." : "";
   const macs = draft.nics.map(n => n.mac).filter(Boolean);
@@ -117,9 +155,11 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
   const mediaIssue = !staleMedia ? "" : selectedMedia
     ? `${selectedMedia.name} is on ${storage.find(s => s.id === selectedMedia.storage_id)?.name || "other storage"}, which none of this VM's disks use. Add a disk on that storage, choose another ISO, or continue without install media.`
     : "That ISO is no longer available on this host. Choose another or continue without install media.";
-  const stepIssue = ["", topologyIssue, diskIssue || (staleDisks ? staleText : ""), macIssue || (staleNICs ? staleText : ""), mediaIssue, ""][step];
+  const stepIssue = ["", topoIssue, diskIssue || (staleDisks ? staleText : ""), macIssue || (staleNICs ? staleText : ""), mediaIssue, ""][step];
   const hostReady = Boolean(selectedHost && readyHost(selectedHost));
-  const blocked = !hostReady || staleDisks || staleNICs || staleMedia || Boolean(topologyIssue || diskIssue || macIssue);
+  const blocked = !hostReady || staleDisks || staleNICs || staleMedia || Boolean(topoIssue || diskIssue || macIssue);
+  const setTopo = (field: "sockets" | "cores" | "threads", raw: number) =>
+    setDraft(d => renumber({ ...d, cpu: applyTopology(d.cpu, field, raw) }));
 
   function chooseHost(id: string) {
     const s = storage.filter(x => x.host_id === id && x.status === "succeeded");
@@ -157,12 +197,12 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
       {step === 1 && <>
         <div className="vm-fields">
           <label>Virtual CPUs<input type="number" required min={1} max={maxCPUs} step={1} value={num(count)} autoFocus onChange={e => edit({ cpu: { ...draft.cpu, count: e.target.valueAsNumber } })} /></label>
-          <label>Sockets<input type="number" min={1} max={maxCPUs} step={1} placeholder="1" aria-describedby={topologyIssue ? "vm-topology-issue" : undefined} value={sockets || ""} onChange={e => edit({ cpu: { ...draft.cpu, sockets: whole(e.target.valueAsNumber) } })} /></label>
-          <label>Cores per socket<input type="number" min={1} max={maxCPUs} step={1} placeholder={String(count || 1)} aria-describedby={topologyIssue ? "vm-topology-issue" : undefined} value={cores || ""} onChange={e => edit({ cpu: { ...draft.cpu, cores: whole(e.target.valueAsNumber) } })} /></label>
-          <label>Threads per core<input type="number" min={1} max={maxCPUs} step={1} placeholder="1" aria-describedby={topologyIssue ? "vm-topology-issue" : undefined} value={threads || ""} onChange={e => edit({ cpu: { ...draft.cpu, threads: whole(e.target.valueAsNumber) } })} /></label>
+          <label>Sockets<input type="number" min={1} max={maxCPUs} step={1} aria-describedby={topoIssue ? "vm-topology-issue" : undefined} value={sockets || ""} onChange={e => setTopo("sockets", e.target.valueAsNumber)} /></label>
+          <label>Cores per socket<input type="number" min={1} max={maxCPUs} step={1} aria-describedby={topoIssue ? "vm-topology-issue" : undefined} value={cores || ""} onChange={e => setTopo("cores", e.target.valueAsNumber)} /></label>
+          <label>Threads per core<input type="number" min={1} max={maxCPUs} step={1} aria-describedby={topoIssue ? "vm-topology-issue" : undefined} value={threads || ""} onChange={e => setTopo("threads", e.target.valueAsNumber)} /></label>
         </div>
         <p className="help">Leave sockets, cores and threads blank for the default: one socket with {count || "the chosen number of"} cores and one thread per core.</p>
-        {topologyIssue && <p className="task-error" id="vm-topology-issue">{topologyIssue}</p>}
+        {topoIssue && <p className="task-error" id="vm-topology-issue">{topoIssue}</p>}
         <label>CPU model<select value={draft.cpu.model} onChange={e => edit({ cpu: { ...draft.cpu, model: e.target.value } })}><option value="host-passthrough">Host passthrough</option><option value="host-model">Host model</option></select></label>
         <p className="help">Host passthrough gives the guest this host's exact processor. Host model presents a common processor instead, which is what allows this VM to migrate later to a host whose CPU is not identical.</p>
         <fieldset>

@@ -17,8 +17,9 @@ build**. Both are for local lab evaluation; the installer does not yet deliver a
    (authorized maintainers; nginx releases, monitoring and rollback).
 8. [Register resources and create a virtual machine](create-virtual-machine.md)
 9. [Control VM power](vm-power.md)
-10. [Open a VM console](vm-console.md)
-   (toolbar with send keys, display scaling and resize, clipboard, typing, screenshots).
+10. [Open a VM or host console](vm-console.md)
+   (toolbar with send keys, display scaling and resize, clipboard, typing, screenshots,
+   CD/DVD insert/eject on VMs, and a Console tab on hosts).
 11. [Install guest tools and read guest information](guest-tools.md)
    (QEMU guest agent and spice-vdagent; OS, hostname, addresses and clipboard readiness).
 12. [Check and apply software updates](software-updates.md)

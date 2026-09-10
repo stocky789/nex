@@ -1,0 +1,28 @@
+{
+  "results": [
+    "administrator bootstrap, login, unauthorized/CSRF/invalid input rejection, site creation and removed manual pool creation",
+    "trusted TLS enrollment, automatic pool named after the master host, private state and single-use token",
+    "real CPU/RAM/OS/NIC inventory and fresh independent heartbeat (libvirt simulated)",
+    "simulated libvirt failure remains fresh with failed service check",
+    "simulated stalled probe times out independently; native inventory and heartbeat continue",
+    "stale/unknown outage state, controller+agent restart identity, durable deduplicated refresh",
+    "agent survives controller outage and reconciles fresh inventory on reconnect",
+    "certificate rotation retains host identity and authenticated reporting",
+    "browser add-host-by-address probe/confirm flow: host request withheld until fingerprint confirmed, root password reaches the request and is cleared from the form on success",
+    "browser keyboard sign-in, invalid credentials, site creation, add-first-host empty state and ephemeral enrollment token",
+    "browser keyboard File/View/Host/Help menus and Escape, menu creation, resource search with ancestors, collapsible tree and current selection, scoped General/Networking/Storage/Activity views, task dock and desktop shell",
+    "browser fixed toolbar: greyed VM power buttons with reasons, Back/Forward history, contextual New VM opening the pool wizard",
+    "browser simulated VM power from the toolbar: state-dependent enablement, confirmation dialog cancel/escape, rejected request kept in the dialog, accepted retry with the same request identity, rejected Start opening the dialog and returning focus",
+    "browser pool aggregate healthy enum, failed libvirt and timed-out probe distinct from fresh heartbeat; recovered checks",
+    "browser desktop/360px host and task views, refresh operation, exact-host confirmation and keyboard skip link",
+    "browser __Host cookie attributes, legacy rejection, restrictive CSP, real inline-script blocking, idle GET/mutation semantics and expired-session login recovery; logout and actual-peer throttle",
+    "browser interrupted request/retry, genuine stopped-agent stale state, revoke and re-enroll entry, sign-out; no page errors",
+    "browser delayed-token site scope, automatic pool master labels, and older inventory response cannot overwrite newer revocation",
+    "revocation rejects credential use and operations; explicit re-enrollment preserves identity; audit attribution"
+  ],
+  "binaries": {
+    "controller": "b070c26866c8bf20aef159313cb53814a451c22c5f110cdc2347de37199e6be5",
+    "agent": "2f3b7658c3f3e45ad0a37fee4f62e1802c391456335ba2486ddd29f9ca18625f"
+  },
+  "simulation": "virsh only; no real libvirt or guest lifecycle verified"
+}

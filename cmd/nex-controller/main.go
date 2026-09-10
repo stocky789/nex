@@ -21,7 +21,7 @@ func main() {
 	flag.StringVar(&listen, "listen", ":8443", "HTTPS listen address")
 	flag.StringVar(&cert, "tls-cert", "", "server TLS certificate PEM")
 	flag.StringVar(&key, "tls-key", "", "server TLS private key PEM")
-	flag.StringVar(&cfg.Username, "admin-username", "admin", "first administrator username")
+	flag.StringVar(&cfg.Username, "admin-username", "root", "first administrator username")
 	flag.StringVar(&passwordFile, "admin-password-file", "", "first administrator password file (nonempty; maximum 1024 UTF-8 bytes; no NUL or line breaks)")
 	flag.StringVar(&cfg.UIPath, "ui-dir", "web/dist", "built web UI directory")
 	flag.StringVar(&cfg.DocsPath, "docs-dir", "docs/api", "generated API reference directory")

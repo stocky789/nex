@@ -145,6 +145,69 @@ func (c *Controller) openConsole(w http.ResponseWriter, r *http.Request, user, c
 	write(w, 201, map[string]any{"ticket": ticket, "vm_id": id, "host_id": host, "expires_at": now.Add(consoleTicketLifetime).UTC(), "websocket": "/api/v1/vms/" + id + "/console/" + ticket})
 }
 
+// openHostConsole issues a single-use console ticket for a fresh host's own console.
+func (c *Controller) openHostConsole(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	var v struct{}
+	if !decode(w, r, &v) {
+		return
+	}
+	id := r.PathValue("id")
+	var revoked bool
+	err := c.db.QueryRow("SELECT revoked FROM hosts WHERE id=?", id).Scan(&revoked)
+	if err == sql.ErrNoRows {
+		fail(w, 404, "host not found")
+		return
+	}
+	if err != nil {
+		fail(w, 500, "storage failed")
+		return
+	}
+	var raw string
+	c.db.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", id).Scan(&raw)
+	var caps []string
+	json.Unmarshal([]byte(raw), &caps)
+	c.mu.Lock()
+	fresh := time.Since(c.seen[id]) <= c.cfg.StaleAfter
+	c.mu.Unlock()
+	if revoked || !fresh {
+		fail(w, 409, "the host is not freshly connected; its console cannot be opened now")
+		return
+	}
+	if !slices.Contains(caps, protocol.HostConsoleCapability) {
+		fail(w, 409, "the host agent does not support browser consoles; upgrade Nex Core")
+		return
+	}
+	ticket := random()
+	now := time.Now()
+	c.consoles.mu.Lock()
+	c.consoles.sweep(now)
+	if len(c.consoles.sessions) >= consoleSessionLimit {
+		c.consoles.mu.Unlock()
+		fail(w, 429, "too many open console sessions; close one and retry")
+		return
+	}
+	if c.consoles.sessions == nil {
+		c.consoles.sessions = map[string]*consoleSession{}
+	}
+	c.consoles.sessions[ticket] = &consoleSession{hostID: id, user: user, expires: now.Add(consoleTicketLifetime), agent: make(chan net.Conn, 1)}
+	c.consoles.mu.Unlock()
+	time.AfterFunc(consoleTicketLifetime+time.Second, func() {
+		c.consoles.mu.Lock()
+		c.consoles.sweep(time.Now())
+		c.consoles.mu.Unlock()
+	})
+	tx, err := c.db.Begin()
+	if err == nil {
+		defer tx.Rollback()
+		err = c.audit(tx, user, "host.console.open", id)
+	}
+	if err != nil || tx.Commit() != nil {
+		fail(w, 500, "audit storage failed")
+		return
+	}
+	write(w, 201, map[string]any{"ticket": ticket, "host_id": id, "expires_at": now.Add(consoleTicketLifetime).UTC(), "websocket": "/api/v1/hosts/" + id + "/console/" + ticket})
+}
+
 // browserConsole upgrades the administrator's WebSocket once the host tunnel arrives.
 func (c *Controller) browserConsole(w http.ResponseWriter, r *http.Request, user, csrf string) {
 	if !sameOrigin(r) || r.Header.Get("Origin") == "" {
@@ -152,9 +215,12 @@ func (c *Controller) browserConsole(w http.ResponseWriter, r *http.Request, user
 		return
 	}
 	key := r.PathValue("ticket")
+	id := r.PathValue("id")
 	c.consoles.mu.Lock()
 	s := c.consoles.sessions[key]
-	if s == nil || s.vmID != r.PathValue("id") || s.user != user || time.Now().After(s.expires) {
+	match := s != nil && s.user == user && !time.Now().After(s.expires) &&
+		((s.vmID != "" && s.vmID == id) || (s.vmID == "" && s.hostID == id))
+	if !match {
 		c.consoles.mu.Unlock()
 		fail(w, 404, "console ticket is unknown, expired or not yours; open the console again")
 		return
@@ -193,7 +259,11 @@ func (c *Controller) browserConsole(w http.ResponseWriter, r *http.Request, user
 	delete(c.consoles.sessions, key)
 	c.consoles.mu.Unlock()
 	wsock.Pipe(ws, tunnel)
-	log.Printf("console closed: vm %s user %s", s.vmID, user)
+	if s.vmID == "" {
+		log.Printf("console closed: host %s user %s", s.hostID, user)
+	} else {
+		log.Printf("console closed: vm %s user %s", s.vmID, user)
+	}
 }
 
 // agentConsole receives the host's outbound tunnel and hands it to the waiting browser.

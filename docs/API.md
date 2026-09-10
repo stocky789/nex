@@ -190,7 +190,8 @@ JSON request bodies are limited to 32 KiB and reject unknown fields. The former 
 local `admin` credentials have no fallback and are removed by package initialization.
 New logins follow OS root password changes; active sessions retain the deadlines above.
 Deploy matching local service, PAM helper/configuration and web assets on upgrade, then
-sign in again as `root`. Controller `admin` credentials remain separate.
+sign in again as `root`. Controller credentials remain a separate account store (default
+username `root`).
 
 API impact: **changed contract** — `localLogin` now authenticates OS root and
 `localLogin`/`localSession` return username `root`; routes and JSON field names remain
@@ -348,7 +349,7 @@ up to 1024 UTF-8 bytes, without CR, LF or NUL. No minimum length or complexity r
 Existing Controller password hashes remain usable. Host-local login uses the current OS
 root password and does not provision a separate credential. Appliance deployment uses the
 same Controller password validation; firstboot also applies that password to the guest
-console account `admin` (root remains locked; SSH password auth remains off). This changes
+console account `root` (SSH password auth remains off). This changes
 browser authentication and bootstrap validation, not outbound host certificate identity,
 agent commands or Core protocol version 1.
 
@@ -516,7 +517,7 @@ MAC uniqueness and host capacity stay with their owners.
   in canonical lower-case colon form, unicast and not all zero; that canonical form is what lets
   Controller enforce pool-wide uniqueness by plain string comparison.
 - **Boot order.** `0` means "not a boot device". Non-zero values are unique across every disk and
-  `boot.media_boot_order` and must number the boot devices `1..N` without gaps; at least one boot
+  `boot.media_boot_order`; gaps are allowed (ejecting media leaves one), and at least one boot
   device is required. A non-zero `media_boot_order` requires `media_id`, and the install ISO must
   reside on a storage target the VM uses. Order is per device because libvirt forbids mixing
   per-device boot with an `<os><boot dev>` list.
@@ -653,6 +654,76 @@ bridges to the VNC server, plus a USB tablet and a VirtIO video model. `validate
 still compares disks, NICs, OS/CPU/boot and the single VNC display, so definitions created
 before this change remain valid; their guest observation reports `clipboard: no-channel` and
 `resize: false`. VNC power control (`powerControl`) is deliberately not enabled.
+
+## Browser host console
+
+API impact: **changed contract** — `openHostConsole` (`POST /api/v1/hosts/{id}/console`),
+`consoleStream` also serves `GET /api/v1/hosts/{id}/console/{ticket}`, and a console request
+with an empty `vm_id` asks the agent for the host's own RFB endpoint. Introduces host
+capability `host-console-v1`; reuses `agentConsole` and the report `consoles` member.
+
+Flow matches the VM console: administrator posts an empty object; Controller verifies the
+host is fresh, unrevoked and reports `host-console-v1`, audits `host.console.open`, and
+returns a 60-second ticket. The next report delivers `{token}` (no `vm_id`); Core starts an
+in-process host console session (a root shell rendered as RFB so the same noVNC client
+works — no socket is opened for it, since only this same agent process ever dials it) and
+opens the outbound `nex-console` upgrade. No pool-scoped setting is introduced.
+
+`host-console-v1` is a capability distinct from `console-v1`: every agent old enough to
+support VM consoles already reports `console-v1`, so gating the host console on it would let
+a new Controller enable the host console tab against an old Core that never implemented the
+host shell, issue a ticket, and leave the browser to hang until the 504 timeout. An old Core
+without `host-console-v1` instead gets the immediate 409 "upgrade Nex Core" refusal, matching
+the VM console's compatibility behaviour.
+
+Hardening (2026-09-10, [change record](changes/2026-09-10-host-console-hardening.json)): the
+host console session has RFB security None but no reachable listener (an in-process
+`net.Pipe`, not a socket, so no other local process — including a QEMU guest — can dial it);
+`FramebufferUpdateRequest` honours the incremental flag and answers only when terminal
+content actually changed since the last frame sent; `KeyEvent` tracks Control up/down and
+maps Ctrl+letter to its control byte and arrow/Home/End keys to their escape sequences.
+
+Checks: `go test ./internal/controller -run HostConsole` and
+`go test ./internal/vmhost -run HostConsole`.
+
+## VM media change (CD/DVD)
+
+API impact: **new contract** — `mediaVM` (`POST /api/v1/vms/{id}/media`), durable command
+`vm-media`, host capability `vm-media-v1`. Body: `{request_id, action: insert|eject, media_id?}`
+(`media_id` required for insert, forbidden for eject). Queued like `vm-power`; Core inserts or
+ejects the SATA CDROM via `virsh change-media` (`--live` added while the domain is running,
+always `--config`), attaching an empty tray first when the domain has none (stopped VMs only:
+SATA cannot hot-plug), and journals the current `media_id` on the pool-master managed record
+for re-adoption.
+
+An eject first reads the CD drive from the domain definition — the live one while the VM is
+running, the persistent one otherwise — and succeeds without calling `virsh` when the domain
+has no CD drive or the tray is already empty; a tray holding either a `<source file>` or a
+`<source dev>` counts as loaded. Nothing is attached to a VM without a drive just to eject
+from it.
+
+Boot order is not changed by a media change, because `virsh change-media` does not change it:
+inserting does not give the CD drive a `bootindex`, and ejecting leaves every device's
+`bootindex` as it was. The journal and the Controller mirror therefore record only `media_id`,
+and an eject clears `media_id` with `media_boot_order` while leaving the disks' `boot_order`
+values exactly as the domain still holds them. `ValidateVMSpec` accordingly requires boot
+order values to be unique and positive but not contiguous: libvirt orders devices by
+`bootindex` and tolerates gaps, and the gap an eject leaves must not make a re-adopting
+Controller reject — and so silently skip — a VM still running on the host. (Relaxing that
+rule is a product decision recorded for confirmation; nothing in the UI or the guide promises
+1..N numbering, and the create form still submits contiguous orders.)
+
+An interrupted media change reconciles by observation. Core journals stage `changing-media`
+together with the resolved media path in a single write immediately before the `virsh` call,
+so a journal without that stage issued nothing and is simply re-applied on reconnect, while
+one with it is compared against the observed CD drive: media equal to the recorded path (or an
+empty tray for an eject) is reported succeeded, anything else keeps the operation for the
+operator to inspect. A media change is never replayed blindly.
+
+Compatibility: older Core without `vm-media-v1` is refused with 409. Upgrade Core on the
+assigned host before using console CD/DVD controls.
+
+Checks: `go test ./internal/vmhost -run Media` and `go test ./internal/controller -run Media`.
 
 ## Guest tools observation
 

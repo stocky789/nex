@@ -58,11 +58,11 @@ def capture(lab, args):
     password.chmod(0o600)
     lab.start('controller', controller, '-data-dir', lab.path / 'controller-state',
         '-listen', f'127.0.0.1:{lab.port}', '-tls-cert', cert, '-tls-key', key,
-        '-admin-username', 'admin', '-admin-password-file', password,
+        '-admin-username', 'root', '-admin-password-file', password,
         '-stale-after', '5m', '-ui-dir', ROOT / 'web/dist', '-source-archive', source)
     lab.client(cert)
     eventually(lambda: lab.api('/api/v1/sites', expected=401), 'controller startup')
-    lab.csrf = lab.api('/api/v1/session', {'username': 'admin', 'password': password.read_text()})['csrf_token']
+    lab.csrf = lab.api('/api/v1/session', {'username': 'root', 'password': password.read_text()})['csrf_token']
     site = lab.api('/api/v1/sites', {'name': 'Community demo'}, expected=201)
     token = lab.api('/api/v1/enrollment-tokens', {'site_id': site['id']}, expected=201)['token']
     agent_key, csr = lab.path / 'agent.key', lab.path / 'agent.csr'
@@ -121,7 +121,7 @@ def capture(lab, args):
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.goto(lab.url)
-        page.get_by_label('Username').fill('admin')
+        page.get_by_label('Username').fill('root')
         page.get_by_label('Password', exact=True).fill(password.read_text())
         page.get_by_role('button', name='Sign in', exact=True).click()
         expect(page.get_by_role('heading', name='Your workspace', exact=True)).to_be_visible()

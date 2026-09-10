@@ -163,6 +163,8 @@ func managedResourceID(c protocol.Command) string {
 		return "vm:" + c.VM.ID
 	case "vm-power":
 		return "power:" + c.OperationID
+	case "vm-media":
+		return "vm-media:" + c.OperationID
 	}
 	return ""
 }
@@ -174,7 +176,7 @@ func validateManaged(c protocol.Command) error {
 		return errors.New("invalid operation ID")
 	}
 	count := 0
-	for _, present := range []bool{c.Storage != nil, c.Network != nil, c.Media != nil, c.VM != nil, c.Power != nil} {
+	for _, present := range []bool{c.Storage != nil, c.Network != nil, c.Media != nil, c.VM != nil, c.Power != nil, c.VMMedia != nil} {
 		if present {
 			count++
 		}
@@ -251,6 +253,21 @@ func validateManaged(c protocol.Command) error {
 		id, pool, host = p.VMID, p.PoolID, p.HostID
 		if !uuidPattern.MatchString(p.VMID) || !protocol.ValidPowerAction(p.Action) {
 			return errors.New("invalid VM identity or power action")
+		}
+	case "vm-media":
+		if c.VMMedia == nil {
+			return errors.New("media-change payload required")
+		}
+		m := c.VMMedia
+		id, pool, host = m.VMID, m.PoolID, m.HostID
+		if !uuidPattern.MatchString(m.VMID) || !protocol.ValidMediaAction(m.Action) {
+			return errors.New("invalid VM identity or media action")
+		}
+		if m.Action == "insert" && !identifier.MatchString(m.MediaID) {
+			return errors.New("insert requires a media identity")
+		}
+		if m.Action == "eject" && m.MediaID != "" {
+			return errors.New("eject must not name media")
 		}
 	default:
 		return errors.New("unsupported managed command")
@@ -467,6 +484,10 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 			return err
 		}
 		return powerVM(ctx, *c.Power)
+	case "vm-media":
+		// changeMedia persists Stage "changing-media" itself, immediately before its virsh
+		// call: an interruption before that point issued nothing, so reconcile re-runs it.
+		return e.changeMedia(ctx, j, js)
 	case "storage-register":
 		if c.Storage.Path == e.stateDir || strings.HasPrefix(e.stateDir, c.Storage.Path+"/") || strings.HasPrefix(c.Storage.Path, e.stateDir+"/") {
 			return errors.New("storage must be separate from agent state")
@@ -1168,6 +1189,29 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protoc
 			j.Result.Error = err.Error()
 		}
 	}
+	if j.Command.Kind == "vm-media" {
+		if j.Stage != "changing-media" {
+			js, err := e.journals()
+			if err != nil {
+				return j.Result, err
+			}
+			if err = e.apply(ctx, &j, js, nil); err == nil {
+				j.Result.Status = "succeeded"
+				j.Result.Error = ""
+			} else {
+				j.Result.Status = "failed"
+				j.Result.Error = err.Error()
+			}
+		} else if err := mediaObserved(ctx, *j.Command.VMMedia, j.MediaPath); err == nil {
+			j.Result.Status = "succeeded"
+			j.Result.Error = ""
+			if err := e.recordVMMedia(*j.Command.VMMedia); err != nil {
+				return j.Result, err
+			}
+		} else {
+			j.Result.Error = err.Error()
+		}
+	}
 	if j.Command.Kind == "iso-import" && j.MediaPath != "" {
 		if err := verifyISO(j.MediaPath, *j.Command.Media); err == nil {
 			j.Result.Status = "succeeded"
@@ -1239,4 +1283,210 @@ func powerObserved(ctx context.Context, p protocol.VMPowerRequest) error {
 	}
 	// An ACPI request may or may not have reached the guest; only the guest's state can tell.
 	return errors.New("power request was interrupted; VM is " + current + "; observe the guest and submit a new request")
+}
+
+// changeMedia inserts or ejects ISO media on a managed VM. An empty SATA tray is attached
+// when the domain has none; QEMU cannot hot-plug SATA, so a running VM without a tray is refused.
+func (e *ManagedEngine) changeMedia(ctx context.Context, j *managedJournal, js []managedJournal) error {
+	req := *j.Command.VMMedia
+	vm, err := managedVM(js, req.VMID)
+	if err != nil {
+		return err
+	}
+	path := ""
+	if req.Action == "insert" {
+		m, mediaPath, err := managedMedia(js, req.MediaID)
+		if err != nil {
+			return err
+		}
+		on := false
+		for _, d := range vm.Disks {
+			on = on || d.StorageID == m.StorageID
+		}
+		if !on {
+			return errors.New("the install ISO must be on one of the VM's disk storage targets")
+		}
+		if err = verifyISO(mediaPath, m); err != nil {
+			return err
+		}
+		path = mediaPath
+	}
+	running, err := managedRunning(ctx, req.VMID)
+	if err != nil {
+		return err
+	}
+	dev := ""
+	if req.Action == "eject" {
+		source, tray, err := cdromSource(ctx, req.VMID, running)
+		if err != nil {
+			return err
+		}
+		if tray == "" || source == "" {
+			// Nothing to eject: do not attach a tray, or call virsh, just to remove from it.
+			return e.recordVMMedia(req)
+		}
+		dev = tray
+	} else if dev, err = ensureCDROM(ctx, e.stateDir, req.VMID, running); err != nil {
+		return err
+	}
+	// Persisted immediately before the virsh call, with the resolved media path, so an
+	// interruption after this point reconciles by observing the tray and one before it is
+	// simply re-applied.
+	j.Stage, j.MediaPath = "changing-media", path
+	if err = e.save(*j); err != nil {
+		return err
+	}
+	args := []string{"change-media", req.VMID, dev, "--force"}
+	if running {
+		args = append(args, "--live")
+	}
+	args = append(args, "--config")
+	if req.Action == "eject" {
+		args = append(args, "--eject")
+	} else {
+		args = append(args, path, "--update")
+	}
+	if _, err = managedVirsh(ctx, args...); err != nil {
+		return errors.New("libvirt refused the media change; inspect the VM on its host")
+	}
+	return e.recordVMMedia(req)
+}
+
+// managedRunning reports whether the domain is running, so callers read the live definition
+// rather than a persistent one the guest may no longer match.
+func managedRunning(ctx context.Context, id string) (bool, error) {
+	state, err := managedVirsh(ctx, "domstate", id)
+	if err != nil {
+		return false, errors.New("VM not found or its state cannot be established on this host")
+	}
+	return strings.TrimSpace(string(state)) == "running", nil
+}
+
+// dumpManagedDomain reads a domain's definition: the live one while running, otherwise the
+// persistent one. Both ensureCDROM and cdromSource read the CD drive from this same parse.
+func dumpManagedDomain(ctx context.Context, id string, running bool) (managedDomain, error) {
+	args := []string{"dumpxml", id}
+	if !running {
+		args = append(args, "--inactive")
+	}
+	b, err := managedVirsh(ctx, args...)
+	if err != nil {
+		return managedDomain{}, errors.New("VM definition cannot be read on this host")
+	}
+	var d managedDomain
+	if err = xml.Unmarshal(b, &d); err != nil {
+		return managedDomain{}, err
+	}
+	return d, nil
+}
+
+// cdromSource reports the domain's CD drive target, empty when it has none, and the media the
+// tray holds. It is a read-only check so an eject on a VM with no drive, or an already-empty
+// one, is recognized as already satisfied instead of failing a virsh call with nothing to
+// eject. A running domain is read live: its tray may have been changed outside Nex, and only
+// the live definition proves what the guest currently sees. Media attached as a host device
+// (<source dev>) counts as present, the same as a file.
+func cdromSource(ctx context.Context, id string, running bool) (source, dev string, err error) {
+	d, err := dumpManagedDomain(ctx, id, running)
+	if err != nil {
+		return "", "", err
+	}
+	for _, disk := range d.Devices.Disks {
+		if disk.Device == "cdrom" {
+			src := disk.Source.File
+			if src == "" {
+				src = disk.Source.Dev
+			}
+			return src, disk.Target.Dev, nil
+		}
+	}
+	return "", "", nil
+}
+
+// ensureCDROM returns the SATA cdrom target, attaching an empty tray when missing.
+// ponytail: SATA cannot hot-plug; a running domain without a tray must be stopped first.
+func ensureCDROM(ctx context.Context, stateDir, id string, running bool) (string, error) {
+	d, err := dumpManagedDomain(ctx, id, running)
+	if err != nil {
+		return "", err
+	}
+	used := map[string]bool{}
+	for _, disk := range d.Devices.Disks {
+		used[disk.Target.Dev] = true
+		if disk.Device == "cdrom" {
+			return disk.Target.Dev, nil
+		}
+	}
+	if running {
+		return "", errors.New("the VM has no CD drive while running; shut it down, then insert or eject media to add one")
+	}
+	dev := "sda"
+	for i := 0; used[dev]; i++ {
+		dev = "sd" + string(rune('a'+i+1))
+		if i > 24 {
+			return "", errors.New("no free SATA target for a CD drive")
+		}
+	}
+	tray := managedDisk{Type: "file", Device: "cdrom", Driver: driverXML{"qemu", "raw"}, Target: targetXML{Dev: dev, Bus: "sata"}, Readonly: &struct{}{}}
+	xmlBytes, err := xml.Marshal(tray)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(stateDir, "cdrom-"+id+".xml")
+	if err = os.WriteFile(path, xmlBytes, 0600); err != nil {
+		return "", err
+	}
+	defer os.Remove(path)
+	if _, err = managedVirsh(ctx, "attach-device", id, path, "--config"); err != nil {
+		return "", errors.New("libvirt refused to add an empty CD drive; inspect the VM on its host")
+	}
+	return dev, nil
+}
+
+func managedVM(js []managedJournal, id string) (protocol.VMCreateSpec, error) {
+	for _, j := range js {
+		if j.Result.Status == "succeeded" && j.Command.Kind == "vm-create" && j.Command.VM != nil && j.Command.VM.ID == id {
+			return *j.Command.VM, nil
+		}
+	}
+	return protocol.VMCreateSpec{}, errors.New("VM is not defined on this host")
+}
+
+// recordVMMedia updates the durable vm-create journal so Applied reports the current media.
+func (e *ManagedEngine) recordVMMedia(req protocol.VMMediaRequest) error {
+	js, err := e.journals()
+	if err != nil {
+		return err
+	}
+	for _, j := range js {
+		if j.Result.Status != "succeeded" || j.Command.Kind != "vm-create" || j.Command.VM == nil || j.Command.VM.ID != req.VMID {
+			continue
+		}
+		v := protocol.ApplyVMMedia(*j.Command.VM, req.Action, req.MediaID)
+		j.Command.VM = &v
+		return e.save(j)
+	}
+	return errors.New("VM is not defined on this host")
+}
+
+// mediaObserved reconciles an interrupted media change by observing the CD drive. The journal
+// records Stage "changing-media" and the resolved media path together, immediately before the
+// virsh call, so an insert reaching here always knows the path it was to install.
+func mediaObserved(ctx context.Context, req protocol.VMMediaRequest, path string) error {
+	running, err := managedRunning(ctx, req.VMID)
+	if err != nil {
+		return errors.New("VM definition cannot be established after an interrupted media change")
+	}
+	got, _, err := cdromSource(ctx, req.VMID, running)
+	if err != nil {
+		return errors.New("VM definition cannot be established after an interrupted media change")
+	}
+	want := ""
+	if req.Action == "insert" {
+		want = path
+	}
+	if got == want {
+		return nil
+	}
+	return errors.New("media change was interrupted; observe the CD drive and submit a new request")
 }

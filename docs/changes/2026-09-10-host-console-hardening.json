@@ -1,0 +1,50 @@
+{
+  "summary": "Harden the host console: drop the reachable-by-any-local-uid RFB socket for an in-process net.Pipe, honour incremental FramebufferUpdateRequest so an idle console stops streaming full frames, track Ctrl and arrow keys, fix a tab-stop bug, and gate openHostConsole on a distinct host-console-v1 capability so an old Core cannot leave the browser hanging on a ticket it can never fulfil. API impact: changed contract (openHostConsole capability gate; corrected 404/409/ticket wording for the host console endpoints).",
+  "paths": [
+    "internal/vmhost/hostconsole.go",
+    "internal/vmhost/hostconsole_test.go",
+    "internal/controller/console.go",
+    "internal/controller/console_test.go",
+    "internal/agent/run.go",
+    "internal/agent/console.go",
+    "internal/agent/console_test.go",
+    "internal/protocol/console.go",
+    "web/src/console.tsx",
+    "web/src/main.tsx",
+    "docs/guide/vm-console.md",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/changes/2026-09-10-host-console-hardening.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The host console now requires the host-console-v1 capability instead of console-v1, and the Send key menu gained a Ctrl+C entry; docs/guide/vm-console.md states both.",
+    "pages": [
+      "docs/guide/vm-console.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "openHostConsole now gates on the new host-console-v1 capability instead of reusing console-v1 (a new Controller against an old Core previously hung the browser to a 504 instead of an immediate refusal); its 404/409 responses and the ticket parameter description were also corrected from copy-pasted VM-console wording to host wording.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "host-console-v1 is a capability string reported fresh on every host report and cached the same way console-v1 already is (host_capabilities, a freshness cache, not an authoritative record); the RFB session itself is an in-process net.Pipe with no state beyond one connection's lifetime, same as before.",
+    "record": ""
+  },
+  "verification": {
+    "method": "go build ./...; go vet ./internal/vmhost/ ./internal/controller/ ./internal/agent/ ./internal/protocol/; go test -race -count=1 ./internal/vmhost/ ./internal/controller/ ./internal/agent/ ./internal/protocol/ (TestHostConsoleIncrementalUpdateOnlyOnChange covers the deferred-then-satisfied incremental request, TestKeysymByteCtrlAndArrows covers Ctrl+letter, Ctrl+@/Space and Ctrl+\\ [ ] ^ _); cd web && npm run typecheck && npm run build; python3 scripts/generate_api.py --check; python3 scripts/check_docs.py --worktree",
+    "evidence": [
+      "internal/vmhost/hostconsole_test.go",
+      "internal/controller/console_test.go",
+      "internal/agent/console_test.go"
+    ],
+    "limits": "No live browser/noVNC walkthrough of the host console (Ctrl+C, arrow keys, idle-frame behavior) against a disposable lab host; verified with Go integration tests driving the RFB protocol directly against HostConsoleSession and with the pure keysymByte/hostTerm unit tests instead. The web UI host-console capability gate (host-console-v1 in hostConsoleBlocker) was verified by typecheck/build and code inspection against openHostConsole, not by driving an old-Core host in a browser."
+  }
+}

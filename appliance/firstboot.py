@@ -15,7 +15,7 @@ import urllib.request
 CONFIG = Path('/etc/nex-controller')
 STATE = Path('/var/lib/nex-controller')
 # Matches the Controller web UI bootstrap username (cmd/nex-controller -admin-username).
-CONSOLE_USER = 'admin'
+CONSOLE_USER = 'root'
 
 
 def validate(config):
@@ -32,9 +32,9 @@ def validate(config):
 
 
 def provision_console_login(password, username=CONSOLE_USER):
-    """Give the Controller admin password to the matching guest console account.
+    """Give the Controller password to the matching guest console account.
 
-    Root stays locked and SSH password auth stays off; this is for the VM console only.
+    Unlocks console login as root with that password; SSH password auth stays off.
     """
     sudo = False
     try:

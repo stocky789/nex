@@ -8,8 +8,9 @@ import {
 } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
-import { HostISOs, ManagedVMs, VMDetails, VMPower, type VM, type Storage, type Network, type Media } from "./managed";
+import { HostISOs, ManagedVMs, VMDetails, VMPower, powerBlocker, type VM, type Storage, type Network, type Media } from "./managed";
 import { Console } from "./console";
+import { Icon } from "./icons";
 
 type Site = { id: string; name: string };
 type Pool = Site & { site_id: string; master_host_id: string };
@@ -126,46 +127,37 @@ type Upload = {
   rate: number;
   state: "uploading" | "succeeded" | "failed" | "cancelled";
   message: string;
+  actor: string;
+  updated_at: string;
 };
 const rate = (bytes: number) =>
   bytes >= 1024 ** 2
     ? `${(bytes / 1024 ** 2).toFixed(1)} MiB/s`
     : `${Math.max(0, Math.round(bytes / 1024))} KiB/s`;
-// UploadStatus covers only the browser-to-Controller transfer. The host import that follows it
+// UploadRow covers only the browser-to-Controller transfer. The host import that follows it
 // is a durable task and stays in the task list and the ISO library.
-function UploadStatus({ upload, onCancel }: { upload: Upload; onCancel: () => void }) {
+function UploadRow({ upload, onCancel }: { upload: Upload; onCancel: () => void }) {
   const running = upload.state === "uploading";
   return (
-    <section className="panel" aria-label="ISO upload to Controller">
-      <div className="section-heading">
-        <h2>{upload.name}</h2>
-        <div className="actions" style={{ alignItems: "center" }}>
-          {/* Only the outcome is announced; percent changes far too often for a live region. */}
-          <span role="status"><Badge value={upload.state} /></span>
-          <progress max={100} value={upload.percent} aria-label={`Upload progress for ${upload.name}`} style={{ width: 110 }} />
-          <span className="muted mono">
-            {upload.percent}% · {running ? rate(upload.rate) : size(upload.total)}
-          </span>
-          {running && <button onClick={onCancel}>Cancel</button>}
-        </div>
-      </div>
-      {upload.message && <p className="panel-note task-error">{upload.message}</p>}
-    </section>
+    <tr aria-label="ISO upload to Controller">
+      <td>
+        <strong>iso-upload</strong>
+        <small>{upload.name} · Controller</small>
+        {upload.message && <p className="task-error">{upload.message}</p>}
+      </td>
+      <td>
+        {/* Only the outcome is announced; percent changes far too often for a live region. */}
+        <span role="status"><Badge value={upload.state} /></span>
+        <small className="mono">
+          <progress max={100} value={upload.percent} aria-label={`Upload progress for ${upload.name}`} style={{ width: 90, verticalAlign: "middle" }} />{" "}
+          {upload.percent}% · {running ? rate(upload.rate) : size(upload.total)}
+        </small>
+        {running && <small><button onClick={onCancel}>Cancel</button></small>}
+      </td>
+      <td>{upload.actor}</td>
+      <td>{date(upload.updated_at)}</td>
+    </tr>
   );
-}
-type ResourceKind = "site" | "pool" | "host" | "home" | "refresh" | "tasks" | "vm";
-const stroke = { strokeWidth: 1.25, strokeLinecap: "round", strokeLinejoin: "round" } as const;
-function Icon({ kind }: { kind: ResourceKind }) {
-  const paths: Record<ResourceKind, ReactNode> = {
-    vm: <><rect x="2" y="3" width="16" height="11" rx="1.5" fill="#93c5fd" stroke="#1d4ed8" /><path d="M7 17h6M10 14v3" stroke="#1d4ed8" /><path d="m8 6 5 3-5 3z" fill="#fff" /></>,
-    home: <><rect x="1.5" y="1.5" width="17" height="17" rx="4.5" fill="#3478ff" /><path d="M6.5 14.5V9.5a3.5 3.5 0 0 1 7 0v5" stroke="#fff" strokeWidth="2.4" /></>,
-    site: <><path d="M3 18.5V4.5a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v14" fill="#4f8dff" stroke="#1d4ed8" /><path d="M12 8h4.5a1 1 0 0 1 1 1v9.5" fill="#a8caff" stroke="#1d4ed8" /><path d="M5 6h2M8 6h2M5 9.5h2M8 9.5h2M5 13h2M8 13h2M14 11h1.5M14 14h1.5" stroke="#fff" strokeWidth="1.5" /><path d="M1.5 18.5h17" stroke="#1d4ed8" /></>,
-    pool: <><rect x="2" y="3" width="7" height="10" rx="1.2" fill="#a78bfa" stroke="#6d28d9" /><rect x="11" y="3" width="7" height="10" rx="1.2" fill="#a78bfa" stroke="#6d28d9" /><path d="M4 6h3M4 8.5h3M13 6h3M13 8.5h3" stroke="#fff" strokeWidth="1.3" /><circle cx="7.5" cy="11" r=".9" fill="#4c1d95" /><circle cx="16.5" cy="11" r=".9" fill="#4c1d95" /><path d="M5.5 13v3h9v-3M10 16v2" stroke="#6d28d9" /><circle cx="10" cy="18" r="1.4" fill="#7c3aed" /></>,
-    host: <><rect x="4" y="2" width="12" height="16" rx="1.5" fill="#2dd4bf" stroke="#0f766e" /><rect x="6" y="4.5" width="8" height="2.2" rx=".6" fill="#f0fdfa" /><rect x="6" y="8" width="8" height="2.2" rx=".6" fill="#f0fdfa" /><circle cx="7.5" cy="14.5" r="1.1" fill="#134e4a" /><rect x="10" y="13.7" width="4" height="1.6" rx=".6" fill="#134e4a" /></>,
-    refresh: <><circle cx="10" cy="10" r="8.5" fill="#dbeafe" /><path d="M16.5 8.5A7 7 0 1 0 17 11.5" stroke="#2563eb" strokeWidth="2" /><path d="M17 3v5.5h-5.5" stroke="#2563eb" strokeWidth="2" /></>,
-    tasks: <><rect x="4" y="3.5" width="12" height="14.5" rx="1.5" fill="#fbbf24" stroke="#b45309" /><rect x="7" y="2" width="6" height="3" rx="1" fill="#fff7ed" stroke="#b45309" /><path d="m6.5 10 1.6 1.6L11 8.6" stroke="#fff" strokeWidth="1.7" /><path d="M12.5 10h1.5M6.5 14h7" stroke="#fff" strokeWidth="1.5" /></>,
-  };
-  return <svg className={`resource-icon icon-${kind}`} viewBox="0 0 20 20" fill="none" {...stroke} aria-hidden="true">{paths[kind]}</svg>;
 }
 function Menu({ label, children }: { label: string; children: ReactNode }) {
   const ref = useRef<HTMLDetailsElement>(null);
@@ -271,13 +263,16 @@ function App() {
   // The browser-to-Controller upload outlives the form that started it, so the App shell owns
   // the request and reports it in the activity dock until the operator navigates or reloads.
   const [upload, setUpload] = useState<Upload | null>(null);
+  const [createVM, setCreateVM] = useState(false);
+  const [mediaNote, setMediaNote] = useState("");
+  const [mediaBusy, setMediaBusy] = useState(false);
   const uploadRequest = useRef<XMLHttpRequest | null>(null);
   const uploadCancelled = useRef(false);
   const uploadClear = useRef(0);
   const uploadSample = useRef({ at: 0, loaded: 0, rate: 0 });
   const [kind, id] = route.split("/").filter(Boolean);
   const vm = data.vms.find(v => (kind === "vms" || kind === "console") && v.id === id);
-  const host = data.hosts.find((h) => kind === "hosts" && h.id === id);
+  const host = data.hosts.find((h) => (kind === "hosts" || kind === "host-console") && h.id === id);
   const pool = data.pools.find(
     (p) => p.id === (vm?.pool_id || host?.pool_id || (kind === "pools" ? id : "")),
   );
@@ -371,10 +366,10 @@ function App() {
     clearTimeout(uploadClear.current);
     uploadCancelled.current = false;
     uploadSample.current = { at: performance.now(), loaded: 0, rate: 0 };
-    setUpload({ name: file.name, loaded: 0, total: file.size, percent: 0, rate: 0, state: "uploading", message: "" });
+    setUpload({ name: file.name, loaded: 0, total: file.size, percent: 0, rate: 0, state: "uploading", message: "", actor: session?.username || "", updated_at: new Date().toISOString() });
     const settle = (patch: Partial<Upload>) => {
       uploadRequest.current = null;
-      setUpload(current => current && { ...current, rate: 0, ...patch });
+      setUpload(current => current && { ...current, rate: 0, updated_at: new Date().toISOString(), ...patch });
       uploadClear.current = window.setTimeout(() => setUpload(null), 8000);
     };
     try {
@@ -403,6 +398,43 @@ function App() {
   async function openConsole(id: string) {
     const ticket = await api<{ websocket: string }>(`vms/${encodeURIComponent(id)}/console`, "POST", {});
     return `wss://${location.host}${ticket.websocket}`;
+  }
+  async function openHostConsole(id: string) {
+    const ticket = await api<{ websocket: string }>(`hosts/${encodeURIComponent(id)}/console`, "POST", {});
+    return `wss://${location.host}${ticket.websocket}`;
+  }
+  async function changeVMMedia(vmID: string, action: "insert" | "eject", mediaID?: string) {
+    setMediaBusy(true);
+    setMediaNote("");
+    try {
+      await api(`vms/${encodeURIComponent(vmID)}/media`, "POST", {
+        request_id: crypto.randomUUID(),
+        action,
+        ...(action === "insert" ? { media_id: mediaID } : {}),
+      });
+      setMediaNote(action === "insert" ? "Inserting ISO…" : "Ejecting ISO…");
+      await reload();
+    } catch (e) {
+      setMediaNote((e as Error).message);
+    } finally {
+      setMediaBusy(false);
+    }
+  }
+  function vmMediaControls(target: VM) {
+    const host = data.hosts.find(h => h.id === target.host_id);
+    if (!host?.capabilities?.includes("vm-media-v1")) {
+      return { currentID: target.spec?.media_id, currentName: data.media.find(m => m.id === target.spec?.media_id)?.name, options: [] as { id: string; name: string }[], busy: true, note: mediaNote || "This host cannot change media yet. Upgrade Nex Core.", onInsert: () => {}, onEject: () => {} };
+    }
+    const options = data.media.filter(m => m.host_id === target.host_id && m.pool_id === target.pool_id && m.status === "succeeded" && m.id !== target.spec?.media_id).map(m => ({ id: m.id, name: m.name }));
+    return {
+      currentID: target.spec?.media_id || undefined,
+      currentName: data.media.find(m => m.id === target.spec?.media_id)?.name,
+      options,
+      busy: mediaBusy,
+      note: mediaNote,
+      onInsert: (id: string) => void changeVMMedia(target.id, "insert", id),
+      onEject: () => void changeVMMedia(target.id, "eject"),
+    };
   }
   async function reload() {
     const current = generation.current;
@@ -472,6 +504,7 @@ function App() {
       setForm(null);
       setToken(null);
       setNotice("");
+      setMediaNote("");
       resetAddHost();
       requestID.current = null;
     };
@@ -504,6 +537,23 @@ function App() {
     setError("");
     resetAddHost();
   }
+  function refreshInventory() {
+    if (!host) return;
+    void action(async () => {
+      requestID.current ??= crypto.randomUUID();
+      const op = await api<Operation>(`hosts/${host.id}/operations`, "POST", { kind: "refresh-inventory", request_id: requestID.current });
+      requestID.current = null;
+      setNotice(`Inventory refresh ${op.status}. Follow its progress in Task history.`);
+      await reload();
+    });
+  }
+  // New VM from the toolbar or File menu opens the pool's VM wizard; the pool view shows it.
+  function newVM() {
+    if (!pool) return;
+    setCreateVM(true);
+    location.hash = `/pools/${pool.id}`;
+  }
+  const powerStatus = vm && `Observed ${vm.state || "unknown"} · ${vm.freshness || "unknown"}. ${powerBlocker(vm, data.hosts.find(h => h.id === vm.host_id)) || "Use the toolbar to start, shut down, reboot or force stop this VM."}`;
   const submitName = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const name = String(new FormData(e.currentTarget).get("name")).trim();
@@ -579,19 +629,27 @@ function App() {
         </footer>
       </main>
     );
-  // Console-only page for a separate browser window; the VM page's Console tab links here.
-  if (kind === "console")
+  // Console-only page for a separate browser window; the VM/host Console tabs link here.
+  if (kind === "console" || kind === "host-console")
     return (
       <div className="console-page">
-        <div className="console-page-bar"><a href={`#/vms/${id}`}>Nex Controller</a><strong>{vm ? vm.name : "VM console"}</strong>{vm && <span className="muted">{vm.state || "unknown"}</span>}</div>
-        {vm ? <Console key={vm.id} name={vm.name} guest={vm.guest} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={() => openConsole(vm.id)} />
-          : <p className="empty">{loading ? "Loading…" : error || "This VM is not known to Nex Controller. Choose it from the Resources tree."}</p>}
+        {kind === "host-console" ? <>
+          <div className="console-page-bar"><a href={`#/hosts/${id}`}>Nex Controller</a><strong>{host ? (host.hostname || host.id) : "Host console"}</strong>{host && <span className="muted">{host.connection}</span>}</div>
+          {host ? <Console key={host.id} name={host.hostname || host.id} disabled={hostConsoleBlocker(host)} open={() => openHostConsole(host.id)} />
+            : <p className="empty">{loading ? "Loading…" : error || "This host is not known to Nex Controller. Choose it from the Resources tree."}</p>}
+        </> : <>
+          <div className="console-page-bar"><a href={`#/vms/${id}`}>Nex Controller</a><strong>{vm ? vm.name : "VM console"}</strong>{vm && <span className="muted">{vm.state || "unknown"}</span>}</div>
+          {vm ? <Console key={vm.id} name={vm.name} guest={vm.guest} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={() => openConsole(vm.id)} media={vmMediaControls(vm)} />
+            : <p className="empty">{loading ? "Loading…" : error || "This VM is not known to Nex Controller. Choose it from the Resources tree."}</p>}
+        </>}
       </div>
     );
   const invalid = Boolean(
     kind &&
     kind !== "tasks" &&
     kind !== "updates" &&
+    kind !== "console" &&
+    kind !== "host-console" &&
     (!id ||
       !["sites", "pools", "hosts", "vms"].includes(kind) ||
       (kind === "sites" && !site) ||
@@ -634,76 +692,25 @@ function App() {
         </div>
       </header>
       <div className="menubar" aria-label="Application menus">
-        <Menu label="File"><button disabled={busy} onClick={() => open("site")}>Create site</button><button disabled={busy || !site || Boolean(host && !host.revoked)} onClick={() => open("enroll")}>{host ? "Re-enroll host" : "Add host"}</button></Menu>
+        <Menu label="File"><button disabled={busy} onClick={() => open("site")}>Create site</button><button disabled={busy || !site || Boolean(host)} onClick={() => open("enroll")}>Add host</button><button disabled={busy || !pool} onClick={newVM}>New VM</button></Menu>
         <Menu label="View"><a href="#/">Overview</a><a href="#/tasks">Task history</a><a href="#/updates">Updates</a><button onClick={() => void reload()} disabled={busy}>Refresh view</button></Menu>
+        <Menu label="Host"><button disabled={busy || !host || host.revoked} onClick={refreshInventory}>Refresh inventory</button><button disabled={busy || !host?.revoked} onClick={() => open("enroll")}>Re-enroll host</button><button disabled={busy || !host || host.revoked} onClick={() => open("revoke")}>Revoke access</button></Menu>
         <Menu label="Help"><a href="/api/docs/" target="_blank" rel="noreferrer">API reference</a><a href="/source">Source code</a></Menu>
       </div>
+      {/* A fixed toolbar in the desktop-console style: every action stays in place and is greyed out,
+          with its reason as a tooltip, when it does not apply to the selected resource. */}
       <div className="toolbar" aria-label="Controller actions">
-            <div className="actions">
-              {(
-                <button
-                  className="primary"
-                  disabled={busy}
-                  onClick={() => open("site")}
-                >
-                  <Icon kind="site" /> Create site
-                </button>
-              )}
-              {site && !host && (
-                <button
-                  className="primary"
-                  disabled={busy}
-                  onClick={() => open("enroll")}
-                >
-                  <Icon kind="host" /> Add host
-                </button>
-              )}
-              {host && !host.revoked && (
-                <>
-                  <button
-                    className="primary"
-                    disabled={busy}
-                    onClick={() =>
-                      void action(async () => {
-                        requestID.current ??= crypto.randomUUID();
-                        const op = await api<Operation>(
-                          `hosts/${host.id}/operations`,
-                          "POST",
-                          {
-                            kind: "refresh-inventory",
-                            request_id: requestID.current,
-                          },
-                        );
-                        requestID.current = null;
-                        setNotice(
-                          `Inventory refresh ${op.status}. Follow its progress in Task history.`,
-                        );
-                        await reload();
-                      })
-                    }
-                  >
-                    <Icon kind="refresh" /> Refresh inventory
-                  </button>
-                  <button
-                    className="danger"
-                    disabled={busy}
-                    onClick={() => open("revoke")}
-                  >
-                    Revoke access
-                  </button>
-                </>
-              )}
-              {host?.revoked && (
-                <button
-                  className="primary"
-                  disabled={busy}
-                  onClick={() => open("enroll")}
-                >
-                  Re-enroll host
-                </button>
-              )}
-            </div>
-        <button disabled={busy} onClick={() => void reload()}><Icon kind="refresh" /> Refresh view</button>
+        <div className="toolbar-group" role="group" aria-label="Navigation">
+          <button type="button" onClick={() => history.back()}><Icon kind="back" />Back</button>
+          <button type="button" onClick={() => history.forward()}><Icon kind="forward" />Forward</button>
+        </div>
+        <div className="toolbar-group" role="group" aria-label="Create">
+          <button type="button" disabled={busy} onClick={() => open("site")}><Icon kind="site" />Create site</button>
+          <button type="button" disabled={busy || !site || Boolean(host)} title={!site ? "Select a site first." : host ? "Select the site or pool to add a host." : undefined} onClick={() => open("enroll")}><Icon kind="host" />Add host</button>
+          <button type="button" disabled={busy || !pool || Boolean(error)} title={pool ? undefined : "Select a pool, host or VM first."} onClick={newVM}><Icon kind="new-vm" />New VM</button>
+        </div>
+        <VMPower key={`power-${vm?.id || "none"}`} vm={vm} host={vm && data.hosts.find(h => h.id === vm.host_id)} api={api} reload={reload} busy={busy} unavailable={Boolean(error)} onNotice={setNotice} describedBy={vm ? "vm-power-status" : undefined} />
+        <button type="button" className="toolbar-end" disabled={busy} onClick={() => void reload()}><Icon kind="refresh" />Refresh view</button>
       </div>
       <div className="shell">
         <aside>
@@ -766,7 +773,7 @@ function App() {
               </h1>
               <p>
                 {vm
-                  ? "Desired configuration and observed state."
+                  ? <span id="vm-power-status">{powerStatus}</span>
                   : host
                   ? "Observed resources and management connectivity."
                   : pool
@@ -782,7 +789,7 @@ function App() {
             </div>
           </div>
           {kind !== "tasks" && kind !== "updates" && !invalid && <nav className="detail-tabs" aria-label="Resource views">
-            {(vm ? ["General", "Console", "Activity"] : host ? ["General", "Networking", "Storage", "Activity"] : pool ? ["General", "Virtual machines", "Storage", "Networking", "ISO library", "Activity"] : ["General", "Activity"]).map((name) =>
+            {(vm ? ["General", "Console", "Activity"] : host ? ["General", "Console", "Networking", "Storage", "Activity"] : pool ? ["General", "Virtual machines", "Storage", "Networking", "ISO library", "Activity"] : ["General", "Activity"]).map((name) =>
               <button key={name} aria-current={tab === name ? "page" : undefined} onClick={() => setTab(name)}>{name}</button>
             )}
           </nav>}
@@ -1077,8 +1084,7 @@ function App() {
             </section>
           ) : kind === "tasks" ? (
             <>
-              {upload && <UploadStatus upload={upload} onCancel={cancelUpload} />}
-              <Tasks operations={data.operations} hosts={data.hosts} />
+              <Tasks operations={data.operations} hosts={data.hosts} upload={upload} onCancelUpload={cancelUpload} />
               <Activity entries={data.audit} data={data} />
             </>
           ) : kind === "updates" ? (
@@ -1136,11 +1142,11 @@ function App() {
             />
           ) : (
             <>
-              {pool && !host && !vm && <ManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} poolName={pool.name} tab={tab} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={setTab} unavailable={Boolean(error)} uploading={upload?.state === "uploading"} startIsoUpload={startIsoUpload} />}
-              {vm && tab !== "Activity" && <VMPower key={`power-${vm.id}`} vm={vm} host={data.hosts.find(h => h.id === vm.host_id)} api={api} reload={reload} busy={busy} unavailable={Boolean(error)} onNotice={setNotice} />}
+              {pool && !host && !vm && <ManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} poolName={pool.name} tab={tab} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={setTab} unavailable={Boolean(error)} uploading={upload?.state === "uploading"} startIsoUpload={startIsoUpload} createVM={createVM} onCreateVMShown={() => setCreateVM(false)} />}
               {vm && tab === "General" && <VMDetails vm={vm} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} />}
-              {vm && tab === "Console" && <Console key={vm.id} name={vm.name} guest={vm.guest} popout={`#/console/${vm.id}`} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={() => openConsole(vm.id)} />}
-              <div hidden={Boolean(vm) || tab === "Activity" || Boolean(pool && !host && tab !== "General")}>
+              {vm && tab === "Console" && <Console key={vm.id} name={vm.name} guest={vm.guest} popout={`#/console/${vm.id}`} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={() => openConsole(vm.id)} media={vmMediaControls(vm)} />}
+              {host && !vm && tab === "Console" && <Console key={host.id} name={host.hostname || host.id} popout={`#/host-console/${host.id}`} disabled={hostConsoleBlocker(host)} open={() => openHostConsole(host.id)} />}
+              <div hidden={Boolean(vm) || tab === "Activity" || tab === "Console" || Boolean(pool && !host && tab !== "General")}>
               {!host && (
                 <div className="metrics">
                   <Metric label="Hosts" value={scopedHosts.length} />
@@ -1226,7 +1232,10 @@ function App() {
                 </section>
               )}
               {host ? (
-                <><HostDetails host={host} master={pool?.master_host_id === host.id} tab={tab} />{tab === "Storage" && <HostISOs host={host} media={data.media} storage={data.storage} unavailable={Boolean(error)} />}</>
+                <>
+                  {tab !== "Console" && <HostDetails host={host} master={pool?.master_host_id === host.id} tab={tab} />}
+                  {tab === "Storage" && <HostISOs host={host} media={data.media} storage={data.storage} unavailable={Boolean(error)} />}
+                </>
               ) : (
                 <section className="panel">
                   <div className="section-heading">
@@ -1326,8 +1335,7 @@ function App() {
           </div>
           {!loading && kind !== "tasks" && kind !== "updates" && <details className="activity-dock" open>
             <summary>Recent tasks <span>{data.operations.filter((o) => scopedHosts.some((h) => h.id === o.host_id)).length}</span></summary>
-            {upload && <UploadStatus upload={upload} onCancel={cancelUpload} />}
-            <Tasks operations={data.operations.filter((o) => scopedHosts.some((h) => h.id === o.host_id)).slice(0, 5)} hosts={data.hosts} recent />
+            <Tasks operations={data.operations.filter((o) => scopedHosts.some((h) => h.id === o.host_id)).slice(0, 5)} hosts={data.hosts} recent upload={upload} onCancelUpload={cancelUpload} />
           </details>}
         </main>
       </div>
@@ -1408,14 +1416,21 @@ function consoleBlocker(vm: VM, host?: Host): string {
   if (!host || host.revoked || host.connection !== "fresh") return "The VM's host is not freshly connected. Its console cannot be opened until the host reports again.";
   if (!host.capabilities?.includes("console-v1")) return "The host agent does not support browser consoles. Upgrade Nex Core on this host.";
   if (vm.freshness !== "fresh") return "Current VM state is unknown; wait for a fresh host report before opening the console.";
-  if (vm.state !== "running") return `The VM is observed ${vm.state || "unknown"}. Use Start above, wait for the next host report, then connect.`;
+  if (vm.state !== "running") return `The VM is observed ${vm.state || "unknown"}. Use Start in the toolbar, wait for the next host report, then connect.`;
+  return "";
+}
+function hostConsoleBlocker(host: Host): string {
+  if (host.revoked || host.connection !== "fresh") return "The host is not freshly connected. Its console cannot be opened until it reports again.";
+  // Must match the gate openHostConsole applies (protocol.HostConsoleCapability); the VM
+  // console above uses console-v1, which an old Core advertises without a host console.
+  if (!host.capabilities?.includes("host-console-v1")) return "The host agent does not support browser consoles. Upgrade Nex Core on this host.";
   return "";
 }
 function HostDetails({ host, master, tab }: { host: Host; master: boolean; tab: string }) {
   const inv = host.inventory;
   return (
     <div className="host-details" data-tab={tab}>
-      <section className="panel host-overview">
+      <section className="panel host-overview" hidden={tab === "Console"}>
         <div className="section-heading">
           <h2>Host overview</h2>
           <span><span className="badge">{master ? "Pool master" : "Member"}</span> <Badge value={host.connection} /></span>
@@ -1549,10 +1564,14 @@ function Tasks({
   operations,
   hosts,
   recent = false,
+  upload,
+  onCancelUpload,
 }: {
   operations: Operation[];
   hosts: Host[];
   recent?: boolean;
+  upload?: Upload | null;
+  onCancelUpload?: () => void;
 }) {
   return (
     <section className="panel">
@@ -1560,7 +1579,7 @@ function Tasks({
         <h2>{recent ? "Recent tasks" : "Tasks"}</h2>
         {recent && <a href="#/tasks">View all tasks →</a>}
       </div>
-      {operations.length ? (
+      {operations.length || upload ? (
         <div className="table-scroll">
           <table>
             <thead>
@@ -1572,6 +1591,7 @@ function Tasks({
               </tr>
             </thead>
             <tbody>
+              {upload && onCancelUpload && <UploadRow upload={upload} onCancel={onCancelUpload} />}
               {operations.map((o) => (
                 <tr key={o.id}>
                   <td>

@@ -1,7 +1,10 @@
 # Full VM creation system
 
 Date: 2026-09-10
-Status: Authorized by Matt on 2026-09-10; implementation in progress.
+Status: Implemented and committed on 2026-09-10 (`4a60e45`, media/adapter follow-up `38aa856`);
+independent review round completed with corrections verified. Open: the Gitea `phase1` browser
+walkthrough (red on BUG-0047, fix pending push), the journal round-trip integration run, and the
+Phase 2 acceptance gate in a disposable nested-KVM lab. See [acceptance](#acceptance).
 Parent: [platform plan](2026-09-08-nex-platform.md) [Phase 2](2026-09-08-nex-platform.md#2-one-host-vm-management),
 items 3, 4, 6 and 7, and the Phase 2 acceptance gate.
 
@@ -184,9 +187,10 @@ uncommitted working tree. Unticked boxes were **not run**; none of them may be c
       `python3 -m unittest tests.test_api_contract` 21 tests OK; `generate_api.py --check` exit 0.
 - [ ] Browser walkthrough of all six steps including validation, empty, stale, failed and
       interrupted states, narrow-screen and keyboard operation; captures inspected.
-      **Not run**: no Playwright environment; no captures exist. `managed_vm_browser.py` was updated
-      to drive the six steps and runs in both workflows, but was not executed here, and
-      `docs/qa/managed-vm/browser-simulated-results.json` is evidence for the old flat flow only.
+      **In progress**: Gitea `phase1` now runs `managed_vm_browser.py --simulated` on every push
+      (runs 3798, 3801, 3804). It drives the six steps and fails at the disk-name default check
+      (BUG-0047 in `docs/BUG_LEDGER.md`); the fix is in the working tree and the walkthrough is
+      verified only once that job is green. No local Playwright captures exist.
 - [ ] **Phase 2 acceptance gate**, folded into this slice by Matt's decision on 2026-09-10:
       create a VM through Nex Controller, install a real guest from an uploaded ISO using the
       browser console, reboot it, and verify written data survives guest and host reboot; stop the
@@ -196,13 +200,13 @@ uncommitted working tree. Unticked boxes were **not run**; none of them may be c
       Needs a disposable nested-KVM lab; it was not part of this implementation batch.
 - [ ] Guide, API reference and scoped change assessment updated; documentation checker and both CI
       workflows run the new checks.
-      Written, and `check_docs.py --all` passes, but the range mode both workflows actually run
-      **fails** three ways: `docs/guide/README.md` and `docs/qa/vm-creation/checks.md` are in no
-      record's `paths`, and the edited `docs/changes/2026-09-10-controller-console-login.json` names
-      a `guide.pages` entry this range does not touch. Neither workflow runs `go vet ./...` or
-      `git diff --check`.
-- [ ] Independent implementation and documentation review; findings resolved and corrections verified.
-      The QA pass above is not independent review.
+      `documentation.yml` is green on the committed slice (Gitea runs 3799, 3802) and
+      `check_docs.py --all` passes at HEAD; the earlier range-mode failures were fixed in the
+      review round and by `8103af4`. Neither workflow runs `go vet ./...` or `git diff --check`.
+- [x] Independent implementation and documentation review; findings resolved and corrections verified.
+      See the [review round](../qa/vm-creation/checks.md#independent-review-round--2026-09-10):
+      dedicated-memory admission control was the material defect, fixed with a mutation-checked
+      regression test.
 
 ## Follow-ups
 
@@ -217,10 +221,3 @@ Deferred from this slice during review, both recorded rather than silently dropp
   (dedicated admission control) is server-side and is implemented.
 - **Per-VM reclaim-availability indicator** in the VM detail and Guest tools panel, showing whether
   a `maximum` VM's balloon driver is actually running rather than assuming it.
-
-Also outstanding, from the same review: `docs/changes/2026-09-10-controller-console-login.json` and
-`2026-09-10-default-iso-storage.json` record `api.impact: "existing contract"`, which
-`scripts/check_docs.py:120` does not accept — it allows only `updated` or `none`, conflicting with
-the `none | existing contract | changed contract | new contract` vocabulary in `AGENTS.md`. Those
-records predate this slice and correcting them requires touching their own guide pages, so the
-conflict is reported here for its owners rather than patched from this slice.

@@ -1,0 +1,32 @@
+{
+  "summary": "BUG-0047: fresh Create VM starts disk names from autoDiskName instead of keeping blank's template name system.",
+  "paths": [
+    "web/src/vm-create.tsx",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-10-vm-disk-name-init.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Guide already describes the pool-vm disk default; only the broken init path is fixed so that documented behaviour actually happens.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "UI draft initialisation only; create-VM request shape and host-side records are unchanged.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Client-side wizard defaults only; durable VM disk names still come from the submitted specification on the pool master.",
+    "record": ""
+  },
+  "verification": {
+    "method": "Root cause read from job 4369 AssertionError on disk name 'system'. npm run typecheck passes. managed_vm_browser.py already asserts derived and suffixed defaults and is the regression detector in phase1; Playwright was not re-executed locally.",
+    "evidence": [
+      "web/src/vm-create.tsx",
+      "tests/integration/managed_vm_browser.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}
