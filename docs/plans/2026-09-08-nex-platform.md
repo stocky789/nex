@@ -31,6 +31,11 @@ and record actual browser walkthrough evidence before accepting the redesign.
 master-and-members model. Administrators never create pools; every enrolling Nex Core
 host becomes the **pool master** of its own automatically created pool, named after
 its hostname. Other hosts in a pool are **member hosts**.
+Decision (Matt, 2026-09-10): pool and host IDs and the pool name are generated and kept by
+Nex Core — the host generates its own ID, the pool master generates the pool ID and holds the
+pool name — and any Controller adopts them unchanged; the Controller never creates or derives
+pool identity. A separate code slice implements this and documents the enrollment contract in
+[docs/API.md](../API.md).
 Enrollment tokens bind to a site, not a pool. Joining a member to an existing pool,
 changing the master and ejecting a member remain Phase 4 work and are not available.
 See the [pool master model decision](2026-09-09-pool-master-model.md).
@@ -273,7 +278,7 @@ SQLite is a deliberate single-controller starting point; do not place its databa
 
 The Go libvirt bindings use CGo and the installed native library. Build and package against the supported Debian environment; this agent is not a completely static binary. [Official bindings](https://libvirt.org/go/libvirt.html)
 
-Nex Controller is a replaceable management front end; the pool master's Nex Core is the durable source of truth for everything scoped to its pool (see [Replaceable Controller](#replaceable-controller--2026-09-09)). Controller holds user intent, authorization, and operation history, and persists each accepted pool-scoped change on the master so a new Controller re-adopts it. Libvirt and agents report actual VM/runtime/storage state. Record drift and reconcile deliberately; neither stale controller records nor unsolicited host reports should silently authorize destructive changes.
+Nex Controller is a replaceable management front end; the pool master's Nex Core is the durable source of truth for everything scoped to its pool (see [Replaceable Controller](#replaceable-controller--2026-09-09)). Controller holds user intent and authorization, and persists each accepted pool-scoped change on the master so a new Controller re-adopts it. The Controller `operations` table is a mirror of host-reported journal results, not Controller-owned state: the host journal is the record, and a fresh Controller rebuilds the history, including failed and needs-attention outcomes, on adoption (decision: Matt, 2026-09-10). Libvirt and agents report actual VM/runtime/storage state. Record drift and reconcile deliberately; neither stale controller records nor unsolicited host reports should silently authorize destructive changes.
 
 Agents initiate outbound authenticated HTTPS connections to the controller for inventory, commands, and console forwarding. VM disks, migrations, and backup data travel directly between authorized hosts/storage endpoints rather than through the controller database or API.
 
@@ -494,7 +499,8 @@ the hosting server and test its recovery before claiming self-hosting recoverabl
 Use SQLite's supported backup mechanism or a quiesced backup, with matching
 configuration and identity material; copying a live database file without its
 transaction/WAL state is not a valid export. Provide a
-documented manual replacement-appliance import of that export in this slice;
+documented manual replacement-appliance import of that export in this slice (from Phase 6 the
+same export carries the Controller-scoped backup schedules, jobs, run history and catalog);
 include CA/identity keys and required configuration with secret protection, and
 ensure the original instance cannot resume before activating its replacement.
 A same-host snapshot is insufficient. This minimal manual Controller recovery
@@ -566,13 +572,15 @@ Snapshots are rollback points on the underlying storage and do not protect again
 2. Implement full backups of gracefully stopped VMs first. Include every supported disk, VM configuration, required firmware/NVRAM state, format versions, checksums, and a standalone recovery manifest. Preserve vTPM state if supported; otherwise block backup of that configuration explicitly.
 3. Export self-contained disk images rather than copies that still depend on source snapshot backing files. Mark backups complete only after data and manifest validation; incomplete uploads must never appear restorable.
 4. Add online full backup using the supported libvirt backup API. Coordinate the disk set, report crash-consistent versus quiesced capture, and test guest shutdown or agent failure during backup. Do not copy a live disk with an ordinary file copy. [Libvirt backup API](https://libvirt.org/formatbackup.html), [live full backup guidance](https://libvirt.org/kbase/live_full_disk_backup.html)
-5. Add pool policies selecting VMs, schedules, retention counts/age, bandwidth/concurrency limits, and per-VM overrides. Run the scheduler in the existing controller process. Record missed runs during controller outages; serialize conflicting disk operations.
+5. Add pool policies selecting VMs, schedules, retention counts/age, bandwidth/concurrency limits, and per-VM overrides. Run the scheduler in the existing controller process (the explicit exception below). Record missed runs during controller outages; serialize conflicting disk operations.
 6. Only prune completed, eligible backups after a successful new backup; respect protected recovery points and active restores. Do not add incremental chains until dependency-aware retention and recovery are implemented and tested.
 7. Restore by default as a new stopped VM into selected pool storage on a compatible host. Generate a new identity/MAC and default to a disconnected or isolated network to avoid collisions with the original.
 8. Provide explicit original-VM replacement with confirmation, proven exclusive ownership, and preserved existing disks until the restored guest is validated. Validate storage capacity, checksums, firmware, network mappings, and manifests before registration.
 9. Support catalog import/rebuild from repository manifests and a documented recovery command so backups remain useful after losing the controller database. Provide encryption at rest through the repository/storage layer initially and document key recovery independently of the controller.
 10. Back up and restore the controller database, configuration, and identity/key material using a consistent database backup mechanism. Restore only one authoritative controller and reconcile agents before accepting mutations.
 11. Show last successful backup, last verification, retention preview, repository space, and failed/missed jobs. Add an explicit test-restore workflow; scheduled isolated boot verification can follow manual restore proof. Completed-backup records are not a claim of tamper-proof/WORM storage.
+
+**Decision (Matt, 2026-09-10):** backup and restore orchestration is the explicit exception to the rule that Nex Controller never drives jobs: the Controller runs the scheduler, drives backup and restore jobs, and keeps their run history and the catalog. Backup repository registrations stay pool-scoped on the pool master and re-adopt like other pool settings. Schedules, jobs, run history and the catalog are Controller-scoped: a replacement Controller recovers them only from the Controller backup/restore in step 10 (the catalog can also be rebuilt from repository manifests, step 9); without that backup they are lost, while the repository registrations and every backup already written are not.
 
 **UX acceptance:** provide a short preset-based policy workflow with explicit VM scope, independent repository, schedule/time zone, retention, and downtime/consistency review. Quick application of a reviewed policy reuses the same validated scheduler; display next run and failed/missed jobs without implying a successful job proves recovery.
 
@@ -698,7 +706,7 @@ This follows Phases 0–8 and the minimal VM image/bootstrap capability it needs
 
 #### Ownership, storage, and failure behavior
 
-- Begin with one managed swarm per enabled pool. Nex Controller owns user intent, authorization, provisioning, and operation history; Swarm owns service scheduling, replicas, rolling updates, and replacement tasks. Avoid a competing Nex container scheduler.
+- Begin with one managed swarm per enabled pool. Nex Controller owns user intent, authorization and provisioning, and mirrors host-reported operation history; Swarm owns service scheduling, replicas, rolling updates, and replacement tasks. Avoid a competing Nex container scheduler.
 - Provision manager/worker roles automatically. For an HA-enabled swarm use three managers on separate physical Nex Core hosts, enforce that separation during VM placement/migration/maintenance, and reserve sufficient resources. Managers may also run workloads in a small validated deployment; dedicated manager VMs can follow workload requirements.
 - Swarm manager quorum is independent of hypervisor/pool HA quorum. Keep manager addresses stable and each manager's Raft state on its own node disk; do not share one Docker data directory between nodes. Loss of Nex Controller must not stop Swarm scheduling; loss of Swarm manager quorum prevents orchestration while existing tasks may continue. [Docker nodes](https://docs.docker.com/engine/swarm/how-swarm-mode-works/nodes/), [Swarm administration](https://docs.docker.com/engine/swarm/admin_guide/)
 - Failover creates replacement containers on eligible nodes; it does not live-migrate their memory, retain process identity, or guarantee uninterrupted connections. Service identity is stable while task/container IDs change. Expose recovery progress and measured downtime honestly.
@@ -820,12 +828,14 @@ connecting each pool master to it, with every setting coming across. Decisions:
   durable, host-local record (today: the managed journal and `/etc/network/interfaces.d`) and is
   reported in inventory so a Controller that does not know it re-adopts it with the same identity
   and name. This applies to pool membership, networks, storage registrations, media, VM
-  definitions and identity, and later snapshot/backup policies. Running workloads and local
+  definitions and identity, later snapshot policies, and backup repository registrations; backup
+  schedules, jobs, run history and the catalog are the agreed Controller-scoped exception
+  (decision: Matt, 2026-09-10, Phase 6). Running workloads and local
   recovery never depend on the Controller (unchanged).
 - **Replacement procedure target:** install a new Controller, connect each pool master (token or
   address plus root password), wait for adoption. No re-entry of pool settings. Controller-scoped
   data (sites, administrator accounts and roles, audit history, enrollment tokens, the Controller
-  CA) is backed up and restored separately; until that exists, it is re-created by hand and this is
+  CA and, from Phase 6, backup jobs) is backed up and restored separately; until that exists, it is re-created by hand and this is
   documented as a limit.
 - **Rule for every slice:** a new pool-scoped setting defines its host-side record and adoption
   path in the same change (see `AGENTS.md`). A setting that lives only in the Controller database

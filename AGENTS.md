@@ -23,9 +23,12 @@ implementation work keeps quietly breaking. It is not negotiable by convenience.
   design would lose anything, or make an operator re-enter anything, the design is wrong. Fix the
   design; do not add a recovery path, export, or migration to compensate.
 - **The only Controller-owned data** is Controller-scoped: sites, administrator accounts and roles,
-  audit history, enrollment tokens, and the Controller CA, which are backed up and restored
-  separately. That list is closed. Adding to it is a product decision for Matt, not an
-  implementation choice.
+  audit history, enrollment tokens, the Controller CA, and backup/restore jobs, which are backed
+  up and restored separately. That list is closed. Adding to it is a product decision for Matt,
+  not an implementation choice. Decision: Matt, 2026-09-10 — backup and restore orchestration is
+  the one explicit exception to the no-jobs rule below: Nex Controller schedules and drives backup
+  and restore jobs and keeps their run history and catalog; backup repository registrations stay
+  pool-scoped on the master.
 
 A change breaks the invariant if it:
 
@@ -34,7 +37,7 @@ A change breaks the invariant if it:
 - makes Nex Controller derive, remember, or reconcile state a host could report instead;
 - implements host behavior in Controller code because that is quicker than adding a Core API;
 - has Nex Controller schedule, poll, or drive a multi-step operation that a host should run and
-  report — any job the Controller must stay alive to finish;
+  report — any job the Controller must stay alive to finish (backup/restore jobs excepted, above);
 - gives a resource an identity, name, or relationship the host does not know, so a re-adopting
   Controller could not reproduce it;
 - keeps operator-visible data about pool resources (tags, notes, custom names, layouts of pool
