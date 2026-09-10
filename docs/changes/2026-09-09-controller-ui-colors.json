@@ -40,6 +40,10 @@
     "reason": "Presentation-only change to SVG icons and CSS tokens; no client request, Controller operation, Core command/result or authorization behavior changes.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Controller web UI presentation only; no new durable state on either side."
+  },
   "verification": {
     "method": "UI typecheck and esbuild build passed. Phase1 suite with --browser passed all 16 result groups on the rebuilt bundle in a disposable lab, producing 23 full-page Chromium captures at 1440x1000 and 360x800 covering healthy, stale, failed, timeout, revoked, error, loading and confirmation states; enlarged crop inspected for icon legibility.",
     "evidence": [

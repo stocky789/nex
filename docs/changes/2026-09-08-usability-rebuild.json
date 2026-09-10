@@ -22,6 +22,10 @@
     "reason": "Build/verification only; no additional Controller/Core/client API changes.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Build, packaging, CI or release tooling only; no Nex Controller or Core state."
+  },
   "verification": {
     "method": "Signed image and embedded package/source checks, actual disposable KVM DHCP and short-password guest boot, package smoke and ISO checksum; full host-local enrollment/physical LAN limits stated.",
     "evidence": [

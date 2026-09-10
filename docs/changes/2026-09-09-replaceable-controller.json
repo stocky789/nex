@@ -16,6 +16,10 @@
     "reason": "No contract changes; the rule requires future slices to add host-side records and adoption paths.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation, plans or contributor policy only; nothing is persisted."
+  },
   "verification": {
     "method": "Documentation review; python3 scripts/check_docs.py --all passed.",
     "evidence": ["docs/plans/2026-09-08-nex-platform.md"]

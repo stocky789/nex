@@ -19,8 +19,7 @@
   },
   "state": {
     "owner": "none",
-    "reason": "No durable state is introduced by a plan status update.",
-    "record": ""
+    "reason": "No durable state is introduced by a plan status update."
   },
   "verification": {
     "method": "Statuses taken from git log (4a60e45, 38aa856, 8103af4), Gitea Actions runs 3798-3804 read via the API (documentation.yml and installer.yml green; phase1 job 4369 fails on BUG-0047), and python3 scripts/check_docs.py --all passing at HEAD.",

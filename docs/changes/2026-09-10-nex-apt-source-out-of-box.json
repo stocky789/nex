@@ -23,6 +23,10 @@
     "reason": "Packaging/host configuration change only; no Controller/Core or client-facing API is added or changed. The apt repository and its signing key already exist and are published.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Software-update behaviour only: the repository location and signing key live in host-local package configuration (/etc/nex/updates.conf, APT sources) owned by the package, not a pool setting, and the Controller stores nothing."
+  },
   "verification": {
     "method": "python3 -m unittest tests.test_core_local_package (postinst writes the deb822 nex.sources with Signed-By and repo_url-driven URI; package ships the dearmored keyring; prerm removes the source and never deletes guest/state); the committed key was verified against the live repo InRelease with gpgv. Run in both GitHub and Gitea phase1 workflows via test_*.py discovery.",
     "evidence": [

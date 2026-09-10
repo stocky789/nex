@@ -17,8 +17,7 @@
   },
   "state": {
     "owner": "none",
-    "reason": "No durable pool or Controller state; notice text only.",
-    "record": ""
+    "reason": "No durable pool or Controller state; notice text only."
   },
   "verification": {
     "method": "Inspected the notice string in web/src/managed.tsx after a power submit; confirmed the follow-the-task sentence is gone.",

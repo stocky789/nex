@@ -30,6 +30,10 @@
       "docs/API.md"
     ]
   },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation scrub and update-repository remap; no new state."
+  },
   "verification": {
     "method": "Repository search finds no private website host address; go test ./internal/nexupdate -run TestNormalize; python3 scripts/check_docs.py --all.",
     "evidence": [

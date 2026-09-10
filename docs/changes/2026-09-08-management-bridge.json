@@ -35,6 +35,11 @@
     "reason": "Existing local bridge discovery/preflight/deployment fields and authorization remain unchanged; installer writes native OS networking only.",
     "pages": []
   },
+  "state": {
+    "owner": "core",
+    "reason": "The management bridge is host-local network configuration created at install time and observed by the agent; it is not Controller state.",
+    "record": "br0 in /etc/network/interfaces on the installed host, written by the installer; the agent reports the resulting NICs, bridge and addresses in inventory, and the Controller keeps no copy."
+  },
   "verification": {
     "method": "Failing-before/passing-after generated configuration check, native isolated Debian networking and GUI review; actual results and limits in QA report.",
     "evidence": [

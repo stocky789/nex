@@ -28,8 +28,7 @@
   },
   "state": {
     "owner": "none",
-    "reason": "Client upload UX and Controller staging admission bounds only; durable ISO records remain pool-scoped iso-import resources on the pool master as before.",
-    "record": ""
+    "reason": "Client upload UX and Controller staging admission bounds only; durable ISO records remain pool-scoped iso-import resources on the pool master as before."
   },
   "verification": {
     "method": "go test ./internal/controller/ ./internal/protocol/ ./internal/vmhost/ -count=1; web npm run typecheck; python3 scripts/check_docs.py --worktree. Browser walkthrough of dismiss/cancel/rate left open for disposable lab.",

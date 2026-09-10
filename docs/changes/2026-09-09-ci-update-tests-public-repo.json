@@ -19,6 +19,10 @@
     "reason": "No contract change; docs/api/index.html regenerated from the already-committed openapi.json.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Build, packaging, CI or release tooling only; no Nex Controller or Core state."
+  },
   "verification": {
     "method": "go test -race ./...; python3 scripts/generate_api.py --check; python3 -m unittest discover -s tests -p 'test_*.py'; python3 scripts/check_docs.py --base <parent> --head <commit> in a clean worktree. Affected unit tests also run inside docker.gitea.com/runner-images:ubuntu-latest (OpenSSL 3.0.13).",
     "evidence": [

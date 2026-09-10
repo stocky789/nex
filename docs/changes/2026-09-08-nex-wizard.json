@@ -49,6 +49,11 @@
     "reason": "Boot wizard writes private local settings consumed by native installation and target configuration; no client API, Controller operation, Core agent command or result contract exists in this flow.",
     "pages": []
   },
+  "state": {
+    "owner": "core",
+    "reason": "Per-NIC IPv4/VLAN configuration is written to the installed host itself; the Controller observes it through inventory and stores nothing of its own.",
+    "record": "/etc/network/interfaces on the installed host, written by the installer; the agent reports the resulting NICs, bridge and addresses in inventory, and the Controller keeps no copy."
+  },
   "verification": {
     "method": "Actual BIOS ISO native GTK walkthrough with two NICs, invalid input and disk confirmation, disposable installation and root login/network observation; final native GUI regression, source/compiled checks and documentation checks. Exact artifact separation and untested limits are recorded.",
     "evidence": [

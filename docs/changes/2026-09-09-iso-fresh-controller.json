@@ -18,11 +18,15 @@
     "reason": "No API contract change; UI display of update_available only.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Build, packaging, CI or release tooling only; no Nex Controller or Core state."
+  },
   "verification": {
-    "method": "./installer/check.sh; appliance 0.1.4 rebuild; core-local 0.1.4 package; ISO extract manifest version 0.1.4; published updates.json",
+    "method": "./installer/check.sh; appliance 0.1.4 rebuild; core-local 0.1.4 package; ISO extract manifest version 0.1.4; published updates.json. The inspected build outputs (dist/appliance-0.1.4/manifest.json, dist/nex-core-0.1.0-alpha1-amd64.iso) were untracked artifacts and are not retained in the repository.",
     "evidence": [
-      "dist/appliance-0.1.4/manifest.json",
-      "dist/nex-core-0.1.0-alpha1-amd64.iso"
+      "installer/check.sh",
+      "installer/build.sh"
     ]
   }
 }

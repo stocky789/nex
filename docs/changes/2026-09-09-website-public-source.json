@@ -17,6 +17,10 @@
     "reason": "Only README, ignore rules and a local regression check change; no client-facing API, Controller operation or Core command/result is affected.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Website source, hosting and review only; no Nex Controller or Core state."
+  },
   "verification": {
     "method": "Enumerate Git-visible website files; inspect source/lockfile, screenshots and metadata; reproduce README disclosure with failing regression, then pass both checks after cleanup; inspect ignore behavior and obtain independent review. See report for actual scope and limits.",
     "evidence": ["docs/qa/website/public-source-review.md", "tests/test_website_public_files.py"]

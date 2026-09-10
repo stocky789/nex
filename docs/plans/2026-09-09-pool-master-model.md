@@ -18,6 +18,12 @@ Matt decided that Nex pools follow the established master-and-members model:
 
 ## What changed
 
+Decision (Matt, 2026-09-10): pool and host IDs and the pool name are generated and kept by Nex
+Core — the host generates its own ID, the pool master generates the pool ID and holds the pool
+name — and a Controller adopts them unchanged. The Controller rows below are a mirror of what the
+host reports, not the origin of pool identity; a separate code slice implements this and documents
+the enrollment contract in [docs/API.md](../API.md).
+
 - Controller: the `pools` table records a master host; enrollment creates the pool and host in
   one transaction and records a `pool.create` audit row; enrollment tokens and appliance
   bootstrap carry a site instead of a pool; adoption derives the pool from the host record;

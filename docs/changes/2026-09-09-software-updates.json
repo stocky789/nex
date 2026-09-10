@@ -57,6 +57,10 @@
       "docs/api/local.html"
     ]
   },
+  "state": {
+    "owner": "none",
+    "reason": "Software-update behaviour only: the repository location and signing key live in host-local package configuration (/etc/nex/updates.conf, APT sources) owned by the package, not a pool setting, and the Controller stores nothing."
+  },
   "verification": {
     "method": "go test ./internal/nexupdate ./internal/version ./internal/controller ./internal/localcore (update-focused), python3 scripts/generate_api.py; GUI browser walkthrough against a live update repo outstanding.",
     "evidence": [

@@ -13,6 +13,10 @@
     "reason": "Static-file observations and review documentation change no client API, Controller operation, Core command or result flow.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Website source, hosting and review only; no Nex Controller or Core state."
+  },
   "verification": {
     "method": "Read-only HTTP, artifact hashes, SSH/sudo configuration, firewall, socket, service isolation and cached security-update checks completed. Independent source review and documentation checks passed; no remediation or external isolation/recovery acceptance claimed.",
     "evidence": [

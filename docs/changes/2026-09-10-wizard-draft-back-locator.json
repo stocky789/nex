@@ -24,8 +24,7 @@
   },
   "state": {
     "owner": "none",
-    "reason": "No new or changed durable pool/Controller state. The wizard draft is an in-memory, unsubmitted request body kept only for retrying an uncertain submission (see vm-create.tsx's Draft comment); fixing what it restores does not add persistent state.",
-    "record": ""
+    "reason": "No new or changed durable pool/Controller state. The wizard draft is an in-memory, unsubmitted request body kept only for retrying an uncertain submission (see vm-create.tsx's Draft comment); fixing what it restores does not add persistent state."
   },
   "verification": {
     "method": "cd web && npm run typecheck && npm run build (both clean). npm --prefix web run test (new `test` script running src/vm-create.test.mjs, added as a step after typecheck in both .github and .gitea phase1 workflows): added unit check exercises restoredNICs directly (extracted pure function) via an esbuild-transformed import of vm-create.tsx, covering explicit [] (preserved), undefined/non-array (falls back to the one-NIC template), and a populated array (preserved); confirmed it fails against the pre-fix `Array.isArray(r.nics) && r.nics.length` logic and passes after the fix. python3 -m py_compile tests/integration/managed_vm_browser.py. Ran the real simulated Playwright acceptance end-to-end: .cache/phase1-qa-venv/bin/python tests/integration/managed_vm_browser.py --simulated --evidence <scratchpad>/managed-vm-browser-run2 (all 5 phases PASS), which exercises the fixed step > 0 wizard Back button via the now-toolbar-scoped locator and confirms Playwright strict mode no longer throws now that the toolbar also has a Back button. python3 scripts/check_docs.py --worktree passes.",

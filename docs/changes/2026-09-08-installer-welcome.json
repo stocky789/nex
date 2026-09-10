@@ -19,6 +19,10 @@
     "reason": "Static labels change no client or Controller/Core operation, command, result or local installer settings.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Installer presentation and input handling only; the installed host gains no new durable setting and the Controller stores nothing."
+  },
   "verification": {
     "method": "Native VM welcome capture and existing installer checks; results in QA report.",
     "evidence": [

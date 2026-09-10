@@ -58,6 +58,10 @@
     "reason": "Static website introduces no service API. Disposable screenshot capture exercises existing session, site/pool, enrollment, mTLS reporting and inventory/audit contracts without behavior changes; reference updates are unnecessary.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Website source, hosting and review only; no Nex Controller or Core state."
+  },
   "verification": {
     "method": "Svelte check/build and all eight VM website browser groups passed. Fresh Controller capture passed real TLS/mTLS setup, neutral rendering and rejection of original personal identity; all 11 served assets match hashes. Captures independently inspected; both CI workflows run the privacy check, with no hosted run claimed.",
     "evidence": [

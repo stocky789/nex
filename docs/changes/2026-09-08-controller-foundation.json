@@ -87,6 +87,11 @@
       "docs/api/index.html"
     ]
   },
+  "state": {
+    "owner": "controller",
+    "reason": "Sites, administrator accounts, audit history, enrollment tokens and the Controller CA are the closed Controller-scoped exceptions; the pools and hosts tables are mirrors of enrolled hosts.",
+    "record": "Controller SQLite (/var/lib/nex-controller/controller.db: sites, admins, audit, tokens, certificates) plus the Controller CA and identity keys in the same data directory; backed up and restored by the appliance recovery export (host-recovery export/restore in docs/guide/deploy-controller-appliance.md); pools/hosts rows are mirrors re-adopted from host enrollment and reports."
+  },
   "verification": {
     "method": "Focused Go race tests, API contract/reference and source-bundle checks, UI typecheck/build, disposable process/browser walkthroughs and independent review; actual outcomes and limits are recorded in Phase 1 QA evidence.",
     "evidence": [

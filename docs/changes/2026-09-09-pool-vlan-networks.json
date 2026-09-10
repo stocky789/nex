@@ -75,6 +75,11 @@
       "docs/api/index.html"
     ]
   },
+  "state": {
+    "owner": "core",
+    "reason": "A pool network is a pool-scoped setting persisted on the pool master both as the registration and as the host bridge it creates.",
+    "record": "network-register entry in the managed journal on the pool master (internal/vmhost, /var/lib/nex/core-local/vmhost/<operation-id>.json): the accepted command and its result are the durable record; the host reports them as Inventory.managed and a fresh Controller re-adopts them with the same IDs and names through adoptManaged. The Controller managed_resources rows are a mirror. The per-VLAN guest bridge itself persists in /etc/network/interfaces.d on the host and is reported as a NIC in inventory."
+  },
   "verification": {
     "method": "go test -race ./... passed; Python contract/tool checks passed; installer network C test passed; TestGuestVLANNetns ran inside an unprivileged user+network namespace with sysfs remounted (dummy uplink; real VLAN device, bridge, ifupdown persistence and six refusals); simulated Chromium walkthrough registered VLAN 100 on the simulated host's nex1 and created a VM on it, captures inspected. Not run: native nested-KVM lab, physical NIC/switch trunking, Windows/Linux guest tools (assessed only). Controller adoption tests in internal/controller (TestHostReportedNetworksAreReadopted, TestDefaultUntaggedNetworkAutoRegistration) and the vmhost Applied() journal test cover automatic default-network creation, no duplication after failure, and adoption of host-reported storage, networks, media and VM definitions from Inventory.managed with preserved IDs. No Controller-replacement walkthrough against a real or nested-KVM host has run. The native lab harness tests/integration/vlan_lab.py was written but not executed; the fresh ISO lab reached the installer review page only. The main ISO in dist/ was rebuilt from this tree (0.1.0+vlan1 package and appliance). controller_replacement.py proved end-to-end recovery of a network across two real Controller processes in a network namespace; wired into both CI workflows. controller_replacement_debian.sh proved all four kinds (storage, network, ISO, VM) across two real Controllers with real libvirt/KVM; BUG-0039 fixed on the way. UI explanatory copy on the Networking tab and form was removed at Matt's request.",
     "evidence": [

@@ -21,6 +21,10 @@
     "reason": "Local GTK display uses no Controller operations, agent commands or client API.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Installer presentation and input handling only; the installed host gains no new durable setting and the Controller stores nothing."
+  },
   "verification": {
     "method": "Failing then passing actual callback regression, strict compilation and native ISO walkthrough recorded in QA.",
     "evidence": [

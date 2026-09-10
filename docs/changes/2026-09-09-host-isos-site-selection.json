@@ -63,6 +63,10 @@
     "reason": "API impact: existing contract. Presentation reuses existing authenticated site/pool/host/VM/storage/media/operation reads; no API or command behavior changes, so API reference updates are not applicable.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Controller web UI presentation only; no new durable state on either side."
+  },
   "verification": {
     "method": "Typecheck/build, focused host ISO browser checks, labeled 500-site browser fixture, existing Phase1 browser regression, independent review and read-only native lab browser verification. Evidence distinguishes simulation and deployment.",
     "evidence": [

@@ -25,6 +25,10 @@
     "reason": "Local asset loading and GTK rendering change no Controller operation, Core command/result, client-facing API or Debian question contract.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Installer presentation and input handling only; the installed host gains no new durable setting and the Controller stores nothing."
+  },
   "verification": {
     "method": "Build isolated GTK initrd; prove native pixel regression fails old background; pass final QEMU/KVM wizard and diskless progress reviews, initrd/source retention and installer checks; inspect captures. No full ISO or real installation rerun.",
     "evidence": [

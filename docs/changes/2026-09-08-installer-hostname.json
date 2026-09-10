@@ -30,6 +30,10 @@
     "reason": "Existing protected local installer settings are consumed by Debian; no Controller/Core or client API contract is added or changed.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Installer presentation and input handling only; the installed host gains no new durable setting and the Controller stores nothing."
+  },
   "verification": {
     "method": "Standards review, compiled boundary tests, backend generated configuration checks and native GUI walkthrough; exact results in QA report.",
     "evidence": [

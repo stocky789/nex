@@ -43,6 +43,10 @@
     "reason": "Static web-server headers, error responses and local deployment commands do not call or change Nex Controller operations, Core commands, observed-state results or client-facing service APIs.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Website source, hosting and review only; no Nex Controller or Core state."
+  },
   "verification": {
     "method": "10 real-nginx/release tests in disposable VM directories, 2 public-file checks and 13 documentation tests passed. Real HTTPS browser workflow passed with captures inspected; service restart, health, log rotation, explicit release rollback, all11 HTTPS hashes and isolated backup restore passed. No SSH/firewall/allowlist changes, reboot, push or hosted CI claimed.",
     "evidence": [

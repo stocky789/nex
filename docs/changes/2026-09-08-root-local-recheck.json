@@ -18,6 +18,10 @@
     "reason": "Local Debian installer account testing introduces no Controller/Core or client API changes.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Verification evidence and guide text only; no state changes."
+  },
   "verification": {
     "method": "Run frozen-source build, bundled account regression, interactive QEMU account flow, and uninterrupted offline installation/boot smoke; inspect captures and serial results. Complete interactive installation, authenticate root using its installer-entered password, inspect account inventory, and run documentation structure checks.",
     "evidence": [

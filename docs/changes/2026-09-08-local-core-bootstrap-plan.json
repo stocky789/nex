@@ -14,6 +14,10 @@
     "reason": "No routes, commands, messages, schemas or runtime behavior changed. The plan traces browser/local Core operations, Controller bootstrap/enrollment/adoption and observed results, and requires both-side contracts/reference/checks when implemented.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation, plans or contributor policy only; nothing is persisted."
+  },
   "verification": {
     "method": "Passed python3 scripts/check_docs.py --all, explicit local-link/anchor checks for both plan files, and scoped git diff --check. Independent read-only review verified Phase 3 placement, API/authority boundaries, offline first-server networking, consistent Controller recovery and future-only guide scope; corrections were rechecked with no remaining findings. No runtime or browser workflow was executed or claimed for this planned feature.",
     "evidence": [

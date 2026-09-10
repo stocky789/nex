@@ -52,6 +52,10 @@
       "docs/api/local.html"
     ]
   },
+  "state": {
+    "owner": "none",
+    "reason": "Local web login authenticates against the host root account already set by the installer; no new record."
+  },
   "verification": {
     "method": "Backend/unit/API checks, real Debian PAM browser interaction with inspected captures, disposable package smoke and independent review; ISO and hardware limits recorded.",
     "evidence": [

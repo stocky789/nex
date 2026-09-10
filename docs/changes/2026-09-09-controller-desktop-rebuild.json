@@ -20,6 +20,10 @@
     "reason": "Build-only artifact assembly changes no client requests, Controller operations, Core commands/results, authorization or retry contract.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Build, packaging, CI or release tooling only; no Nex Controller or Core state."
+  },
   "verification": {
     "method": "Appliance and package builds plus ISO assembly passed. Native disposable KVM guest boot and Debian package smoke exited zero. Final ISO checksum passed; independent signature/source/guest-assets/package/ISO-content and BIOS/UEFI boot-record inspection passed. No fresh ISO install or hosted CI claimed.",
     "evidence": [

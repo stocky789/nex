@@ -41,6 +41,10 @@
     "reason": "The baseline implements the standalone installer and no Nex runtime API. Existing docs/API.md explicitly records that status.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Inventory of pre-gate history; it introduced no state and assesses none."
+  },
   "verification": {
     "method": "Inspect committed baseline inventory and existing alpha QA report. This assessment does not verify uncommitted installer changes, manual installer prompts, or the full future platform.",
     "evidence": [

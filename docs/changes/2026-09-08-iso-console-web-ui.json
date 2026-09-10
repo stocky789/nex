@@ -30,6 +30,10 @@
     "reason": "No Controller/Core or client API changes; installer ships an existing local service and console presentation.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Bundles the local service on the ISO and shows its URL; no new durable setting."
+  },
   "verification": {
     "method": "installer/check.sh and python3 -m unittest tests.test_core_local_package; ISO rebuild/boot console walkthrough remains open until a new image is built and installed on a disposable disk.",
     "evidence": [

@@ -110,6 +110,10 @@
       "docs/api/local.html"
     ]
   },
+  "state": {
+    "owner": "none",
+    "reason": "Login sessions and cookies are short-lived authentication state, not a durable setting; administrator accounts remain covered by the controller-foundation record."
+  },
   "verification": {
     "method": "Independent source audit/review, failing-before/passing-after Go subprocess/login/Unicode and CI prerequisite regressions, race/Python/API/UI checks, actual HTTPS browser security assertions, source and actual binary advisory scans, clean package and disposable KVM evidence; reports distinguish limits and unexecuted hosted CI.",
     "evidence": [

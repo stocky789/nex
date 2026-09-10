@@ -33,6 +33,10 @@
     "reason": "Boot menus select Debian frontends; existing local preseed/hooks configure the OS. No Controller operation, Core command/result or client API exists in this flow.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Installer presentation and input handling only; the installed host gains no new durable setting and the Controller stores nothing."
+  },
   "verification": {
     "method": "Build actual ISO; run installer policy/account checks, diskless BIOS/UEFI frontend capture, graphical password/disk walkthrough and offline installed-host smoke. Inspect captures and log markers; limits recorded in QA.",
     "evidence": [

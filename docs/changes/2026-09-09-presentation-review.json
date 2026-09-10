@@ -34,6 +34,10 @@
     "reason": "Static files and repository prose have no changed client API, Controller operation, Core command or observed-state/result flow.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Website source, hosting and review only; no Nex Controller or Core state."
+  },
   "verification": {
     "method": "Svelte check/build, two public-source tests, eight deployed browser result groups, served-file hash comparison, desktop/mobile visual inspection, scoped links and documentation checks. Independent review recorded in QA report.",
     "evidence": [
