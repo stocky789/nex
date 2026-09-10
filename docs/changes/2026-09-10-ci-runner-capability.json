@@ -1,17 +1,21 @@
 {
-  "summary": "BUG-0043: phase1 and installer had failed on every Gitea run since 2026-09-08 because the runner executes jobs in an unprivileged container. phase1 stopped at an unshare step that ran sixth, skipping the 18 checks after it; installer bind-mounted a path that does not exist on the Docker host. phase1 now runs every unprivileged check first and gates the namespace steps on a detected capability with a loud warning naming the missing coverage. The Gitea installer job was scoped to what that runner can do: source checks and regressions run directly in the job container, and four checks were DELETED \u2014 native bridge, DHCP preview, ISO build with initramfs completeness, and wizard/progress. That job no longer establishes an ISO is buildable and warns so on every run. The GitHub copy keeps the full matrix. API impact: none \u2014 CI configuration only.",
+  "summary": "BUG-0043: phase1 and installer had failed on every Gitea run since 2026-09-08 because the runner executes jobs in an unprivileged container. phase1 stopped at an unshare step that ran sixth, skipping the 18 checks after it; installer bind-mounted a path that does not exist on the Docker host. phase1 now runs every unprivileged check first and gates the namespace steps on a detected capability with a loud warning naming the missing coverage. The Gitea installer job was scoped to what that runner can do: source checks and regressions run directly in the job container, and four checks were DELETED \u2014 native bridge, DHCP preview, ISO build with initramfs completeness, and wizard/progress. That job no longer establishes an ISO is buildable and warns so on every run. The GitHub copy keeps the full matrix. API impact: none \u2014 CI configuration only. The release workflow gained the same bind-mount preflight, since it builds the ISO the same way and would otherwise fail deep inside the build, and the release guide documents that blocker.",
   "paths": [
     ".gitea/workflows/phase1.yml",
     ".gitea/workflows/installer.yml",
     ".github/workflows/phase1.yml",
     ".github/workflows/installer.yml",
     "docs/BUG_LEDGER.md",
-    "docs/changes/2026-09-10-ci-runner-capability.json"
+    "docs/changes/2026-09-10-ci-runner-capability.json",
+    ".gitea/workflows/release.yml",
+    "docs/guide/publish-a-release.md"
   ],
   "guide": {
-    "impact": "none",
-    "reason": "Contributor CI configuration only. No operator-facing behavior, GUI workflow, CLI, installer output, configuration, permission or error message changes; nothing an operator does with Nex Core or Controller is different. The user guide documents operator procedures, not runner capabilities.",
-    "pages": []
+    "impact": "updated",
+    "reason": "The release guide gained a troubleshooting entry for the bind-mount failure, which currently blocks every tagged release on this runner and is the first thing a maintainer will hit. The rest of this change is contributor CI configuration with no operator-facing behaviour.",
+    "pages": [
+      "docs/guide/publish-a-release.md"
+    ]
   },
   "api": {
     "impact": "none",
