@@ -44,7 +44,11 @@ input, textarea {
 }
 input::placeholder { color: #60666d; }
 textarea, code, .mono { font-family: Consolas, monospace; overflow-wrap: anywhere; }
-label { display: grid; gap: 5px; font-weight: 600; }
+label { display: grid; gap: 5px; align-content: start; font-weight: 600; }
+/* Grouped fields share one quiet border; a legend sits on it like a heading. */
+fieldset { display: grid; gap: 10px; min-width: 0; margin: 0; padding: 10px 12px 12px; border: 1px solid #c3cdd9; border-radius: 2px; background: #fff; }
+legend { padding: 0 4px; font-weight: 600; }
+form .alert, form .notice, form .warning { margin: 0; }
 form { display: grid; gap: 12px; }
 form button { justify-self: start; }
 h1, h2, h3, p { margin-top: 0; }
@@ -317,7 +321,14 @@ select option { padding: 5px 8px; }
 select option:hover, select option:focus-visible { background: #d4e3ff; }
 select option:checked { font-weight: 600; }
 .managed-actions { margin-bottom: 12px; }
-.vm-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.vm-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }
+.vm-wizard form { max-width: 680px; }
+/* Boot order: one row per device, its position in a counter and the move controls at the end. */
+.boot-order { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; counter-reset: boot; }
+.boot-order li { display: flex; align-items: center; gap: 10px; padding: 5px 6px 5px 10px; border: 1px solid #d5dbe3; background: #f8fafc; }
+.boot-order li::before { counter-increment: boot; content: counter(boot); display: grid; place-items: center; min-width: 20px; height: 20px; border-radius: 50%; background: #dbe7ff; color: #10306b; font-size: 11px; font-weight: 600; }
+.boot-order li > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.boot-order button { min-height: 24px; padding: 2px 9px; font-size: 12px; }
 .iso-drop { border: 1px dashed #7ea6cf; background: #fff; padding: 14px; min-width: 0; }
 .iso-drop .help { margin-top: 10px; }
 .iso-filename { margin: 10px 0 0; overflow-wrap: anywhere; }
@@ -343,6 +354,6 @@ progress { width: 100%; accent-color: var(--blue); }
 /* VM editor: the details panel as a form; nested device fieldsets stay compact. */
 .vm-editor { padding: 8px 10px 12px; }
 .vm-editor > fieldset { margin: 10px 0 0; }
-.vm-editor fieldset fieldset { margin: 8px 0; }
+.vm-editor fieldset fieldset { margin: 0; }
 .vm-editor textarea { width: 100%; max-width: 660px; }
 .vm-editor > .actions { margin-top: 12px; }

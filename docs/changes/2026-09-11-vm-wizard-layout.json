@@ -1,0 +1,33 @@
+{
+  "summary": "Tidy the Create VM wizard and VM editor layout: form controls keep their natural height instead of stretching to the tallest neighbour, grouped fields get one consistent bordered fieldset style, the wizard form is wide enough for two columns of selects, the Networks step keeps the registration note beside the Network field, and the boot order is a numbered list of rows with the Up/Down controls aligned at the end. API impact: none (CSS and markup only).",
+  "paths": [
+    "web/src/style.css",
+    "web/src/vm-create.tsx",
+    "docs/qa/vm-creation/wizard-networks.png",
+    "docs/qa/vm-creation/wizard-boot-order.png",
+    "docs/qa/vm-creation/editor-fieldsets.png",
+    "docs/changes/2026-09-11-vm-wizard-layout.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Visual layout only. Every field, label, button name and note the guide describes is unchanged; the network registration sentence moved from the page footer to beside the Network field, which the guide already documents under that field.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Stylesheet and JSX structure only; no Controller or Core request, response or command changed.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state is added or changed; the wizard draft remains an in-memory request body."
+  },
+  "verification": {
+    "method": "cd web && npm run typecheck && npm test && npm run build. Simulated browser acceptance (real Controller, simulated host, headless Chromium 1440x1000 and 360x800): TMPDIR=.cache/tmp python tests/integration/managed_vm_browser.py --simulated, all 5 phases PASS, walking every wizard step including the two-interface Networks step, reordering the boot order and creating the VM; python tests/integration/vm_edit_browser.py, 3 PASS, covering the VM editor's nested fieldsets. Captures inspected: the Networks step labels and controls line up across both columns at their natural height, the boot order rows carry a numbered badge with Up/Down at the end, the CPU, Disks, Boot and Review steps and the 360px review keep their content. The first baseline run failed at the ISO upload because the workstation /tmp was full (256 MiB staging reserve), not because of this change; rerun with TMPDIR on /home.",
+    "evidence": [
+      "docs/qa/vm-creation/wizard-networks.png",
+      "docs/qa/vm-creation/wizard-boot-order.png",
+      "docs/qa/vm-creation/editor-fieldsets.png"
+    ]
+  }
+}

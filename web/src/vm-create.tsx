@@ -184,7 +184,7 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
     setDraft(d => renumber(d, keys));
   }
 
-  return <section className="panel form-panel" aria-label="Create VM">
+  return <section className="panel form-panel vm-wizard" aria-label="Create VM">
     <div className="section-heading"><h2 ref={heading} tabIndex={-1}>Create VM · {step + 1} of 6: {steps[step]}</h2><button disabled={busy} onClick={onClose}>Close</button></div>
     <form onSubmit={e => { e.preventDefault(); if (step < 5) go(step + 1); else void create({ ...draft, pool_id: poolID }); }}>
       {step === 0 && <>
@@ -239,7 +239,7 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
         {draft.nics.map((n, i) => <fieldset key={i}>
           <legend>Network interface {i + 1}</legend>
           <div className="vm-fields">
-            <label>Network<select required value={n.network_id} onChange={e => setNIC(i, { network_id: e.target.value })}><option value="">Select validated network</option>{hostNetworks.map(x => <option key={x.id} value={x.id}>{x.name} · {describeNetwork(x)}</option>)}</select></label>
+            <label>Network<select required value={n.network_id} onChange={e => setNIC(i, { network_id: e.target.value })}><option value="">Select validated network</option>{hostNetworks.map(x => <option key={x.id} value={x.id}>{x.name} · {describeNetwork(x)}</option>)}</select><small>Verified on the placement host. Registration does not make a host network reachable from another host.</small></label>
             <label>Adapter model<select value={n.model} onChange={e => setNIC(i, { model: e.target.value, ...(e.target.value === "virtio" ? {} : { mtu: 0 }) })}>{Object.entries(adapterNames).map(([v, t]) => <option key={v} value={v}>{t}</option>)}</select><small>{adapterNotes[n.model]}</small></label>
             <label>MAC address<input placeholder="Automatic" pattern={macPattern} title="Leave blank for an automatic address, or use six lower-case hex octets separated by colons with an even second character, such as 52:54:00:12:34:56." aria-describedby={macIssue ? "vm-nic-issue" : undefined} value={n.mac} onChange={e => setNIC(i, { mac: e.target.value.trim().toLowerCase().replace(/-/g, ":") })} /><small>Blank derives a stable address from this VM's identity.</small></label>
             {n.model === "virtio"
@@ -252,7 +252,7 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
         {macIssue && <p className="task-error" id="vm-nic-issue">{macIssue}</p>}
         {staleNICs && <p className="warning">{staleText}</p>}
         <div className="actions"><button type="button" disabled={busy || draft.nics.length >= 8} onClick={() => edit({ nics: [...draft.nics, { network_id: hostNetworks.length === 1 ? hostNetworks[0].id : "", model: "virtio", mac: "", mtu: 0 }] })}>Add network interface</button></div>
-        <p className="help">A VM may have up to 8 interfaces. Registration does not make a host network reachable from another host.</p>
+        <p className="help">A VM may have up to 8 interfaces.</p>
         {!hostNetworks.length && <p className="help">No verified network on this host. <button type="button" onClick={() => setTab("Networking")}>Open Networking</button></p>}
       </>}
       {step === 4 && <>
@@ -266,7 +266,7 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
         {!availableMedia.length && <p className="help">{hostMedia.length ? "No transferred ISO is stored on the storage this VM's disks use." : "No transferred ISO is available on this host."} <button type="button" onClick={() => setTab("ISO library")}>Open ISO library</button></p>}
         <fieldset>
           <legend>Boot order</legend>
-          <ol>{order.map((k, i) => <li key={k}>{bootLabel(k)} <button type="button" disabled={busy || i === 0} aria-label={`Move ${bootLabel(k)} up in the boot order`} onClick={() => move(i, -1)}>Up</button> <button type="button" disabled={busy || i === order.length - 1} aria-label={`Move ${bootLabel(k)} down in the boot order`} onClick={() => move(i, 1)}>Down</button></li>)}</ol>
+          <ol className="boot-order">{order.map((k, i) => <li key={k}><span>{bootLabel(k)}</span><button type="button" disabled={busy || i === 0} aria-label={`Move ${bootLabel(k)} up in the boot order`} onClick={() => move(i, -1)}>Up</button><button type="button" disabled={busy || i === order.length - 1} aria-label={`Move ${bootLabel(k)} down in the boot order`} onClick={() => move(i, 1)}>Down</button></li>)}</ol>
           <p className="help">The host tries these in order. Put the install media first to install a guest, then start from the disk afterwards.</p>
         </fieldset>
       </>}
