@@ -42,6 +42,15 @@ class WebsiteHosting(unittest.TestCase):
         config = config.replace('/var/log/nex-website', str(cls.log_dir))
         cls.config = cls.base / 'nginx.conf'
         cls.config.write_text(config)
+        # tempfile gives 0700, but an nginx master started as root drops its workers to the
+        # build's unprivileged user, which then cannot traverse the fixture. try_files treats
+        # that EACCES as "not found" and falls through to =404, so every served path would
+        # answer 404 and the policy under test would never run. Production serves a root-owned
+        # /srv/nex-website/current to that same unprivileged worker, so a traversable fixture
+        # is the faithful one.
+        for path in [cls.base, *cls.base.rglob('*')]:
+            if not path.is_symlink():
+                path.chmod(0o755 if path.is_dir() else 0o644)
         subprocess.run([cls.nginx, '-t', '-c', str(cls.config)], check=True, capture_output=True, text=True)
         cls.process = subprocess.Popen([cls.nginx, '-c', str(cls.config), '-g', 'daemon off;'])
         for _ in range(50):
