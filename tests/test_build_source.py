@@ -67,17 +67,12 @@ class SourceArchiveTests(unittest.TestCase):
                 self.assertEqual(source.go_license_path(Path(directory) / 'missing-goroot'), override)
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class MaintainerScriptRetentionTests(unittest.TestCase):
-    """Every Debian maintainer script a package builder installs must reach the source archive.
+    """Every packaging path a package builder installs must reach the source archive.
 
-    packaging/core-local/preinst was added and wired into build-inside.sh without being added
-    to FILES. It has no extension, so no TREES rule picked it up either: the archive built
-    fine, and the ISO build failed hours later inside the builder container with
-    "install: cannot stat 'packaging/core-local/preinst'".
+    Extensionless files under packaging/ are easy to miss: TREES only matches suffixes,
+    so they must be listed in FILES. Missing them builds a fine archive and fails hours
+    later inside the builder with "install: cannot stat ...".
     """
 
     def test_installed_maintainer_scripts_are_in_the_allowlist(self):
@@ -98,3 +93,7 @@ class MaintainerScriptRetentionTests(unittest.TestCase):
             if path.startswith(tree + '/') and Path(path).suffix in suffixes:
                 return True
         return False
+
+
+if __name__ == '__main__':
+    unittest.main()

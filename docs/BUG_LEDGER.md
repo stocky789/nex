@@ -1441,3 +1441,21 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 - Avoid: treating `needs_attention` as a lasting reservation when reporting does not adopt it
   as current state; and treating libvirt-injected CPU attributes as tampering when the domain
   omitted them.
+
+## BUG-0068 — VNC lossy wrapper omitted from the corresponding-source archive
+
+- Date: 2026-09-11
+- Symptom: release job failed building `nex-core-local` with
+  `install: cannot stat 'packaging/core-local/qemu-vnc-lossy': No such file or directory`
+  (Gitea run 3862 job 4427).
+- Root cause: same class as BUG-0045. `qemu-vnc-lossy` is extensionless, so the
+  `packaging/core-local` TREES suffix allowlist never copied it, and it was not listed in
+  `scripts/build-source.py` FILES. The package builder installs from the extracted source
+  archive, so the release build failed after appliance packaging had already succeeded.
+- Fix: add `packaging/core-local/qemu-vnc-lossy` to FILES. Keep
+  `MaintainerScriptRetentionTests` before `if __name__` so discovery always loads it.
+- Regression evidence: `python3 -m unittest tests.test_build_source -v` — with the FILES
+  entry removed the retention case fails naming `qemu-vnc-lossy`; with it restored all 5
+  pass. Covered by phase1 `Check contracts and contributor tools` in both workflows.
+- Avoid: shipping any new packaging path through `build-inside.sh` without adding
+  extensionless files to FILES (or giving them a TREES-covered suffix).

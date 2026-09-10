@@ -1,0 +1,29 @@
+{
+  "summary": "Include packaging/core-local/qemu-vnc-lossy in the corresponding-source archive so release package builds can install it.",
+  "paths": [
+    "scripts/build-source.py",
+    "tests/test_build_source.py",
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-11-qemu-vnc-lossy-source.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Packaging allowlist fix; no operator workflow change."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core API change."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Build packaging only."
+  },
+  "verification": {
+    "method": "python3 -m unittest tests.test_build_source -v",
+    "evidence": [
+      "tests/test_build_source.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

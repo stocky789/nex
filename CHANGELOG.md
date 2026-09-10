@@ -29,6 +29,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Fixed Controller updates for appliances that were never installed as a Debian package:
   Update now runs a normal apt install (not --only-upgrade), and Available no longer says
   Up to date when the check failed.
+- Fixed the Core package build omitting the VNC lossy wrapper script from the source archive,
+  which broke release packaging.
 
 ## [0.1.6-alpha1] — 2026-09-11
 
