@@ -284,8 +284,17 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
   flow (step 3). Wait for the host to report; each pool returns with its original ID and
   name and its master with its original host ID, because the host keeps that identity and
   presents it at enrollment, and its storage registrations, networks, ISO records and VM
-  definitions return with their original names and IDs. Verify each pool's **Storage**, **Networking**,
-  **ISO library** and **Virtual machines** tabs. Limits: sites, administrator accounts,
+  definitions return with their original names and IDs. The Controller appliance VM itself returns too, as the
+  protected **Controller** VM on the host that deployed it, and the host's failed or
+  interrupted tasks reappear in **Tasks** with their original status and error. Verify each
+  pool's **Storage**, **Networking**, **ISO library** and **Virtual machines** tabs and the
+  host's checks: **managed-journal** and **managed-vms** must be healthy. Nothing is skipped
+  silently: an entry the new Controller cannot take over shows as a `needs_attention` task
+  whose error starts with `not adopted from host report:` and names the reason (an invalid or
+  conflicting entry, a reference the host has not adopted, or a VM whose definition is
+  missing from libvirt on the host); it turns `succeeded` by itself once the entry is adopted
+  on a later report. A `failed` **managed-journal** check names a journal file on the host
+  that could not be read; the other entries are still adopted. Limits: sites, administrator accounts,
   audit history, enrollment tokens and the Controller CA are not recovered and must be
   re-created; multi-host pool membership is not restored (joining members is not available
   in this build). Never run the old and new Controller at the same time. If you re-enroll a
@@ -300,8 +309,13 @@ the [pool VLAN network checks](../qa/pool-vlan-networks/checks.md) record runs w
 real libvirt and KVM: storage, a network, an ISO record and a stopped VM created through
 Controller A all came back on a brand-new Controller B with the same IDs and names after one
 ordinary enrollment, with no command dispatched and no duplicates, and new work on the adopted
-resources succeeded. Not walked through: the browser **Add host** flow against a replacement
-Controller and the packaged agent on an installed host.
+resources succeeded. The appliance return, the failed task in **Tasks** and the
+`needs_attention` record for an unadoptable entry are covered by the Go checks named in the
+[API reference](../API.md#managed-vm-creation) and by the same replacement script, which
+seeds a deploy journal and a failed journal entry on the test host before Controller B starts
+(2026-09-10; see the change record for the run). Not walked through: the browser **Add host**
+flow against a replacement Controller, the packaged agent on an installed host, and a real
+appliance deployment followed by a Controller replacement.
 
 **Pool master change verified (2026-09-09):** the [pool master checks](../qa/pool-master/checks.md)
 (simulated host, Chromium) and the [real lab run](../qa/pool-master/lab/checks.md) (real appliance,

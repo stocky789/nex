@@ -79,7 +79,7 @@ func TestManagedPowerRequests(t *testing.T) {
 	if r, _ := e.Execute(context.Background(), command("p8", "start"), nil); r.Status != "succeeded" || calls() != "domstate "+vm+"\nstart "+vm+"\n" {
 		t.Fatalf("interrupted-before-issue start: %+v", r)
 	}
-	if len(e.Applied().VMs) != 0 {
+	if applied, _ := e.Applied(context.Background()); len(applied.VMs) != 0 {
 		t.Fatal("power requests must not appear as applied settings")
 	}
 }

@@ -54,6 +54,14 @@ type ManagedState struct {
 	Networks []NetworkRegistration `json:"networks,omitempty"`
 	Media    []Media               `json:"media,omitempty"`
 	VMs      []VMCreateSpec        `json:"vms,omitempty"`
+	// MissingVMs names entries of VMs whose persistent domain libvirt no longer lists; the
+	// journal still holds them, but a Controller must not adopt them as live guests.
+	MissingVMs []string `json:"missing_vms,omitempty"`
+	// Appliances are the Controller appliance VMs this host deployed and owns.
+	Appliances []Appliance `json:"appliances,omitempty"`
+	// Outcomes are journal entries that ended failed or needs_attention: task history a
+	// replaced Controller records so host truth is not lost with the old database.
+	Outcomes []ManagedOutcome `json:"outcomes,omitempty"`
 }
 
 // Ports lists the physical NICs or bonds enslaved to this bridge.

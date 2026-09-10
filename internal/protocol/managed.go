@@ -13,6 +13,25 @@ import (
 
 const ManagedVMCapability = "managed-vm-v1"
 
+// Appliance is a Controller appliance VM the host deployed through its local engine, reported
+// from that engine's deploy journal so a replaced Controller re-adopts it as protected.
+type Appliance struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	RequestID string `json:"request_id"`
+	Role      string `json:"role"`
+}
+
+// ManagedOutcome is a journal entry that did not succeed, keyed by the host's operation ID.
+type ManagedOutcome struct {
+	OperationID string `json:"operation_id"`
+	Kind        string `json:"kind"`
+	ID          string `json:"id"`
+	Name        string `json:"name,omitempty"`
+	Status      string `json:"status"`
+	Error       string `json:"error,omitempty"`
+}
+
 type StorageRegistration struct {
 	ID          string `json:"id"`
 	PoolID      string `json:"pool_id"`

@@ -72,7 +72,7 @@ esac`)
 	if !strings.Contains(got, "change-media "+vm+" sda --force --live --config --eject") {
 		t.Fatalf("running eject argv %q", got)
 	}
-	applied := e.Applied()
+	applied, _ := e.Applied(context.Background())
 	if len(applied.VMs) != 1 || applied.VMs[0].MediaID != "" || applied.VMs[0].Boot.MediaBootOrder != 0 {
 		t.Fatalf("journal after eject %+v", applied.VMs)
 	}
@@ -85,7 +85,7 @@ esac`)
 	if !strings.Contains(got, "change-media "+vm+" sda --force --live --config "+isoPath+" --update") {
 		t.Fatalf("running insert argv %q", got)
 	}
-	applied = e.Applied()
+	applied, _ = e.Applied(context.Background())
 	if applied.VMs[0].MediaID != "media-1" {
 		t.Fatalf("journal after insert %+v", applied.VMs[0])
 	}

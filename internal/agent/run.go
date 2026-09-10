@@ -21,6 +21,12 @@ type persistenceError struct{ error }
 
 type RunConfig struct{ Heartbeat, ProbeInterval, ProbeTimeout time.Duration }
 
+// ApplianceJournalDir is the local appliance engine's deploy journal (nex-core-local's
+// data directory plus /vmhost). Its deployments are reported as this host's appliances.
+// The packaged default matches nex-core-local's default data directory; nex-core-local
+// itself sets it from its configuration before starting the embedded agent.
+var ApplianceJournalDir = "/var/lib/nex/core-local/vmhost"
+
 func completeJournal(s *Store, inv *protocol.Inventory, timeout time.Duration) {
 	for id, e := range s.State.Journal {
 		if e.Status != "pending" || (e.Command != nil && managedCommand(e.Command.Kind)) {
@@ -77,7 +83,10 @@ func applyResponse(s *Store, r protocol.ReportResponse) error {
 }
 func report(ctx context.Context, s *Store, m *Monitor, cfg RunConfig) error {
 	inv := m.Snapshot()
-	inv.Managed = vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied()
+	managed, checks := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(ctx)
+	managed.Appliances = vmhost.Deployments(ApplianceJournalDir)
+	inv.Managed = managed
+	inv.Checks = append(inv.Checks, checks...)
 	completeJournal(s, inv, cfg.ProbeInterval+2*cfg.ProbeTimeout)
 	if s.State.Sequence == math.MaxUint64 {
 		return errors.New("report sequence exhausted")

@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 func (c *Controller) initManaged() error {
@@ -279,9 +280,12 @@ func (c *Controller) registerResource(w http.ResponseWriter, r *http.Request, us
 // adoptManaged is the managed step of a host report, run inside the report transaction after
 // its results have been applied. It mirrors the pool-scoped configuration the host reports as
 // applied from its journal, so a replaced Controller recovers a pool by connecting its master.
-// Adopted entries keep their IDs and names, get the current pool/host, and are recorded as succeeded without a command:
-// re-running them on the host would fail as already registered. Entries that are invalid,
-// already held, or whose references do not resolve are skipped.
+// Adopted entries keep their IDs and names, get the current pool/host, and are recorded as
+// succeeded without a command: re-running them on the host would fail as already registered.
+// The host's Controller appliance deployments become appliances rows, and journal entries that
+// ended failed or needs_attention become operations with that status. An entry that is already
+// held is silently current; one that is invalid, conflicting, unresolved or missing from libvirt
+// is recorded once as a needs_attention operation plus an audit entry naming the reason.
 func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Inventory) error {
 	m := inv.Managed
 	if m == nil {
@@ -314,20 +318,71 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		}
 	}
 	rows.Close()
-	free := func(id, key string) bool {
+	count := func(query string, args ...any) (int, error) {
 		var n int
-		if !identifierValid(id) || taken[key] || tx.QueryRow("SELECT count(*) FROM managed_resources WHERE id=?", id).Scan(&n) != nil || n > 0 {
-			return false
+		err := tx.QueryRow(query, args...).Scan(&n)
+		return n, err
+	}
+	// held reports an entry this Controller already knows under the same ID and kind: the
+	// steady state of every report after adoption, which needs no record.
+	held := func(id, kind string) (bool, error) {
+		n, err := count("SELECT count(*) FROM managed_resources WHERE id=? AND kind=?", id, kind)
+		return n > 0, err
+	}
+	free := func(id, key string) (bool, error) {
+		if !identifierValid(id) || taken[key] {
+			return false, nil
+		}
+		n, err := count("SELECT count(*) FROM managed_resources WHERE id=?", id)
+		if err != nil || n > 0 {
+			return false, err
 		}
 		taken[key] = true
-		return true
+		return true, nil
 	}
-	save := func(kind, name, id string, cmd protocol.Command, payload any) error {
-		_, err := c.saveResourceStatus(tx, "system", "adopt-"+kind+":"+host+":"+id, pool, host, name, id, "succeeded", cmd, payload)
+	// attention records, once per host and entry, why the entry was not adopted.
+	attention := func(kind, opKind, id, name, reason string) error {
+		requestID := clip("adopt-attention:"+host+":"+kind+":"+id, 200)
+		n, err := count("SELECT count(*) FROM operations WHERE request_id=?", requestID)
+		if err != nil || n > 0 {
+			return err
+		}
+		now := stamp()
+		if _, err = tx.Exec("INSERT INTO operations VALUES(?,?,?,?,?,?,?,?,?)", random(), host, opKind, requestID, "needs_attention", clip("not adopted from host report: "+reason, 4096), now, now, "system"); err != nil {
+			return err
+		}
+		return auditDetail(tx, "adopt.attention", clip(id, 200), clip(opKind+" "+name+": "+reason, 4096))
+	}
+	// resolved closes the attention record of an entry that has since been adopted.
+	resolved := func(kind, id string) error {
+		_, err := tx.Exec("UPDATE operations SET status='succeeded',error='',updated_at=? WHERE request_id=? AND status='needs_attention'", stamp(), clip("adopt-attention:"+host+":"+kind+":"+id, 200))
 		return err
 	}
+	save := func(kind, name, id string, cmd protocol.Command, payload any) error {
+		if _, err := c.saveResourceStatus(tx, "system", "adopt-"+kind+":"+host+":"+id, pool, host, name, id, "succeeded", cmd, payload); err != nil {
+			return err
+		}
+		return resolved(kind, id)
+	}
 	for _, s := range m.Storage {
-		if !nameValid(s.Name) || !storagePathValid(s.Path) || !free(s.ID, "path:"+s.Path) {
+		if ok, err := held(s.ID, "storage-register"); err != nil || ok {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		reason := ""
+		if !nameValid(s.Name) || !storagePathValid(s.Path) {
+			reason = "invalid storage name or path"
+		} else if ok, err := free(s.ID, "path:"+s.Path); err != nil {
+			return err
+		} else if !ok {
+			reason = "storage ID or path already registered"
+		}
+		if reason != "" {
+			if err = attention("storage", "storage-register", s.ID, s.Name, reason); err != nil {
+				return err
+			}
 			continue
 		}
 		v := registrationRequest{RequestID: "adopt-storage:" + host + ":" + s.ID, PoolID: pool, HostID: host, Name: strings.TrimSpace(s.Name), Path: s.Path}
@@ -338,7 +393,24 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		}
 	}
 	for _, n := range m.Networks {
-		if !nameValid(n.Name) || !networkShapeValid(n.Kind, n.Source, n.Uplink, n.VLAN) || !free(n.ID, networkKey(n.Kind, n.Source)) {
+		if ok, err := held(n.ID, "network-register"); err != nil || ok {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		reason := ""
+		if !nameValid(n.Name) || !networkShapeValid(n.Kind, n.Source, n.Uplink, n.VLAN) {
+			reason = "invalid network name or shape"
+		} else if ok, err := free(n.ID, networkKey(n.Kind, n.Source)); err != nil {
+			return err
+		} else if !ok {
+			reason = "network ID or source already registered"
+		}
+		if reason != "" {
+			if err = attention("network", "network-register", n.ID, n.Name, reason); err != nil {
+				return err
+			}
 			continue
 		}
 		v := registrationRequest{RequestID: "adopt-network:" + host + ":" + n.ID, PoolID: pool, HostID: host, Name: strings.TrimSpace(n.Name), Kind: n.Kind, Source: n.Source, Uplink: n.Uplink, VLAN: n.VLAN}
@@ -349,10 +421,26 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		}
 	}
 	for _, md := range m.Media {
-		if !nameValid(md.Name) || filepath.Base(md.Name) != md.Name || !strings.HasSuffix(strings.ToLower(md.Name), ".iso") || md.SizeBytes < 32774 || !sha256Hex(md.SHA256) {
+		if ok, err := held(md.ID, "iso-import"); err != nil || ok {
+			if err != nil {
+				return err
+			}
 			continue
 		}
-		if _, e := readyResource(tx, md.StorageID, "storage-register", pool, host); e != nil || !free(md.ID, "id:"+md.ID) {
+		reason := ""
+		if !nameValid(md.Name) || filepath.Base(md.Name) != md.Name || !strings.HasSuffix(strings.ToLower(md.Name), ".iso") || md.SizeBytes < 32774 || !sha256Hex(md.SHA256) {
+			reason = "invalid ISO name, size or SHA-256"
+		} else if _, e := readyResource(tx, md.StorageID, "storage-register", pool, host); e != nil {
+			reason = "storage " + clip(md.StorageID, 64) + " is not adopted on this host"
+		} else if ok, err := free(md.ID, "id:"+md.ID); err != nil {
+			return err
+		} else if !ok {
+			reason = "ISO ID already held by another resource"
+		}
+		if reason != "" {
+			if err = attention("media", "iso-import", md.ID, md.Name, reason); err != nil {
+				return err
+			}
 			continue
 		}
 		v := mediaRequest{RequestID: "adopt-media:" + host + ":" + md.ID, StorageID: md.StorageID, Name: md.Name, SizeBytes: md.SizeBytes, SHA256: md.SHA256}
@@ -362,27 +450,49 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 			return err
 		}
 	}
+	missing := map[string]bool{}
+	for _, id := range m.MissingVMs {
+		missing[id] = true
+	}
 	for _, s := range m.VMs {
-		if !vmName.MatchString(s.Name) || protocol.ValidateVMSpec(s) != nil || s.CPU.Count > 64 || s.Memory.SizeMiB > 262144 {
+		if ok, err := held(s.ID, "vm-create"); err != nil || ok {
+			if err != nil {
+				return err
+			}
 			continue
 		}
-		ready := true
+		reason := ""
+		if !vmName.MatchString(s.Name) || protocol.ValidateVMSpec(s) != nil || s.CPU.Count > 64 || s.Memory.SizeMiB > 262144 {
+			reason = "invalid VM name or specification"
+		} else if missing[s.ID] {
+			reason = "VM definition is missing from libvirt on the host"
+		}
 		for _, d := range s.Disks {
-			if _, e := readyResource(tx, d.StorageID, "storage-register", pool, host); e != nil {
-				ready = false
+			if _, e := readyResource(tx, d.StorageID, "storage-register", pool, host); e != nil && reason == "" {
+				reason = "storage " + clip(d.StorageID, 64) + " is not adopted on this host"
 			}
 		}
 		for _, n := range s.NICs {
-			if _, e := readyResource(tx, n.NetworkID, "network-register", pool, host); e != nil {
-				ready = false
+			if _, e := readyResource(tx, n.NetworkID, "network-register", pool, host); e != nil && reason == "" {
+				reason = "network " + clip(n.NetworkID, 64) + " is not adopted on this host"
 			}
 		}
 		if s.MediaID != "" {
-			if _, e := readyResource(tx, s.MediaID, "iso-import", pool, host); e != nil {
-				ready = false
+			if _, e := readyResource(tx, s.MediaID, "iso-import", pool, host); e != nil && reason == "" {
+				reason = "ISO " + clip(s.MediaID, 64) + " is not adopted on this host"
 			}
 		}
-		if !ready || !free(s.ID, "vm:"+s.Name) {
+		if reason == "" {
+			if ok, err := free(s.ID, "vm:"+s.Name); err != nil {
+				return err
+			} else if !ok {
+				reason = "VM ID or name already held in the pool"
+			}
+		}
+		if reason != "" {
+			if err = attention("vm", "vm-create", s.ID, s.Name, reason); err != nil {
+				return err
+			}
 			continue
 		}
 		spec := s
@@ -398,9 +508,129 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 			return err
 		}
 	}
+	if err = c.adoptAppliances(tx, host, pool, inv, attention, resolved); err != nil {
+		return err
+	}
+	for _, o := range m.Outcomes {
+		if !identifierValid(o.OperationID) || !managedKind(o.Kind) || (o.Status != "failed" && o.Status != "needs_attention") {
+			continue
+		}
+		// The host's operation ID is the Controller's when this Controller issued it; only a
+		// replaced Controller lacks the row.
+		n, err := count("SELECT count(*) FROM operations WHERE id=? OR request_id=?", o.OperationID, "adopt-outcome:"+host+":"+o.OperationID)
+		if err != nil || n > 0 {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		now := stamp()
+		if _, err = tx.Exec("INSERT INTO operations VALUES(?,?,?,?,?,?,?,?,?)", o.OperationID, host, o.Kind, "adopt-outcome:"+host+":"+o.OperationID, o.Status, clip(o.Error, 4096), now, now, "system"); err != nil {
+			return err
+		}
+		if err = auditDetail(tx, "adopt.outcome", clip(o.ID, 200), clip(o.Kind+" "+o.Name+" "+o.Status+": "+o.Error, 4096)); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
+// adoptAppliances rebuilds the appliances rows from the host's deploy journal. A row is
+// inserted when the host observes the VM through healthy libvirt; a row held by a revoked
+// host moves to the reporting host. POST /api/v1/appliances/adopt stays the handoff's path
+// and replays as already adopted once the report has inserted the row.
+func (c *Controller) adoptAppliances(tx *sql.Tx, host, pool string, inv *protocol.Inventory, attention func(kind, opKind, id, name, reason string) error, resolved func(kind, id string) error) error {
+	libvirt := false
+	for _, check := range inv.Checks {
+		if check.Name == "libvirt" && check.Status == "healthy" {
+			libvirt = true
+		}
+	}
+	observed := map[string]bool{}
+	for _, vm := range inv.VMs {
+		observed[strings.ToLower(vm.ID)] = true
+	}
+	for _, ap := range inv.Managed.Appliances {
+		reason := ""
+		if !applianceUUID(ap.ID) || !nameValid(ap.Name) || !nameValid(ap.RequestID) || ap.Role != "controller" {
+			reason = "invalid appliance record"
+		} else if !observed[ap.ID] {
+			if !libvirt {
+				continue // unknown, not absent: the next healthy observation decides
+			}
+			reason = "deploy record present but libvirt does not list the VM"
+		} else if n := 0; tx.QueryRow("SELECT count(*) FROM managed_resources WHERE id=?", ap.ID).Scan(&n) == nil && n > 0 {
+			reason = "VM belongs to a managed creation operation"
+		}
+		if reason != "" {
+			if err := attention("appliance", "vm-create", ap.ID, ap.Name, "Controller appliance: "+reason); err != nil {
+				return err
+			}
+			continue
+		}
+		var oldID, oldHost string
+		var oldRevoked bool
+		err := tx.QueryRow("SELECT a.id,a.host_id,h.revoked FROM appliances a JOIN hosts h ON h.id=a.host_id WHERE a.id=? OR a.request_id=? LIMIT 1", ap.ID, ap.RequestID).Scan(&oldID, &oldHost, &oldRevoked)
+		switch {
+		case err == sql.ErrNoRows:
+			if _, err = tx.Exec("INSERT INTO appliances VALUES(?,?,?,?,?)", ap.ID, pool, host, strings.TrimSpace(ap.Name), ap.RequestID); err != nil {
+				return err
+			}
+			if err = c.audit(tx, "system", "appliance.adopt", ap.ID); err != nil {
+				return err
+			}
+		case err != nil:
+			return err
+		case oldID != ap.ID:
+			if err = attention("appliance", "vm-create", ap.ID, ap.Name, "Controller appliance: request_id already belongs to another appliance"); err != nil {
+				return err
+			}
+			continue
+		case oldHost != host && !oldRevoked:
+			if err = attention("appliance", "vm-create", ap.ID, ap.Name, "Controller appliance: owned by another active host"); err != nil {
+				return err
+			}
+			continue
+		case oldHost != host:
+			if _, err = tx.Exec("UPDATE appliances SET pool_id=?,host_id=? WHERE id=?", pool, host, ap.ID); err != nil {
+				return err
+			}
+			if err = c.audit(tx, "system", "appliance.adopt", ap.ID); err != nil {
+				return err
+			}
+		}
+		if err = resolved("appliance", ap.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func managedKind(kind string) bool {
+	switch kind {
+	case "storage-register", "network-register", "iso-import", "vm-create", "vm-power", "vm-media":
+		return true
+	}
+	return false
+}
+
+// clip bounds host-supplied text stored in Controller rows.
+func clip(s string, n int) string {
+	s = strings.ToValidUTF8(s, "\uFFFD")
+	for len(s) > n {
+		_, size := utf8.DecodeLastRuneInString(s)
+		s = s[:len(s)-size]
+	}
+	return s
+}
+func auditDetail(tx *sql.Tx, action, id, detail string) error {
+	_, err := tx.Exec("INSERT INTO audit(actor,action,resource_id,created_at,detail) VALUES('system',?,?,?,?)", action, id, stamp(), detail)
+	return err
+}
+
+// autoNetworks registers, once per host bridge that sits on a physical NIC or bond, the
+// pool's default untagged network (for example br0 on nex0), so a pool has a usable network
+// without operator action. Existing registrations for the bridge, in any state, are respected.
 // hostInventory returns the last observed inventory; an absent report decodes as empty.
 func hostInventory(tx *sql.Tx, host string) (protocol.Inventory, error) {
 	var raw sql.NullString

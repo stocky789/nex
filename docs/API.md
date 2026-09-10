@@ -187,7 +187,12 @@ After the enrolled host reports fresh successful libvirt inventory, appliance ad
 registers the existing VM UUID and assigned host, with a protected Controller role. The pool
 is derived from the host record: `pool_id` is optional in the request, must match when
 supplied (409 otherwise), and is always returned so the deployer can persist it for retries. It does not create a second VM. Conflicting ownership or an unobserved VM blocks
-adoption. A stable adoption request ID makes a lost reply safe to reconcile. Read-only
+adoption. A stable adoption request ID makes a lost reply safe to reconcile. Adoption is not
+one-time: the host's appliance engine keeps the deploy journal as the durable ownership
+record, its agent reports every deployment in `Inventory.managed.appliances`, and each
+managed report rebuilds the Controller's appliance record from it (2026-09-10; see
+[Managed VM creation](#managed-vm-creation)). The handoff's `POST /api/v1/appliances/adopt`
+therefore replays as already adopted (200) when the report has already inserted the row. Read-only
 managed appliance inventory derives power state from fresh successful observations; failed,
 stale or revoked hosts yield unknown, never permission to start another writer.
 
@@ -483,7 +488,41 @@ host-originated entries in that same journal (see *Host-owned defaults and valid
 so they reach a Controller only by this adoption path.
 On the host, `vm-create` resolves storage, network and media references by
 resource ID rather than by pool/host ID, so creation works after re-enrollment under a new
-Controller. Result: replacing a Controller means installing a new one and connecting each
+Controller.
+
+**Adoption completeness (2026-09-10; API impact: changed contract, `Inventory.managed` and
+`Inventory.checks`, protocol version unchanged, older Cores simply omit the new lists):**
+`ManagedState` gains `appliances` (`Appliance`: the Controller appliance VMs the host
+deployed, from the appliance engine's deploy journal under the nex-core-local data directory,
+`/var/lib/nex/core-local/vmhost` by default; the standalone agent takes
+`--appliance-journal-dir`), `outcomes` (`ManagedOutcome`: every journal entry that ended
+`failed` or `needs_attention`, with the host's operation ID, kind, resource ID, name, status
+and error) and `missing_vms` (IDs of `vms` entries whose persistent domain
+`virsh list --all --uuid` no longer reports). Two host checks qualify the report:
+`managed-journal` is `failed` when a journal file cannot be read — that file is skipped and
+named in the error while every other entry is still reported, instead of the whole state
+collapsing to empty — and `managed-vms` is `failed` naming the missing VMs, or `unknown` when
+libvirt did not answer. Before reporting, the host re-observes `vm-create` entries an
+interruption left in `needs_attention` after the definition step (at most once a minute) and
+promotes them to `succeeded` when the persistent domain matches the journaled definition, so a
+replaced Controller, which never re-sends the operation, still adopts the VM. On the
+Controller, each managed report also: inserts the `appliances` row for a reported appliance
+the healthy libvirt observation lists (keyed by VM UUID, moved to the reporting host when the
+previous owner is revoked, audit `appliance.adopt`); records each outcome it does not hold as
+an operation with the host's operation ID, kind, status and error (actor `system`,
+`request_id adopt-outcome:<host>:<operation_id>`, audit `adopt.outcome`); and never skips an
+entry silently — an entry already held under the same ID and kind is current, and any other
+entry it cannot adopt (invalid, conflicting ID/path/source/name, references not adopted on
+the host, missing from libvirt, or an appliance the host does not observe) leaves one
+`needs_attention` operation per host and entry (`request_id adopt-attention:<host>:<kind>:<id>`,
+actor `system`, error prefixed `not adopted from host report:`; appliance records use kind
+`vm-create` with a `Controller appliance:` prefix) and an audit entry `adopt.attention` naming
+the reason. That record is marked `succeeded` once the entry is adopted on a later report.
+Checks: `go test ./internal/vmhost ./internal/controller` (`TestAppliedSurvivesCorruptJournalEntry`,
+`TestAppliedReportsOutcomes`, `TestAppliedPromotesInterruptedCreation`,
+`TestAppliedFlagsVMsMissingFromLibvirt`, `TestDeploymentsListsApplianceOwnership`,
+`TestAdoptionRebuildsApplianceOutcomesAndAttention`) and
+`tests/integration/controller_replacement.py`. Result: replacing a Controller means installing a new one and connecting each
 pool master (token, or address plus root password); storage, networks, ISO records and VM
 definitions return with their IDs and names. Not recovered, because it is Controller-scoped:
 sites, administrator accounts and roles, audit history, enrollment tokens and the Controller

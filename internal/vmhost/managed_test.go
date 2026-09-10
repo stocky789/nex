@@ -16,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"nex.local/nex/internal/protocol"
 )
@@ -259,7 +260,7 @@ func TestManagedRecordVMMediaKeepsBootOrderOnEject(t *testing.T) {
 	if err := e.recordVMMedia(protocol.VMMediaRequest{VMID: v.ID, PoolID: v.PoolID, HostID: v.HostID, Action: "eject"}); err != nil {
 		t.Fatal(err)
 	}
-	applied := e.Applied()
+	applied, _ := e.Applied(context.Background())
 	if len(applied.VMs) != 1 {
 		t.Fatalf("VM missing after eject: %+v", applied.VMs)
 	}
@@ -701,5 +702,178 @@ func TestVerifyDomainAcceptsAnEqualMTU(t *testing.T) {
 	}
 	if !sameMTU(&mtuXML{Size: 1500}, nil) {
 		t.Fatal("an MTU we never requested must not fail the VM")
+	}
+}
+
+// One corrupt journal file must not empty the reported state: a replaced Controller would
+// then adopt nothing from the pool. The bad file is skipped and named in a failed check.
+func TestAppliedSurvivesCorruptJournalEntry(t *testing.T) {
+	e := NewManaged(t.TempDir())
+	s := protocol.StorageRegistration{ID: "st-1", PoolID: "p", HostID: "h", Name: "Local", Path: "/srv/vms"}
+	if err := e.save(managedJournal{Command: protocol.Command{OperationID: "op-st", Kind: "storage-register", Storage: &s}, Result: protocol.Result{OperationID: "op-st", Status: "succeeded"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.stateDir, "bad.json"), []byte(`{"command":{"kind":"storage-register","operation_id":"bad"},"result":{"status":"pending"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, checks := e.Applied(context.Background())
+	if len(got.Storage) != 1 || got.Storage[0].ID != "st-1" {
+		t.Fatalf("corrupt file emptied the applied state: %+v", got)
+	}
+	var journal *protocol.Check
+	for i := range checks {
+		if checks[i].Name == "managed-journal" {
+			journal = &checks[i]
+		}
+	}
+	if journal == nil || journal.Status != "failed" || !strings.Contains(journal.Error, "bad.json") {
+		t.Fatalf("corrupt file not surfaced as a failed managed-journal check: %+v", checks)
+	}
+	// An intact journal reports the check healthy and Execute still fails closed on corruption.
+	if _, err := e.Execute(context.Background(), protocol.Command{OperationID: "op-2", Kind: "network-register", Network: &protocol.NetworkRegistration{ID: "n", PoolID: "p", HostID: "h", Kind: "network", Source: "default"}}, nil); err == nil {
+		t.Fatal("corrupt journal accepted by Execute")
+	}
+	os.Remove(filepath.Join(e.stateDir, "bad.json"))
+	if _, checks = e.Applied(context.Background()); checks[0].Name != "managed-journal" || checks[0].Status != "healthy" {
+		t.Fatalf("intact journal not healthy: %+v", checks)
+	}
+	// A journal directory that does not exist yet is an empty state, not a failure.
+	if got, checks = NewManaged(filepath.Join(t.TempDir(), "absent")).Applied(context.Background()); len(got.Storage) != 0 || checks[0].Status != "healthy" {
+		t.Fatalf("absent journal: %+v %+v", got, checks)
+	}
+}
+
+// Failed and needs_attention entries are reported as outcomes so a replaced Controller's task
+// history matches the host; pending entries are in flight and not reported.
+func TestAppliedReportsOutcomes(t *testing.T) {
+	e := NewManaged(t.TempDir())
+	v := managedTestVM()
+	for _, j := range []managedJournal{
+		{Command: protocol.Command{OperationID: "op-fail", Kind: "storage-register", Storage: &protocol.StorageRegistration{ID: "st-x", PoolID: "p", HostID: "h", Name: "Broken", Path: "/srv/broken"}}, Result: protocol.Result{OperationID: "op-fail", Status: "failed", Error: "storage is not writable"}},
+		{Command: protocol.Command{OperationID: "op-vm", Kind: "vm-create", VM: &v}, Result: protocol.Result{OperationID: "op-vm", Status: "needs_attention", Error: "disk allocation interrupted"}, Stage: "allocating"},
+		{Command: protocol.Command{OperationID: "op-pending", Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: v.ID, PoolID: "p", HostID: "h", Action: "start"}}, Result: protocol.Result{OperationID: "op-pending", Status: "pending"}},
+	} {
+		if err := e.save(j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _ := e.Applied(context.Background())
+	if len(got.Outcomes) != 2 || len(got.VMs) != 0 || len(got.Storage) != 0 {
+		t.Fatalf("outcomes %+v", got)
+	}
+	by := map[string]protocol.ManagedOutcome{}
+	for _, o := range got.Outcomes {
+		by[o.OperationID] = o
+	}
+	if o := by["op-fail"]; o.Kind != "storage-register" || o.ID != "st-x" || o.Name != "Broken" || o.Status != "failed" || o.Error != "storage is not writable" {
+		t.Fatalf("failed outcome %+v", o)
+	}
+	if o := by["op-vm"]; o.Kind != "vm-create" || o.ID != v.ID || o.Name != "guest" || o.Status != "needs_attention" {
+		t.Fatalf("needs_attention outcome %+v", o)
+	}
+}
+
+// A creation interrupted after its definition step is re-observed on report and promoted to
+// succeeded when the domain matches; a replaced Controller never re-sends the operation, so
+// without this the VM would never be adopted. Observation runs at most once a minute.
+func TestAppliedPromotesInterruptedCreation(t *testing.T) {
+	e := NewManaged(t.TempDir())
+	v := managedTestVM()
+	j := managedJournal{Command: protocol.Command{OperationID: "create", Kind: "vm-create", VM: &v}, Result: protocol.Result{OperationID: "create", Status: "needs_attention", Error: "interrupted", ObservedAt: time.Now().Add(-2 * time.Minute)}, Stage: "defined", Domain: []byte("<domain/>"), Disks: []string{"/srv/vms/disk-0.qcow2"}}
+	if err := e.save(j); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	e.observe = func(context.Context, managedJournal) error {
+		calls++
+		return errors.New("VM state is not confirmed stopped")
+	}
+	got, _ := e.Applied(context.Background())
+	if calls != 1 || len(got.VMs) != 0 || len(got.Outcomes) != 1 || got.Outcomes[0].Error != "VM state is not confirmed stopped" {
+		t.Fatalf("failed observation not recorded: calls=%d %+v", calls, got)
+	}
+	if got, _ = e.Applied(context.Background()); calls != 1 {
+		t.Fatal("re-observed within a minute")
+	}
+	j.Result.ObservedAt = time.Now().Add(-2 * time.Minute)
+	if err := e.save(j); err != nil {
+		t.Fatal(err)
+	}
+	e.observe = func(context.Context, managedJournal) error { calls++; return nil }
+	fakeCommand(t, "virsh", "printf '%s\\n' "+v.ID)
+	if got, _ = e.Applied(context.Background()); calls != 2 || len(got.VMs) != 1 || len(got.Outcomes) != 0 || len(got.MissingVMs) != 0 {
+		t.Fatalf("matching domain not promoted: %+v", got)
+	}
+	saved, err := e.readJournal("create.json")
+	if err != nil || saved.Result.Status != "succeeded" || saved.Stage != "defined" || saved.Result.Error != "" {
+		t.Fatalf("promotion not durable: %+v %v", saved, err)
+	}
+	// An entry interrupted before the definition step has nothing to observe.
+	j.Command.OperationID, j.Result.OperationID, j.Stage, j.Result.Status = "alloc", "alloc", "allocating", "needs_attention"
+	v2 := v
+	v2.ID = "12345678-1234-4234-8234-123456789013"
+	j.Command.VM = &v2
+	if err := e.save(j); err != nil {
+		t.Fatal(err)
+	}
+	if e.Applied(context.Background()); calls != 2 {
+		t.Fatal("allocation-stage entry observed")
+	}
+}
+
+// A journaled VM whose domain libvirt no longer lists is reported as missing with a failed
+// check instead of being adopted as a live guest; when libvirt cannot answer nothing is flagged.
+func TestAppliedFlagsVMsMissingFromLibvirt(t *testing.T) {
+	e := NewManaged(t.TempDir())
+	v := managedTestVM()
+	if err := e.save(managedJournal{Command: protocol.Command{OperationID: "create", Kind: "vm-create", VM: &v}, Result: protocol.Result{OperationID: "create", Status: "succeeded"}, Stage: "defined"}); err != nil {
+		t.Fatal(err)
+	}
+	check := func(name string, checks []protocol.Check) protocol.Check {
+		for _, c := range checks {
+			if c.Name == name {
+				return c
+			}
+		}
+		t.Fatalf("check %s missing: %+v", name, checks)
+		return protocol.Check{}
+	}
+	fakeCommand(t, "virsh", "exit 1")
+	got, checks := e.Applied(context.Background())
+	if len(got.VMs) != 1 || len(got.MissingVMs) != 0 || check("managed-vms", checks).Status != "unknown" {
+		t.Fatalf("libvirt outage flagged a VM: %+v %+v", got, checks)
+	}
+	fakeCommand(t, "virsh", "printf 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee\\n'")
+	got, checks = e.Applied(context.Background())
+	if len(got.VMs) != 1 || len(got.MissingVMs) != 1 || got.MissingVMs[0] != v.ID {
+		t.Fatalf("undefined VM not flagged: %+v", got)
+	}
+	if c := check("managed-vms", checks); c.Status != "failed" || !strings.Contains(c.Error, v.ID) {
+		t.Fatalf("missing VM check %+v", c)
+	}
+	fakeCommand(t, "virsh", "printf '%s\\n' "+strings.ToUpper(v.ID))
+	if got, checks = e.Applied(context.Background()); len(got.MissingVMs) != 0 || check("managed-vms", checks).Status != "healthy" {
+		t.Fatalf("defined VM flagged: %+v %+v", got, checks)
+	}
+}
+
+// The appliance engine's deploy journal is the host's ownership record of the Controller VM.
+func TestDeploymentsListsApplianceOwnership(t *testing.T) {
+	e := testEngine(t)
+	if err := e.save(journal{Operation: Operation{ID: "deploy-1", VMID: "12345678-1234-4234-8234-123456789012", Kind: "deploy", Status: "booted"}, Name: "nex-controller"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.save(journal{Operation: Operation{ID: "power-1", VMID: "12345678-1234-4234-8234-123456789012", Kind: "power", Status: "completed"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.config.StateDir, "junk.json"), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := Deployments(e.config.StateDir)
+	if len(got) != 1 || got[0] != (protocol.Appliance{ID: "12345678-1234-4234-8234-123456789012", Name: "nex-controller", RequestID: "deploy-1", Role: "controller"}) {
+		t.Fatalf("deployments %+v", got)
+	}
+	if Deployments(filepath.Join(e.config.StateDir, "absent")) != nil {
+		t.Fatal("absent journal listed deployments")
 	}
 }
