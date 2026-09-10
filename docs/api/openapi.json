@@ -1857,7 +1857,7 @@
       "post": {
         "operationId": "createVM",
         "summary": "Create a stopped guest VM",
-        "description": "Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Shared bounds, enforced identically on Controller and Core: 1\u20138 disks of 1\u20132048 GiB on virtio, sata or scsi with names unique in the VM; at most 8 NICs on virtio or e1000e with unicast lower-case manual MACs; at least 1 vCPU with sockets \u00d7 cores \u00d7 threads equal to the count when a topology is given; at least 512 MiB in memory mode dedicated or maximum; uefi or bios; boot orders unique and positive across disks and install media (gaps are allowed, since ejecting media leaves one), with at least one boot device. Controller additionally caps CPU at 64 and memory at 262144 MiB, enforces MAC uniqueness across the pool, assigns the UUID and reserves the name within the pool before dispatch. Host observed capacity and Core current capacity must suffice, using the memory ceiling in both modes. Storage, network and ISO must have succeeded on this host and pool, and the install ISO must reside on a storage target this VM uses. Core journals effects and reconciles per-disk ownership before replay; needs_attention preserves uncertain resources for manual recovery. Creation never boots a guest: start_after_create makes Controller issue the separate vm-power start only after creation succeeds, and autostart is a libvirt property set while the stopped VM is defined. No console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64 and machine-type libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint.",
+        "description": "Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Shared bounds, enforced identically on Controller and Core: 1\u20138 disks of 1\u20132048 GiB on virtio, sata or scsi with names unique in the VM; at most 8 NICs on virtio or e1000e with unicast lower-case manual MACs; at least 1 vCPU with sockets \u00d7 cores \u00d7 threads equal to the count when a topology is given; at least 512 MiB in memory mode dedicated or maximum; uefi or bios; boot orders unique and positive across disks and install media (gaps are allowed, since ejecting media leaves one), with at least one boot device. Controller additionally caps CPU at 64 and memory at 262144 MiB, assigns the UUID and refuses capacity above the host's observed CPU or memory. The host decides everything its own record answers: VM name and MAC uniqueness against its managed journal and libvirt domains, and dedicated-memory admission against total host memory, are reported as a failed vm-create result with the reason (visible in Task history), not as an HTTP refusal. Storage, network and ISO must have succeeded on this host and pool, and the install ISO must reside on a storage target this VM uses. Core journals effects and reconciles per-disk ownership before replay; needs_attention preserves uncertain resources for manual recovery. start_after_create is honoured by the host inside the same creation: after the definition is verified, Core starts the guest once and records the outcome in the journal entry, so a retry never starts it twice; a start failure keeps the VM and reports needs_attention with the reason. autostart is a libvirt property set while the stopped VM is defined. No console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64 and machine-type libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint.",
         "security": [
           {
             "AdminSession": []
@@ -5364,7 +5364,7 @@
           "status"
         ],
         "x-go-type": "protocol.StorageRegistration",
-        "description": "Pool registration with explicit access only on host_id; never implies shared storage. status/error reflect its durable operation, not a continuously refreshed filesystem probe. Controller also creates a registration itself (actor system): the default local directory /var/lib/libvirt/images named ISO (request_id auto-storage:<host>), and any storage the host reports in Inventory.managed.storage that Controller does not hold (request_id adopt-storage-register:<host>:<id>, ID and name preserved)."
+        "description": "Pool registration with explicit access only on host_id; never implies shared storage. status/error reflect its durable operation, not a continuously refreshed filesystem probe. The host self-registers its default local directory /var/lib/libvirt/images as ISO in its own journal with a host-generated ID; Controller creates registrations itself only by adoption (actor system): any storage the host reports in Inventory.managed.storage that Controller does not hold (request_id adopt-storage:<host>:<id>, ID and name preserved). A path already held by another registration on that host is a failed host result, not an HTTP 409."
       },
       "NetworkRegistration": {
         "type": "object",
@@ -5431,7 +5431,7 @@
           "status"
         ],
         "x-go-type": "protocol.NetworkRegistration",
-        "description": "Pool guest network on one host: an existing bridge, an active libvirt network, or a Core-created VLAN bridge (kind vlan) on an uplink NIC. VLAN bridges are additive; the management bridge, addresses and routes are never changed. Controller also creates registrations itself (actor system): the untagged default network of every host bridge on a physical NIC or bond (request_id auto-network:<host>:<bridge>), and any network the host reports in Inventory.managed.networks that Controller does not hold (request_id adopt-network-register:<host>:<id>, ID and name preserved)."
+        "description": "Pool guest network on one host: an existing bridge, an active libvirt network, or a Core-created VLAN bridge (kind vlan) on an uplink NIC. VLAN bridges are additive; the management bridge, addresses and routes are never changed. The host self-registers the untagged default network of every host bridge on a physical NIC or bond (<port> untagged, kind bridge, uplink recorded) in its own journal with host-generated IDs, at agent start and when a new uplink appears; Controller creates registrations itself only by adoption (actor system): any network the host reports in Inventory.managed.networks that Controller does not hold (request_id adopt-network:<host>:<id>, ID and name preserved). A bridge or libvirt network already held by another registration on that host is a failed host result, not an HTTP 409."
       },
       "Media": {
         "type": "object",
@@ -5745,7 +5745,7 @@
           },
           "start_after_create": {
             "type": "boolean",
-            "description": "Not part of creation. When creation succeeds, Controller issues the existing vm-power start as a second, separate operation; the vm-create command never starts a guest, so a failed or uncertain creation never boots."
+            "description": "Honoured by the host inside the creation: once the definition is verified, Core starts the guest exactly once and records the outcome in the same journal entry. A failed or uncertain creation never boots; a start that fails leaves the VM defined and the result needs_attention with the reason. Controller issues no follow-on power request."
           },
           "autostart": {
             "type": "boolean",
@@ -5943,7 +5943,7 @@
           },
           "start_after_create": {
             "type": "boolean",
-            "description": "Not part of creation. When creation succeeds, Controller issues the existing vm-power start as a second, separate operation; the vm-create command never starts a guest, so a failed or uncertain creation never boots."
+            "description": "Honoured by the host inside the creation: once the definition is verified, Core starts the guest exactly once and records the outcome in the same journal entry. A failed or uncertain creation never boots; a start that fails leaves the VM defined and the result needs_attention with the reason. Controller issues no follow-on power request."
           },
           "autostart": {
             "type": "boolean",
@@ -6379,7 +6379,7 @@
       "result": {
         "$ref": "#/components/schemas/Result"
       },
-      "semantics": "Verify existing local directory access; no formatting. Controller also creates the default ISO registration for /var/lib/libvirt/images (request_id auto-storage:<host>) when absent. Succeeded registrations are reported back in Inventory.managed.storage and adopted by a Controller that does not hold them (request_id adopt-storage-register:<host>:<id>) without redelivery."
+      "semantics": "Verify existing local directory access; no formatting. Refuse, as a failed result, a path another non-failed registration on this host already holds. The host self-registers /var/lib/libvirt/images as ISO through this same verification, with a host-generated ID, unless any journal entry already holds that path. Succeeded registrations are reported back in Inventory.managed.storage and adopted by a Controller that does not hold them (request_id adopt-storage:<host>:<id>) without redelivery."
     },
     "network-register": {
       "transport": "POST /api/v1/agent/report response.commands",
@@ -6390,7 +6390,7 @@
       "result": {
         "$ref": "#/components/schemas/Result"
       },
-      "semantics": "Verify existing bridge or active libvirt network without edits; for kind vlan, idempotently create bridge <uplink>v<vlan> over the 802.1Q sub-interface, persist it under /etc/network/interfaces.d and refuse uplinks or VLAN devices already used by the host configuration. Succeeded registrations are reported back in Inventory.managed.networks and adopted by a Controller that does not hold them (request_id adopt-network-register:<host>:<id>) without redelivery."
+      "semantics": "Verify existing bridge or active libvirt network without edits; for kind vlan, idempotently create bridge <uplink>v<vlan> over the 802.1Q sub-interface, persist it under /etc/network/interfaces.d and refuse uplinks or VLAN devices already used by the host configuration. Refuse, as a failed result, a bridge (shared by kind bridge and vlan) or libvirt network another non-failed registration on this host already holds. The host self-registers <port> untagged for every bridge on a physical NIC or bond through this same verification, with host-generated IDs, unless any journal entry already holds that bridge. Succeeded registrations are reported back in Inventory.managed.networks and adopted by a Controller that does not hold them (request_id adopt-network:<host>:<id>) without redelivery."
     },
     "iso-import": {
       "transport": "POST /api/v1/agent/report response.commands",
@@ -6412,7 +6412,7 @@
       "result": {
         "$ref": "#/components/schemas/Result"
       },
-      "semantics": "Create a stopped VM from the full specification: one exclusive new qcow2 per disk inside the VM's own directory on each disk's storage target (sparse when thin, preallocated when not), one interface per NIC with its derived or manual MAC, per-device boot order, the memory mode's balloon configuration, the selected firmware and machine type, and libvirt autostart when requested. Never start a guest: start_after_create is satisfied by Controller issuing the separate vm-power start after this command succeeds. Reconcile journal and per-disk ownership on replay. Core resolves storage, network and media references by resource ID, not by pool/host ID, so creation works after re-enrollment under a new Controller. Succeeded definitions are reported back in Inventory.managed.vms and adopted by a Controller that does not hold them (request_id adopt-vm:<host>:<id>) without redelivery."
+      "semantics": "Create a stopped VM from the full specification: one exclusive new qcow2 per disk inside the VM's own directory on each disk's storage target (sparse when thin, preallocated when not), one interface per NIC with its derived or manual MAC, per-device boot order, the memory mode's balloon configuration, the selected firmware and machine type, and libvirt autostart when requested. Refuse, as a failed result, a name another domain or non-failed journal entry on this host holds, an effective MAC (manual or derived) any domain or journal entry holds, and dedicated memory that, with what is already promised plus the 2 GiB host reserve, exceeds total host memory. When start_after_create is set, start the guest once after the definition is verified and record the outcome in the journal entry (a retry or reconciliation never starts twice; a start failure keeps the VM and reports needs_attention with the reason). Reconcile journal and per-disk ownership on replay. Core resolves storage, network and media references by resource ID, not by pool/host ID, so creation works after re-enrollment under a new Controller. Succeeded definitions are reported back in Inventory.managed.vms and adopted by a Controller that does not hold them (request_id adopt-vm:<host>:<id>) without redelivery."
     },
     "vm-power": {
       "transport": "POST /api/v1/agent/report response.commands",

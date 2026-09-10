@@ -38,8 +38,18 @@ type createdVM struct {
 	Operation protocol.Operation `json:"operation"`
 }
 
-// managedLab is an enrolled managed host with its automatic ISO storage and untagged network
-// verified, so VM specifications have references to resolve.
+// hostDefaults is what a Core self-registers in its journal and reports for adoption: the
+// default ISO storage and the untagged network of its bridge on a physical port. The pool is
+// assigned on adoption, so the host's own identity stands in for it.
+func hostDefaults(host string) *protocol.ManagedState {
+	return &protocol.ManagedState{
+		Storage:  []protocol.StorageRegistration{{ID: "host-iso", PoolID: host, HostID: host, Name: "ISO", Path: "/var/lib/libvirt/images"}},
+		Networks: []protocol.NetworkRegistration{{ID: "host-untagged", PoolID: host, HostID: host, Name: "nex0 untagged", Kind: "bridge", Source: "br0", Uplink: "nex0"}},
+	}
+}
+
+// managedLab is an enrolled managed host whose self-registered ISO storage and untagged
+// network are mirrored, so VM specifications have references to resolve.
 type managedLab struct {
 	a                      *testClient
 	t                      *testing.T
@@ -55,11 +65,9 @@ func newManagedLab(t *testing.T, caps ...string) *managedLab {
 	a := newClient(t)
 	host := a.enroll(a.token(a.site(), ""), csr(t))
 	l := &managedLab{a: a, t: t, cert: certificate(t, host.CertificatePEM), host: host, caps: caps, pool: a.poolOf(host.HostID)}
-	var done []protocol.Result
-	for _, cmd := range l.report().Commands {
-		done = append(done, protocol.Result{OperationID: cmd.OperationID, Status: "succeeded"})
+	if cmds := l.report().Commands; len(cmds) != 0 {
+		t.Fatalf("host-reported defaults were dispatched: %+v", cmds)
 	}
-	l.report(done...)
 	var storage []protocol.StorageRegistration
 	var networks []protocol.NetworkRegistration
 	read(t, a.call("GET", "/api/v1/storage", nil, nil, 200), &storage)
@@ -74,7 +82,7 @@ func (l *managedLab) report(results ...protocol.Result) protocol.ReportResponse 
 	l.t.Helper()
 	l.seq++
 	nics := []protocol.NIC{{Name: "nex0", Kind: "physical", Master: "br0"}, {Name: "br0", Kind: "bridge"}}
-	inv := &protocol.Inventory{Hostname: "core", CPUCount: 8, MemoryBytes: 16 << 30, NICs: nics}
+	inv := &protocol.Inventory{Hostname: "core", CPUCount: 8, MemoryBytes: 16 << 30, NICs: nics, Managed: hostDefaults(l.host.HostID)}
 	return l.a.report(l.cert, protocol.ReportRequest{Version: 1, Sequence: l.seq, Capabilities: l.caps, Inventory: inv, Results: results})
 }
 func (l *managedLab) spec(name string) protocol.VMCreateSpec {
@@ -100,7 +108,9 @@ func TestManagedWorkflowScopeRetryAndMedia(t *testing.T) {
 	sequence := uint64(0)
 	report := func(caps bool, results ...protocol.Result) protocol.ReportResponse {
 		sequence++
-		v := protocol.ReportRequest{Version: 1, Sequence: sequence, Results: results, Inventory: &protocol.Inventory{Hostname: "core", CPUCount: 8, MemoryBytes: 16 << 30}}
+		iso := hostDefaults(host.HostID)
+		iso.Networks = nil
+		v := protocol.ReportRequest{Version: 1, Sequence: sequence, Results: results, Inventory: &protocol.Inventory{Hostname: "core", CPUCount: 8, MemoryBytes: 16 << 30, Managed: iso}}
 		if caps {
 			v.Capabilities = []string{protocol.ManagedVMCapability}
 		}
@@ -108,11 +118,15 @@ func TestManagedWorkflowScopeRetryAndMedia(t *testing.T) {
 	}
 	req := registrationRequest{RequestID: "storage1", PoolID: pool, HostID: host.HostID, Name: "Local", Path: "/var/lib/nex/vms"}
 	a.call("POST", "/api/v1/storage", req, nil, 409)
-	auto := report(true)
-	if len(auto.Commands) != 1 || auto.Commands[0].Storage == nil || auto.Commands[0].Storage.Path != defaultLocalStoragePath || auto.Commands[0].Storage.Name != defaultLocalStorageName {
-		t.Fatalf("auto ISO storage %#v", auto.Commands)
+	// The host's own ISO storage is mirrored from its journal, never issued as a command.
+	if cmds := report(true).Commands; len(cmds) != 0 {
+		t.Fatalf("host default dispatched %#v", cmds)
 	}
-	report(true, protocol.Result{OperationID: auto.Commands[0].OperationID, Status: "succeeded"})
+	var mirrored []protocol.StorageRegistration
+	read(t, a.call("GET", "/api/v1/storage", nil, nil, 200), &mirrored)
+	if len(mirrored) != 1 || mirrored[0].ID != "host-iso" || mirrored[0].Name != "ISO" || mirrored[0].Status != "succeeded" || mirrored[0].PoolID != pool {
+		t.Fatalf("mirrored ISO storage %+v", mirrored)
+	}
 	a.call("POST", "/api/v1/hosts/"+host.HostID+"/operations", map[string]string{"request_id": "reserved-request", "kind": "refresh-inventory"}, nil, 202)
 	reserved := req
 	reserved.RequestID = "reserved-request"
@@ -197,7 +211,7 @@ func TestManagedWorkflowScopeRetryAndMedia(t *testing.T) {
 		t.Fatalf("replay created a second VM operation: %+v", replay)
 	}
 	// Nex Core attaches the ISO from one of the VM's own storage targets.
-	elsewhere := createVMRequest{RequestID: "vm-iso-elsewhere", VMCreateSpec: vmSpec(pool, host.HostID, "guest2", auto.Commands[0].Storage.ID, network.ID, media.ID)}
+	elsewhere := createVMRequest{RequestID: "vm-iso-elsewhere", VMCreateSpec: vmSpec(pool, host.HostID, "guest2", "host-iso", network.ID, media.ID)}
 	if w := a.call("POST", "/api/v1/vms", elsewhere, nil, 409); !strings.Contains(w.Body.String(), "disk storage targets") {
 		t.Fatal(w.Body.String())
 	}
@@ -268,12 +282,7 @@ func TestVLANNetworkRegistration(t *testing.T) {
 	pool := a.poolOf(host.HostID)
 	cert := certificate(t, host.CertificatePEM)
 	nics := []protocol.NIC{{Name: "nex0", Kind: "physical"}, {Name: "br0", Kind: "bridge"}, {Name: "nex1", Kind: "physical"}, {Name: "legacy"}}
-	first := a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Hostname: "core", NICs: nics}})
-	for _, cmd := range first.Commands {
-		if cmd.Storage != nil {
-			a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 2, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Hostname: "core", NICs: nics}, Results: []protocol.Result{{OperationID: cmd.OperationID, Status: "succeeded"}}})
-		}
-	}
+	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Hostname: "core", NICs: nics}})
 	base := registrationRequest{RequestID: "vlan1", PoolID: pool, HostID: host.HostID, Name: "Servers", Kind: "vlan", Uplink: "nex1", VLAN: 100}
 	for name, bad := range map[string]func(r *registrationRequest){
 		"tag too high":      func(r *registrationRequest) { r.VLAN = 4095 },
@@ -303,13 +312,22 @@ func TestVLANNetworkRegistration(t *testing.T) {
 	if len(commands) != 1 || commands[0].Network == nil || commands[0].Network.Source != "nex1v100" || commands[0].Network.VLAN != 100 {
 		t.Fatalf("VLAN command %#v", commands)
 	}
-	// The same uplink/VLAN, or a plain registration of the derived bridge, is one host resource.
+	// The same uplink/VLAN, or a plain registration of the derived bridge, is one host
+	// resource: the host holds the authoritative record and reports the conflict as a failed
+	// task; the Controller queues the request and shows what the host answered.
 	dup := base
 	dup.RequestID = "vlan-dup"
 	dup.Name = "Servers again"
-	a.call("POST", "/api/v1/networks", dup, nil, 409)
+	var dupNetwork, plainNetwork protocol.NetworkRegistration
+	read(t, a.call("POST", "/api/v1/networks", dup, nil, 201), &dupNetwork)
 	plain := registrationRequest{RequestID: "bridge-dup", PoolID: pool, HostID: host.HostID, Name: "Manual", Kind: "bridge", Source: "nex1v100"}
-	a.call("POST", "/api/v1/networks", plain, nil, 409)
+	read(t, a.call("POST", "/api/v1/networks", plain, nil, 201), &plainNetwork)
+	reason := "network nex1v100 is already registered on this host as Servers"
+	if cmds := a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 4, Capabilities: []string{protocol.ManagedVMCapability}}).Commands; len(cmds) != 3 {
+		t.Fatalf("duplicate registrations are the host's to refuse; dispatched %+v", cmds)
+	}
+	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 5, Capabilities: []string{protocol.ManagedVMCapability}, Results: []protocol.Result{
+		{OperationID: dupNetwork.OperationID, Status: "failed", Error: reason}, {OperationID: plainNetwork.OperationID, Status: "failed", Error: reason}}})
 	// Untagged on the legacy-reported NIC without a kind, and a second tag on the same uplink, are distinct.
 	other := base
 	other.RequestID, other.Name, other.Uplink, other.VLAN = "vlan-legacy", "Untagged", "legacy", 0
@@ -319,105 +337,56 @@ func TestVLANNetworkRegistration(t *testing.T) {
 	}
 	var list []protocol.NetworkRegistration
 	read(t, a.call("GET", "/api/v1/networks", nil, nil, 200), &list)
-	if len(list) != 2 || list[0].VLAN != 100 || list[1].Uplink != "legacy" {
+	byName := map[string]protocol.NetworkRegistration{}
+	for _, n := range list {
+		byName[n.Name] = n
+	}
+	if len(list) != 4 || byName["Servers"].VLAN != 100 || byName["Untagged"].Uplink != "legacy" || byName["Servers again"].Status != "failed" || byName["Manual"].Error != reason {
 		t.Fatalf("list %+v", list)
 	}
 }
-func TestDefaultUntaggedNetworkAutoRegistration(t *testing.T) {
+
+// The host owns its default ISO storage and untagged networks: it self-registers them in its
+// journal and the Controller only mirrors them, so a report never turns into a command and an
+// agent without managed-VM support gets nothing.
+func TestHostReportedDefaultsAreMirroredNotIssued(t *testing.T) {
 	a := newClient(t)
 	host := a.enroll(a.token(a.site(), ""), csr(t))
 	cert := certificate(t, host.CertificatePEM)
 	pool := a.poolOf(host.HostID)
-	nics := []protocol.NIC{{Name: "nex0", Kind: "physical", Master: "br0"}, {Name: "br0", Kind: "bridge"}, {Name: "nex0.15", Kind: "vlan", Parent: "nex0", Master: "nex0v15"}, {Name: "nex0v15", Kind: "bridge"}, {Name: "vnet0", Kind: "virtual", Master: "br0"}}
+	nics := []protocol.NIC{{Name: "nex0", Kind: "physical", Master: "br0"}, {Name: "br0", Kind: "bridge"}}
 	report := func(seq uint64, caps bool) protocol.ReportResponse {
-		v := protocol.ReportRequest{Version: 1, Sequence: seq, Inventory: &protocol.Inventory{Hostname: "core", NICs: nics}}
+		v := protocol.ReportRequest{Version: 1, Sequence: seq, Inventory: &protocol.Inventory{Hostname: "core", NICs: nics, Managed: hostDefaults(host.HostID)}}
 		if caps {
 			v.Capabilities = []string{protocol.ManagedVMCapability}
 		}
 		return a.report(cert, v)
 	}
-	var list []protocol.NetworkRegistration
-	report(1, false)
-	read(t, a.call("GET", "/api/v1/networks", nil, nil, 200), &list)
-	if len(list) != 0 {
-		t.Fatal("old agent must not receive auto networks")
-	}
-	// A bridge on a physical port is registered once; the VLAN bridge (port is a VLAN device) is not.
-	// Default ISO local storage is also queued on the first managed report.
-	response := report(2, true)
-	read(t, a.call("GET", "/api/v1/networks", nil, nil, 200), &list)
-	if len(list) != 1 || list[0].Kind != "bridge" || list[0].Source != "br0" || list[0].Uplink != "nex0" || list[0].Name != "nex0 untagged" || list[0].PoolID != pool {
-		t.Fatalf("auto network %+v", list)
-	}
+	var networks []protocol.NetworkRegistration
 	var storage []protocol.StorageRegistration
-	read(t, a.call("GET", "/api/v1/storage", nil, nil, 200), &storage)
-	if len(storage) != 1 || storage[0].Name != defaultLocalStorageName || storage[0].Path != defaultLocalStoragePath || storage[0].PoolID != pool {
-		t.Fatalf("auto ISO storage %+v", storage)
+	load := func() {
+		read(t, a.call("GET", "/api/v1/networks", nil, nil, 200), &networks)
+		read(t, a.call("GET", "/api/v1/storage", nil, nil, 200), &storage)
 	}
-	if len(response.Commands) != 2 {
-		t.Fatalf("auto network+storage commands %+v", response.Commands)
-	}
-	var networkCmd, storageCmd *protocol.Command
-	for i := range response.Commands {
-		switch {
-		case response.Commands[i].Network != nil:
-			networkCmd = &response.Commands[i]
-		case response.Commands[i].Storage != nil:
-			storageCmd = &response.Commands[i]
-		}
-	}
-	if networkCmd == nil || networkCmd.Network.Source != "br0" || storageCmd == nil || storageCmd.Storage.Path != defaultLocalStoragePath {
-		t.Fatalf("auto network/storage command %+v", response.Commands)
-	}
-	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 3, Capabilities: []string{protocol.ManagedVMCapability}, Results: []protocol.Result{{OperationID: list[0].OperationID, Status: "failed", Error: "bridge missing"}}})
-	report(4, true)
-	read(t, a.call("GET", "/api/v1/networks", nil, nil, 200), &list)
-	if len(list) != 1 || list[0].Status != "failed" {
-		t.Fatalf("failed auto registration must not be recreated: %+v", list)
-	}
-	read(t, a.call("GET", "/api/v1/storage", nil, nil, 200), &storage)
-	if len(storage) != 1 {
-		t.Fatalf("auto ISO storage recreated: %+v", storage)
-	}
-	// A manual VLAN on the same uplink still works alongside the default network.
-	read(t, a.call("POST", "/api/v1/networks", registrationRequest{RequestID: "vlan15", PoolID: pool, HostID: host.HostID, Name: "vlan15", Kind: "vlan", Uplink: "nex0", VLAN: 15}, nil, 201), &list[0])
-}
-func TestDefaultISOStorageAutoRegistration(t *testing.T) {
-	a := newClient(t)
-	host := a.enroll(a.token(a.site(), ""), csr(t))
-	cert := certificate(t, host.CertificatePEM)
-	pool := a.poolOf(host.HostID)
-	report := func(seq uint64, caps bool, results ...protocol.Result) protocol.ReportResponse {
-		v := protocol.ReportRequest{Version: 1, Sequence: seq, Results: results, Inventory: &protocol.Inventory{Hostname: "core"}}
-		if caps {
-			v.Capabilities = []string{protocol.ManagedVMCapability}
-		}
-		return a.report(cert, v)
-	}
-	var list []protocol.StorageRegistration
 	report(1, false)
-	read(t, a.call("GET", "/api/v1/storage", nil, nil, 200), &list)
-	if len(list) != 0 {
-		t.Fatal("old agent must not receive auto storage")
+	load()
+	if len(networks) != 0 || len(storage) != 0 {
+		t.Fatal("old agent must not get resources")
 	}
-	response := report(2, true)
-	read(t, a.call("GET", "/api/v1/storage", nil, nil, 200), &list)
-	if len(list) != 1 || list[0].Name != defaultLocalStorageName || list[0].Path != defaultLocalStoragePath || list[0].PoolID != pool || list[0].HostID != host.HostID {
-		t.Fatalf("auto ISO %+v", list)
+	for seq := uint64(2); seq < 4; seq++ {
+		if cmds := report(seq, true).Commands; len(cmds) != 0 {
+			t.Fatalf("host defaults dispatched as commands: %+v", cmds)
+		}
+		load()
+		if len(networks) != 1 || networks[0].ID != "host-untagged" || networks[0].Kind != "bridge" || networks[0].Source != "br0" || networks[0].Uplink != "nex0" || networks[0].Name != "nex0 untagged" || networks[0].PoolID != pool || networks[0].HostID != host.HostID || networks[0].Status != "succeeded" {
+			t.Fatalf("mirrored network %+v", networks)
+		}
+		if len(storage) != 1 || storage[0].ID != "host-iso" || storage[0].Name != "ISO" || storage[0].Path != "/var/lib/libvirt/images" || storage[0].PoolID != pool || storage[0].Status != "succeeded" {
+			t.Fatalf("mirrored storage %+v", storage)
+		}
 	}
-	if len(response.Commands) != 1 || response.Commands[0].Storage == nil || response.Commands[0].Storage.Path != defaultLocalStoragePath {
-		t.Fatalf("auto ISO command %+v", response.Commands)
-	}
-	report(3, true, protocol.Result{OperationID: list[0].OperationID, Status: "failed", Error: "path missing"})
-	report(4, true)
-	read(t, a.call("GET", "/api/v1/storage", nil, nil, 200), &list)
-	if len(list) != 1 || list[0].Status != "failed" {
-		t.Fatalf("failed auto ISO must not be recreated: %+v", list)
-	}
-	// Failed definite registrations can be revalidated with a new request_id; the path stays free.
-	var other protocol.StorageRegistration
-	read(t, a.call("POST", "/api/v1/storage", registrationRequest{RequestID: "retry-iso", PoolID: pool, HostID: host.HostID, Name: "ISO", Path: defaultLocalStoragePath}, nil, 201), &other)
-	read(t, a.call("POST", "/api/v1/storage", registrationRequest{RequestID: "extra", PoolID: pool, HostID: host.HostID, Name: "Extra", Path: "/var/lib/nex/vms"}, nil, 201), &other)
+	// A manual VLAN on the same uplink still works alongside the host's default network.
+	read(t, a.call("POST", "/api/v1/networks", registrationRequest{RequestID: "vlan15", PoolID: pool, HostID: host.HostID, Name: "vlan15", Kind: "vlan", Uplink: "nex0", VLAN: 15}, nil, 201), &networks[0])
 }
 func TestHostReportedManagedStateIsAdopted(t *testing.T) {
 	// A rebuilt Controller mirrors the master's journal: IDs and names survive, pool/host are rewritten.
@@ -450,11 +419,9 @@ func TestHostReportedManagedStateIsAdopted(t *testing.T) {
 	report := func(seq uint64) protocol.ReportResponse {
 		return a.report(cert, protocol.ReportRequest{Version: 1, Sequence: seq, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: inv})
 	}
-	response := report(1)
-	if len(response.Commands) != 1 || response.Commands[0].Storage == nil || response.Commands[0].Storage.Path != defaultLocalStoragePath {
-		t.Fatalf("adopted entries must not be dispatched; only auto ISO: %+v", response.Commands)
+	if response := report(1); len(response.Commands) != 0 {
+		t.Fatalf("adopted entries must not be dispatched: %+v", response.Commands)
 	}
-	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 2, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: inv, Results: []protocol.Result{{OperationID: response.Commands[0].OperationID, Status: "succeeded"}}})
 	var storage []protocol.StorageRegistration
 	var networks []protocol.NetworkRegistration
 	var media []protocol.Media
@@ -466,24 +433,8 @@ func TestHostReportedManagedStateIsAdopted(t *testing.T) {
 		read(t, a.call("GET", "/api/v1/vms", nil, nil, 200), &vms)
 	}
 	load()
-	if len(storage) != 2 {
-		t.Fatalf("storage %+v", storage)
-	}
-	byID := map[string]protocol.StorageRegistration{}
-	for _, s := range storage {
-		byID[s.ID] = s
-	}
-	if s := byID["stor-1"]; s.Name != "Local" || s.PoolID != pool || s.HostID != host.HostID || s.Status != "succeeded" {
+	if len(storage) != 1 || storage[0].ID != "stor-1" || storage[0].Name != "Local" || storage[0].PoolID != pool || storage[0].HostID != host.HostID || storage[0].Status != "succeeded" {
 		t.Fatalf("adopted storage %+v", storage)
-	}
-	foundISO := false
-	for _, s := range storage {
-		if s.Path == defaultLocalStoragePath && s.Name == defaultLocalStorageName && s.Status == "succeeded" {
-			foundISO = true
-		}
-	}
-	if !foundISO {
-		t.Fatalf("auto ISO missing: %+v", storage)
 	}
 	if len(networks) != 2 || networks[0].ID != "net-default" || networks[0].Name != "nex0 untagged" || networks[0].Uplink != "nex0" || networks[0].Status != "succeeded" ||
 		networks[1].ID != "net-vlan15" || networks[1].VLAN != 15 || networks[1].PoolID != pool || networks[1].HostID != host.HostID || networks[1].Status != "succeeded" {
@@ -512,17 +463,8 @@ func TestHostReportedManagedStateIsAdopted(t *testing.T) {
 		t.Fatalf("re-report dispatched %+v", response.Commands)
 	}
 	load()
-	if len(storage) != 2 || len(networks) != 2 || len(media) != 1 || len(vms) != 1 {
-		t.Fatalf("re-report changed resources: %d %d %d %d", len(storage), len(networks), len(media), len(vms))
-	}
-	stillLocal := false
-	for _, s := range storage {
-		if s.ID == "stor-1" {
-			stillLocal = true
-		}
-	}
-	if !stillLocal {
-		t.Fatalf("adopted storage lost: %+v", storage)
+	if len(storage) != 1 || storage[0].ID != "stor-1" || len(networks) != 2 || len(media) != 1 || len(vms) != 1 {
+		t.Fatalf("re-report changed resources: %+v %d %d %d", storage, len(networks), len(media), len(vms))
 	}
 	// Adopted references resolve for new work on the same host.
 	v := createVMRequest{RequestID: "vm2", VMCreateSpec: vmSpec(pool, host.HostID, "guest2", "stor-1", "net-vlan15", "iso-1")}
@@ -607,14 +549,24 @@ func TestCreateVMSpecificationReferencesAndScope(t *testing.T) {
 	if !applianceUUID(created.VMID) {
 		t.Fatal("invalid stable uuid")
 	}
-	for name, mac := range map[string]string{"supplied": "52:54:00:aa:bb:01", "derived": protocol.DerivedMAC(created.VMID, 1)} {
-		v := l.spec("guest2")
-		v.NICs[0].MAC = mac
-		if w := l.create("duplicate-"+name+"-mac", v, 409); !strings.Contains(w.Body.String(), "already used by another VM") {
-			t.Fatal(w.Body.String())
+	// A duplicate MAC or name is not the Controller's call: the host checks its journal and
+	// libvirt and answers with a failed task, which the Controller records as reported.
+	var dup createdVM
+	read(t, l.create("duplicate-mac", func() protocol.VMCreateSpec { v := l.spec("guest2"); v.NICs[0].MAC = "52:54:00:aa:bb:01"; return v }(), 202), &dup)
+	l.create("duplicate-name", l.spec("guest1"), 202)
+	l.report()
+	l.report(protocol.Result{OperationID: dup.Operation.ID, Status: "failed", Error: "MAC address 52:54:00:aa:bb:01 is already used by VM guest1 on this host"})
+	var vms []managedAppliance
+	read(t, a.call("GET", "/api/v1/vms", nil, nil, 200), &vms)
+	failed := 0
+	for _, vm := range vms {
+		if vm.ID == dup.VMID && vm.Status == "failed" && strings.Contains(vm.Error, "already used by VM guest1") {
+			failed++
 		}
 	}
-	l.create("duplicate-name", l.spec("guest1"), 409)
+	if len(vms) != 3 || failed != 1 {
+		t.Fatalf("host-reported conflict missing from the VM list: %+v", vms)
+	}
 	// The host must be in the VM's pool, freshly connected and still active.
 	other := a.enroll(a.token(a.site(), ""), csr(t))
 	wrongPool := l.spec("guest2")
@@ -648,104 +600,28 @@ func addNICs(v *protocol.VMCreateSpec, n int) {
 	}
 }
 
-func TestStartAfterCreateIssuesTheExistingPowerStart(t *testing.T) {
+// start_after_create is honoured by the host inside the creation itself: the Controller
+// dispatches the flag with the vm-create command and issues no follow-on power request,
+// whatever the creation's result and whether or not the host reports vm-power-v1.
+func TestStartAfterCreateIsTheHostsCreation(t *testing.T) {
 	l := newManagedLab(t, protocol.ManagedVMCapability)
-	start := func(name string) protocol.VMCreateSpec {
-		v := l.spec(name)
-		v.StartAfterCreate = true
-		return v
-	}
-	// A creation that does not succeed is never started.
-	var failed createdVM
-	read(t, l.create("vm-failed", start("guest-failed"), 202), &failed)
-	l.report()
-	if cmds := l.report(protocol.Result{OperationID: failed.Operation.ID, Status: "failed", Error: "disk allocation failed"}).Commands; len(cmds) != 0 {
-		t.Fatalf("failed creation dispatched %+v", cmds)
-	}
-	// A host that cannot accept central power requests still creates the VM and records why
-	// the start was not performed, without retrying it on every report.
-	var unpowered createdVM
-	read(t, l.create("vm-unpowered", start("guest-unpowered"), 202), &unpowered)
-	l.report()
-	if cmds := l.report(protocol.Result{OperationID: unpowered.Operation.ID, Status: "succeeded"}).Commands; len(cmds) != 0 {
-		t.Fatalf("power dispatched to a host without the capability %+v", cmds)
-	}
-	refused := starts(l.operations())["start-after-create:"+unpowered.VMID]
-	if refused.Status != "failed" || refused.Actor != "system" || !strings.Contains(refused.Error, "does not support central power requests") {
-		t.Fatalf("refused start %+v", refused)
-	}
-	// The capability arriving later does not resurrect a start the operator was told to make.
-	l.caps = append(l.caps, protocol.PowerCapability)
-	if cmds := l.report().Commands; len(cmds) != 0 {
-		t.Fatalf("refused start retried %+v", cmds)
-	}
+	v := l.spec("guest-started")
+	v.StartAfterCreate = true
 	var created createdVM
-	read(t, l.create("vm-started", start("guest-started"), 202), &created)
-	l.report()
-	cmds := l.report(protocol.Result{OperationID: created.Operation.ID, Status: "succeeded"}).Commands
-	if len(cmds) != 1 || cmds[0].Kind != "vm-power" || cmds[0].Power == nil || cmds[0].Power.VMID != created.VMID || cmds[0].Power.Action != "start" ||
-		cmds[0].Power.HostID != l.host.HostID || cmds[0].Power.PoolID != l.pool {
-		t.Fatalf("follow-on start %+v", cmds)
+	read(t, l.create("vm-started", v, 202), &created)
+	cmds := l.report().Commands
+	if len(cmds) != 1 || cmds[0].VM == nil || !cmds[0].VM.StartAfterCreate {
+		t.Fatalf("creation command must carry start_after_create: %+v", cmds)
 	}
-	issued := starts(l.operations())
-	if len(issued) != 2 || issued["start-after-create:"+created.VMID].Status != "dispatched" {
-		t.Fatalf("start operations %+v", issued)
-	}
-	if _, wrong := issued["start-after-create:"+failed.VMID]; wrong {
-		t.Fatal("a failed creation was started")
-	}
-	// Every VM was created; only the last one was started.
-	var vms []managedAppliance
-	read(t, l.a.call("GET", "/api/v1/vms", nil, nil, 200), &vms)
-	if len(vms) != 3 {
-		t.Fatalf("VM list %+v", vms)
-	}
-}
-
-// starts indexes the follow-on start operations by their stable request_id.
-func starts(ops []protocol.Operation) map[string]protocol.Operation {
-	out := map[string]protocol.Operation{}
-	for _, op := range ops {
-		if op.Kind == "vm-power" {
-			out[op.RequestID] = op
+	for _, status := range []string{"succeeded", "needs_attention"} {
+		l.caps = append(l.caps, protocol.PowerCapability)
+		if cmds := l.report(protocol.Result{OperationID: created.Operation.ID, Status: status}).Commands; len(cmds) != 0 {
+			t.Fatalf("follow-on dispatched after %s: %+v", status, cmds)
 		}
 	}
-	return out
-}
-
-// Dedicated memory is a promise, so the host admission-controls it against what it has already
-// promised. Both independent reviews found this unimplemented: five 16 GiB dedicated VMs were
-// accepted on a 16 GiB host while the wizard, guide and API reference all told the operator the
-// memory was reserved and never given to another VM. Maximum mode reserves nothing and must
-// still be allowed past the same point.
-func TestDedicatedMemoryIsAdmissionControlled(t *testing.T) {
-	l := newManagedLab(t, protocol.ManagedVMCapability)
-	// The lab host reports 16 GiB; 2 GiB is reserved for the host itself.
-	first := l.spec("dedicated1")
-	first.Memory = protocol.VMMemory{Mode: "dedicated", SizeMiB: 8192}
-	l.create("req-dedicated-1", first, 202)
-
-	// 8192 already promised + 8192 + 2048 reserve > 16384: the host cannot promise it.
-	second := l.spec("dedicated2")
-	second.Memory = protocol.VMMemory{Mode: "dedicated", SizeMiB: 8192}
-	if body := l.create("req-dedicated-2", second, 409).Body.String(); !strings.Contains(body, "left to promise") {
-		t.Fatalf("second dedicated VM was not refused for capacity: %s", body)
+	for _, op := range l.operations() {
+		if op.Kind == "vm-power" {
+			t.Fatalf("Controller issued a start: %+v", op)
+		}
 	}
-
-	// Same size in maximum mode reserves nothing and is allowed to oversubscribe.
-	relaxed := l.spec("maximum1")
-	relaxed.Memory = protocol.VMMemory{Mode: "maximum", SizeMiB: 8192}
-	l.create("req-maximum-1", relaxed, 202)
-
-	// A maximum VM neither consumes the dedicated allowance nor frees it: what still fits
-	// dedicated is bounded by the dedicated commitments alone. 8192 promised + 2048 reserve
-	// leaves exactly 6144, so that is the boundary in both directions.
-	over := l.spec("dedicated3")
-	over.Memory = protocol.VMMemory{Mode: "dedicated", SizeMiB: 6145}
-	if body := l.create("req-dedicated-3", over, 409).Body.String(); !strings.Contains(body, "left to promise") {
-		t.Fatalf("dedicated VM one MiB over the remaining promise was accepted: %s", body)
-	}
-	fits := l.spec("dedicated4")
-	fits.Memory = protocol.VMMemory{Mode: "dedicated", SizeMiB: 6144}
-	l.create("req-dedicated-4", fits, 202)
 }

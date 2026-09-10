@@ -27,20 +27,15 @@ func TestPowerRequestsAreAuthorizedDurableAndDispatched(t *testing.T) {
 		inv := &protocol.Inventory{ObservedAt: now, Hostname: "core", CPUCount: 4, MemoryBytes: 8 << 30, Checks: []protocol.Check{{Name: "libvirt", Status: "healthy", ObservedAt: now}}, VMs: []protocol.VM{{ID: vm, Name: "controller", State: "shut off"}}}
 		return a.report(cert, protocol.ReportRequest{Version: 1, Sequence: sequence, Capabilities: caps, Inventory: inv, Results: results})
 	}
-	// An enrolled host is handed its default ISO storage registration; acknowledge it so the
-	// dispatch assertion below is about the power request alone and not a queued re-send.
-	var enrolled []protocol.Result
-	for _, cmd := range report([]string{protocol.ManagedVMCapability}).Commands {
-		enrolled = append(enrolled, protocol.Result{OperationID: cmd.OperationID, Status: "succeeded"})
-	}
-	if len(enrolled) != 1 {
-		t.Fatalf("enrollment commands %d", len(enrolled))
+	// The host owns its default resources, so an enrolled host is handed no commands.
+	if enrolled := report([]string{protocol.ManagedVMCapability}).Commands; len(enrolled) != 0 {
+		t.Fatalf("enrollment commands %+v", enrolled)
 	}
 	if w := a.call("POST", "/api/v1/vms/"+vm+"/power", body, nil, 409); !strings.Contains(w.Body.String(), "does not support central power") {
 		t.Fatal(w.Body.String())
 	}
 	caps := []string{protocol.ManagedVMCapability, protocol.PowerCapability}
-	report(caps, enrolled...)
+	report(caps)
 	var first map[string]any
 	read(t, a.call("POST", "/api/v1/vms/"+vm+"/power", body, nil, 202), &first)
 	op := first["operation"].(map[string]any)

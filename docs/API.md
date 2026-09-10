@@ -411,9 +411,10 @@ local directory or bridge/active libvirt network without formatting or configuri
 `kind: "vlan"` with `uplink` (host NIC or bond name, at most 10 characters) and `vlan`
 (0–4094; 0 = untagged). `source` must be omitted; Controller derives the bridge name
 `<uplink>v<vlan>` (for example `nex1v100`) before replay comparison, so identical retries
-replay identically. Controller rejects mixed shapes (400), uplinks the host has not reported
-as a physical NIC or bond (409) and a duplicate uplink/VLAN or plain registration of the same
-derived bridge on that host (409). The `network-register` command then creates the 802.1Q
+replay identically. Controller rejects mixed shapes (400) and uplinks the host has not reported
+as a physical NIC or bond (409). A duplicate uplink/VLAN or plain registration of the same
+derived bridge on that host is queued and refused by the host as a failed task (see
+*Host-owned defaults and validation* below). The `network-register` command then creates the 802.1Q
 sub-interface `<uplink>.<vlan>` and the bridge idempotently, persists an ifupdown stanza under
 `/etc/network/interfaces.d/nex-<bridge>` (adding `source /etc/network/interfaces.d/*` to
 `/etc/network/interfaces` when absent) and verifies the port is attached. It never modifies
@@ -442,11 +443,9 @@ actor `system` with `request_id adopt-<kind>:<host>:<id>` (`storage-register`,
 `network-register`, `iso-import`, `vm-create`), every entry it does not hold, reusing the ID
 and recording the operation as already succeeded without dispatching a command. Entries that
 duplicate an existing ID, storage path, network (kind, source) or VM name, and invalid entries,
-are skipped. The default local storage **ISO** for `/var/lib/libvirt/images`
-(`request_id auto-storage:<host>`) and the untagged default network `<port> untagged` for each
-host bridge whose port is a physical NIC or bond (`request_id auto-network:<host>:<bridge>`,
-kind `bridge` with `uplink` set) are created by Controller under actor `system` when absent; a
-registration for that path or bridge in any state, including failed, suppresses re-creation.
+are skipped. The default local storage **ISO** and the untagged default networks are
+host-originated entries in that same journal (see *Host-owned defaults and validation* below),
+so they reach a Controller only by this adoption path.
 On the host, `vm-create` resolves storage, network and media references by
 resource ID rather than by pool/host ID, so creation works after re-enrollment under a new
 Controller. Result: replacing a Controller means installing a new one and connecting each
@@ -464,7 +463,8 @@ read-only media. See the OpenAPI operations for admission errors.
 `vm-create` preserves pool membership separately from host placement, allocates a stable
 UUID and requires successful registrations/media for the same host and pool. Core rechecks
 storage, networking, capacity and firmware, then creates every disk and defines a stopped
-guest through system libvirt. It does not start the VM. The shared host engine's
+guest through system libvirt; only `start_after_create` makes it start that guest, once, after
+the definition is verified. The shared host engine's
 `NewManaged(stateDir)` selects its private journal;
 `Execute(ctx, command, fetch)` validates scope and payload, serializes effects and returns
 the durable `Result` separately from journal/persistence errors. The agent supplies the
@@ -480,8 +480,8 @@ command payload and the VM list/report inventory carry `VMCreateSpec` in its com
 Controller and Core by `protocol.ValidateVMSpec`; existence of referenced resources, pool-wide
 MAC uniqueness and host capacity stay with their owners.
 
-- **Identity.** `name` unique within the pool (`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`, reserved
-  before dispatch), `description` at most 4096 characters, and `guest_os` (`""`, `linux`,
+- **Identity.** `name` (`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`; uniqueness is the host's
+  check, see *Host-owned defaults and validation*), `description` at most 4096 characters, and `guest_os` (`""`, `linux`,
   `windows`, `other`) recorded for display and guest-tools advice. It installs nothing and does
   not change the VM's devices: disk bus and NIC model are chosen per device.
 - **`cpu`.** `count` at least 1; Controller caps it at 64 and at host capacity. `sockets`,
@@ -515,7 +515,7 @@ MAC uniqueness and host capacity stay with their owners.
   administered unicast prefix, two octets of `sha256(vm id)` and the interface index), which is
   stable per VM and interface and cannot collide within a VM. A manual `mac` must be six octets
   in canonical lower-case colon form, unicast and not all zero; that canonical form is what lets
-  Controller enforce pool-wide uniqueness by plain string comparison.
+  the host check uniqueness against its journal and domain definitions by plain string comparison.
 - **Boot order.** `0` means "not a boot device". Non-zero values are unique across every disk and
   `boot.media_boot_order`; gaps are allowed (ejecting media leaves one), and at least one boot
   device is required. A non-zero `media_boot_order` requires `media_id`, and the install ISO must
@@ -526,24 +526,65 @@ MAC uniqueness and host capacity stay with their owners.
   name (`^[a-z0-9][a-z0-9._-]{0,31}$`).
 - **Lifecycle.** `autostart` is the libvirt property (`virsh autostart`) set while the stopped
   guest is defined, so the host starts the VM on boot; it is not a start. `start_after_create` is
-  **not** part of creation: when the create command succeeds, Controller issues the existing,
-  proven `vm-power` `start` as a second operation. The managed create engine still never starts a
-  guest, so a failed or uncertain creation never boots and the operator sees two honest tasks.
-  The follow-on carries actor `system` and the stable `request_id start-after-create:<vm id>`, so
-  it is one durable attempt and not a retry loop. If the host does not report `vm-power-v1`,
-  Controller records that `vm-power` operation as `failed` with the reason instead of queueing a
-  command: the VM exists, stopped, and the operator starts it explicitly. Adoption by a replaced
-  Controller clears `start_after_create`, so re-adopting a pool never powers guests on.
+  honoured by the host inside the same creation (changed contract, 2026-09-10): after every disk
+  is created and the persistent definition is verified, Core persists stage `starting` and issues
+  the same single libvirt start `vm-power` uses, then records the outcome (`started`, or the
+  reason) in the creation's journal entry. That entry is what makes the start happen once: a
+  replayed command returns the durable result, and an interruption around the start is
+  reconciled by observation (`running` proves it) and never re-issued. A start that libvirt
+  refuses leaves the VM defined with its disks and returns `needs_attention` with
+  `VM created but not started: <reason>`; a failed or uncertain creation never boots. Controller
+  issues no follow-on `vm-power` operation and no longer needs `vm-power-v1` for this; the
+  operator sees one creation task whose result covers both steps.
 
 `createVM` refusals, in the order they are evaluated: **400** for a client-supplied `id`, an
 invalid `request_id` or name, any `protocol.ValidateVMSpec` violation (its message is returned
 verbatim) and the Controller ceilings `cpu.count > 64` or `memory.size_mib > 262144`; **409** for
 a replay whose payload changed, a host outside the named pool, a stale or revoked host, a
-`media_id` on a storage target none of the VM's disks use, capacity above the host's observed CPU
-or memory, a VM name already reserved in the pool, and a manual `mac` already used by another VM
-in that pool (including another VM's derived addresses); **404** for any `disks[].storage_id`,
-`nics[].network_id` or non-empty `media_id` that is not a registration this pool and host have
-verified. A **200** replay returns the original VM and operation; a new request returns **202**.
+`media_id` on a storage target none of the VM's disks use, and capacity above the host's observed
+CPU or memory; **404** for any `disks[].storage_id`, `nics[].network_id` or non-empty `media_id`
+that is not a registration this pool and host have verified. A **200** replay returns the
+original VM and operation; a new request returns **202**. Name and MAC uniqueness and
+dedicated-memory admission are not HTTP refusals: the host decides them and reports a failed
+task (next section).
+
+**Host-owned defaults and validation (changed contract, 2026-09-10):** Nex Core owns its default
+resources and every admission decision its own record can answer; Controller only mirrors and
+displays what the host reports. API impact: **changed contract** for `storage-register`,
+`network-register` and `vm-create` results and for the corresponding client refusals; protocol
+version and capabilities are unchanged.
+
+- *Defaults are host-originated.* At agent start, and whenever a new bridge on a physical NIC or
+  bond appears (checked once a minute from the same interface observation the inventory probe
+  reports), Core self-registers `/var/lib/libvirt/images` as storage **ISO** and `<port> untagged`
+  (kind `bridge`, `source` the bridge, `uplink` the port) for each such bridge, in its managed
+  journal with host-generated IDs, through the same verification a Controller-issued
+  registration gets. A journal entry that already holds that path or bridge — in any state,
+  whoever issued it — suppresses the default, so a host that received Controller-issued defaults
+  before this change gets no duplicates. Host-originated entries carry the host ID in both
+  `pool_id` and `host_id`; the pool is assigned on adoption like every other journal entry.
+  Controller never queues `auto-storage`/`auto-network` registrations any more.
+- *Validation errors are failed results.* Core refuses, as a `failed` result with an
+  operator-readable `error`: a storage path another non-failed registration on the host holds
+  (`storage path <path> is already registered on this host as <name>`); a bridge (shared by
+  kind `bridge` and `vlan`) or libvirt network another non-failed registration holds
+  (`network <source> is already registered on this host as <name>`); a VM name another domain
+  or non-failed `vm-create` entry holds; an effective MAC, manual or derived, that any domain
+  definition or non-failed `vm-create` entry holds (`MAC address <mac> is already used by VM
+  <name> on this host`); and dedicated memory that, with the dedicated memory already promised
+  by every non-failed `vm-create` entry plus the 2 GiB host reserve, exceeds `MemTotal`
+  (`dedicated memory exceeds what this host has left to promise; free a dedicated VM or use the
+  maximum memory mode`). A failed registration or creation releases what it claimed. Controller
+  no longer refuses these itself (the former 409s for a registered path/bridge, a reserved VM
+  name, a used MAC and the dedicated-memory promise are gone); it records the host's result on
+  the operation, and the existing operation views show it. Uniqueness is checked on the VM's
+  host; a pool has one host until member joins exist, so this is the pool today.
+- *Compatibility.* Core and Controller ship together. A Core older than this change does not
+  self-register defaults, so a new Controller managing it would show no **ISO** storage or
+  untagged network until the host is upgraded; and it does not honour `start_after_create`
+  itself, so a VM created with that flag through such a host stays stopped. Both are accepted
+  (decision: Matt, 2026-09-10); upgrade the host. An older Controller against a new Core keeps
+  issuing its own defaults, which the host refuses as already registered.
 
 API impact: **changed contract**. The VM creation request, the `vm-create` command payload and
 the VM list/report inventory (`ManagedAppliance.spec`, `Inventory.managed.vms`) all carry the new

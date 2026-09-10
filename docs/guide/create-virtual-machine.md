@@ -10,8 +10,8 @@ One VM can have up to eight disks and up to eight network interfaces, either
 autostart. The VM belongs to a pool with a separate assignment to one host. Storage and
 network access are checked on that host; a pool registration does not make a local disk shared.
 
-**Creation never starts a guest.** The VM is always created stopped. **Start after creation**
-makes Nex issue a separate start request once creation has succeeded, so you see two tasks.
+The VM is created stopped. **Start after creation** makes the host start it once, as the last
+step of the same creation task, after it has verified the definition.
 
 Editing an existing VM and deleting a VM are not yet available in this development build:
 plan the disks, interfaces, firmware and memory before you create the VM, because changing
@@ -61,21 +61,25 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
 
 1. Sign in to Controller and, in **Resources**, select the pool that was created for the
    host (it is named after the host, which its **General** panel shows as **Pool master**).
-2. Open **Storage**. The host's default **ISO** storage (`/var/lib/libvirt/images`) is
-   registered automatically once the host reports; wait for it to show `succeeded` and use
-   it for ISO upload and VM disks. To add another directory, select **Register local storage**,
+2. Open **Storage**. The host registers its default **ISO** storage (`/var/lib/libvirt/images`)
+   itself and reports it once connected; wait for it to show `succeeded` and use it for ISO
+   upload and VM disks. To add another directory, select **Register local storage**,
    enter a **Name**, select the **Host**, and enter its **Existing directory**, then
    **Register and check access**. Wait for the access check to show `succeeded`; follow its
-   link to **Task history** if it remains queued or reports an error.
-3. Open **Networking**. The host's untagged network (for example **nex0 untagged** on the
-   installer-created `br0`) is registered automatically once the host reports; use it for
-   VMs on the management LAN. For a tagged VLAN, select **Register network**. Enter a name and select the same
+   link to **Task history** if it remains queued or reports an error. A directory the host has
+   already registered under another name is reported by the host as a failed task naming that
+   registration; reuse it instead.
+3. Open **Networking**. The host registers its untagged network (for example **nex0 untagged**
+   on the installer-created `br0`) itself and reports it once connected, and adds one for any
+   bridge it later gains on a physical NIC or bond; use it for VMs on the management LAN. For a tagged VLAN, select **Register network**. Enter a name and select the same
    host. Under **Connection**, choose the host NIC that carries the network and enter its
    **VLAN ID** (1–4094 tagged; 0 uses the NIC untagged, which is only accepted on a NIC
    without host addresses). The bridge name is shown as `<NIC>v<VLAN>`. To use an existing
    bridge untagged, choose it from the same list; choose **Other** to enter an existing
    bridge or libvirt network by name. Select **Register and check access**, then wait for
-   `succeeded`. The table shows each network's connection, bridge and VM count.
+   `succeeded`. The table shows each network's connection, bridge and VM count. A bridge or
+   libvirt network the host has already registered under another name is reported by the host
+   as a failed task naming that registration; reuse it instead.
 4. Open **ISO library**, then **Upload ISO**. Choose the validated **Destination storage**
    (the default **ISO** registration is fine) and select or drop one **ISO file**. Select
    **Upload and transfer ISO**. Progress, rate and **Cancel** for the upload to Controller
@@ -188,9 +192,10 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
         the ISO removes it from the order.
    6. **Review** — every selection is listed for a last check, including the derived or
       manual MAC of each interface and the resolved boot order. Under **Lifecycle**:
-      - **Start after creation** — Nex issues a separate start request only once creation has
-        succeeded, so you will see two tasks; the VM itself is always created stopped. The
-        automatic start is attempted once and is not retried.
+      - **Start after creation** — the host starts the VM once, as the last step of the
+        creation task, after every disk exists and the definition is verified. The start is
+        attempted once and is not retried; if it fails, the VM is still created and the task
+        reports `needs_attention` with the reason.
       - **Start automatically when the host boots** — sets the VM's autostart property on the
         host. It does not start the VM now.
 6. Select **Create stopped VM** (or **Create and start VM**, when start after creation is
@@ -234,9 +239,8 @@ model and MAC, the install ISO with its boot position, the firmware and machine 
 whether the VM starts when the host boots. A successful creation task means provisioning
 completed; fresh libvirt observations establish its current state separately.
 
-Creation never starts a guest: with **Start after creation** the VM is created stopped and a
-separate power task starts it, so the VM's page can briefly show a stopped VM while that
-second task runs. No guest operating system is installed by this workflow — start the VM,
+With **Start after creation** the creation task itself ends by starting the VM, so the VM's
+page can briefly show a stopped VM while the task finishes. No guest operating system is installed by this workflow — start the VM,
 open its [console](vm-console.md) and install the guest from the attached ISO.
 
 **Host ISO images** lists only transfers assigned to the selected host and pool.
@@ -260,10 +264,12 @@ the host; files are checked again when creating a VM.
   carries host addresses; choose a VLAN ID instead. Nothing is changed on a refused request.
   For an existing bridge or libvirt network, verify it exists or is active on this host and
   correct networking separately with a recovery path.
-- **The default untagged network is missing:** it appears only after a host with managed-VM
-  support reports a bridge whose port is a physical NIC. Check the host's **Networking**
-  panel: each physical NIC lists what it carries; bridges, VLAN devices and VM ports are
-  under **All interfaces**. If the automatic registration failed, its task shows the reason.
+- **The default untagged network is missing:** the host registers it itself, at agent start
+  and within a minute of a bridge on a physical NIC or bond appearing, and reports it on its
+  next connection. Check the host's **Networking** panel: each physical NIC lists what it
+  carries; bridges, VLAN devices and VM ports are under **All interfaces**. If the host's own
+  registration failed, its task shows the reason. A host running Nex Core from before this
+  behaviour registers nothing itself; upgrade it.
 - **Controller was rebuilt:** once the host reconnects, its storage registrations, networks,
   ISO records and VM definitions come back automatically with their original names and IDs.
   Not recovered: sites, administrator accounts, audit history and enrollment tokens; the host
@@ -291,14 +297,15 @@ the host; files are checked again when creating a VM.
   picked has stopped being verified for this host — usually because the host went stale or a
   registration was re-checked. Reselect the resource, or go back to **Storage**,
   **Networking** or **ISO library** and confirm its state before continuing.
-- **The submission is refused immediately:** unresolvable storage, network or ISO selections,
-  a VM name already reserved in the pool, capacity beyond what the host reports, and a MAC
-  already used in the pool are all rejected by Controller without queuing a host task.
-  Nothing was created; correct the entry and submit again.
-- **A MAC address is already used:** Controller enforces MAC uniqueness across the whole
-  pool, including the automatic addresses of other VMs. Clear the field to take an automatic
-  address, or choose another one. If Controller reports that it could not derive free MAC
-  addresses for this VM, set them manually.
+- **The submission is refused immediately:** unresolvable storage, network or ISO selections
+  and capacity beyond what the host reports are rejected by Controller without queuing a host
+  task. Nothing was created; correct the entry and submit again.
+- **The creation task failed with a duplicate name, a used MAC or dedicated memory the host
+  cannot promise:** the host checks its own record and libvirt, so these arrive as a failed
+  task in **Task history** with the conflicting VM named. Nothing was created and the name and
+  address are free again. Choose another name; clear the MAC field to take an automatic
+  address, or choose another one (the host also checks the automatic addresses of its other
+  VMs); or lower the dedicated size, free a dedicated VM, or use the **Maximum** memory mode.
 - **Resource or firmware validation fails on the host:** the host repeats the checks with its
   real state, so a request Controller accepted can still fail. *insufficient available memory
   including 2 GiB host reserve* means the host's currently available memory cannot meet the
@@ -306,11 +313,11 @@ the host; files are checked again when creating a VM.
   storage target cannot hold every disk placed on it plus its headroom. *UEFI firmware is not
   available on this host* means that host's libvirt does not advertise EFI for this machine
   type; choose BIOS or fix the host's firmware packages.
-- **The VM was created but did not start:** creation and starting are separate tasks. Check
-  **Task history** for the follow-on power request; a host whose agent does not support
-  central power requests records the start as failed with that reason, and the VM still
-  exists, stopped. The automatic start is not retried; start it from the
-  [Power controls](vm-power.md).
+- **The VM was created but did not start:** the creation task reports `needs_attention` with
+  *VM created but not started* and the host's reason. The VM exists with its disks, stopped;
+  the start is not retried. Inspect the reason, then start it from the
+  [Power controls](vm-power.md). A host running Nex Core from before this behaviour ignores
+  the option and always leaves the VM stopped.
 - **Autostart could not be enabled:** the VM is defined but its autostart property was not
   set. The task says so. Inspect the VM on its host; the VM itself is intact.
 - **The guest does not boot from the ISO:** confirm **Install media** is first in the boot
@@ -351,6 +358,14 @@ single-disk, single-interface form and remain valid only for the parts of this p
 did not change: sign-in, storage/network registration, ISO upload and transfer, and the
 stopped-VM outcome. Treat every instruction in step 5 as untested until a report covering the
 six pages is linked here.
+
+**Host-owned defaults, validation and start after creation (2026-09-10) — not yet walked
+through in a browser.** The host now self-registers the **ISO** storage and untagged networks
+(steps 2–3), refuses duplicate paths, bridges, VM names, MACs and unpromisable dedicated
+memory as failed tasks, and starts a VM itself when **Start after creation** is selected.
+This is covered by Core and Controller unit tests (`go test ./...`) and the UI typecheck
+only; the browser walkthrough, the disposable-host defaults registration and a real start
+after creation are not yet recorded.
 
 **Background ISO upload / no fixed size cap (2026-09-10) — not yet walked through in a
 browser.** Step 4's Recent tasks progress/rate/Cancel behaviour and uploads larger than the

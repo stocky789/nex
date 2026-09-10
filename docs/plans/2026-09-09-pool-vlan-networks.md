@@ -42,8 +42,11 @@ Matt asked why no untagged (VLAN 0) network exists by default, why one VLAN show
 interfaces, and whether everything comes back from the pool master if Controller dies.
 
 - Every host bridge on a physical NIC or bond gets an automatic pool network
-  `<port> untagged` (kind bridge, uplink recorded) when a managed host reports. Operators
-  should never have to register the management LAN.
+  `<port> untagged` (kind bridge, uplink recorded). Operators should never have to register
+  the management LAN. Revised 2026-09-10 (architecture invariant): the host self-registers it
+  in its managed journal, with host-generated IDs, at agent start and when a new uplink
+  appears; Controller only adopts it. Registration conflicts and VM name/MAC/dedicated-memory
+  admission are likewise the host's checks, reported as failed tasks.
 - The 802.1Q sub-interface plus per-VLAN bridge is ordinary Linux plumbing: one bridge per
   VLAN. The host page now shows physical NICs and what they carry;
   bridges, VLAN devices and VM ports are folded into an "All interfaces" list.
