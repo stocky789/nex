@@ -1,0 +1,29 @@
+{
+  "summary": "Align the managed-VM browser check with the current invalid-ISO alert text so phase1 stops failing on a stale assertion.",
+  "paths": [
+    "tests/integration/managed_vm_browser.py",
+    "docs/changes/2026-09-10-managed-vm-iso-alert.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Browser QA assertion only; operator-facing ISO upload copy and steps are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core contract change; the check only matches existing UI alert text.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Test expectation only; no durable pool or Controller state.",
+    "record": ""
+  },
+  "verification": {
+    "method": "Compared run 3798 job 4363 failure text against web/src/managed.tsx and updated the assertion to the live alert substring. Runner host 192.168.98.101 was inspected: gitea-runner container healthy, Docker up; failure was not a runner fault.",
+    "evidence": [
+      "tests/integration/managed_vm_browser.py",
+      "web/src/managed.tsx"
+    ]
+  }
+}

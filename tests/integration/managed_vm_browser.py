@@ -201,7 +201,7 @@ def acceptance(config, password, iso, evidence, mode):
         page.get_by_role('button', name='Upload ISO', exact=True).click()
         page.get_by_label('Destination storage').select_option(label=next(t for t in page.get_by_label('Destination storage').locator('option').all_text_contents() if t.startswith(storage_name)))
         page.get_by_label('ISO file', exact=True).set_input_files({'name': 'bad.txt', 'mimeType': 'text/plain', 'buffer': b'invalid'})
-        expect(page.get_by_role('alert')).to_contain_text('Choose a non-empty ISO')
+        expect(page.get_by_role('alert')).to_contain_text('Choose an ISO image ending in .iso of at least 32 KiB.')
         capture('invalid-iso')
         if mode == 'simulated':
             transfer = page.evaluate_handle('(name) => { const d = new DataTransfer(); const data = new Uint8Array(65536); data.set([1,67,68,48,48,49,1],32768); d.items.add(new File([data], name, {type: "application/x-iso9660-image"})); return d; }', iso.name)
