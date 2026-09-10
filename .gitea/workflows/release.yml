@@ -35,8 +35,22 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Releasing $tag as Debian version $version"
 
-      - name: Require Docker
-        run: docker info
+      # installer/build.sh bind-mounts the workspace into its builder images. On a
+      # runner that executes jobs inside a container, $PWD is not a Docker host path
+      # and those mounts resolve to empty directories. Fail here with the cause
+      # rather than deep inside the build. See docs/BUG_LEDGER.md BUG-0043.
+      - name: Require Docker and a workspace the build can mount
+        run: |
+          set -eu
+          docker info
+          probe=$(docker run --rm -v "$PWD:/probe" --entrypoint sh debian:trixie-slim \
+            -c 'test -f /probe/installer/build.sh && echo ok' 2>/dev/null || true)
+          if [ "$probe" != ok ]; then
+            echo "This runner cannot bind-mount the workspace: \$PWD ($PWD) is not a" >&2
+            echo 'path on the Docker host, so the ISO build would mount nothing.' >&2
+            echo 'Fix: give act_runner a host label, for example "ubuntu-latest:host".' >&2
+            exit 1
+          fi
 
       - name: Build source archive, packages and ISO
         env:

@@ -1,11 +1,12 @@
 {
-  "summary": "BUG-0043: phase1 and installer had failed on every Gitea run since 2026-09-08 because the runner executes jobs in an unprivileged container. phase1 stopped at an unshare step that ran sixth, skipping the 18 checks after it; installer bind-mounted a path that does not exist on the Docker host. phase1 now runs every unprivileged check first and gates the namespace steps on a detected capability with a loud warning naming the missing coverage; installer fails fast with the cause and the runner-side fix. API impact: none — CI configuration only, no product code, interface or contract is touched.",
+  "summary": "BUG-0043: phase1 and installer had failed on every Gitea run since 2026-09-08 because the runner executes jobs in an unprivileged container. phase1 stopped at an unshare step that ran sixth, skipping the 18 checks after it; installer bind-mounted a path that does not exist on the Docker host. phase1 now runs every unprivileged check first and gates the namespace steps on a detected capability with a loud warning naming the missing coverage. The Gitea installer job was scoped to what that runner can do: source checks and regressions run directly in the job container, and four checks were DELETED \u2014 native bridge, DHCP preview, ISO build with initramfs completeness, and wizard/progress. That job no longer establishes an ISO is buildable and warns so on every run. The GitHub copy keeps the full matrix. API impact: none \u2014 CI configuration only.",
   "paths": [
     ".gitea/workflows/phase1.yml",
     ".gitea/workflows/installer.yml",
     ".github/workflows/phase1.yml",
     ".github/workflows/installer.yml",
-    "docs/BUG_LEDGER.md"
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-10-ci-runner-capability.json"
   ],
   "guide": {
     "impact": "none",
@@ -18,7 +19,7 @@
     "pages": []
   },
   "verification": {
-    "method": "All seven workflow files parsed with PyYAML; the resulting phase1 step order confirmed as go test, contract/unit checks, UI build, advisories, then the capability probe followed by the two gated namespace steps; the two gated steps confirmed to carry if: steps.netns.outputs.available == 'true'. Audited every run: block across .gitea and .github for ${{ }} interpolation and found none, so no workflow-injection surface was introduced. Root cause read directly from the failing run: job 4335 log shows 'bash: installer/check.sh: No such file or directory' after a -v \"$PWD:/work\" mount, and job 4336 shows 'unshare: unshare failed: Operation not permitted' with go test -race ./... having already passed and 18 later steps skipped; the run header shows the job executing inside docker.gitea.com/runner-images:ubuntu-latest. Run history over the Gitea API confirms phase1 and installer failed on every run from 2026-09-08 onward, predating the change under test. NOT verified: no workflow run was triggered, so the reordered pipeline has not executed; full namespace and ISO-build coverage still requires a host-mode runner label and remains outstanding, not restored by this change.",
+    "method": "bash installer/check.sh and all seven tests/integration/installer-*.py checks plus the installer-network.c compile-and-run were executed on a workstation outside any container, exactly as the scoped job invokes them: all nine pass, confirming they never needed the builder image. All seven workflow files parsed with PyYAML; phase1 step order confirmed as go test, contract/unit checks, UI build, advisories, then the capability probe followed by the two gated namespace steps carrying if: steps.netns.outputs.available == 'true'. Audited every run: block across .gitea and .github for ${{ }} interpolation and found none. Root cause read from the failing runs: job 4335 shows 'bash: installer/check.sh: No such file or directory' after -v \"$PWD:/work\"; job 4336 shows 'unshare: unshare failed: Operation not permitted' with go test -race ./... already passed and 18 steps skipped; job 4338 confirms $PWD is /workspace/stocky789/Nex, a container-only path. Gitea run history shows phase1 and installer failing on every run from 2026-09-08, predating these changes. NOT verified: no run was triggered after scoping, so the reordered and scoped pipelines have not executed; the docker build step was not exercised locally. ISO build, bridge, DHCP, initramfs, wizard and namespace coverage are OUTSTANDING, deleted or skipped rather than restored, and need a host-mode runner label.",
     "evidence": [
       "docs/BUG_LEDGER.md",
       ".gitea/workflows/phase1.yml",

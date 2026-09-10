@@ -754,14 +754,22 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
   masked because the privileged step ran sixth, ahead of everything cheap and unconditional.
 - Fix: reordered `phase1` so every unprivileged check runs before the namespace steps, and gated
   those two steps on a detected capability that emits a loud `::warning::` naming the missing
-  coverage when it is absent. `installer` now verifies the workspace actually reached the builder
-  image and fails with the cause and the runner-side fix instead of a bare "No such file or
-  directory". Full coverage still requires a host-mode runner label.
-- Regression evidence: none automated — this is CI configuration, and a workflow file establishes
-  no coverage by itself. Verified by parsing all seven workflow files, confirming the resulting
-  step order and `if` gating, and confirming no `${{ }}` interpolation appears inside any `run:`
-  block. The real check is the next pushed run: `phase1` must report results for the unit tests,
-  contract check and UI build rather than skipping them.
+  coverage when it is absent. `.gitea/workflows/installer.yml` was then scoped to what this runner
+  can actually do (Matt's decision, 2026-09-10): `installer/check.sh` and the seven installer
+  regressions now run directly in the job container, which only ever needed a toolchain, plus a
+  `docker build` that still catches a broken Dockerfile. **Four checks were deleted, not fixed** —
+  native bridge verification, DHCP preview, ISO build with initramfs completeness, and the wizard
+  review / disk confirmation / installer progress checks. Nothing in that job now establishes that
+  a bootable, correct ISO can be produced, and it says so in a `::warning::` on every run.
+  `.github/workflows/installer.yml` deliberately keeps the full matrix, since GitHub-hosted runners
+  are VMs with the required privileges.
+- Regression evidence: `bash installer/check.sh` plus all seven `tests/integration/installer-*.py`
+  checks and the `installer-network.c` compile-and-run were executed directly on a workstation,
+  outside any container, exactly as the scoped job invokes them — all pass, confirming they never
+  needed the builder image. All seven workflow files parse; step order and `if` gating confirmed;
+  no `${{ }}` interpolation appears inside any `run:` block. CI configuration otherwise carries no
+  automated regression test: a workflow file establishes no coverage by itself. The real check is
+  the next pushed run.
 - Avoid: putting a step that needs host privileges ahead of cheap unconditional checks. A single
   environment failure then hides the entire suite, and the job looks uniformly broken when almost
   all of it would have passed. Equally, do not read the resulting green as full coverage: the

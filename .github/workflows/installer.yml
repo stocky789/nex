@@ -1,4 +1,11 @@
 name: Installer
+# Deliberately diverges from .gitea/workflows/installer.yml, which is scoped down to
+# source-level checks. GitHub-hosted runners are virtual machines with the privileges
+# and real filesystem paths this job needs, so the full matrix is kept here: ISO build,
+# initramfs completeness, native bridge and DHCP verification, and the wizard review.
+# The Gitea runner executes jobs in an unprivileged container and cannot do any of it.
+# See docs/BUG_LEDGER.md BUG-0043. Keep the two in sync again once that runner is
+# switched to a host label.
 on:
   push:
   pull_request:

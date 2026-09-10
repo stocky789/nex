@@ -81,6 +81,10 @@ treated as proof the artifact is served.
 - **"[Unreleased] still has entries"** — move them under the version heading.
 - **"declares <version>, expected <version>"** — a package was built at a different version
   than the tag. Re-run the workflow; do not publish the mismatched artifact.
+- **"This runner cannot bind-mount the workspace"** — the runner executes jobs inside a
+  container, so the ISO build would mount an empty directory. Give `act_runner` a host
+  label (`ubuntu-latest:host` in its `config.yaml`) and restart it. This currently blocks
+  every tagged release; see [BUG-0043](../BUG_LEDGER.md).
 - **Deploy secrets are not set** — the workflow says so and uploads artifacts without
   publishing. Add the secrets and re-run, or publish by hand from the artifacts.
 - **Nothing published and no error** — check the runner can reach the website host; the host
