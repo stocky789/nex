@@ -770,6 +770,16 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
   no `${{ }}` interpolation appears inside any `run:` block. CI configuration otherwise carries no
   automated regression test: a workflow file establishes no coverage by itself. The real check is
   the next pushed run.
+- Third pass: with the ordering fixed, phase1 reached 20 of 24 steps and failed at *Verify local
+  host browser authentication and preflight blockers* with
+  `cc1: fatal error: /workspace/stocky789/Nex/packaging/core-local/nex-root-auth.c: No such file`.
+  That file exists and is tracked; `localcore_browser.py` runs `docker run -v {ROOT}:{ROOT}:ro`,
+  so the same container-only workspace path mounted empty. The two libvirt steps after it need
+  KVM and a running libvirtd, equally unavailable. Rather than discover these one run at a time,
+  the two separate probes were replaced by a single `hostcap` step that tests **both** namespace
+  creation and a Docker bind mount, and all five host-dependent steps are gated on it. Every
+  remaining step passed unaided in run 3789, so the job should now complete with those five
+  reported as skipped.
 - Second cause, found after two failed attempts to fix the first: **Gitea on git.stockhome.com.au
   executes `.github/workflows/`, not `.gitea/workflows/`.** Two pushes that scoped
   `.gitea/workflows/installer.yml` changed nothing, because the job kept running the `.github`
@@ -806,3 +816,28 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
   the policy under test. A permission error that `try_files` renders as "not found" makes the
   whole suite vacuous rather than failing loudly, so a fixture that nginx cannot read looks the
   same as a policy that does not match.
+
+## BUG-0045 — New maintainer script omitted from the corresponding-source archive
+
+- Date: 2026-09-10.
+- Symptom: `packaging/core-local/preinst` was added to the package builder but not to the file
+  allowlist in `scripts/build-source.py`, so it was absent from the generated AGPL
+  corresponding-source archive.
+- Root cause: `packaging/core-local/build.py` extracts that archive and runs `build-inside.sh`
+  from the extracted copy, so the builder's `install -m755 packaging/core-local/preinst ...`
+  would fail on a file the archive never contained. Two lists have to agree — what the package
+  installs and what the source archive ships — and only one was updated. The second is also the
+  corresponding source Nex is obliged to distribute, so an omission there is a licensing defect,
+  not only a build break.
+- Fix: add `packaging/core-local/preinst` to the allowlist, and add
+  `test_installed_maintainer_scripts_are_in_the_allowlist`, which cross-checks every packaging
+  path referenced by a package builder against the archive allowlist so the next omission fails
+  a check instead of a build.
+- Regression evidence: `python3 -m unittest discover -s tests -p 'test_build_source.py'` — with
+  the allowlist entry removed the new case fails with
+  `referenced by a package builder but absent from the source archive: ['packaging/core-local/preinst']`;
+  with it restored all 5 pass. Run by the `Check contracts and contributor tools` step of both
+  phase1 workflows.
+- Avoid: adding a file to a package builder without adding it to the source archive that builder
+  is itself built from. Neither an ISO build nor a package build was runnable in CI when this
+  landed, so nothing would have caught it before a release attempt.

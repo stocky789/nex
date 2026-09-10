@@ -69,3 +69,32 @@ class SourceArchiveTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class MaintainerScriptRetentionTests(unittest.TestCase):
+    """Every Debian maintainer script a package builder installs must reach the source archive.
+
+    packaging/core-local/preinst was added and wired into build-inside.sh without being added
+    to FILES. It has no extension, so no TREES rule picked it up either: the archive built
+    fine, and the ISO build failed hours later inside the builder container with
+    "install: cannot stat 'packaging/core-local/preinst'".
+    """
+
+    def test_installed_maintainer_scripts_are_in_the_allowlist(self):
+        root = Path(__file__).parents[1]
+        referenced = set()
+        for builder in root.glob('packaging/*/build-inside.sh'):
+            for token in builder.read_text().split():
+                token = token.strip('"\'')
+                if token.startswith('packaging/') and (root / token).is_file():
+                    referenced.add(token)
+        self.assertTrue(referenced, 'no packaging paths found; the builders or this check moved')
+        missing = sorted(p for p in referenced if p not in source.FILES and not self.covered_by_tree(p))
+        self.assertEqual(missing, [], f'referenced by a package builder but absent from the source archive: {missing}')
+
+    @staticmethod
+    def covered_by_tree(path):
+        for tree, suffixes in source.TREES.items():
+            if path.startswith(tree + '/') and Path(path).suffix in suffixes:
+                return True
+        return False

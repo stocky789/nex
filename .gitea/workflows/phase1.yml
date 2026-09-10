@@ -44,28 +44,38 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
           govulncheck ./...
           npm --prefix web audit --audit-level=low
-      # Creating network namespaces needs CAP_SYS_ADMIN, which a job running inside
-      # an unprivileged runner container does not have. Detect it once so the two
-      # steps below report honestly as not-run instead of failing the whole job.
-      # This is missing coverage, not passing coverage: the warning says so.
-      - name: Check whether this runner can create namespaces
-        id: netns
+      # The remaining checks need one of two things a job running inside an
+      # unprivileged runner container cannot provide: CAP_SYS_ADMIN to create network
+      # namespaces, or a workspace path that exists on the Docker host so nested
+      # containers can bind-mount the repository. Probe both once, and gate every
+      # dependent step on the result so a limited runner reports them honestly as
+      # not-run instead of failing the job. These are SKIPPED, NOT PASSING.
+      - name: Check runner capabilities for host-dependent checks
+        id: hostcap
         run: |
           set -eu
-          if sudo unshare -nm true 2>/dev/null; then
+          namespaces=no
+          bindmount=no
+          sudo unshare -nm true 2>/dev/null && namespaces=yes || true
+          if docker run --rm -v "$PWD:/probe" --entrypoint sh debian:trixie-slim \
+              -c 'test -f /probe/go.mod' >/dev/null 2>&1; then
+            bindmount=yes
+          fi
+          echo "namespaces=$namespaces bind mount=$bindmount"
+          if [ "$namespaces" = yes ] && [ "$bindmount" = yes ]; then
             echo 'available=true' >> "$GITHUB_OUTPUT"
           else
             echo 'available=false' >> "$GITHUB_OUTPUT"
-            echo '::warning::Runner cannot create network namespaces, so the guest VLAN and Controller replacement network checks DID NOT RUN. That coverage is missing from this run. Give act_runner a host label (for example "ubuntu-latest:host") to restore it.'
+            echo "::warning::Runner cannot run host-dependent checks (namespaces=$namespaces, docker bind mount=$bindmount). SKIPPED, NOT PASSED: guest VLAN bridge, Controller replacement in a namespace, local host browser authentication and preflight, Debian libvirt observations, and Controller replacement with Debian libvirt. That coverage is missing from this run. Give act_runner a host label (for example \"ubuntu-latest:host\") to restore it."
           fi
       - name: Verify guest VLAN bridge creation in a disposable network namespace
-        if: steps.netns.outputs.available == 'true'
+        if: steps.hostcap.outputs.available == 'true'
         run: |
           mkdir -p .cache
           go test -c -o .cache/vmhost.test ./internal/vmhost
           sudo unshare -nm sh -c 'mount -t sysfs none /sys && NEX_NETNS_TEST=1 .cache/vmhost.test -test.run TestGuestVLANNetns -test.v'
       - name: Verify Controller replacement with real processes in a disposable network namespace
-        if: steps.netns.outputs.available == 'true'
+        if: steps.hostcap.outputs.available == 'true'
         run: |
           mkdir -p .cache/replacement-bin
           go build -o .cache/replacement-bin/nex-controller ./cmd/nex-controller
@@ -111,8 +121,11 @@ jobs:
       - name: Build local host browser service
         run: go build -o dist/nex-core-local ./cmd/nex-core-local
       - name: Verify local host browser authentication and preflight blockers
+        if: steps.hostcap.outputs.available == 'true'
         run: .cache/phase1-qa-venv/bin/python tests/integration/localcore_browser.py --blocked-only
       - name: Verify Debian and native libvirt observations
+        if: steps.hostcap.outputs.available == 'true'
         run: bash tests/integration/phase1-debian.sh
       - name: Verify Controller replacement end to end with Debian libvirt (storage, network, ISO, VM)
+        if: steps.hostcap.outputs.available == 'true'
         run: bash tests/integration/controller_replacement_debian.sh .cache/controller-replacement-debian

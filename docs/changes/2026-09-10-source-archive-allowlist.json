@@ -1,0 +1,26 @@
+{
+  "summary": "BUG-0045: packaging/core-local/preinst was added to the package builder but not to the file allowlist in scripts/build-source.py, so it was missing from the generated AGPL corresponding-source archive. packaging/core-local/build.py extracts that archive and builds from it, so the package build would have failed on the missing file, and the distributed corresponding source was incomplete. The allowlist is corrected and a new check cross-references every packaging path a package builder installs against the archive allowlist. API impact: none — build tooling only, no product code or interface.",
+  "paths": [
+    "scripts/build-source.py",
+    "tests/test_build_source.py",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-10-source-archive-allowlist.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Build tooling only. No operator-facing behaviour, GUI workflow, CLI, installer output, configuration, permission or error message changes. The corresponding-source obligation is covered by docs/LICENSING.md, which is unchanged: the archive's required contents did not change, only whether the tooling actually included them.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller operation, agent command, event, stream, observed-state flow or client-facing endpoint is added, removed or changed. The change is one entry in a source-archive file list plus a check over that list.",
+    "pages": []
+  },
+  "verification": {
+    "method": "python3 -m unittest discover -s tests -p 'test_build_source.py' — 5 cases pass. The new case was confirmed to actually detect the defect rather than merely pass: with the allowlist entry removed it fails with \"referenced by a package builder but absent from the source archive: ['packaging/core-local/preinst']\", and passes once restored. This check runs in CI through the 'Check contracts and contributor tools' step of both phase1 workflows. NOT verified: no package or ISO has been built from the corrected archive, because neither is buildable on the current runner (BUG-0043); the end-to-end proof that packaging/core-local/build.py now succeeds remains outstanding.",
+    "evidence": [
+      "tests/test_build_source.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}
