@@ -63,7 +63,11 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
    host (it is named after the host, which its **General** panel shows as **Pool master**).
 2. Open **Storage**. The host registers its default **ISO** storage (`/var/lib/libvirt/images`)
    itself and reports it once connected; wait for it to show `succeeded` and use it for ISO
-   upload and VM disks. To add another directory, select **Register local storage**,
+   upload and VM disks. If that self-registration fails (the directory is missing or not
+   writable, for example), no **Storage** row appears: the failure is a failed task in
+   **Task history** naming the host's reason, and the host does not retry it. Correct the
+   directory on the host, then register it yourself with **Register local storage** below;
+   a failed registration does not reserve its path. To add another directory, select **Register local storage**,
    enter a **Name**, select the **Host**, and enter its **Existing directory**, then
    **Register and check access**. Wait for the access check to show `succeeded`; follow its
    link to **Task history** if it remains queued or reports an error. A directory the host has
@@ -313,11 +317,14 @@ the host; files are checked again when creating a VM.
   storage target cannot hold every disk placed on it plus its headroom. *UEFI firmware is not
   available on this host* means that host's libvirt does not advertise EFI for this machine
   type; choose BIOS or fix the host's firmware packages.
-- **The VM was created but did not start:** the creation task reports `needs_attention` with
-  *VM created but not started* and the host's reason. The VM exists with its disks, stopped;
-  the start is not retried. Inspect the reason, then start it from the
-  [Power controls](vm-power.md). A host running Nex Core from before this behaviour ignores
-  the option and always leaves the VM stopped.
+- **The VM was created but did not start:** the creation task shows `succeeded` and a
+  separate failed power task, *VM created but not started* with the host's reason, appears in
+  **Task history**. The VM exists with its disks, stopped, and is a normal managed VM; the
+  start is not retried by itself. Inspect the reason, then start it from the
+  [Power controls](vm-power.md). *interrupted before the automatic start completed* means the
+  host was interrupted at that step and did not find the VM running afterwards; start it the
+  same way. A host running Nex Core from before this behaviour ignores the option and always
+  leaves the VM stopped.
 - **Autostart could not be enabled:** the VM is defined but its autostart property was not
   set. The task says so. Inspect the VM on its host; the VM itself is intact.
 - **The guest does not boot from the ISO:** confirm **Install media** is first in the boot

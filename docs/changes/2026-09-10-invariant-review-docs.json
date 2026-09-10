@@ -1,0 +1,34 @@
+{
+  "summary": "Correct the documentation findings from the independent review of the invariant branch: state the host's start-after-create semantics (a verified creation succeeds; a failed automatic start is a separate failed vm-power outcome <operation-id>:start in Task history and the VM stays a normal managed VM), document pending journal entries the host is no longer executing as needs_attention 'interrupted before completion' outcomes, give one consistent statement that pool, host and resource IDs inside managed entries are host-owned (defaults carry the pool ID when the host knows it, otherwise the host ID as placeholder), note that an older Controller rejects an upgraded Core's report fields on every report, qualify Controller replacement for hosts enrolled before host-owned identity, and explain a failed default ISO storage self-registration in the creation guide.",
+  "paths": [
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/manage-controller.md",
+    "docs/changes/2026-09-10-invariant-review-docs.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operator-visible behaviour changed: a VM whose automatic start failed is a succeeded creation plus a failed start task and is started from Power; interrupted tasks after a Controller replacement appear as needs_attention with a retry instruction; a failed default ISO storage self-registration appears only in Task history and is fixed by registering the directory manually; a pre-host-owned-identity host lands in a new pool on replacement.",
+    "pages": ["docs/guide/create-virtual-machine.md", "docs/guide/manage-controller.md"]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "API impact: changed contract semantics on existing shapes, no new field or endpoint. The vm-create result becomes succeeded once the definition is verified and the automatic start is reported through the existing ManagedOutcome list (operation_id <operation-id>:start, kind vm-power), pending entries the host no longer executes are reported as needs_attention outcomes, and the ManagedState ID statement is corrected to host-owned/stable with the pool-ID-or-placeholder rule for defaults. The code for these semantics is implemented on a separate branch; this record covers the contract text (docs/API.md, openapi.json descriptions, regenerated index.html).",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/index.html"]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation only: the start outcome, pending-entry outcomes and default entries it describes are already recorded in the managed journal on the pool master, whose owner is declared by the adoption-completeness and host-owned-defaults records; this change persists nothing new."
+  },
+  "verification": {
+    "method": "python3 scripts/generate_api.py (index.html regenerated from openapi.json), python3 -m unittest tests.test_api_contract, python3 scripts/check_docs.py --worktree, and a grep of the diff for other product names (none). Merged-run evidence for the replacement flow this text describes: tests/integration/controller_replacement.py was run on commit c81a633 with CI's exact command and passed - Controller B, started empty with a different certificate, adopted the host and pool with their original IDs and pool name, plus storage, network and ISO record with the same IDs and names under actor system, with no command and no duplicates, and a new ISO transfer on the adopted resources succeeded; its result file (.cache/controller-replacement/controller-replacement.json in the integration worktree) is not committed. The new S1/S2 wording was not exercised against a host: it documents the semantics being implemented on the code branch, whose own record must carry the runnable checks.",
+    "evidence": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "tests/test_api_contract.py",
+      "tests/integration/controller_replacement.py"
+    ]
+  }
+}

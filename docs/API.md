@@ -477,8 +477,12 @@ device). `Inventory.guest_networks[]` and the `GuestNetwork` schema are replaced
 `Inventory.managed`, a `ManagedState` object with `storage` (StorageRegistration), `networks`
 (NetworkRegistration), `media` (Media) and `vms` (VMCreateSpec) lists, each at most 10000
 entries and omitted when empty: every succeeded registration and VM definition from the Core
-managed journal. `pool_id`/`host_id` inside entries are the creating Controller's and are
-rewritten on adoption; resource IDs are stable. On each managed report Controller adopts, under
+managed journal. Pool, host and resource IDs inside entries are host-owned and stable across
+Controllers: a host's self-registered default entry carries its pool ID when the host knows it
+(hosts enrolled with host-owned identity), otherwise its host ID as a placeholder until
+adoption (see *Host-owned defaults and validation* below). Adoption records each entry under
+the host's current pool and host, a no-op for hosts that presented their own identity at
+enrollment. On each managed report Controller adopts, under
 actor `system` with `request_id adopt-<kind>:<host>:<id>` (`storage-register`,
 `network-register`, `iso-import`, `vm-create`), every entry it does not hold, reusing the ID
 and recording the operation as already succeeded without dispatching a command. Entries that
@@ -497,7 +501,11 @@ deployed, from the appliance engine's deploy journal under the nex-core-local da
 `/var/lib/nex/core-local/vmhost` by default; the standalone agent takes
 `--appliance-journal-dir`), `outcomes` (`ManagedOutcome`: every journal entry that ended
 `failed` or `needs_attention`, with the host's operation ID, kind, resource ID, name, status
-and error) and `missing_vms` (IDs of `vms` entries whose persistent domain
+and error, plus two derived outcomes: a failed automatic start after `vm-create`, reported
+under ID `<operation-id>:start` with kind `vm-power` and status `failed`, and every `pending`
+entry the host is not currently executing — typically orphaned by a Controller replacement
+mid-operation — reported with status `needs_attention` and error `interrupted before
+completion; retry from a new request`; an entry still executing is not reported) and `missing_vms` (IDs of `vms` entries whose persistent domain
 `virsh list --all --uuid` no longer reports). Two host checks qualify the report:
 `managed-journal` is `failed` when a journal file cannot be read — that file is skipped and
 named in the error while every other entry is still reported, instead of the whole state
@@ -510,7 +518,9 @@ Controller, each managed report also: inserts the `appliances` row for a reporte
 the healthy libvirt observation lists (keyed by VM UUID, moved to the reporting host when the
 previous owner is revoked, audit `appliance.adopt`); records each outcome it does not hold as
 an operation with the host's operation ID, kind, status and error (actor `system`,
-`request_id adopt-outcome:<host>:<operation_id>`, audit `adopt.outcome`); and never skips an
+`request_id adopt-outcome:<host>:<operation_id>`, audit `adopt.outcome`; the issuing
+Controller already holds its own row and ignores the outcome, so an interrupted `pending`
+entry reaches Task history only on a replacement Controller); and never skips an
 entry silently — an entry already held under the same ID and kind is current, and any other
 entry it cannot adopt (invalid, conflicting ID/path/source/name, references not adopted on
 the host, missing from libvirt, or an appliance the host does not observe) leaves one
@@ -518,6 +528,10 @@ the host, missing from libvirt, or an appliance the host does not observe) leave
 actor `system`, error prefixed `not adopted from host report:`; appliance records use kind
 `vm-create` with a `Controller appliance:` prefix) and an audit entry `adopt.attention` naming
 the reason. That record is marked `succeeded` once the entry is adopted on a later report.
+Compatibility: an upgraded Core that reports `managed.appliances`, `outcomes` or
+`missing_vms` to an older Controller is rejected with 400 on every report, not only at
+enrollment, because the Controller decodes reports with unknown fields disallowed; upgrade
+the Controller before the hosts.
 Checks: `go test ./internal/vmhost ./internal/controller` (`TestAppliedSurvivesCorruptJournalEntry`,
 `TestAppliedReportsOutcomes`, `TestAppliedPromotesInterruptedCreation`,
 `TestAppliedFlagsVMsMissingFromLibvirt`, `TestDeploymentsListsApplianceOwnership`,
@@ -601,15 +615,21 @@ MAC uniqueness and host capacity stay with their owners.
 - **Lifecycle.** `autostart` is the libvirt property (`virsh autostart`) set while the stopped
   guest is defined, so the host starts the VM on boot; it is not a start. `start_after_create` is
   honoured by the host inside the same creation (changed contract, 2026-09-10): after every disk
-  is created and the persistent definition is verified, Core persists stage `starting` and issues
-  the same single libvirt start `vm-power` uses, then records the outcome (`started`, or the
-  reason) in the creation's journal entry. That entry is what makes the start happen once: a
-  replayed command returns the durable result, and an interruption around the start is
-  reconciled by observation (`running` proves it) and never re-issued. A start that libvirt
-  refuses leaves the VM defined with its disks and returns `needs_attention` with
-  `VM created but not started: <reason>`; a failed or uncertain creation never boots. Controller
-  issues no follow-on `vm-power` operation and no longer needs `vm-power-v1` for this; the
-  operator sees one creation task whose result covers both steps.
+  is created and the persistent definition is verified, the creation has **succeeded** whether
+  or not the flag is set. Core then persists stage `starting`, issues the same single libvirt
+  start `vm-power` uses and records the outcome (`started`, or the reason) in the entry's
+  `start` field. That field is what makes the start happen once: a replayed command returns
+  the durable result and never starts again, and a creation interrupted at the start step is
+  reconciled by observing libvirt — `running` records `started`, anything else records the
+  failure `interrupted before the automatic start completed`. A start that libvirt refuses
+  leaves the creation `succeeded` and the VM defined with its disks, stopped, as a normal
+  managed VM: power, console and media work on it and a replacement Controller adopts it. The
+  host reports the failed start as its own outcome with ID `<operation-id>:start`, kind
+  `vm-power`, status `failed` and error `VM created but not started: <reason>`, which the
+  Controller records in Task history next to the succeeded creation; a failed or uncertain
+  creation never boots. Controller issues no follow-on `vm-power` operation and no longer
+  needs `vm-power-v1` for this; the operator sees the creation task and, only when the
+  automatic start failed, one failed start task.
 
 `createVM` refusals, in the order they are evaluated: **400** for a client-supplied `id`, an
 invalid `request_id` or name, any `protocol.ValidateVMSpec` violation (its message is returned
@@ -635,8 +655,10 @@ version and capabilities are unchanged.
   journal with host-generated IDs, through the same verification a Controller-issued
   registration gets. A journal entry that already holds that path or bridge — in any state,
   whoever issued it — suppresses the default, so a host that received Controller-issued defaults
-  before this change gets no duplicates. Host-originated entries carry the host ID in both
-  `pool_id` and `host_id`; the pool is assigned on adoption like every other journal entry.
+  before this change gets no duplicates. Host-originated entries carry the host's pool ID
+  when the host knows it (hosts enrolled with host-owned identity) and its `host_id`; a legacy
+  host without a pool ID uses its host ID as the `pool_id` placeholder until adoption records
+  the entry under its current pool, like every other journal entry.
   Controller never queues `auto-storage`/`auto-network` registrations any more.
 - *Validation errors are failed results.* Core refuses, as a `failed` result with an
   operator-readable `error`: a storage path another non-failed registration on the host holds

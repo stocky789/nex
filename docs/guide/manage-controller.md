@@ -283,10 +283,19 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
   each pool master with an enrollment token or the **Add host** address-and-root-password
   flow (step 3). Wait for the host to report; each pool returns with its original ID and
   name and its master with its original host ID, because the host keeps that identity and
-  presents it at enrollment, and its storage registrations, networks, ISO records and VM
+  presents it at enrollment (a host enrolled before host-owned identity and never re-enrolled
+  since presents no pool ID, so it lands in a new pool named after its hostname, which
+  receives its resources), and its storage registrations, networks, ISO records and VM
   definitions return with their original names and IDs. The Controller appliance VM itself returns too, as the
   protected **Controller** VM on the host that deployed it, and the host's failed or
-  interrupted tasks reappear in **Tasks** with their original status and error. Verify each
+  interrupted tasks reappear in **Tasks** with their original status and error. A task the
+  old Controller issued that was still running when it went away, and that the host has not
+  finished, shows as `needs_attention` with *interrupted before completion; retry from a new
+  request*: the host will not resume it. Check the resource it addressed in **Storage**,
+  **Networking**, **ISO library** or **Virtual machines**, and submit it again as a new
+  request if it is missing. A VM whose automatic start failed shows a separate failed
+  *VM created but not started* task; the VM itself is adopted and starts from its
+  [Power controls](vm-power.md). Verify each
   pool's **Storage**, **Networking**, **ISO library** and **Virtual machines** tabs and the
   host's checks: **managed-journal** and **managed-vms** must be healthy. Nothing is skipped
   silently: an entry the new Controller cannot take over shows as a `needs_attention` task
@@ -313,7 +322,12 @@ resources succeeded. The appliance return, the failed task in **Tasks** and the
 `needs_attention` record for an unadoptable entry are covered by the Go checks named in the
 [API reference](../API.md#managed-vm-creation) and by the same replacement script, which
 seeds a deploy journal and a failed journal entry on the test host before Controller B starts
-(2026-09-10; see the change record for the run). Not walked through: the browser **Add host**
+(2026-09-10; see the change record for the run). The merged run of that script on commit
+c81a633, with CI's exact command, passed: Controller B, started empty with a different
+certificate, adopted the host and pool with their original IDs and pool name, plus the
+storage, network and ISO record with the same IDs and names under actor `system`, with no
+command and no duplicates, and a new ISO transfer on the adopted resources succeeded (result
+file kept outside the repository; see the change record). Not walked through: the browser **Add host**
 flow against a replacement Controller, the packaged agent on an installed host, and a real
 appliance deployment followed by a Controller replacement.
 
