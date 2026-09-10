@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -37,6 +39,25 @@ type ManagedEngine struct {
 func NewManaged(stateDir string) *ManagedEngine {
 	return &ManagedEngine{stateDir: stateDir, networkDir: "/etc/network"}
 }
+
+// inFlight holds the operation IDs this process is executing, so a report can tell a pending
+// entry that is in progress from one an earlier process left behind. One agent process owns a
+// host and its report path opens its own engine, so the set is process-wide.
+var inFlight = struct {
+	sync.Mutex
+	ids map[string]bool
+}{ids: map[string]bool{}}
+
+func (e *ManagedEngine) observer() func(context.Context, managedJournal) error {
+	if e.observe != nil {
+		return e.observe
+	}
+	return e.observeCreated
+}
+
+// startInterrupted is the recorded start outcome when the process died between persisting
+// stage "starting" and recording libvirt's answer, and the domain is not running now.
+const startInterrupted = "interrupted before the automatic start completed"
 
 type managedJournal struct {
 	Command   protocol.Command `json:"command"`
@@ -138,6 +159,10 @@ func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch f
 		result.Error = err.Error()
 		return result, nil
 	}
+	inFlight.Lock()
+	inFlight.ids[c.OperationID] = true
+	inFlight.Unlock()
+	defer func() { inFlight.Lock(); delete(inFlight.ids, c.OperationID); inFlight.Unlock() }()
 	if !filepath.IsAbs(e.stateDir) || filepath.Clean(e.stateDir) == "/" {
 		return result, errors.New("managed state requires an absolute non-root directory")
 	}
@@ -472,21 +497,37 @@ func qemuCreateArgs(path string, d protocol.VMDisk) []string {
 
 // Applied lists the pool-scoped configuration this host has durably applied, for a replaced
 // Controller to mirror, with the checks that qualify it. Per-operation fields are cleared.
-// Entries that ended failed or needs_attention are reported as outcomes; interrupted creations
-// are re-observed first (see promote); VMs libvirt no longer defines are listed as missing.
+// Entries that ended failed or needs_attention are reported as outcomes, as is a pending entry
+// no longer executing in this process (an earlier process died with it) and a creation whose
+// automatic start failed (outcome <operation>:start, kind vm-power, while the VM itself stays
+// a normal managed VM); interrupted creations are re-observed first (see promote); VMs
+// libvirt no longer defines are listed as missing.
 func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []protocol.Check) {
 	out := &protocol.ManagedState{}
+	// Read and snapshot together: an entry pending on disk while its ID is in flight is
+	// executing; Execute registers the ID before the pending save and drops it after the final one.
+	inFlight.Lock()
 	js, bad := e.readable()
-	js = e.promote(ctx, js)
+	running := maps.Clone(inFlight.ids)
+	inFlight.Unlock()
+	js = e.promote(ctx, js, running)
 	for _, j := range js {
 		c := j.Command
-		if j.Result.Status == "failed" || j.Result.Status == "needs_attention" {
-			id, name := managedIdentity(c)
-			out.Outcomes = append(out.Outcomes, protocol.ManagedOutcome{OperationID: c.OperationID, Kind: c.Kind, ID: id, Name: name, Status: j.Result.Status, Error: j.Result.Error})
+		id, name := managedIdentity(c)
+		outcome := protocol.ManagedOutcome{OperationID: c.OperationID, Kind: c.Kind, ID: id, Name: name, Status: j.Result.Status, Error: j.Result.Error}
+		switch j.Result.Status {
+		case "failed", "needs_attention":
+			out.Outcomes = append(out.Outcomes, outcome)
+			continue
+		case "pending":
+			if !running[c.OperationID] {
+				outcome.Status, outcome.Error = "needs_attention", "interrupted before completion; retry from a new request"
+				out.Outcomes = append(out.Outcomes, outcome)
+			}
 			continue
 		}
-		if j.Result.Status != "succeeded" {
-			continue
+		if c.Kind == "vm-create" && c.VM.StartAfterCreate && j.Start != "" && j.Start != "started" {
+			out.Outcomes = append(out.Outcomes, protocol.ManagedOutcome{OperationID: c.OperationID + ":start", Kind: "vm-power", ID: id, Name: name, Status: "failed", Error: "VM created but not started: " + j.Start})
 		}
 		switch c.Kind {
 		case "storage-register":
@@ -561,15 +602,17 @@ func domains(ctx context.Context) map[string]bool {
 	return out
 }
 
-// promote settles vm-create entries an interruption left in needs_attention after the
-// definition step: when the persistent domain matches the journaled definition the creation
-// succeeded. reconcile does the same for a re-sent operation, which a replaced Controller
-// never sends. Each entry is re-observed at most once a minute; a running operation holds
-// the journal lock, in which case this round is skipped.
-func (e *ManagedEngine) promote(ctx context.Context, js []managedJournal) []managedJournal {
+// promote settles vm-create entries an interruption left pending or needs_attention after the
+// definition step, and none of them is executing here: when the persistent domain matches the
+// journaled definition the creation succeeded, and an entry that died at the start step is
+// settled from libvirt's state (see settleStart). reconcile does the same for a re-sent
+// operation, which a replaced Controller never sends. No guest is started here: a start the
+// interruption skipped is recorded as not started. Each entry is re-observed at most once a
+// minute; a running operation holds the journal lock, in which case this round is skipped.
+func (e *ManagedEngine) promote(ctx context.Context, js []managedJournal, running map[string]bool) []managedJournal {
 	var due []int
 	for i, j := range js {
-		if j.Command.Kind == "vm-create" && j.Result.Status == "needs_attention" && (j.Stage == "defining" || j.Stage == "defined") && time.Since(j.Result.ObservedAt) >= time.Minute {
+		if j.Command.Kind == "vm-create" && (j.Result.Status == "needs_attention" || j.Result.Status == "pending") && !running[j.Command.OperationID] && createObservable(j.Stage) && time.Since(j.Result.ObservedAt) >= time.Minute {
 			due = append(due, i)
 		}
 	}
@@ -583,20 +626,25 @@ func (e *ManagedEngine) promote(ctx context.Context, js []managedJournal) []mana
 		return js
 	}
 	defer unlock(lock)
-	observe := e.observe
-	if observe == nil {
-		observe = e.observeCreated
-	}
+	observe := e.observer()
 	for _, i := range due {
 		// Re-read under the lock: the entry may have moved on since it was listed.
 		j, err := e.readJournal(js[i].Command.OperationID + ".json")
-		if err != nil || j.Result.Status != "needs_attention" {
+		if err != nil || (j.Result.Status != "needs_attention" && j.Result.Status != "pending") {
 			continue
 		}
-		if err = observe(ctx, j); err == nil {
-			j.Result.Status, j.Result.Error, j.Stage = "succeeded", "", "defined"
+		if j.Stage == "starting" || j.Stage == "started" {
+			err = settleStart(ctx, &j)
+		} else if err = observe(ctx, j); err == nil {
+			j.Stage = "defined"
+			if j.Command.VM.StartAfterCreate && j.Start == "" {
+				j.Start = startInterrupted
+			}
+		}
+		if err == nil {
+			j.Result.Status, j.Result.Error = "succeeded", ""
 		} else {
-			j.Result.Error = err.Error()
+			j.Result.Status, j.Result.Error = "needs_attention", err.Error()
 		}
 		j.Result.ObservedAt = time.Now().UTC()
 		if e.save(j) == nil {
@@ -604,6 +652,30 @@ func (e *ManagedEngine) promote(ctx context.Context, js []managedJournal) []mana
 		}
 	}
 	return js
+}
+
+// createObservable reports whether a vm-create stage has a definition to observe.
+func createObservable(stage string) bool {
+	return stage == "defining" || stage == "defined" || stage == "starting" || stage == "started"
+}
+
+// settleStart resolves an automatic start whose outcome the journal never recorded: the
+// single request was issued or interrupted, and libvirt's state says which. A recorded
+// outcome, started or the failure reason, is kept.
+func settleStart(ctx context.Context, j *managedJournal) error {
+	if j.Start != "" {
+		j.Stage = "started"
+		return nil
+	}
+	state, err := managedVirsh(ctx, "domstate", j.Command.VM.ID)
+	if err != nil {
+		return errors.New("VM state cannot be established after an interrupted start")
+	}
+	j.Start, j.Stage = startInterrupted, "started"
+	if strings.TrimSpace(string(state)) == "running" {
+		j.Start = "started"
+	}
+	return nil
 }
 func managedSubdir(path string) error {
 	if err := trustedManagedPath(filepath.Dir(path)); err != nil {
@@ -1217,7 +1289,9 @@ func (e *ManagedEngine) create(ctx context.Context, j *managedJournal, js []mana
 // startCreated honours start_after_create once the definition is verified. Stage "starting" is
 // persisted before the single libvirt request so an interruption is reconciled by observation,
 // and the outcome lands in the same journal entry so a retry never starts the guest again. A
-// start failure leaves the creation intact and reports needs_attention with the reason.
+// start failure never fails the creation: the VM is defined and verified, so the creation
+// succeeds and Start carries the reason, which Applied reports as a failed <operation>:start
+// outcome. The only error is a persistence failure.
 func (e *ManagedEngine) startCreated(ctx context.Context, j *managedJournal) error {
 	if !j.Command.VM.StartAfterCreate || j.Start != "" {
 		return nil
@@ -1226,11 +1300,10 @@ func (e *ManagedEngine) startCreated(ctx context.Context, j *managedJournal) err
 	if err := e.save(*j); err != nil {
 		return err
 	}
+	j.Start, j.Stage = "started", "started"
 	if err := powerVM(ctx, protocol.VMPowerRequest{VMID: j.Command.VM.ID, Action: "start"}); err != nil {
 		j.Start = err.Error()
-		return errors.New("VM created but not started: " + err.Error())
 	}
-	j.Start, j.Stage = "started", "started"
 	return nil
 }
 
@@ -1432,24 +1505,20 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protoc
 		}
 	}
 	if j.Command.Kind == "vm-create" && (j.Stage == "defining" || j.Stage == "defined") {
-		if err := e.observeCreated(ctx, j); err == nil {
-			j.Result.Status = "succeeded"
-			j.Result.Error = ""
-			j.Stage = "defined"
+		// The start step was never reached, so the re-sent creation runs it once now.
+		if err := e.observer()(ctx, j); err == nil {
+			j.Result.Status, j.Result.Error, j.Stage = "succeeded", "", "defined"
 			if err = e.startCreated(ctx, &j); err != nil {
-				j.Result.Status = "needs_attention"
-				j.Result.Error = err.Error()
+				return j.Result, err
 			}
 		}
-	}
-	if j.Command.Kind == "vm-create" && j.Stage == "starting" {
-		// The start request was issued or interrupted; only observation says which.
-		if err := powerObserved(ctx, protocol.VMPowerRequest{VMID: j.Command.VM.ID, Action: "start"}); err == nil {
-			j.Result.Status = "succeeded"
-			j.Result.Error = ""
-			j.Start, j.Stage = "started", "started"
-		} else if j.Start == "" {
-			j.Result.Error = "VM created but not started: " + err.Error()
+	} else if j.Command.Kind == "vm-create" && (j.Stage == "starting" || j.Stage == "started") {
+		// The start request was issued or interrupted; libvirt's state says which, and a
+		// recorded outcome stands. Either way the creation succeeded.
+		if err := settleStart(ctx, &j); err == nil {
+			j.Result.Status, j.Result.Error = "succeeded", ""
+		} else {
+			j.Result.Error = err.Error()
 		}
 	}
 	if j.Command.Kind == "vm-power" {
@@ -1812,11 +1881,12 @@ func hostID() string {
 // RegisterDefaults self-registers the host's default storage and untagged networks in the
 // managed journal, through the same verification a Controller-issued registration gets, so a
 // Controller only mirrors them. A journal entry already holding the path or bridge, in any
-// state and whoever issued it, means nothing is added; the pool is assigned on adoption, so
-// the host's own identity stands in for it. It is safe to call on every uplink change.
-func (e *ManagedEngine) RegisterDefaults(ctx context.Context, host string, nics []protocol.NIC) error {
-	if !identifier.MatchString(host) {
-		return errors.New("defaults need the enrolled host identity")
+// state and whoever issued it, means nothing is added. pool is the host's own pool identity;
+// a legacy host that has none passes its host identity, since a Controller assigns the pool on
+// adoption and matches by resource ID only. It is safe to call on every uplink change.
+func (e *ManagedEngine) RegisterDefaults(ctx context.Context, pool, host string, nics []protocol.NIC) error {
+	if !identifier.MatchString(host) || !identifier.MatchString(pool) {
+		return errors.New("defaults need the enrolled host and pool identity")
 	}
 	js, err := e.journals()
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -1826,7 +1896,7 @@ func (e *ManagedEngine) RegisterDefaults(ctx context.Context, host string, nics 
 	if !slices.ContainsFunc(js, func(j managedJournal) bool {
 		return j.Command.Storage != nil && j.Command.Storage.Path == DefaultStoragePath
 	}) {
-		commands = append(commands, protocol.Command{OperationID: hostID(), Kind: "storage-register", Storage: &protocol.StorageRegistration{ID: hostID(), PoolID: host, HostID: host, Name: DefaultStorageName, Path: DefaultStoragePath}})
+		commands = append(commands, protocol.Command{OperationID: hostID(), Kind: "storage-register", Storage: &protocol.StorageRegistration{ID: hostID(), PoolID: pool, HostID: host, Name: DefaultStorageName, Path: DefaultStoragePath}})
 	}
 	for _, n := range DefaultNetworks(nics) {
 		if slices.ContainsFunc(js, func(j managedJournal) bool {
@@ -1834,7 +1904,7 @@ func (e *ManagedEngine) RegisterDefaults(ctx context.Context, host string, nics 
 		}) {
 			continue
 		}
-		n.ID, n.PoolID, n.HostID = hostID(), host, host
+		n.ID, n.PoolID, n.HostID = hostID(), pool, host
 		commands = append(commands, protocol.Command{OperationID: hostID(), Kind: "network-register", Network: &n})
 	}
 	for _, c := range commands {

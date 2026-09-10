@@ -744,7 +744,8 @@ func TestAppliedSurvivesCorruptJournalEntry(t *testing.T) {
 }
 
 // Failed and needs_attention entries are reported as outcomes so a replaced Controller's task
-// history matches the host; pending entries are in flight and not reported.
+// history matches the host; a pending entry nothing in this process executes was left behind
+// by an earlier process and is reported as needs_attention.
 func TestAppliedReportsOutcomes(t *testing.T) {
 	e := NewManaged(t.TempDir())
 	v := managedTestVM()
@@ -758,7 +759,7 @@ func TestAppliedReportsOutcomes(t *testing.T) {
 		}
 	}
 	got, _ := e.Applied(context.Background())
-	if len(got.Outcomes) != 2 || len(got.VMs) != 0 || len(got.Storage) != 0 {
+	if len(got.Outcomes) != 3 || len(got.VMs) != 0 || len(got.Storage) != 0 {
 		t.Fatalf("outcomes %+v", got)
 	}
 	by := map[string]protocol.ManagedOutcome{}
@@ -770,6 +771,182 @@ func TestAppliedReportsOutcomes(t *testing.T) {
 	}
 	if o := by["op-vm"]; o.Kind != "vm-create" || o.ID != v.ID || o.Name != "guest" || o.Status != "needs_attention" {
 		t.Fatalf("needs_attention outcome %+v", o)
+	}
+	if o := by["op-pending"]; o.Kind != "vm-power" || o.ID != v.ID || o.Status != "needs_attention" || o.Error != "interrupted before completion; retry from a new request" {
+		t.Fatalf("orphaned pending outcome %+v", o)
+	}
+	if saved, err := e.readJournal("op-pending.json"); err != nil || saved.Result.Status != "pending" {
+		t.Fatalf("orphaned entry must stay on disk as it was: %+v %v", saved, err)
+	}
+}
+
+// A pending entry whose operation is executing in this process is in flight, not orphaned.
+func TestAppliedSkipsPendingEntriesInFlight(t *testing.T) {
+	e := startEngine(t)
+	gate := filepath.Join(t.TempDir(), "go")
+	t.Setenv("VMHOST_GATE", gate)
+	fakeCommand(t, "virsh", `case "$3" in domstate) while [ ! -e "$VMHOST_GATE" ]; do sleep 0.02; done; printf 'shut off\n';; start) exit 0;; list) exit 0;; *) exit 2;; esac`)
+	v := managedTestVM()
+	c := protocol.Command{OperationID: "p-live", Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: v.ID, PoolID: "p", HostID: "h", Action: "start"}}
+	done := make(chan protocol.Result, 1)
+	go func() { r, _ := e.Execute(context.Background(), c, nil); done <- r }()
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		if _, err := os.Stat(filepath.Join(e.stateDir, "p-live.json")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("pending entry never persisted")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got, _ := e.Applied(context.Background()); len(got.Outcomes) != 0 {
+		t.Fatalf("executing operation reported as orphaned: %+v", got.Outcomes)
+	}
+	if err := os.WriteFile(gate, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-done; r.Status != "succeeded" {
+		t.Fatalf("power %+v", r)
+	}
+	if got, _ := e.Applied(context.Background()); len(got.Outcomes) != 0 {
+		t.Fatalf("finished operation reported: %+v", got.Outcomes)
+	}
+}
+
+// startLibvirt fakes libvirt for the start step: domstate answers $VMHOST_STATE, list names the
+// domains in $VMHOST_DOMAINS, start fails when $VMHOST_FAIL is set, and every call is logged.
+func startLibvirt(t *testing.T) func() string {
+	t.Helper()
+	log := filepath.Join(t.TempDir(), "virsh.log")
+	t.Setenv("VMHOST_LOG", log)
+	fakeCommand(t, "virsh", `echo "$3 $4" >> "$VMHOST_LOG"; case "$3" in domstate) printf '%s\n' "$VMHOST_STATE";; list) printf '%s\n' $VMHOST_DOMAINS;; start) [ -n "$VMHOST_FAIL" ] && exit 1; exit 0;; *) exit 2;; esac`)
+	return func() string { b, _ := os.ReadFile(log); os.Remove(log); return string(b) }
+}
+
+// A verified definition is a succeeded creation whatever the automatic start did: the failure
+// reason lands in the journal's start field, is reported as a failed <operation>:start
+// vm-power outcome while the VM is listed as a normal managed VM, and a retried creation
+// neither starts the guest again nor loses the recorded reason.
+func TestManagedStartFailureKeepsCreationSucceeded(t *testing.T) {
+	e := startEngine(t)
+	calls := startLibvirt(t)
+	v := managedTestVM()
+	v.StartAfterCreate = true
+	c := protocol.Command{OperationID: "create", Kind: "vm-create", VM: &v}
+	// Interrupted after the definition was verified, before the start step.
+	j := managedJournal{Command: c, Result: protocol.Result{OperationID: "create", Status: "pending"}, Stage: "defined", Domain: []byte("<domain/>"), Disks: []string{"/srv/vms/disk-0.qcow2"}}
+	if err := e.save(j); err != nil {
+		t.Fatal(err)
+	}
+	e.observe = func(context.Context, managedJournal) error { return nil }
+	t.Setenv("VMHOST_STATE", "shut off")
+	t.Setenv("VMHOST_FAIL", "1")
+	t.Setenv("VMHOST_DOMAINS", v.ID)
+	r, err := e.Execute(context.Background(), c, nil)
+	if err != nil || r.Status != "succeeded" || r.Error != "" {
+		t.Fatalf("creation with a failed start: %+v %v", r, err)
+	}
+	reason := "libvirt refused the start request; inspect the VM on its host"
+	if got := calls(); got != "domstate "+v.ID+"\nstart "+v.ID+"\n" {
+		t.Fatalf("start calls %q", got)
+	}
+	saved, err := e.readJournal("create.json")
+	if err != nil || saved.Start != reason || saved.Stage != "started" {
+		t.Fatalf("start reason not recorded: %+v %v", saved, err)
+	}
+	got, checks := e.Applied(context.Background())
+	if len(got.VMs) != 1 || got.VMs[0].ID != v.ID || len(got.MissingVMs) != 0 || checks[1].Status != "healthy" {
+		t.Fatalf("VM not reported as managed: %+v %+v", got, checks)
+	}
+	want := protocol.ManagedOutcome{OperationID: "create:start", Kind: "vm-power", ID: v.ID, Name: "guest", Status: "failed", Error: "VM created but not started: " + reason}
+	if len(got.Outcomes) != 1 || got.Outcomes[0] != want {
+		t.Fatalf("start outcome %+v, want %+v", got.Outcomes, want)
+	}
+	calls()
+	if r, err = e.Execute(context.Background(), c, nil); err != nil || r.Status != "succeeded" {
+		t.Fatalf("retry %+v %v", r, err)
+	}
+	if got := calls(); got != "" {
+		t.Fatalf("retry touched libvirt: %q", got)
+	}
+	if saved, err = e.readJournal("create.json"); err != nil || saved.Start != reason {
+		t.Fatalf("retry lost the start reason: %+v %v", saved, err)
+	}
+	// A start that succeeds reports no outcome.
+	t.Setenv("VMHOST_FAIL", "")
+	v2 := v
+	v2.ID, v2.Name = "12345678-1234-4234-8234-123456789013", "guest2"
+	c2 := protocol.Command{OperationID: "create-2", Kind: "vm-create", VM: &v2}
+	j.Command, j.Result.OperationID = c2, "create-2"
+	if err := e.save(j); err != nil {
+		t.Fatal(err)
+	}
+	if r, err = e.Execute(context.Background(), c2, nil); err != nil || r.Status != "succeeded" {
+		t.Fatalf("started creation %+v %v", r, err)
+	}
+	t.Setenv("VMHOST_DOMAINS", v.ID+" "+v2.ID)
+	if got, _ = e.Applied(context.Background()); len(got.VMs) != 2 || len(got.Outcomes) != 1 || got.Outcomes[0].OperationID != "create:start" {
+		t.Fatalf("started creation reported an outcome: %+v", got)
+	}
+}
+
+// An entry that died at the start step is settled from libvirt: a running domain means the
+// single start took effect; otherwise the start is recorded as interrupted and reported as a
+// failed outcome. The creation is succeeded either way, on a re-sent operation and on report,
+// and a reason an earlier process recorded is never overwritten.
+func TestManagedInterruptedStartSettlesFromLibvirt(t *testing.T) {
+	e := startEngine(t)
+	calls := startLibvirt(t)
+	seed := func(op, id string, status, start string) protocol.Command {
+		v := managedTestVM()
+		v.ID, v.Name, v.StartAfterCreate = id, "guest-"+op, true
+		c := protocol.Command{OperationID: op, Kind: "vm-create", VM: &v}
+		j := managedJournal{Command: c, Result: protocol.Result{OperationID: op, Status: status, ObservedAt: time.Now().Add(-2 * time.Minute)}, Stage: "starting", Start: start, Domain: []byte("<domain/>"), Disks: []string{"/srv/vms/disk-0.qcow2"}}
+		if err := e.save(j); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	running := seed("running", "12345678-1234-4234-8234-123456789021", "pending", "")
+	t.Setenv("VMHOST_STATE", "running")
+	r, err := e.Execute(context.Background(), running, nil)
+	if err != nil || r.Status != "succeeded" {
+		t.Fatalf("re-sent creation with a running domain: %+v %v", r, err)
+	}
+	if got := calls(); got != "domstate "+running.VM.ID+"\n" {
+		t.Fatalf("settling must observe only: %q", got)
+	}
+	if saved, err := e.readJournal("running.json"); err != nil || saved.Start != "started" || saved.Stage != "started" {
+		t.Fatalf("running domain not recorded as started: %+v %v", saved, err)
+	}
+	// Left behind by a dead process: report settles it without a re-sent operation.
+	stopped := seed("stopped", "12345678-1234-4234-8234-123456789022", "pending", "")
+	legacy := seed("legacy", "12345678-1234-4234-8234-123456789023", "needs_attention", "libvirt refused the start request; inspect the VM on its host")
+	t.Setenv("VMHOST_STATE", "shut off")
+	t.Setenv("VMHOST_DOMAINS", running.VM.ID+" "+stopped.VM.ID+" "+legacy.VM.ID)
+	got, _ := e.Applied(context.Background())
+	if len(got.VMs) != 3 || len(got.Outcomes) != 2 {
+		t.Fatalf("settled creations: %+v", got)
+	}
+	by := map[string]protocol.ManagedOutcome{}
+	for _, o := range got.Outcomes {
+		by[o.OperationID] = o
+	}
+	if o := by["stopped:start"]; o.Kind != "vm-power" || o.Status != "failed" || o.ID != stopped.VM.ID || o.Error != "VM created but not started: interrupted before the automatic start completed" {
+		t.Fatalf("interrupted start outcome %+v", o)
+	}
+	if o := by["legacy:start"]; o.Error != "VM created but not started: libvirt refused the start request; inspect the VM on its host" {
+		t.Fatalf("recorded reason overwritten: %+v", o)
+	}
+	for _, op := range []string{"stopped", "legacy"} {
+		if saved, err := e.readJournal(op + ".json"); err != nil || saved.Result.Status != "succeeded" || saved.Stage != "started" {
+			t.Fatalf("%s not durably succeeded: %+v %v", op, saved, err)
+		}
+	}
+	// A re-sent operation for the settled entry replays the durable result.
+	calls()
+	if r, err = e.Execute(context.Background(), stopped, nil); err != nil || r.Status != "succeeded" || calls() != "" {
+		t.Fatalf("settled entry replay %+v %v", r, err)
 	}
 }
 

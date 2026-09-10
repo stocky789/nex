@@ -49,10 +49,10 @@ func TestRegisterDefaultsIsIdempotentAndRespectsExistingEntries(t *testing.T) {
 	ctx := context.Background()
 	e := NewManaged(filepath.Join(t.TempDir(), "state"))
 	nics := []protocol.NIC{{Name: "nex0", Kind: "physical", Master: "nexbr0"}, {Name: "nexbr0", Kind: "bridge"}}
-	if err := e.RegisterDefaults(ctx, "bad host!", nics); err == nil {
+	if err := e.RegisterDefaults(ctx, "pool-1", "bad host!", nics); err == nil {
 		t.Fatal("invalid host identity accepted")
 	}
-	if err := e.RegisterDefaults(ctx, "host-1", nics); err != nil {
+	if err := e.RegisterDefaults(ctx, "pool-1", "host-1", nics); err != nil {
 		t.Fatal(err)
 	}
 	count := func(want int) []managedJournal {
@@ -70,13 +70,13 @@ func TestRegisterDefaultsIsIdempotentAndRespectsExistingEntries(t *testing.T) {
 		case j.Command.Storage != nil:
 			storage++
 			s := j.Command.Storage
-			if s.Name != DefaultStorageName || s.Path != DefaultStoragePath || s.HostID != "host-1" || s.PoolID != "host-1" || !identifier.MatchString(s.ID) {
+			if s.Name != DefaultStorageName || s.Path != DefaultStoragePath || s.HostID != "host-1" || s.PoolID != "pool-1" || !identifier.MatchString(s.ID) {
 				t.Fatalf("default storage %+v", s)
 			}
 		case j.Command.Network != nil:
 			network++
 			n := j.Command.Network
-			if n.Name != "nex0 untagged" || n.Kind != "bridge" || n.Source != "nexbr0" || n.Uplink != "nex0" || n.HostID != "host-1" || !identifier.MatchString(n.ID) {
+			if n.Name != "nex0 untagged" || n.Kind != "bridge" || n.Source != "nexbr0" || n.Uplink != "nex0" || n.HostID != "host-1" || n.PoolID != "pool-1" || !identifier.MatchString(n.ID) {
 				t.Fatalf("default network %+v", n)
 			}
 		}
@@ -85,13 +85,13 @@ func TestRegisterDefaultsIsIdempotentAndRespectsExistingEntries(t *testing.T) {
 		t.Fatalf("storage %d network %d", storage, network)
 	}
 	// Re-running, in whatever state the entries ended up, adds nothing.
-	if err := e.RegisterDefaults(ctx, "host-1", nics); err != nil {
+	if err := e.RegisterDefaults(ctx, "pool-1", "host-1", nics); err != nil {
 		t.Fatal(err)
 	}
 	count(2)
 	// A new physical uplink adds exactly its untagged network.
 	nics = append(nics, protocol.NIC{Name: "nex1", Kind: "physical", Master: "nexbr1"}, protocol.NIC{Name: "nexbr1", Kind: "bridge"})
-	if err := e.RegisterDefaults(ctx, "host-1", nics); err != nil {
+	if err := e.RegisterDefaults(ctx, "pool-1", "host-1", nics); err != nil {
 		t.Fatal(err)
 	}
 	for _, j := range count(3) {
@@ -110,7 +110,7 @@ func TestRegisterDefaultsIsIdempotentAndRespectsExistingEntries(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := issued.RegisterDefaults(ctx, "host-1", nics[:2]); err != nil {
+	if err := issued.RegisterDefaults(ctx, "pool-1", "host-1", nics[:2]); err != nil {
 		t.Fatal(err)
 	}
 	if js := journalsOf(t, issued); len(js) != 2 {
@@ -260,13 +260,15 @@ func TestStartAfterCreateStartsOnceAndRecordsFailure(t *testing.T) {
 			t.Fatalf("a VM not asking for a start was started: %v %+v", err, stopped)
 		}
 	})
-	t.Run("failure keeps the creation and reports why", func(t *testing.T) {
-		startVirsh(t, "shut off", true)
+	t.Run("failure keeps the creation and records why", func(t *testing.T) {
+		calls := startVirsh(t, "shut off", true)
 		e := startEngine(t)
 		j := create()
-		err := e.startCreated(ctx, &j)
-		if err == nil || !strings.Contains(err.Error(), "VM created but not started") || j.Start == "" || j.Stage != "starting" {
+		if err := e.startCreated(ctx, &j); err != nil || !strings.Contains(j.Start, "libvirt refused the start request") || j.Stage != "started" {
 			t.Fatalf("%v %+v", err, j)
+		}
+		if err := e.startCreated(ctx, &j); err != nil || startCalls(t, calls) != 1 {
+			t.Fatalf("a recorded failure was retried: %v, %d starts", err, startCalls(t, calls))
 		}
 	})
 	t.Run("retry after an interrupted start observes instead of starting again", func(t *testing.T) {
@@ -290,7 +292,7 @@ func TestStartAfterCreateStartsOnceAndRecordsFailure(t *testing.T) {
 			t.Fatalf("replay %+v %v, %d starts", r, err, startCalls(t, calls))
 		}
 	})
-	t.Run("interrupted start that did not take effect needs attention", func(t *testing.T) {
+	t.Run("interrupted start that did not take effect is recorded, not retried", func(t *testing.T) {
 		calls := startVirsh(t, "shut off", false)
 		e := startEngine(t)
 		j := create()
@@ -299,8 +301,11 @@ func TestStartAfterCreateStartsOnceAndRecordsFailure(t *testing.T) {
 			t.Fatal(err)
 		}
 		r, err := e.Execute(ctx, j.Command, nil)
-		if err != nil || r.Status != "needs_attention" || !strings.Contains(r.Error, "VM created but not started") || startCalls(t, calls) != 0 {
+		if err != nil || r.Status != "succeeded" || startCalls(t, calls) != 0 {
 			t.Fatalf("%+v %v, %d starts", r, err, startCalls(t, calls))
+		}
+		if js := journalsOf(t, e); len(js) != 1 || js[0].Start != startInterrupted || js[0].Stage != "started" {
+			t.Fatalf("journal %+v", js)
 		}
 	})
 }

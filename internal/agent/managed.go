@@ -2,6 +2,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -93,7 +94,7 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 		if key == seen {
 			return
 		}
-		if err := engine.RegisterDefaults(ctx, identity.HostID, nics); err != nil {
+		if err := engine.RegisterDefaults(ctx, cmp.Or(identity.PoolID, identity.HostID), identity.HostID, nics); err != nil {
 			log.Printf("default resources: %v", err)
 			return
 		}
