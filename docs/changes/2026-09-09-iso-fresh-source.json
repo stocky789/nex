@@ -16,6 +16,10 @@
     "reason": "No Controller/Core API contract change.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Build, packaging, CI or release tooling only; no Nex Controller or Core state."
+  },
   "verification": {
     "method": "./installer/check.sh; ./installer/build.sh with CORE_LOCAL_DEB=dist/core-local/nex-core-local_0.1.4_amd64.deb; verify ISO and package source digests",
     "evidence": [

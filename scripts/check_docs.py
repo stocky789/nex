@@ -107,29 +107,37 @@ def path_list(root, values, label, exists=False):
     return set(values)
 
 
-def check_state(file, data, required):
+# The closed list of Controller-owned data (AGENTS.md, architecture invariant). A controller
+# owner must name one of these in its record; anything else is a design defect, not a record.
+CONTROLLER_EXCEPTIONS = ('sites', 'administrator accounts and roles', 'audit history', 'enrollment tokens',
+                         'the Controller CA', 'backup/restore jobs')
+CONTROLLER_RECORD = re.compile(r'\b(sites?|administrators?|admins?|audit|enrollment|tokens?|controller ca|ca|backups?|restores?)\b', re.I)
+
+
+def check_state(file, data):
     """Force each change to say where its durable state lives.
 
     Nex Controller is replaceable, so pool state belongs on the pool master; a feature that
     parks it in the Controller breaks the product model (AGENTS.md, architecture invariant).
-    Prose alone did not stop that, so every new change answers the question explicitly.
-    Like the updated-pages rule, this applies to a record when it is added: correcting a
-    merged record must not require inventing an assessment for someone else's finished work,
-    and records that predate the field stay valid.
+    Prose alone did not stop that, so every record answers the question explicitly, merged
+    ones included: the records are the reviewable map of where state lives, and a gap in it
+    is a gap in the map.
     """
     state = data.get('state')
-    if state is None and not required:
-        return
     if not isinstance(state, dict) or state.get('owner') not in ('none', 'core', 'controller'):
         raise ValueError(f'{file}: state.owner must be none, core, or controller')
     nonempty(state.get('reason'), 'state.reason')
     if state['owner'] == 'none':
-        if state.get('record'):
-            raise ValueError(f'{file}: state none requires no record')
-    else:
-        # core: the host-side record and the path a fresh Controller re-adopts it by.
-        # controller: which closed Controller-scoped exception it is, and its backup path.
-        nonempty(state.get('record'), 'state.record')
+        # An empty record is a hedge, not an answer: none means there is nothing to name.
+        if 'record' in state:
+            raise ValueError(f'{file}: state none must omit record')
+        return
+    # core: the host-side record and the path a fresh Controller re-adopts it by.
+    # controller: which closed Controller-scoped exception it is, and its backup path.
+    nonempty(state.get('record'), 'state.record')
+    if state['owner'] == 'controller' and not CONTROLLER_RECORD.search(state['record']):
+        raise ValueError(f'{file}: state.record for owner controller must name one of the closed '
+                         'Controller-scoped exceptions: ' + ', '.join(CONTROLLER_EXCEPTIONS))
 
 
 def check_record(root, file, changed=None, new=True):
@@ -164,7 +172,7 @@ def check_record(root, file, changed=None, new=True):
                 raise ValueError(f'{file}: {kind} updated requires pages changed in this range')
         elif pages:
             raise ValueError(f'{file}: {kind} none requires empty pages')
-    check_state(file, data, required=changed is not None and new)
+    check_state(file, data)
     verification = data.get('verification')
     if not isinstance(verification, dict):
         raise ValueError(f'{file}: verification object required')

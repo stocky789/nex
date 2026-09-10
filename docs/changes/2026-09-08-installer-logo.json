@@ -20,6 +20,10 @@
     "reason": "Local GTK header and initrd archive change no Controller operation, Core command/result, client API or Debian question contract.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Installer presentation and input handling only; the installed host gains no new durable setting and the Controller stores nothing."
+  },
   "verification": {
     "method": "Build ISO; inspect actual QEMU/KVM GTK language and keyboard screens at 800x600; run full-initrd artwork regression, installer contract and classifier checks, SHA256 and documentation checks. No full install rerun for this presentation correction.",
     "evidence": [

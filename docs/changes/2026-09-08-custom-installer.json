@@ -37,6 +37,10 @@
     "reason": "The boot menu selects a local frontend using unchanged Debian question/answer behavior. No Controller operation, Core command/result, or client-facing API is introduced.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Installer presentation and input handling only; the installed host gains no new durable setting and the Controller stores nothing."
+  },
   "verification": {
     "method": "Build ISO and actual GTK module; compile classifier checks; interact with BIOS/UEFI modes, 800x600 keyboard, password errors and disk-confirmation workflow in disposable QEMU. Inspect screenshots and source archive; limits in QA.",
     "evidence": [

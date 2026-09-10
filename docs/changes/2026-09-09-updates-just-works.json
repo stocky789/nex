@@ -34,6 +34,10 @@
       "docs/api/index.html"
     ]
   },
+  "state": {
+    "owner": "none",
+    "reason": "Software-update behaviour only: the repository location and signing key live in host-local package configuration (/etc/nex/updates.conf, APT sources) owned by the package, not a pool setting, and the Controller stores nothing."
+  },
   "verification": {
     "method": "go test ./internal/nexupdate ./internal/controller ./internal/vmhost -run 'TestUpdates|TestNormalize|TestCompare|TestSeed'; packages 0.1.0+upd3 published with appliance/update helper files.",
     "evidence": [

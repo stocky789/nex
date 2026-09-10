@@ -72,6 +72,10 @@
       "docs/api/local.html"
     ]
   },
+  "state": {
+    "owner": "none",
+    "reason": "Console sessions are in-memory tickets and tunnels; vm-power results are host journal outcomes mirrored in the Controller operations table, not Controller-owned state."
+  },
   "verification": {
     "method": "go test -race ./... (wsock framing, VNC socket resolution, Controller ticket authorization/pairing/relay/timeout, agent tunnel, host-local bridge), Python contract/documentation checks, UI typecheck/build, and tests/integration/console_lab.py browser walkthroughs of both consoles against a running guest in a disposable nested-KVM lab; results and limits in the QA report. Power: vmhost/controller Go tests and the same lab run exercising Start, Reboot and Force stop from the browser.",
     "evidence": [

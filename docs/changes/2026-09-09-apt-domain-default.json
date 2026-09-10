@@ -30,6 +30,10 @@
       "docs/api/index.html"
     ]
   },
+  "state": {
+    "owner": "none",
+    "reason": "Software-update behaviour only: the repository location and signing key live in host-local package configuration (/etc/nex/updates.conf, APT sources) owned by the package, not a pool setting, and the Controller stores nothing."
+  },
   "verification": {
     "method": "curl -fsSI https://nexvirtualization.com/apt/updates.json returns 200; published packages 0.1.0+upd2 embed repo_url=https://nexvirtualization.com/apt; go test ./internal/nexupdate.",
     "evidence": [

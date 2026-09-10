@@ -27,6 +27,11 @@
       "docs/api/openapi.json"
     ]
   },
+  "state": {
+    "owner": "core",
+    "reason": "The default ISO storage is an ordinary pool-scoped storage registration auto-issued by the Controller and persisted on the pool master.",
+    "record": "storage-register entry with request_id auto-storage:<host> in the managed journal on the pool master (internal/vmhost, /var/lib/nex/core-local/vmhost/<operation-id>.json): the accepted command and its result are the durable record; the host reports them as Inventory.managed and a fresh Controller re-adopts them with the same IDs and names through adoptManaged. The Controller managed_resources rows are a mirror."
+  },
   "verification": {
     "method": "go test ./internal/controller -run 'TestManaged|TestDefault|TestHostReported|TestVLAN'; python3 scripts/generate_api.py (and --check). Live host enrollment + Storage UI showing ISO succeeded remains a lab walkthrough.",
     "evidence": [

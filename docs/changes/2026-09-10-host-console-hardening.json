@@ -35,8 +35,7 @@
   },
   "state": {
     "owner": "none",
-    "reason": "host-console-v1 is a capability string reported fresh on every host report and cached the same way console-v1 already is (host_capabilities, a freshness cache, not an authoritative record); the RFB session itself is an in-process net.Pipe with no state beyond one connection's lifetime, same as before.",
-    "record": ""
+    "reason": "host-console-v1 is a capability string reported fresh on every host report and cached the same way console-v1 already is (host_capabilities, a freshness cache, not an authoritative record); the RFB session itself is an in-process net.Pipe with no state beyond one connection's lifetime, same as before."
   },
   "verification": {
     "method": "go build ./...; go vet ./internal/vmhost/ ./internal/controller/ ./internal/agent/ ./internal/protocol/; go test -race -count=1 ./internal/vmhost/ ./internal/controller/ ./internal/agent/ ./internal/protocol/ (TestHostConsoleIncrementalUpdateOnlyOnChange covers the deferred-then-satisfied incremental request, TestKeysymByteCtrlAndArrows covers Ctrl+letter, Ctrl+@/Space and Ctrl+\\ [ ] ^ _); cd web && npm run typecheck && npm run build; python3 scripts/generate_api.py --check; python3 scripts/check_docs.py --worktree",

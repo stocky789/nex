@@ -19,11 +19,15 @@
     "reason": "Same Updates endpoints; progress merge behavior only.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Update progress and appliance CPU mode fixes; no new durable setting."
+  },
   "verification": {
-    "method": "go test ./internal/nexupdate ./internal/vmhost; disposable lab Check/Apply against https://nexvirtualization.com/apt",
+    "method": "go test ./internal/nexupdate ./internal/vmhost (TestMergeProgressStaleInstalling and the engine_test host-passthrough assertion); disposable lab Check/Apply against https://nexvirtualization.com/apt",
     "evidence": [
-      "internal/nexupdate/nexupdate_test.go TestMergeProgressStaleInstalling",
-      "internal/vmhost/engine_test.go host-passthrough assertion"
+      "internal/nexupdate/nexupdate_test.go",
+      "internal/vmhost/engine_test.go"
     ]
   }
 }

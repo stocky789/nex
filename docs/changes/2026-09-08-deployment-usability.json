@@ -61,6 +61,11 @@
       "docs/api/index.html"
     ]
   },
+  "state": {
+    "owner": "controller",
+    "reason": "The persisted TLS identity is the Controller appliance identity (Controller CA material); DHCP/static mode is the appliance network configuration inside the guest.",
+    "record": "Controller CA/TLS identity persisted in the appliance under /var/lib/nex-controller; backed up and restored by the appliance recovery export (host-recovery export/restore in docs/guide/deploy-controller-appliance.md); pools/hosts rows are mirrors re-adopted from host enrollment and reports."
+  },
   "verification": {
     "method": "Focused Go/race and Python/API contracts, actual TLS checks, real PAM/browser with simulated deployment/power, inspected desktop/mobile captures and independent review; native guest/hardware and new artifact delivery remain unverified.",
     "evidence": [

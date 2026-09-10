@@ -21,8 +21,7 @@
   },
   "state": {
     "owner": "none",
-    "reason": "Presentation-only fix; no durable pool or Controller state.",
-    "record": ""
+    "reason": "Presentation-only fix; no durable pool or Controller state."
   },
   "verification": {
     "method": "Reproduced Bus/select flicker with .panel overflow:hidden under the desktop shell; menus stay open with overflow visible. form_select_overflow.py fails on the old rule and passes on the fix; headed run confirmed open-menu highlight pixels.",

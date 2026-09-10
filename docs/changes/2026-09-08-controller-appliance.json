@@ -160,6 +160,11 @@
       "docs/api/local.html"
     ]
   },
+  "state": {
+    "owner": "core",
+    "reason": "Appliance deployment is a host-run operation journaled by the local Core service; the Controller appliances row is re-created by the idempotent bootstrap/adopt handoff.",
+    "record": "Deploy journal in the hosting Core local service state (/var/lib/nex/core-local/vmhost, the deploy operation with VM identity and disk); POST /api/v1/appliances/bootstrap and /adopt re-link a fresh Controller to it from the host handoff."
+  },
   "verification": {
     "method": "Go race and Python suites, generated-reference checks, UI typecheck/build, actual HTTPS/browser checks with explicit VM simulation, separate Debian package and nested-KVM evidence, and independent runtime/delivery review. Reports identify exact executed results and open gates; no hosted CI claim.",
     "evidence": [

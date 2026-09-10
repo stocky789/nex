@@ -91,8 +91,11 @@ class DocumentationGateTests(unittest.TestCase):
         self.write(record, json.dumps(data))
         with self.assertRaisesRegex(ValueError, 'state.owner must be'):
             docs.check(self.root, {'app.py', record}, added={record})
-        docs.check(self.root)  # Records predating the field stay valid in tree mode,
-        docs.check(self.root, {'app.py', record}, added=set())  # and when corrected later.
+        # Every record answers, merged ones included: in tree mode and when edited later.
+        with self.assertRaisesRegex(ValueError, 'state.owner must be'):
+            docs.check(self.root)
+        with self.assertRaisesRegex(ValueError, 'state.owner must be'):
+            docs.check(self.root, {'app.py', record}, added=set())
         data['state'] = {'owner': 'controller-only', 'reason': 'Kept in the Controller database'}
         self.write(record, json.dumps(data))
         with self.assertRaisesRegex(ValueError, 'state.owner must be'):
@@ -106,7 +109,24 @@ class DocumentationGateTests(unittest.TestCase):
         docs.check(self.root, {'app.py', record}, added={record})
         data['state'] = {'owner': 'none', 'reason': 'Nothing persists', 'record': 'Contradiction'}
         self.write(record, json.dumps(data))
-        with self.assertRaisesRegex(ValueError, 'state none requires no record'):
+        with self.assertRaisesRegex(ValueError, 'state none must omit record'):
+            docs.check(self.root, {'app.py', record}, added={record})
+        data['state']['record'] = ''  # An empty record is still a record key, not an omission.
+        self.write(record, json.dumps(data))
+        with self.assertRaisesRegex(ValueError, 'state none must omit record'):
+            docs.check(self.root, {'app.py', record}, added={record})
+
+    def test_controller_owner_must_name_a_closed_exception(self):
+        """A controller owner is only legitimate for the closed Controller-scoped list."""
+        record = self.record(['app.py'], state={'owner': 'controller', 'reason': 'Kept in SQLite',
+                                                'record': 'Controller table vm_layouts'})
+        with self.assertRaisesRegex(ValueError, 'closed Controller-scoped exceptions: sites, administrator accounts and roles, audit history, enrollment tokens, the Controller CA, backup/restore jobs'):
+            docs.check(self.root, {'app.py', record}, added={record})
+        for record_text in ('Enrollment tokens table; re-created on a fresh Controller',
+                            'Controller SQLite admins row, in the appliance recovery export',
+                            'Backup job history and catalog, covered by the Controller backup',
+                            'The Controller CA under /var/lib/nex-controller'):
+            self.record(['app.py'], state={'owner': 'controller', 'reason': 'Closed-list item', 'record': record_text})
             docs.check(self.root, {'app.py', record}, added={record})
 
     def test_editing_a_merged_record_does_not_demand_its_pages_change_again(self):

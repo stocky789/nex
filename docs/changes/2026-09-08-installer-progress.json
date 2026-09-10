@@ -35,6 +35,10 @@
     "reason": "Local GTK and Debian preseed changes preserve installer operations; no Controller/Core or client contracts change.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Installer presentation and input handling only; the installed host gains no new durable setting and the Controller stores nothing."
+  },
   "verification": {
     "method": "Native diskless GTK protocol regression reproduces baseline gap and exercises progress/prompt transitions; full disposable installation verifies final restart. Actual results and limits in QA.",
     "evidence": [

@@ -30,6 +30,10 @@
     "reason": "Live local NIC observation changes no Controller/Core/client API or generated target network settings.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Installer presentation and input handling only; the installed host gains no new durable setting and the Controller stores nothing."
+  },
   "verification": {
     "method": "Focused probe/status checks and native cable toggles preserving edits, unchecked erase rejection and reset, with actual results in QA report.",
     "evidence": [

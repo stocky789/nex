@@ -27,6 +27,10 @@
     "reason": "Local frontend presentation preserves backend operations and changes no Controller/Core or client-facing API.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Installer presentation and input handling only; the installed host gains no new durable setting and the Controller stores nothing."
+  },
   "verification": {
     "method": "Native framebuffer regression compares active, gap and resumed layouts, then exercises errors, logs and completion. See QA for actual results and limits.",
     "evidence": [

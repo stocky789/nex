@@ -48,6 +48,10 @@
     "reason": "Existing session/sites/pools/hosts/enrollment/revocation/operations/audit API calls retain request shapes, authorization, retry and observation semantics. No Core command or contract change.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Controller web UI presentation only; no new durable state on either side."
+  },
   "verification": {
     "method": "UI typecheck/build and complete disposable HTTPS Phase 1 browser/process walkthrough passed all 16 groups. Inspected desktop/mobile captures, reproduced and corrected Help menu clipping, and obtained independent implementation/evidence review. Libvirt is simulated; no hosted CI or image deployment claimed.",
     "evidence": [

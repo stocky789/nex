@@ -27,6 +27,10 @@
       "docs/API.md"
     ]
   },
+  "state": {
+    "owner": "none",
+    "reason": "The appliance console user is provisioned at firstboot from the deploy request with the existing administrator password; no new record beyond the administrator account already covered by the controller-foundation record."
+  },
   "verification": {
     "method": "python3 -m unittest tests.test_appliance_build — covers password hashing with colons and firstboot calling provision_console_login from bootstrap. go test ./internal/vmhost -run TestSeedInjectsUpdateHelperWhenPresent — seed injects appliance-firstboot for older qcow images. Live appliance console login after deploy remains a lab walkthrough (not run in this change).",
     "evidence": [

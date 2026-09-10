@@ -20,6 +20,10 @@
     "reason": "No Controller operation, agent command, event, stream, observed-state flow or client-facing endpoint is added, removed or changed. The change is to the documentation gate script, its tests, and contributor process text.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation, plans or contributor policy only; nothing is persisted."
+  },
   "verification": {
     "method": "python3 -m unittest discover -s tests -p 'test_check_docs.py' — 19 cases pass, 6 of them new: that editing a merged record no longer demands its pages change again while adding one still does; that an unknown added-set falls back to the strict check so the gate fails closed; that impact:updated still requires at least one page; that an absent pages key reads as no pages while a non-list value is still rejected; that changed_paths reports which records a range adds; and that --worktree sees uncommitted edits and untracked records. The three real pushes that failed the gate this session (9611fc7..3f9fbf2, 6cef94e..41cb970, f61bb3a..6cef94e) were replayed against the fixed checker using their actual git diffs and all three now pass. The existing 13 cases were updated for the changed changed_paths signature and still pass, including the coverage, reason, evidence, navigation, merge-base and clean-worktree cases, so the gate was not weakened. python3 scripts/check_docs.py --worktree was run against this change and correctly reported the uncovered paths before this record existed. NOT verified: no CI run has executed with the new checker.",
     "evidence": [

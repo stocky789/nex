@@ -31,6 +31,10 @@
     "reason": "Local discovery, erase validation and GTK presentation change no Controller/Core or client-facing contracts.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Installer presentation and input handling only; the installed host gains no new durable setting and the Controller stores nothing."
+  },
   "verification": {
     "method": "Run actual validator with simulated device boundaries and native QEMU GUI walkthrough; see QA for results and limits.",
     "evidence": [

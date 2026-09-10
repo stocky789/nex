@@ -20,8 +20,7 @@
   },
   "state": {
     "owner": "none",
-    "reason": "Transient in-browser upload progress; the durable iso-import task stays on the pool master.",
-    "record": ""
+    "reason": "Transient in-browser upload progress; the durable iso-import task stays on the pool master."
   },
   "verification": {
     "method": "npm run typecheck and build pass. managed_vm_browser.py --simulated on the workstation passed the new upload-row assertions and captured browser-simulated-iso-upload-row.png (upload as first Recent tasks row); the run later failed on the uncommitted toolbar's ambiguous Back button, outside this change.",

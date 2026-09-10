@@ -20,8 +20,7 @@
   },
   "state": {
     "owner": "none",
-    "reason": "Client-side wizard field behaviour only; durable CPU topology still comes from the submitted specification on the pool master.",
-    "record": ""
+    "reason": "Client-side wizard field behaviour only; durable CPU topology still comes from the submitted specification on the pool master."
   },
   "verification": {
     "method": "Root cause confirmed from screenshots (error 0×2×2 with sockets placeholder 1). npm run typecheck passes. managed_vm_browser.py asserts cores+threads seed sockets=1 for count 4; Playwright not re-executed locally.",

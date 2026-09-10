@@ -52,6 +52,11 @@
       "docs/api/local.html"
     ]
   },
+  "state": {
+    "owner": "controller",
+    "reason": "Enrollment tokens are a closed Controller-scoped exception; the host it enrols is re-adopted from the host itself.",
+    "record": "Enrollment tokens in the Controller SQLite tokens table (site-bound, hashed, expiring); backed up and restored by the appliance recovery export (host-recovery export/restore in docs/guide/deploy-controller-appliance.md); pools/hosts rows are mirrors re-adopted from host enrollment and reports. A fresh Controller issues new tokens rather than recovering old ones."
+  },
   "verification": {
     "method": "Real lab walkthrough passed 2026-09-09: tests/integration/add_host_lab.py ran 12 checks with real Chromium against the disposable nested-KVM lab (Nex Core host 10.0.2.15, Controller appliance 10.0.2.20 running the working-tree Controller rebuilt in debian:13-slim): probe fingerprint verified against the host's served certificate, wrong fingerprint 502 before login, wrong password 401, already-enrolled 409, non-revoked re-enrollment 409, revoke then browser re-enrollment keeping identity and pool, retry 409, audit without passwords; plus a fresh enrollment through a second isolated nex-core-local instance (auto-created pool with the host as master, in-process agent reporting fresh), a nex-core-local restart, and journal hygiene. Lab preparation caught a real bug hidden by the unit tests: the push sent the host-identity CA as trust while the appliance serves a self-signed HTTPS certificate; fixed by pushing the Controller's served certificate (cmd/nex-controller/main.go reads -tls-cert into Config.ServerCertPEM) with 503 when absent, and TestAddSiteHostSuccess now uses a self-signed listener that fails on the old value. Local checks after the fix: go test -race ./..., python3 scripts/generate_api.py --check, python3 -m unittest discover -s tests, npm --prefix web run typecheck/build, python3 scripts/check_docs.py --all, and tests/integration/phase1.py --browser all pass. Not covered: package upgrade, physical hardware, other L2 segments, manual fallback in the lab.",
     "evidence": [

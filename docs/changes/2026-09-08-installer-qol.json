@@ -33,6 +33,10 @@
     "reason": "Widget changes use the same private local installer settings; no Controller operation, agent command or client API changes.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Installer presentation and input handling only; the installed host gains no new durable setting and the Controller stores nothing."
+  },
   "verification": {
     "method": "Native GUI walkthrough and focused regression checks; actual results and limits recorded in the linked QA report.",
     "evidence": [

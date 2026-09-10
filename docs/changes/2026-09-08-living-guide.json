@@ -37,6 +37,10 @@
       "docs/API.md"
     ]
   },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation, plans or contributor policy only; nothing is persisted."
+  },
   "verification": {
     "method": "Run the stdlib checker tests, validate current guide structure/links, and check this documentation slice in an isolated Git range. Independently review applicability and actual evidence. See reports for precise walkthrough and hosted-CI limits.",
     "evidence": [

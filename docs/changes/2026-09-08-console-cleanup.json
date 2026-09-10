@@ -18,6 +18,10 @@
     "reason": "Existing URL presentation only, no Controller/agent or client-facing contract change.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Pre-login console banner text only; nothing persisted."
+  },
   "verification": {
     "method": "Nine package unit checks passed with exact generated notice/MOTD assertion and real certificate checks; console refresh mocked.",
     "evidence": [

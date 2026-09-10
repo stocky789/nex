@@ -24,6 +24,10 @@
     "reason": "Native widgets emit the existing canonical timezone in protected local installer configuration; no API contract changes.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Installer presentation and input handling only; the installed host gains no new durable setting and the Controller stores nothing."
+  },
   "verification": {
     "method": "Compiled checks and native VM walkthrough; results and limits in QA report.",
     "evidence": [

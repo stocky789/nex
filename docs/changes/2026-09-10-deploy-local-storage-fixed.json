@@ -23,8 +23,7 @@
   },
   "state": {
     "owner": "none",
-    "reason": "UI presentation of the host-reported storage path; durable deployment state remains on the host.",
-    "record": ""
+    "reason": "UI presentation of the host-reported storage path; durable deployment state remains on the host."
   },
   "verification": {
     "method": "npm run typecheck in web/; python3 scripts/check_docs.py --worktree; browser integration scripts updated to assert the fixed Local storage value instead of select_option.",

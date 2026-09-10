@@ -44,7 +44,7 @@
   "state": {
     "owner": "core",
     "reason": "Current VM media_id is journaled on the pool-master managed VM record and re-adopted with the VM; host console sessions are in-memory tickets only (same as VM consoles).",
-    "record": "managed_resources vm-create command/spec.media_id updated by vm-media success; inventory/adoption recovers it with the VM"
+    "record": "vm-create journal entry <operation-id>.json in the internal/vmhost managed journal on the pool master, field command.vm.media_id, updated on vm-media success and re-adopted with the VM through Applied()/adoptManaged; the Controller managed_resources column is only a mirror of that."
   },
   "verification": {
     "method": "go test ./internal/controller -run 'Console|HostConsole|Media'; go test ./internal/vmhost -run 'HostConsole|Media'; go test ./internal/agent -run Console; web tsc --noEmit; python3 scripts/check_docs.py --worktree",

@@ -22,6 +22,10 @@
     "reason": "Static APT repository files and publish scripts do not call or change Nex Controller operations, Core commands, observed-state results or client-facing service APIs.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Website source, hosting and review only; no Nex Controller or Core state."
+  },
   "verification": {
     "method": "python3 -m unittest tests.test_apt_publish -v against disposable tempfile repos; dpkg-deb/dpkg-scanpackages and gpg exercised locally.",
     "evidence": [

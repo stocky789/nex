@@ -16,6 +16,10 @@
     "reason": "No Controller operation, agent command, event, stream, observed-state flow or client-facing endpoint is added, removed or changed. The change is one entry in a source-archive file list plus a check over that list.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Build, packaging, CI or release tooling only; no Nex Controller or Core state."
+  },
   "verification": {
     "method": "python3 -m unittest discover -s tests -p 'test_build_source.py' — 5 cases pass. The new case was confirmed to actually detect the defect rather than merely pass: with the allowlist entry removed it fails with \"referenced by a package builder but absent from the source archive: ['packaging/core-local/preinst']\", and passes once restored. This check runs in CI through the 'Check contracts and contributor tools' step of both phase1 workflows. NOT verified: no package or ISO has been built from the corrected archive, because neither is buildable on the current runner (BUG-0043); the end-to-end proof that packaging/core-local/build.py now succeeds remains outstanding.",
     "evidence": [

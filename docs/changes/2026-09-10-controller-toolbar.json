@@ -34,8 +34,7 @@
   },
   "state": {
     "owner": "none",
-    "reason": "No durable state. Toolbar enablement is derived from the hosts' reported inventory each render; the New VM handoff is transient UI state.",
-    "record": ""
+    "reason": "No durable state. Toolbar enablement is derived from the hosts' reported inventory each render; the New VM handoff is transient UI state."
   },
   "verification": {
     "method": "npm typecheck and build; tests/integration/phase1.py --browser against a disposable HTTPS Controller with the real agent, including a new fixed-toolbar group and a labeled simulated-VM power dialog group; captures inspected.",

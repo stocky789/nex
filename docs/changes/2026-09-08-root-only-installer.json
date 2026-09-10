@@ -32,6 +32,10 @@
     "reason": "The boot media invokes Debian account setup locally; there is no Controller operation, Core agent command/result, or client-facing API in this standalone slice.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Installer presentation and input handling only; the installed host gains no new durable setting and the Controller stores nothing."
+  },
   "verification": {
     "method": "Run installer source checks and the bundled Debian account-dialog regression check; rebuild and verify the ISO checksum, then exercise interactive prompts and an offline disposable QEMU installation. Exact completed results and limitations are recorded in the QA report.",
     "evidence": [

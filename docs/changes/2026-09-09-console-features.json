@@ -52,6 +52,11 @@
       "docs/api/index.html"
     ]
   },
+  "state": {
+    "owner": "core",
+    "reason": "The clipboard channel, USB tablet and VirtIO display are part of the pool-scoped VM definition; guest-tools observations are reported fresh by the host and cached only.",
+    "record": "vm-create entry in the managed journal on the pool master (internal/vmhost, /var/lib/nex/core-local/vmhost/<operation-id>.json): the accepted command and its result are the durable record; the host reports them as Inventory.managed and a fresh Controller re-adopts them with the same IDs and names through adoptManaged. The Controller managed_resources rows are a mirror."
+  },
   "verification": {
     "method": "go test -race ./... (definition devices, guest observation parsing, snapshot attachment, VM list pass-through), go vet, Python contract and documentation checks, UI typecheck/build, and tests/integration/console_features_lab.py: a disposable nested-KVM lab copy with a Debian 13 guest whose guest tools were installed by cloud-init, driving the Guest tools panel and every console toolbar feature in Playwright with guest-exec checks inside the guest for send keys, typed text and clipboard contents; results, captures and limits in the QA report.",
     "evidence": [

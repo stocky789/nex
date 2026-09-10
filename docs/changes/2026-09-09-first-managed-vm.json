@@ -98,6 +98,11 @@
       "docs/api/index.html"
     ]
   },
+  "state": {
+    "owner": "core",
+    "reason": "Storage/network registrations, ISO media and the first VM definition are pool-scoped and live on the pool master.",
+    "record": "storage-register, network-register, iso-import and vm-create entries in the managed journal on the pool master (internal/vmhost, /var/lib/nex/core-local/vmhost/<operation-id>.json): the accepted command and its result are the durable record; the host reports them as Inventory.managed and a fresh Controller re-adopts them with the same IDs and names through adoptManaged. The Controller managed_resources rows are a mirror."
+  },
   "verification": {
     "method": "Passed final Go race tests, 62 Python checks, UI/API/source checks, 16 existing process/browser groups, native BIOS/UEFI provisioning and reporter-recovery checks, and native/simulated new browser workflows. Independent reviewers inspected source, captures, exact settings and execution limits; see the QA report. No hosted CI or deployment is claimed. Scoped assessment, modified-guide checks and final combined documentation structure pass; the earlier transient website-documentation failure and its resolution are recorded explicitly.",
     "evidence": [

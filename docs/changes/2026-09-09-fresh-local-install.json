@@ -89,6 +89,10 @@
     "reason": "Existing contracts are exercised without changing runtime behavior or the API reference.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Verification evidence and guide text only; no state changes."
+  },
   "verification": {
     "method": "Actual blank-disk graphical installation, bundled Controller browser deployment, managed VM browser/native checks and recovery; see report for executed results and limits. Offline harness target guards and documentation checks run separately.",
     "evidence": [

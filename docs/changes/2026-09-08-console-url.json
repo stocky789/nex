@@ -20,6 +20,10 @@
     "reason": "No network API changes; local setup renders its existing TLS listener address in agetty.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Pre-login console banner text only; nothing persisted."
+  },
   "verification": {
     "method": "Nine package unit tests and native Debian13 agetty rendering in a disposable container; limits recorded in QA.",
     "evidence": [

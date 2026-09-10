@@ -32,6 +32,10 @@
     "reason": "No Controller/Core agent command or client-facing API changes; GTK calls a local BusyBox helper.",
     "pages": []
   },
+  "state": {
+    "owner": "none",
+    "reason": "Installer presentation and input handling only; the installed host gains no new durable setting and the Controller stores nothing."
+  },
   "verification": {
     "method": "Native isolated DHCP ACK/no-side-effect/timeout/cancellation tests, C/carrier regression, independent review and native GUI captures; exact evidence and limits in QA report.",
     "evidence": [
