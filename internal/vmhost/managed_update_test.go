@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"nex.local/nex/internal/protocol"
 )
@@ -189,5 +190,73 @@ case "$*" in *dumpxml*) cat "`+actualPath+`";; esac`)
 	xml.Unmarshal(expected, &got)
 	if got.Devices.Disks[1].Target.Dev != "sdb" || got.Devices.Disks[2].Device != "cdrom" || got.Devices.Disks[2].Source != nil {
 		t.Fatalf("expected definition %+v", got.Devices.Disks)
+	}
+}
+
+// A vm-update that failed inside update reserved nothing: the revision it named is still the
+// next one the Controller sends, and the retry must reach the edit instead of the reservation.
+func TestManagedFailedUpdateDoesNotReserveRevision(t *testing.T) {
+	e := NewManaged(t.TempDir())
+	os.MkdirAll(e.stateDir, 0700)
+	v0 := managedTestVM()
+	v1 := v0
+	v1.Revision, v1.Description = 1, "first try"
+	for _, entry := range []managedJournal{
+		{Command: protocol.Command{OperationID: "op-create", Kind: "vm-create", VM: &v0}, Result: protocol.Result{OperationID: "op-create", Status: "succeeded"}, Disks: []string{"/d0"}, Targets: []string{"vda"}, MediaTarget: "sda"},
+		{Command: protocol.Command{OperationID: "op-1", Kind: "vm-update", VM: &v1}, Result: protocol.Result{OperationID: "op-1", Status: "failed", Error: "VM is running; stop it first"}, Stage: "validating"},
+	} {
+		if err := e.save(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fakeCommand(t, "virsh", "echo crashed")
+	retry := v1
+	retry.Description = "second try"
+	r, err := e.Execute(context.Background(), protocol.Command{OperationID: "op-2", Kind: "vm-update", VM: &retry}, nil)
+	if err != nil || r.Status != "failed" || !strings.HasPrefix(r.Error, "VM is crashed") {
+		t.Fatalf("retry did not reach the edit: %+v %v", r, err)
+	}
+}
+
+// An edit a dead agent process left at defining, attaching or defined is settled on report the
+// way a re-sent operation would be: a matching persistent definition means it succeeded, in
+// the state the edit left the guest.
+func TestAppliedPromotesInterruptedEdit(t *testing.T) {
+	e := NewManaged(t.TempDir())
+	os.MkdirAll(e.stateDir, 0700)
+	v0 := managedTestVM()
+	v1 := v0
+	v1.Revision, v1.Description = 1, "edited"
+	create := managedJournal{Command: protocol.Command{OperationID: "op-create", Kind: "vm-create", VM: &v0}, Result: protocol.Result{OperationID: "op-create", Status: "succeeded"}, Stage: "defined", Disks: []string{"/d0"}, Targets: []string{"vda"}, MediaTarget: "sda"}
+	edit := managedJournal{Command: protocol.Command{OperationID: "op-1", Kind: "vm-update", VM: &v1}, Result: protocol.Result{OperationID: "op-1", Status: "pending", ObservedAt: time.Now().Add(-2 * time.Minute)}, Stage: "defined", Domain: []byte("<domain/>"), Disks: []string{"/d0"}, Targets: []string{"vda"}, MediaTarget: "sda"}
+	for _, entry := range []managedJournal{create, edit} {
+		if err := e.save(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var states []string
+	e.observe = func(_ context.Context, j managedJournal, state string) error {
+		states = append(states, j.Command.OperationID+":"+state)
+		return nil
+	}
+	fakeCommand(t, "virsh", "printf '%s\\n' "+v0.ID)
+	got, _ := e.Applied(context.Background())
+	if len(states) != 1 || states[0] != "op-1:shut off" || len(got.Outcomes) != 0 || len(got.VMs) != 1 || got.VMs[0].Revision != 1 {
+		t.Fatalf("interrupted edit not promoted: %v %+v", states, got)
+	}
+	saved, err := e.readJournal("op-1.json")
+	if err != nil || saved.Result.Status != "succeeded" || saved.Stage != "defined" || saved.Result.Error != "" {
+		t.Fatalf("promotion not durable: %+v %v", saved, err)
+	}
+	// An edit interrupted while attaching devices left the guest running.
+	edit.Command.OperationID, edit.Result.OperationID, edit.Stage, edit.Result.Status = "op-2", "op-2", "attaching", "needs_attention"
+	v2 := v1
+	v2.Revision = 2
+	edit.Command.VM = &v2
+	if err := e.save(edit); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = e.Applied(context.Background()); len(states) != 2 || states[1] != "op-2:running" || got.VMs[0].Revision != 2 {
+		t.Fatalf("attaching edit not promoted: %v %+v", states, got)
 	}
 }

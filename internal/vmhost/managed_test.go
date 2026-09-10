@@ -847,7 +847,7 @@ func TestManagedStartFailureKeepsCreationSucceeded(t *testing.T) {
 	if err := e.save(j); err != nil {
 		t.Fatal(err)
 	}
-	e.observe = func(context.Context, managedJournal) error { return nil }
+	e.observe = func(context.Context, managedJournal, string) error { return nil }
 	t.Setenv("VMHOST_STATE", "shut off")
 	t.Setenv("VMHOST_FAIL", "1")
 	t.Setenv("VMHOST_DOMAINS", v.ID)
@@ -970,7 +970,7 @@ func TestAppliedPromotesInterruptedCreation(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := 0
-	e.observe = func(context.Context, managedJournal) error {
+	e.observe = func(context.Context, managedJournal, string) error {
 		calls++
 		return errors.New("VM state is not confirmed stopped")
 	}
@@ -985,7 +985,7 @@ func TestAppliedPromotesInterruptedCreation(t *testing.T) {
 	if err := e.save(j); err != nil {
 		t.Fatal(err)
 	}
-	e.observe = func(context.Context, managedJournal) error { calls++; return nil }
+	e.observe = func(context.Context, managedJournal, string) error { calls++; return nil }
 	fakeCommand(t, "virsh", "printf '%s\\n' "+v.ID)
 	if got, _ = e.Applied(context.Background()); calls != 2 || len(got.VMs) != 1 || len(got.Outcomes) != 0 || len(got.MissingVMs) != 0 {
 		t.Fatalf("matching domain not promoted: %+v", got)

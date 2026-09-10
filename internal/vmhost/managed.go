@@ -32,8 +32,9 @@ import (
 // is verified; every other command leaves power state to vm-power.
 type ManagedEngine struct {
 	stateDir, networkDir string
-	// observe verifies an interrupted creation; nil selects observeCreated (tests stub it).
-	observe func(context.Context, managedJournal) error
+	// observe verifies an interrupted creation or edit in the given libvirt state; nil selects
+	// observeDefinition (tests stub it).
+	observe func(context.Context, managedJournal, string) error
 }
 
 func NewManaged(stateDir string) *ManagedEngine {
@@ -48,11 +49,11 @@ var inFlight = struct {
 	ids map[string]bool
 }{ids: map[string]bool{}}
 
-func (e *ManagedEngine) observer() func(context.Context, managedJournal) error {
+func (e *ManagedEngine) observer() func(context.Context, managedJournal, string) error {
 	if e.observe != nil {
 		return e.observe
 	}
-	return e.observeCreated
+	return e.observeDefinition
 }
 
 // startInterrupted is the recorded start outcome when the process died between persisting
@@ -207,8 +208,13 @@ func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch f
 		return result, errors.New("managed journal full; manual recovery required")
 	}
 	j := managedJournal{Command: c, Result: result, Stage: "validating"}
-	// Reserve every resource ID, even when its operation was interrupted or failed.
+	// Reserve every resource ID, even when its operation was interrupted or failed. A failed
+	// vm-update is the exception: it changed nothing, and the revision it named is still the
+	// next one the Controller sends; update's revision check serialises the retries.
 	for _, old := range js {
+		if old.Command.Kind == "vm-update" && old.Result.Status == "failed" {
+			continue
+		}
 		if managedResourceID(old.Command) == managedResourceID(c) {
 			j.Result.Error = "resource ID already reserved by another operation"
 			return j.Result, e.save(j)
@@ -628,17 +634,19 @@ func domains(ctx context.Context) map[string]bool {
 	return out
 }
 
-// promote settles vm-create entries an interruption left pending or needs_attention after the
-// definition step, and none of them is executing here: when the persistent domain matches the
-// journaled definition the creation succeeded, and an entry that died at the start step is
-// settled from libvirt's state (see settleStart). reconcile does the same for a re-sent
-// operation, which a replaced Controller never sends. No guest is started here: a start the
-// interruption skipped is recorded as not started. Each entry is re-observed at most once a
-// minute; a running operation holds the journal lock, in which case this round is skipped.
+// promote settles vm-create and vm-update entries an interruption left pending or
+// needs_attention after the definition step, and none of them is executing here: when the
+// persistent domain matches the journaled definition the operation succeeded (an edit in the
+// state it left the guest), and a creation that died at the start step is settled from
+// libvirt's state (see settleStart). reconcile does the same for a re-sent operation, which a
+// replaced Controller never sends. No guest is started here: a start the interruption skipped
+// is recorded as not started. Each entry is re-observed at most once a minute; a running
+// operation holds the journal lock, in which case this round is skipped.
 func (e *ManagedEngine) promote(ctx context.Context, js []managedJournal, running map[string]bool) []managedJournal {
 	var due []int
 	for i, j := range js {
-		if j.Command.Kind == "vm-create" && (j.Result.Status == "needs_attention" || j.Result.Status == "pending") && !running[j.Command.OperationID] && createObservable(j.Stage) && time.Since(j.Result.ObservedAt) >= time.Minute {
+		observable := (j.Command.Kind == "vm-create" && createObservable(j.Stage)) || (j.Command.Kind == "vm-update" && updateObservable(j.Stage))
+		if observable && (j.Result.Status == "needs_attention" || j.Result.Status == "pending") && !running[j.Command.OperationID] && time.Since(j.Result.ObservedAt) >= time.Minute {
 			due = append(due, i)
 		}
 	}
@@ -661,9 +669,9 @@ func (e *ManagedEngine) promote(ctx context.Context, js []managedJournal, runnin
 		}
 		if j.Stage == "starting" || j.Stage == "started" {
 			err = settleStart(ctx, &j)
-		} else if err = observe(ctx, j); err == nil {
+		} else if err = observe(ctx, j, updateState(j)); err == nil {
 			j.Stage = "defined"
-			if j.Command.VM.StartAfterCreate && j.Start == "" {
+			if j.Command.Kind == "vm-create" && j.Command.VM.StartAfterCreate && j.Start == "" {
 				j.Start = startInterrupted
 			}
 		}
@@ -683,6 +691,20 @@ func (e *ManagedEngine) promote(ctx context.Context, js []managedJournal, runnin
 // createObservable reports whether a vm-create stage has a definition to observe.
 func createObservable(stage string) bool {
 	return stage == "defining" || stage == "defined" || stage == "starting" || stage == "started"
+}
+
+// updateObservable reports whether a vm-update stage has a definition to observe.
+func updateObservable(stage string) bool {
+	return stage == "defining" || stage == "attaching" || stage == "defined"
+}
+
+// updateState is the libvirt state an interrupted operation left the guest in: an edit
+// applied live (stage attaching) kept it running; everything else defined it shut off.
+func updateState(j managedJournal) string {
+	if j.Command.Kind == "vm-update" && j.Stage == "attaching" {
+		return "running"
+	}
+	return "shut off"
 }
 
 // settleStart resolves an automatic start whose outcome the journal never recorded: the
@@ -1629,7 +1651,7 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protoc
 	}
 	if j.Command.Kind == "vm-create" && (j.Stage == "defining" || j.Stage == "defined") {
 		// The start step was never reached, so the re-sent creation runs it once now.
-		if err := e.observer()(ctx, j); err == nil {
+		if err := e.observer()(ctx, j, "shut off"); err == nil {
 			j.Result.Status, j.Result.Error, j.Stage = "succeeded", "", "defined"
 			if err = e.startCreated(ctx, &j); err != nil {
 				return j.Result, err
@@ -1637,12 +1659,8 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protoc
 		}
 	}
 	// An interrupted edit is proven the same way, in whichever state it was applied.
-	if j.Command.Kind == "vm-update" && (j.Stage == "defining" || j.Stage == "attaching" || j.Stage == "defined") {
-		state := "shut off"
-		if j.Stage == "attaching" {
-			state = "running"
-		}
-		if err := e.observeDefinition(ctx, j, state); err == nil {
+	if j.Command.Kind == "vm-update" && updateObservable(j.Stage) {
+		if err := e.observer()(ctx, j, updateState(j)); err == nil {
 			j.Result.Status = "succeeded"
 			j.Result.Error = ""
 			j.Stage = "defined"
