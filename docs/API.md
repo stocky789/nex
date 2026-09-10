@@ -48,13 +48,48 @@ Controller administration. Both references are generated and checked by the comm
 
 Administrators create sites only. Pools are never created by hand and `POST /api/v1/pools`
 does not exist: every Nex Core host that enrolls becomes the **pool master** of a new pool,
-created in the same transaction as the host record, in the token's site and named after the
-host's hostname. `GET /api/v1/pools` returns `master_host_id`, and the audit log records
-`pool.create` next to `host.enroll`. Enrollment tokens (`POST /api/v1/enrollment-tokens`)
-take `{site_id, host_id?}`: an unknown site is 400, and re-enrollment (`host_id`) needs a
-revoked host whose pool belongs to that site (409 otherwise). Re-enrollment keeps the host's
-existing pool. Managed resources, VM creation and media keep the `pool_id` + `host_id`
-contract; the host must belong to the selected pool.
+created in the same transaction as the host record, in the token's site. `GET /api/v1/pools`
+returns `master_host_id`, and the audit log records `pool.create` next to `host.enroll`.
+Enrollment tokens (`POST /api/v1/enrollment-tokens`) take `{site_id, host_id?}`: an unknown
+site is 400, and re-enrollment (`host_id`) needs a revoked host whose pool belongs to that
+site (409 otherwise). Re-enrollment keeps the host's existing pool. Managed resources, VM
+creation and media keep the `pool_id` + `host_id` contract; the host must belong to the
+selected pool.
+
+### Host-owned identity (`POST /api/v1/agent/enroll`)
+
+Pool ID, pool name and host ID are generated and durably kept by Nex Core, not by the
+Controller. On its first enrollment the agent generates its host UUID and, as its pool's
+master, the pool UUID and pool name (its hostname), persists them in its state before the
+request, and presents them as `host_id`, `pool_id` and `pool_name`. The Controller adopts
+them unchanged and the response echoes `host_id`, `pool_id` and `pool_name`, so a
+replacement Controller that receives an ordinary enrollment from a pool master recovers the
+pool with its original ID and name and the host with its original ID; adoption of the
+managed journal then records the host's storage, networks, media and VMs under that same
+pool and host.
+
+Validation and conflicts:
+
+- `host_id` and `pool_id` must be canonical lowercase UUIDs; the 64-hex form the Controller
+  issued to hosts enrolled before host-owned identity is also accepted, because those hosts
+  keep it. `pool_name` follows the name rule (nonblank, at most 200 bytes, no CR/LF/NUL) and
+  defaults to the hostname. Anything else is 400.
+- A presented `host_id` already on record, or a `pool_id` already held by another master
+  host, is 409: a token holder cannot claim an existing identity. Only a token bound to a
+  revoked host (`host_id` on the token) re-issues that host, and the request must present
+  that host and its pool, or nothing (409 otherwise). Joining a second host to an existing
+  pool is not available (Phase 4).
+- The same key is the same host: a request whose CSR matches an active recorded credential
+  (a retry after a lost response, even with a newly minted token, as the **Add host** flow
+  does) returns that credential unchanged rather than a duplicate or a refusal. The existing
+  identical token/CSR replay is unchanged.
+
+Compatibility: agents from before host-owned identity present no IDs; the Controller mints
+a 64-hex host ID and pool ID and names the pool after the hostname, exactly as before, and
+the response reports them for the agent to keep, so such a host presents them from then on
+(a host that already holds a Controller-issued host ID keeps it and adopts the reported pool).
+An older Controller rejects the new request fields with 400 (unknown field); Controller and
+Core development builds must be upgraded together. Rotation responses carry only `host_id`.
 
 Databases from the earlier manual-pool model are migrated on start: each pool with hosts gets
 its earliest enrolled active host (or any host) as master, pools that never received a host
@@ -64,9 +99,9 @@ site-bound form. Tokens expire within ten minutes, so this loses nothing durable
 Compatibility: Controller and Core development builds must be upgraded together. An older
 Core local service whose handoff still sends `pool_name` to `POST /api/v1/appliances/bootstrap`
 is rejected with 400 (unknown field); a handoff interrupted across the upgrade must be
-restarted from the host. Older agents are unaffected because `POST /api/v1/agent/enroll` is
-unchanged. Older UI builds that call `POST /api/v1/pools` or send `{pool_id}` to
-`POST /api/v1/enrollment-tokens` receive 404 and 400 respectively.
+restarted from the host. Older agents still enroll (see host-owned identity above). Older UI
+builds that call `POST /api/v1/pools` or send `{pool_id}` to `POST /api/v1/enrollment-tokens`
+receive 404 and 400 respectively.
 
 Planned, **not available**: joining a second host to an existing pool as a member host,
 changing the pool master, and ejecting a member (Phase 4 multi-host pools).

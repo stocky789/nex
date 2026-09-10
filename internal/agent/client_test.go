@@ -2,6 +2,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -17,6 +18,7 @@ import (
 	"nex.local/nex/internal/protocol"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 )
@@ -37,17 +39,20 @@ func TestEnrollmentLostResponseAndIdentityPersistence(t *testing.T) {
 	caDER, _ := x509.CreateCertificate(rand.Reader, ca, ca, &caKey.PublicKey, caKey)
 	caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}))
 	calls := 0
-	var firstCSR string
+	var first protocol.EnrollRequest
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		var req protocol.EnrollRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Error(err)
 		}
-		if firstCSR == "" {
-			firstCSR = req.CSRPEM
-		} else if req.CSRPEM != firstCSR {
-			t.Error("retry changed CSR")
+		if calls == 1 {
+			first = req
+		} else if req != first {
+			t.Errorf("retry changed the request: %+v != %+v", req, first)
+		}
+		if !uuidForm(req.HostID) || !uuidForm(req.PoolID) || req.PoolName == "" {
+			t.Errorf("host did not present its own identity: %+v", req)
 		}
 		block, _ := pem.Decode([]byte(req.CSRPEM))
 		csr, err := x509.ParseCertificateRequest(block.Bytes)
@@ -55,20 +60,23 @@ func TestEnrollmentLostResponseAndIdentityPersistence(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		cert := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "host-1"}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, KeyUsage: x509.KeyUsageDigitalSignature}
+		cert := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: req.HostID}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, KeyUsage: x509.KeyUsageDigitalSignature}
 		der, _ := x509.CreateCertificate(rand.Reader, cert, ca, csr.PublicKey, caKey)
 		if calls == 1 {
 			conn, _, _ := w.(http.Hijacker).Hijack()
 			conn.Close()
 			return
 		}
-		json.NewEncoder(w).Encode(protocol.EnrollResponse{HostID: "host-1", CertificatePEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), CAPEM: caPEM})
+		json.NewEncoder(w).Encode(protocol.EnrollResponse{HostID: req.HostID, PoolID: req.PoolID, PoolName: req.PoolName, CertificatePEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), CAPEM: caPEM})
 	}))
 	defer srv.Close()
 	trust := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))
 	s := testStore(t)
 	if err := Enroll(context.Background(), s, srv.URL, trust, "token", ""); err == nil {
 		t.Fatal("lost response accepted")
+	}
+	if s.State.HostID != "" || s.State.PendingHostID != first.HostID || s.State.PoolID != first.PoolID || s.State.PoolName != first.PoolName {
+		t.Fatalf("identity not persisted before the request, or treated as enrolled: %+v", s.State)
 	}
 	key := s.State.KeyPEM
 	dir := s.dir
@@ -82,8 +90,8 @@ func TestEnrollmentLostResponseAndIdentityPersistence(t *testing.T) {
 	if err = Enroll(context.Background(), s, srv.URL, trust, "token", ""); err != nil {
 		t.Fatal(err)
 	}
-	if s.State.KeyPEM != key || s.State.HostID != "host-1" {
-		t.Fatal("identity changed")
+	if s.State.KeyPEM != key || s.State.HostID != first.HostID || s.State.PendingHostID != "" || s.State.PoolID != first.PoolID {
+		t.Fatalf("identity changed: %+v", s.State)
 	}
 	if err = Enroll(context.Background(), s, srv.URL, trust, "token", ""); err == nil {
 		t.Fatal("silent replacement accepted")
@@ -182,11 +190,17 @@ func TestRunStopsOnJournalPersistenceFailure(t *testing.T) {
 	}
 }
 
-// issuingController returns a fake Controller with its own CA that issues hostID.
-func issuingController(t *testing.T, hostID string) (*httptest.Server, string) {
+func uuidForm(s string) bool {
+	return regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(s)
+}
+
+// issuingController returns a fake Controller with its own CA. Like a real one it adopts the
+// presented host identity and mints a pool ("pool-of-"+host) for a host presenting none; with
+// mint set it issues that host ID regardless, like a Controller ignoring presented identity.
+func issuingController(t *testing.T, mint string) (*httptest.Server, string) {
 	t.Helper()
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	ca := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "CA " + hostID}, IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour)}
+	ca := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "CA " + mint}, IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour)}
 	caDER, _ := x509.CreateCertificate(rand.Reader, ca, ca, &caKey.PublicKey, caKey)
 	caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}))
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -198,35 +212,70 @@ func issuingController(t *testing.T, hostID string) (*httptest.Server, string) {
 			t.Error(err)
 			return
 		}
-		cert := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: hostID}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, KeyUsage: x509.KeyUsageDigitalSignature}
+		resp := protocol.EnrollResponse{HostID: cmp.Or(mint, req.HostID), PoolID: req.PoolID, PoolName: req.PoolName}
+		if resp.PoolID == "" {
+			resp.PoolID, resp.PoolName = "pool-of-"+resp.HostID, req.Hostname
+		}
+		cert := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: resp.HostID}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, KeyUsage: x509.KeyUsageDigitalSignature}
 		der, _ := x509.CreateCertificate(rand.Reader, cert, ca, csr.PublicKey, caKey)
-		json.NewEncoder(w).Encode(protocol.EnrollResponse{HostID: hostID, CertificatePEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), CAPEM: caPEM})
+		resp.CertificatePEM, resp.CAPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), caPEM
+		json.NewEncoder(w).Encode(resp)
 	}))
 	t.Cleanup(srv.Close)
 	return srv, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))
 }
 
-// A host connects to a replacement Controller in place: fresh identity there, same state
-// directory (so its managed journal is reported), pending results for the old one dropped.
+// A host connects to a replacement Controller in place: a fresh credential there, the same
+// host and pool identity (so the pool comes back with its original ID and name), the same
+// state directory (so its managed journal is reported), pending results for the old one dropped.
 func TestEnrollWithReplacementController(t *testing.T) {
-	first, firstTrust := issuingController(t, "host-a")
-	second, secondTrust := issuingController(t, "host-b")
+	first, firstTrust := issuingController(t, "")
+	second, secondTrust := issuingController(t, "")
 	s := testStore(t)
 	if err := Enroll(context.Background(), s, first.URL, firstTrust, "token", ""); err != nil {
 		t.Fatal(err)
 	}
-	oldKey := s.State.KeyPEM
+	oldKey, host, pool, poolName := s.State.KeyPEM, s.State.HostID, s.State.PoolID, s.State.PoolName
+	hostname, _ := os.Hostname()
+	if !uuidForm(host) || !uuidForm(pool) || poolName != hostname {
+		t.Fatalf("host did not generate its own identity: %+v", s.State)
+	}
 	s.State.Journal["op-old"] = JournalEntry{Status: "pending"}
-	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", "host-a"); err == nil {
+	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", host); err == nil {
 		t.Fatal("replace-host accepted against a different Controller")
 	}
 	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", ""); err != nil {
 		t.Fatal("switching Controller refused:", err)
 	}
-	if s.State.HostID != "host-b" || s.State.Controller != second.URL || s.State.TrustPEM != secondTrust || s.State.KeyPEM == oldKey || len(s.State.Journal) != 0 {
-		t.Fatalf("replacement identity not applied: %+v", s.State)
+	if s.State.HostID != host || s.State.PoolID != pool || s.State.PoolName != poolName || s.State.Controller != second.URL || s.State.TrustPEM != secondTrust || s.State.KeyPEM == oldKey || len(s.State.Journal) != 0 {
+		t.Fatalf("replacement did not keep identity with a fresh credential: %+v", s.State)
 	}
 	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", ""); err == nil {
 		t.Fatal("duplicate enrollment with the same Controller accepted")
+	}
+}
+
+// A host enrolled before host-owned identity keeps its Controller-issued host ID and adopts
+// the pool identity the Controller reports; a Controller that answers with a different host
+// identity is refused and leaves the host unenrolled there.
+func TestEnrollLegacyIdentityAdoptionAndChangedIdentityRefused(t *testing.T) {
+	srv, trust := issuingController(t, "")
+	s := testStore(t)
+	s.State.HostID = "legacy-host"
+	s.State.Controller, s.State.TrustPEM = "https://old.example", "old trust"
+	if err := Enroll(context.Background(), s, srv.URL, trust, "token", ""); err != nil {
+		t.Fatal(err)
+	}
+	hostname, _ := os.Hostname()
+	if s.State.HostID != "legacy-host" || s.State.PoolID != "pool-of-legacy-host" || s.State.PoolName != hostname {
+		t.Fatalf("legacy host did not keep its ID and adopt the reported pool: %+v", s.State)
+	}
+	other, otherTrust := issuingController(t, "someone-else")
+	fresh := testStore(t)
+	if err := Enroll(context.Background(), fresh, other.URL, otherTrust, "token", ""); err == nil || fresh.State.HostID != "" || fresh.State.CertificatePEM != "" || fresh.State.PendingHostID == "" {
+		t.Fatalf("Controller changing the host identity was accepted: %v %+v", err, fresh.State)
+	}
+	if err := Enroll(context.Background(), s, other.URL, otherTrust, "token", ""); err == nil || s.State.HostID != "legacy-host" || s.State.CertificatePEM == "" {
+		t.Fatalf("enrolled host accepted a changed identity: %v %+v", err, s.State)
 	}
 }

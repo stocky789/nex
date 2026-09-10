@@ -27,17 +27,26 @@ type JournalEntry struct {
 	Acknowledged bool              `json:"acknowledged"`
 }
 type State struct {
-	Controller           string                  `json:"controller"`
-	ControllerServerName string                  `json:"controller_server_name,omitempty"`
-	TrustPEM             string                  `json:"trust_pem"`
-	HostID               string                  `json:"host_id"`
-	KeyPEM               string                  `json:"key_pem"`
-	CSRPEM               string                  `json:"csr_pem"`
-	CertificatePEM       string                  `json:"certificate_pem"`
-	PendingKeyPEM        string                  `json:"pending_key_pem,omitempty"`
-	PendingCSRPEM        string                  `json:"pending_csr_pem,omitempty"`
-	Sequence             uint64                  `json:"sequence"`
-	Journal              map[string]JournalEntry `json:"journal"`
+	Controller           string `json:"controller"`
+	ControllerServerName string `json:"controller_server_name,omitempty"`
+	TrustPEM             string `json:"trust_pem"`
+	// Identity is host-owned. HostID is set once a Controller has accepted it and is the
+	// enrolled marker; PendingHostID holds the UUID this host generated before its first
+	// enrollment so retries present the same one. PoolID and PoolName are generated with it
+	// (this host is its pool's master) and presented unchanged to every Controller, including
+	// a replacement one. Hosts enrolled before host-owned identity keep their Controller-issued
+	// HostID and adopt the pool identity the Controller reports.
+	HostID         string                  `json:"host_id"`
+	PendingHostID  string                  `json:"pending_host_id,omitempty"`
+	PoolID         string                  `json:"pool_id,omitempty"`
+	PoolName       string                  `json:"pool_name,omitempty"`
+	KeyPEM         string                  `json:"key_pem"`
+	CSRPEM         string                  `json:"csr_pem"`
+	CertificatePEM string                  `json:"certificate_pem"`
+	PendingKeyPEM  string                  `json:"pending_key_pem,omitempty"`
+	PendingCSRPEM  string                  `json:"pending_csr_pem,omitempty"`
+	Sequence       uint64                  `json:"sequence"`
+	Journal        map[string]JournalEntry `json:"journal"`
 }
 
 type Store struct {
@@ -123,6 +132,17 @@ func (s *Store) Save() error {
 	}
 	defer d.Close()
 	return d.Sync()
+}
+
+// newUUID returns a random version 4 UUID in canonical lowercase form.
+func newUUID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 func newKey() (string, string, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

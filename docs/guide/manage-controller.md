@@ -275,9 +275,10 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
 - **Replace a failed Controller:** deploy or install a new Controller
   ([deploy the appliance](deploy-controller-appliance.md)), sign in, create a site, then connect
   each pool master with an enrollment token or the **Add host** address-and-root-password
-  flow (step 3). Wait for the host to report; each master lands in a new pool named after its
-  hostname, and its storage registrations, networks, ISO records and VM definitions return
-  with their original names and IDs. Verify each pool's **Storage**, **Networking**,
+  flow (step 3). Wait for the host to report; each pool returns with its original ID and
+  name and its master with its original host ID, because the host keeps that identity and
+  presents it at enrollment, and its storage registrations, networks, ISO records and VM
+  definitions return with their original names and IDs. Verify each pool's **Storage**, **Networking**,
   **ISO library** and **Virtual machines** tabs. Limits: sites, administrator accounts,
   audit history, enrollment tokens and the Controller CA are not recovered and must be
   re-created; multi-host pool membership is not restored (joining members is not available

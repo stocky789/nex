@@ -46,8 +46,9 @@ type VM struct {
 }
 
 // ManagedState lists succeeded registrations and VM definitions from the host journal.
-// Pool and host IDs inside entries are those of the Controller that created them and are
-// rewritten on adoption; resource IDs are stable across Controllers.
+// Pool, host and resource IDs are host-owned and stable across Controllers; adoption
+// still records each entry under the current pool/host, which is a no-op for hosts that
+// presented their own identity at enrollment.
 type ManagedState struct {
 	Storage  []StorageRegistration `json:"storage,omitempty"`
 	Networks []NetworkRegistration `json:"networks,omitempty"`
@@ -94,14 +95,27 @@ type Host struct {
 	LastSeen     *time.Time `json:"last_seen"`
 	Inventory    *Inventory `json:"inventory"`
 }
+
+// EnrollRequest presents the host-owned identity: the host generates host_id, and as a
+// pool master pool_id and pool_name, on first enrollment and keeps them across Controllers.
+// Empty values come from agents enrolled before host-owned identity; the Controller mints
+// what is missing and the response reports it for the host to keep.
 type EnrollRequest struct {
 	Version  int    `json:"version"`
 	Token    string `json:"token"`
 	CSRPEM   string `json:"csr_pem"`
 	Hostname string `json:"hostname"`
+	HostID   string `json:"host_id,omitempty"`
+	PoolID   string `json:"pool_id,omitempty"`
+	PoolName string `json:"pool_name,omitempty"`
 }
+
+// EnrollResponse echoes the adopted identity; host_id and pool_id equal the request when
+// presented. Rotation responses carry only host_id.
 type EnrollResponse struct {
 	HostID         string `json:"host_id"`
+	PoolID         string `json:"pool_id,omitempty"`
+	PoolName       string `json:"pool_name,omitempty"`
 	CertificatePEM string `json:"certificate_pem"`
 	CAPEM          string `json:"ca_pem"`
 }

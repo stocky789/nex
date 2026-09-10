@@ -6,8 +6,9 @@ Controller A enrolls a real nex-core-agent, which registers local storage (a roo
 directory created for the check), a pool network (an existing bridge, verified read-only)
 and receives an uploaded ISO. Controller A is then stopped and its data deleted. A brand-new
 Controller B with a different certificate is started; the host is connected to it with an
-ordinary enrollment, and the network must come back with the same ID and name without any
-operator re-entry and without a command being dispatched.
+ordinary enrollment, and the host, its pool (ID and name) and the network must come back
+with the same IDs and names without any operator re-entry and without a command being
+dispatched: identity is host-owned, so the replacement adopts what the host presents.
 
 Run inside a disposable network namespace that owns the named bridge, for example:
   unshare -Urnm sh -c 'mount -t sysfs none /sys && ip link set lo up && ip link add nexqa type bridge
@@ -122,8 +123,8 @@ def vm_spec(scope, name, storage_id, network_id, media_id):
 
 
 def same_spec(item, sent):
-    """Every requested field must come back unchanged. pool_id/host_id are rewritten to the
-    Controller currently holding the host, and id is asserted separately against the VM."""
+    """Every requested field must come back unchanged. pool_id/host_id are asserted
+    separately against the (preserved) host, and id against the VM."""
     ignored = ('id', 'pool_id', 'host_id', 'request_id')
     got = {k: v for k, v in item['spec'].items() if k not in ignored}
     want = {k: v for k, v in sent.items() if k not in ignored}
@@ -182,7 +183,9 @@ def main():
             assert vm['id'] in virsh('list', '--all', '--uuid'), 'VM not defined in libvirt'
             assert same_spec(vm, spec) and vm['spec']['id'] == vm['id'], vm['spec']
         old_identity = json.loads((state / 'state.json').read_text())
-        evidence['steps'].append({'controller': 'A', 'url': lab.url, **scope, 'storage': storage, 'network': applied, 'media': media, 'vm': vm})
+        pool_a = next(p for p in lab.api('/api/v1/pools') if p['id'] == host['pool_id'])
+        assert old_identity['host_id'] == host['id'] and old_identity['pool_id'] == pool_a['id'] and old_identity['pool_name'] == pool_a['name'], 'Controller A did not adopt the host-owned identity'
+        evidence['steps'].append({'controller': 'A', 'url': lab.url, **scope, 'pool': pool_a, 'storage': storage, 'network': applied, 'media': media, 'vm': vm})
         lab.passed('Controller A enrolled the real agent; the agent verified local storage, applied a pool network, transferred an uploaded ISO' + (' and defined a stopped VM in libvirt' if vm else ''))
 
         # Destroy Controller A completely: process and database.
@@ -202,14 +205,18 @@ def main():
         assert lab.api('/api/v1/networks') == [] and lab.api('/api/v1/storage') == [] and lab.api('/api/v1/media') == [] and lab.api('/api/v1/hosts') == [], 'Controller B must start empty'
         run(agent_bin, 'enroll', '--controller', lab.url, '--ca-file', b_cert, '--token-file', b_token, '--state-dir', state)
         new_identity = json.loads((state / 'state.json').read_text())
-        assert new_identity['host_id'] != old_identity['host_id'] and new_identity['controller'] == lab.url, 'host did not take a new identity on Controller B'
+        assert new_identity['controller'] == lab.url and new_identity['certificate_pem'] != old_identity['certificate_pem'], 'host did not take a new credential on Controller B'
+        assert {k: new_identity[k] for k in ('host_id', 'pool_id', 'pool_name')} == {k: old_identity[k] for k in ('host_id', 'pool_id', 'pool_name')}, 'host identity changed on Controller B'
         lab.start('agent-b', *agent_args())
         host_b = eventually(lambda: fresh_host(lab), 'host fresh on Controller B', timeout=30)
+        assert host_b['id'] == host['id'] and host_b['pool_id'] == host['pool_id'], 'Controller B did not adopt the host-owned identity'
+        pool_b = next(p for p in lab.api('/api/v1/pools') if p['id'] == host_b['pool_id'])
+        assert pool_b['name'] == pool_a['name'] and pool_b['master_host_id'] == host_b['id'], (pool_a, pool_b)
         adopted, operations = {}, {}
         for kind, path, original in (('storage', '/api/v1/storage', storage), ('network', '/api/v1/networks', applied), ('media', '/api/v1/media', media)):
             item = eventually(lambda p=path, i=original['id']: next((x for x in lab.api(p) if x['id'] == i), None), kind + ' adopted by Controller B', timeout=30)
             assert item['name'] == original['name'] and item['status'] == 'succeeded', item
-            assert item['host_id'] == host_b['id'] and item['pool_id'] == host_b['pool_id'], f'adopted {kind} not rewritten to the new pool/host'
+            assert item['host_id'] == host_b['id'] and item['pool_id'] == host_b['pool_id'], f'adopted {kind} not under the preserved pool/host'
             operation = next(op for op in lab.api('/api/v1/operations') if op['id'] == item['operation_id'])
             assert operation['actor'] == 'system' and operation['status'] == 'succeeded' and operation['request_id'].startswith('adopt-' + kind + ':'), operation
             adopted[kind], operations[kind] = item, operation
@@ -246,9 +253,9 @@ def main():
             assert same_spec(second_vm, after), second_vm['spec']
             assert second_vm['id'] in virsh('list', '--all', '--uuid') and vm['id'] in virsh('list', '--all', '--uuid')
             adopted['vm_after_replacement'] = second_vm
-        evidence['steps'].append({'controller': 'B', 'url': lab.url, 'host_id': host_b['id'], 'pool_id': host_b['pool_id'], 'adopted': adopted,
+        evidence['steps'].append({'controller': 'B', 'url': lab.url, 'host_id': host_b['id'], 'pool_id': host_b['pool_id'], 'pool': pool_b, 'identity_preserved': True, 'adopted': adopted,
                                   'adoption_operations': operations, 'counts_after_repeat_reports': counts, 'new_media_after_replacement': second})
-        lab.passed('Controller B, started empty with a different certificate, adopted storage, network, ISO record' + (', VM definition' if vm else '') + ' with the same IDs and names under actor system, with no command and no duplicates; a new ISO transfer' + (' and a new VM' if vm else '') + ' on the adopted resources succeeded')
+        lab.passed('Controller B, started empty with a different certificate, adopted the host and pool with their original IDs and pool name, plus storage, network, ISO record' + (', VM definition' if vm else '') + ' with the same IDs and names under actor system, with no command and no duplicates; a new ISO transfer' + (' and a new VM' if vm else '') + ' on the adopted resources succeeded')
         evidence['checks'] = lab.results
         evidence['environment'] = 'Real nex-controller and nex-core-agent processes on loopback inside a disposable network namespace as root; real directory storage and ISO transfer; bridge verified read-only; ' + ('real system libvirt defines the VMs (KVM device present, VMs never started)' if vm else 'no libvirt, so VM definitions are not covered')
         evidence['agent_state_dir_reused'] = True

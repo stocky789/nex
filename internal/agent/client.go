@@ -3,6 +3,7 @@ package agent
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -113,9 +114,15 @@ func post(ctx context.Context, c *http.Client, origin, path string, in, out any)
 	dec := json.NewDecoder(io.LimitReader(resp.Body, 2<<20))
 	return dec.Decode(out)
 }
-func acceptIdentity(s *Store, r protocol.EnrollResponse, key, csr string) error {
+func acceptIdentity(s *Store, r protocol.EnrollResponse, key, csr string, switching bool) error {
 	if r.HostID == "" {
 		return errors.New("controller returned an empty host identity")
+	}
+	if want := cmp.Or(s.State.HostID, s.State.PendingHostID); want != "" && r.HostID != want {
+		return errors.New("controller changed the host identity")
+	}
+	if s.State.PoolID != "" && r.PoolID != "" && r.PoolID != s.State.PoolID {
+		return errors.New("controller changed the pool identity")
 	}
 	pair, err := tls.X509KeyPair([]byte(r.CertificatePEM), []byte(key))
 	if err != nil {
@@ -135,12 +142,17 @@ func acceptIdentity(s *Store, r protocol.EnrollResponse, key, csr string) error 
 	if _, err = cert.Verify(x509.VerifyOptions{Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
 		return fmt.Errorf("invalid host certificate: %w", err)
 	}
-	if s.State.HostID != "" && r.HostID != s.State.HostID {
+	if switching {
 		// Pending results belong to the previous Controller; the new one learns applied
 		// state from the managed journal instead.
 		s.State.Journal = map[string]JournalEntry{}
 	}
 	s.State.HostID = r.HostID
+	s.State.PendingHostID = ""
+	if s.State.PoolID == "" {
+		// Older hosts adopt the pool identity the Controller holds for them.
+		s.State.PoolID, s.State.PoolName = r.PoolID, r.PoolName
+	}
 	s.State.KeyPEM = key
 	s.State.CSRPEM = csr
 	s.State.CertificatePEM = r.CertificatePEM
@@ -152,8 +164,9 @@ func Enroll(ctx context.Context, s *Store, controller, ca, token, replaceHost st
 	if strings.TrimSpace(token) == "" {
 		return errors.New("enrollment token is empty")
 	}
-	// A different Controller (URL or trust) is a replacement: the host takes a fresh identity
-	// there while keeping this state directory, so its managed journal is reported and adopted.
+	// A different Controller (URL or trust) is a replacement: the host takes a fresh credential
+	// there while keeping this state directory and its host/pool identity, so the pool comes
+	// back with its original ID and name and its managed journal is reported and adopted.
 	switching := s.State.Controller != "" && (s.State.Controller != controller || s.State.TrustPEM != ca)
 	if switching && replaceHost != "" {
 		return errors.New("--replace-host applies to the current Controller; enrolling with a different Controller needs no replacement ID")
@@ -198,14 +211,27 @@ func Enroll(ctx context.Context, s *Store, controller, ca, token, replaceHost st
 	if err != nil {
 		return err
 	}
+	// Identity is host-owned: a first-time host mints its own host and pool identity and
+	// persists them before asking, so retries present the same IDs and every Controller,
+	// including a replacement, adopts the same IDs and pool name.
+	if s.State.HostID == "" && (s.State.PendingHostID == "" || s.State.PoolID == "") {
+		s.State.PendingHostID = cmp.Or(s.State.PendingHostID, newUUID())
+		if s.State.PoolID == "" {
+			s.State.PoolID, s.State.PoolName = newUUID(), hostname
+		}
+		if err = s.Save(); err != nil {
+			return err
+		}
+	}
 	var r protocol.EnrollResponse
-	if err = post(ctx, c, controller, "/api/v1/agent/enroll", protocol.EnrollRequest{Version: protocol.Version, Token: strings.TrimSpace(token), CSRPEM: csr, Hostname: hostname}, &r); err != nil {
+	req := protocol.EnrollRequest{Version: protocol.Version, Token: strings.TrimSpace(token), CSRPEM: csr, Hostname: hostname, HostID: cmp.Or(s.State.HostID, s.State.PendingHostID), PoolID: s.State.PoolID, PoolName: s.State.PoolName}
+	if err = post(ctx, c, controller, "/api/v1/agent/enroll", req, &r); err != nil {
 		return err
 	}
 	if replaceHost != "" && r.HostID != replaceHost {
 		return errors.New("replacement enrollment returned a different host; use a token targeting the revoked host")
 	}
-	return acceptIdentity(s, r, key, csr)
+	return acceptIdentity(s, r, key, csr, switching)
 }
 func Rotate(ctx context.Context, s *Store) error {
 	c, err := client(s.State, true)
@@ -229,7 +255,7 @@ func Rotate(ctx context.Context, s *Store) error {
 	if r.HostID != s.State.HostID {
 		return errors.New("rotation changed host identity")
 	}
-	return acceptIdentity(s, r, s.State.PendingKeyPEM, s.State.PendingCSRPEM)
+	return acceptIdentity(s, r, s.State.PendingKeyPEM, s.State.PendingCSRPEM, false)
 }
 func CertificateExpiry(s State) (time.Time, error) {
 	b, _ := pem.Decode([]byte(s.CertificatePEM))

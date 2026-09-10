@@ -1348,12 +1348,12 @@
   }
 }</pre></details></section>
 <section id="enrollHost"><h2>POST <code>/api/v1/agent/enroll</code></h2>
-<p>Enroll a Core host</p><p>Implemented in development product 0.1.0, protocol v1. Outbound HTTPS; agent must verify Controller identity before transmitting its site-bound token. Provide a signed PEM ECDSA P-256 CSR and nonblank hostname (maximum 200 UTF-8 bytes, no CR/LF/NUL). A fresh enrollment creates a pool in the token site, named after the request hostname, with this host as its master, then records the host in that pool in the same transaction (audit pool.create and host.enroll). Re-enrollment keeps the existing host and pool. Issues a 90-day host-specific client certificate and CA. The token binds to its first CSR; an identical token/CSR retry before token expiry returns the same identity without duplicate enrollment. A different CSR returns 409. After expiry or revocation obtain a new site-bound token; replacement requires explicit revoked host selection. Enrollment has no VM side effects.</p>
+<p>Enroll a Core host</p><p>Implemented in development product 0.1.0, protocol v1. Outbound HTTPS; agent must verify Controller identity before transmitting its site-bound token. Provide a signed PEM ECDSA P-256 CSR and nonblank hostname (maximum 200 UTF-8 bytes, no CR/LF/NUL). Identity is host-owned: the host presents the host_id it generated and, as its pool&#x27;s master, the pool_id and pool_name it keeps, and the Controller adopts them unchanged, so a replacement Controller recovers the pool with its original ID and name. host_id and pool_id must be canonical lowercase UUIDs (or the 64-hex form issued to hosts enrolled before host-owned identity) and pool_name a valid name, else 400. A fresh enrollment creates the pool in the token site with this host as its master, then records the host in that pool in the same transaction (audit pool.create and host.enroll); older agents that present no identity get Controller-minted IDs and a pool named after the hostname, which the response reports for the host to keep. A presented host_id already on record, or a pool_id already held by another master host, is 409: only a token bound to a revoked host may re-issue that host, and it must present that host and its pool (409 otherwise); multi-host pools are not available. The same key is the same host: a request whose CSR matches a recorded active credential (a retry after a lost response, even with a new token) returns that credential unchanged. Issues a 90-day host-specific client certificate and CA. The token binds to its first CSR; an identical token/CSR retry before token expiry returns the same identity without duplicate enrollment. A different CSR returns 409. After expiry or revocation obtain a new site-bound token; replacement requires explicit revoked host selection. Enrollment has no VM side effects. Compatibility: an older Controller rejects the new fields with 400 (unknown field); upgrade Controller and Core together.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;enrollHost&quot;,
   &quot;summary&quot;: &quot;Enroll a Core host&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Outbound HTTPS; agent must verify Controller identity before transmitting its site-bound token. Provide a signed PEM ECDSA P-256 CSR and nonblank hostname (maximum 200 UTF-8 bytes, no CR/LF/NUL). A fresh enrollment creates a pool in the token site, named after the request hostname, with this host as its master, then records the host in that pool in the same transaction (audit pool.create and host.enroll). Re-enrollment keeps the existing host and pool. Issues a 90-day host-specific client certificate and CA. The token binds to its first CSR; an identical token/CSR retry before token expiry returns the same identity without duplicate enrollment. A different CSR returns 409. After expiry or revocation obtain a new site-bound token; replacement requires explicit revoked host selection. Enrollment has no VM side effects.&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Outbound HTTPS; agent must verify Controller identity before transmitting its site-bound token. Provide a signed PEM ECDSA P-256 CSR and nonblank hostname (maximum 200 UTF-8 bytes, no CR/LF/NUL). Identity is host-owned: the host presents the host_id it generated and, as its pool&#x27;s master, the pool_id and pool_name it keeps, and the Controller adopts them unchanged, so a replacement Controller recovers the pool with its original ID and name. host_id and pool_id must be canonical lowercase UUIDs (or the 64-hex form issued to hosts enrolled before host-owned identity) and pool_name a valid name, else 400. A fresh enrollment creates the pool in the token site with this host as its master, then records the host in that pool in the same transaction (audit pool.create and host.enroll); older agents that present no identity get Controller-minted IDs and a pool named after the hostname, which the response reports for the host to keep. A presented host_id already on record, or a pool_id already held by another master host, is 409: only a token bound to a revoked host may re-issue that host, and it must present that host and its pool (409 otherwise); multi-host pools are not available. The same key is the same host: a request whose CSR matches a recorded active credential (a retry after a lost response, even with a new token) returns that credential unchanged. Issues a 90-day host-specific client certificate and CA. The token binds to its first CSR; an identical token/CSR retry before token expiry returns the same identity without duplicate enrollment. A different CSR returns 409. After expiry or revocation obtain a new site-bound token; replacement requires explicit revoked host selection. Enrollment has no VM side effects. Compatibility: an older Controller rejects the new fields with 400 (unknown field); upgrade Controller and Core together.&quot;,
   &quot;tags&quot;: [
     &quot;Core agent \u2192 Controller&quot;
   ],
@@ -4197,6 +4197,18 @@
     &quot;hostname&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;description&quot;: &quot;Nonblank, maximum 200 UTF-8 bytes, no CR/LF/NUL.&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Host-owned identity: the UUID this host generated on its first enrollment (canonical lowercase form) and keeps across Controllers. Hosts enrolled before host-owned identity present their Controller-issued 64-hex ID instead. Omitted only by older agents; the Controller then mints one.&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;UUID of the pool this host is master of, generated by the host with host_id and kept across Controllers. Omitted by older agents or hosts that adopted a Controller-minted pool before presenting one; the Controller then mints or keeps the pool.&quot;
+    },
+    &quot;pool_name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Name of the pool held by the pool master, its hostname at first enrollment. Nonblank, maximum 200 UTF-8 bytes, no CR/LF/NUL. Defaults to hostname when omitted.&quot;
     }
   },
   &quot;required&quot;: [
@@ -4210,14 +4222,26 @@
     &quot;version&quot;: 1,
     &quot;token&quot;: &quot;&lt;single-use-enrollment-token&gt;&quot;,
     &quot;csr_pem&quot;: &quot;&lt;signed-P256-CSR-PEM&gt;&quot;,
-    &quot;hostname&quot;: &quot;nex-core-1&quot;
+    &quot;hostname&quot;: &quot;nex-core-1&quot;,
+    &quot;host_id&quot;: &quot;6f1c2a3e-9b7d-4c5e-8a1b-0d2e3f4a5b6c&quot;,
+    &quot;pool_id&quot;: &quot;0a9b8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d&quot;,
+    &quot;pool_name&quot;: &quot;nex-core-1&quot;
   }
 }</pre></details>
 <details id="EnrollResponse"><summary>EnrollResponse</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;properties&quot;: {
     &quot;host_id&quot;: {
-      &quot;type&quot;: &quot;string&quot;
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Equals the presented host_id when one was presented.&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Pool the host is master of; equals the presented pool_id when one was presented. Absent from rotation responses.&quot;
+    },
+    &quot;pool_name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Name of that pool. Absent from rotation responses.&quot;
     },
     &quot;certificate_pem&quot;: {
       &quot;type&quot;: &quot;string&quot;
@@ -4233,7 +4257,9 @@
   ],
   &quot;x-go-type&quot;: &quot;protocol.EnrollResponse&quot;,
   &quot;example&quot;: {
-    &quot;host_id&quot;: &quot;&lt;host-id&gt;&quot;,
+    &quot;host_id&quot;: &quot;6f1c2a3e-9b7d-4c5e-8a1b-0d2e3f4a5b6c&quot;,
+    &quot;pool_id&quot;: &quot;0a9b8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d&quot;,
+    &quot;pool_name&quot;: &quot;nex-core-1&quot;,
     &quot;certificate_pem&quot;: &quot;&lt;issued-host-certificate-PEM&gt;&quot;,
     &quot;ca_pem&quot;: &quot;&lt;host-CA-certificate-PEM&gt;&quot;
   }
