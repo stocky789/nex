@@ -3,6 +3,7 @@
   "paths": [
     "web/src/style.css",
     "web/src/local.css",
+    "tests/integration/form_select_overflow.py",
     "tests/integration/form_select_picker.py",
     ".github/workflows/phase1.yml",
     ".gitea/workflows/phase1.yml",
