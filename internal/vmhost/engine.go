@@ -1022,7 +1022,7 @@ func (e *Engine) deployment(id string) (journal, error) {
 			return j, nil
 		}
 	}
-	return journal{}, errors.New("VM is not owned by the local appliance engine")
+	return journal{}, errors.New("Local power control is only available for the Controller appliance deployed from this page")
 }
 func (e *Engine) owned(ctx context.Context, j journal) error {
 	if !uuidPattern.MatchString(j.VMID) || j.Disk != filepath.Join(e.config.StorageDir, j.VMID, "controller.qcow2") || j.Bridge != e.config.Bridge {
