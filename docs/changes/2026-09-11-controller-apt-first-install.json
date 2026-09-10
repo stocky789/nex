@@ -1,0 +1,29 @@
+{
+  "summary": "Controller Update applies with apt install (not --only-upgrade) so binary-only appliances can become packaged, and the Updates UI no longer labels a failed check as Up to date.",
+  "paths": [
+    "internal/nexupdate/nexupdate.go",
+    "internal/nexupdate/nexupdate_test.go",
+    "web/src/main.tsx",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-11-controller-apt-first-install.json",
+    "web/src/local.tsx"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator update steps are unchanged; only the misleading Available label and the first-install apt invocation differ."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Same Updates endpoints and Status schema; Apply still schedules apply-update. Behavior of the helper's apt install line is host-local."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable pool or Controller-owned product state; package install remains on the Controller host."
+  },
+  "verification": {
+    "method": "go test ./internal/nexupdate. Live host at 0.1.5~alpha1 was binary-only without keyring/nex.sources and returned package not available from https://nexvirtualization.com/apt while the signed archive already published nex-controller 0.1.6~alpha1; UI Available showed Up to date for that error.",
+    "evidence": [
+      "internal/nexupdate/nexupdate_test.go"
+    ]
+  }
+}

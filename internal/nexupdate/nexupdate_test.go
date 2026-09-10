@@ -240,7 +240,7 @@ func TestApplyLocalUpgradesViaApt(t *testing.T) {
 		switch {
 		case strings.HasPrefix(line, "dpkg-query"):
 			return installed, 0
-		case strings.Contains(line, "install -y --only-upgrade"):
+		case strings.Contains(line, "install -y nex-core-local"):
 			installed = "0.2.0"
 			return "Setting up nex-core-local (0.2.0)", 0
 		}
@@ -255,8 +255,11 @@ func TestApplyLocalUpgradesViaApt(t *testing.T) {
 		t.Fatalf("%+v", res)
 	}
 	got := joined(calls)
-	if !strings.Contains(got, "apt-get -q -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=60 install -y --only-upgrade nex-core-local") {
-		t.Fatalf("apt upgrade not invoked:\n%s", got)
+	if !strings.Contains(got, "apt-get -q -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=60 install -y nex-core-local") {
+		t.Fatalf("apt install not invoked:\n%s", got)
+	}
+	if strings.Contains(got, "--only-upgrade") {
+		t.Fatalf("still using --only-upgrade (skips binary-only appliances):\n%s", got)
 	}
 	if strings.Contains(got, "dpkg -i") {
 		t.Fatalf("still installing a bare .deb:\n%s", got)
@@ -291,7 +294,7 @@ func TestApplyLocalRejectsUnchangedVersion(t *testing.T) {
 func TestApplyLocalReportsAptFailure(t *testing.T) {
 	isolatePaths(t)
 	fakeCommands(t, func(line string) (string, int) {
-		if strings.Contains(line, "install -y --only-upgrade") {
+		if strings.Contains(line, "install -y nex-core-local") {
 			return "E: Unable to correct problems, you have held broken packages.", 1
 		}
 		if strings.HasPrefix(line, "dpkg-query") {

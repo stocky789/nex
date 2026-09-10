@@ -529,7 +529,9 @@ func ApplyLocal(ctx context.Context, repoURL, packageName, stateDir string) (App
 	_, _ = apt(ctx, "update").CombinedOutput()
 
 	_ = WriteProgress(stateDir, Progress{Phase: "installing", Percent: 50, Message: "Installing package"})
-	out, err := apt(ctx, "install", "-y", "--only-upgrade", packageName).CombinedOutput()
+	// Plain install both upgrades a packaged host and first-installs an appliance
+	// that only had a binary under /usr/local (apt --only-upgrade skips those).
+	out, err := apt(ctx, "install", "-y", packageName).CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {

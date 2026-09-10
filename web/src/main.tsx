@@ -1386,7 +1386,7 @@ function UpdatesPanel({
         </div>
         <div>
           <dt>Available</dt>
-          <dd>{!update ? "—" : update.update_available ? (update.available_version || "—") : "Up to date"}</dd>
+          <dd>{!update ? "—" : update.update_available ? (update.available_version || "—") : update.error ? "—" : "Up to date"}</dd>
         </div>
       </dl>
       {(working || phase === "done") && <p className="small" role="status">{label}</p>}
