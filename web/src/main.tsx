@@ -403,15 +403,21 @@ function App() {
     const ticket = await api<{ websocket: string }>(`hosts/${encodeURIComponent(id)}/console`, "POST", {});
     return `wss://${location.host}${ticket.websocket}`;
   }
+  // One request identity per VM+action until it succeeds, so a retry after an uncertain outcome
+  // is the same request rather than a second change.
+  const mediaRequest = useRef<Record<string, string>>({});
   async function changeVMMedia(vmID: string, action: "insert" | "eject", mediaID?: string) {
     setMediaBusy(true);
     setMediaNote("");
+    const key = `${vmID}/${action}`;
+    mediaRequest.current[key] ??= crypto.randomUUID();
     try {
       await api(`vms/${encodeURIComponent(vmID)}/media`, "POST", {
-        request_id: crypto.randomUUID(),
+        request_id: mediaRequest.current[key],
         action,
         ...(action === "insert" ? { media_id: mediaID } : {}),
       });
+      delete mediaRequest.current[key];
       setMediaNote(action === "insert" ? "Inserting ISO…" : "Ejecting ISO…");
       await reload();
     } catch (e) {
@@ -1129,8 +1135,8 @@ function App() {
                         return;
                       }
                     }
-                    setUpdateNote("Still applying… refresh Updates if needed");
-                    setUpdatePhase("done");
+                    setUpdateNote("Still applying after 10 minutes; the result is unknown. Select Check to read the current state.");
+                    setUpdatePhase("idle");
                   } catch (e) {
                     setUpdatePhase("error");
                     setError((e as Error).message);
@@ -1392,7 +1398,7 @@ function UpdatesPanel({
         />
       )}
       {update?.error && <p className="warning" role="status">{update.error}</p>}
-      {note && phase === "done" && <p className="notice" role="status">{note}</p>}
+      {note && phase === "idle" && <p className="notice" role="status">{note}</p>}
       <div className="actions">
         <button disabled={busy} onClick={onCheck}>Check</button>
         <button className="primary" disabled={busy || !update?.update_available} onClick={onApply}>Update</button>

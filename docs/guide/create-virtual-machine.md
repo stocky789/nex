@@ -240,8 +240,8 @@ second task runs. No guest operating system is installed by this workflow — st
 open its [console](vm-console.md) and install the guest from the attached ISO.
 
 **Host ISO images** lists only transfers assigned to the selected host and pool.
-**Transferred · last verified** means import succeeded, storage was validated and
-the host is freshly connected. Pending, failed and uncertain transfers are listed
+**Transfer succeeded · not rescanned** means import succeeded, storage was validated and
+the host is freshly connected; the file itself is not checked again until VM creation. Pending, failed and uncertain transfers are listed
 with their own status. This is Nex's transfer record, not a scan of every ISO on
 the host; files are checked again when creating a VM.
 

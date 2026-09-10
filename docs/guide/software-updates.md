@@ -50,6 +50,9 @@ Controller host page **Version** field; that package version is the only Nex Cor
 - Appliance images and new Core deploys include the update helper so **Update** works
   after deploy. Older Controller VMs without that helper need a redeploy (or a one-time
   `nex-controller` package install).
+- If the page reports *Still applying after 10 minutes; the result is unknown*, the page stopped
+  following the update; it has not completed or failed as far as the page knows. Select
+  **Check** to read the host's current state.
 - If Core shows Installing after the service is already back, refresh **Updates**; completed
   installs clear themselves once the installed version matches available.
 

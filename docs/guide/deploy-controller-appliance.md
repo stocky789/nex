@@ -119,9 +119,13 @@ Controller failover remain outside this slice. This page does not establish Phas
    inventory under its host. Select it in Controller to inspect its VM identity;
    adoption retains the existing appliance UUID instead of creating another VM.
 
-7. For local power recovery, return to **Virtual machines** on the host. Where local control
-   is allowed, select **Start**, **Shut down** or **Force stop**, then confirm the selected
-   VM and action. No hostname typing is needed. Stopping Controller interrupts central management. Force stop cuts
+7. For local power recovery, return to **Virtual machines** on the host. The appliance this
+   page deployed is labelled **Controller appliance**; every other VM libvirt reports,
+   including VMs created through Controller, is labelled **Other VM on this host** and shows
+   *Local power control is only available for the Controller appliance deployed from this
+   page* instead of power buttons. Where local control is allowed, select **Start**,
+   **Shut down** or **Force stop**, then confirm the selected VM and action. No hostname
+   typing is needed. Stopping Controller interrupts central management. Force stop cuts
    power immediately and can lose unwritten data; inspect observed state after the request.
 
 ## Expected result
@@ -134,8 +138,8 @@ must not create a second VM. Local host access remains available if Controller i
 
 A running VM alone is not completion. Initialization, TLS verification, enrollment and
 adoption must also succeed. The local page shows resident VM observations; power actions apply only to the Controller
-appliance created by this host. Unrelated resident VMs remain read-only. Unknown ownership
-prevents local starts.
+appliance created by this host. Other VMs on this host, including Controller-created ones,
+remain read-only here; manage them from Controller. Unknown ownership prevents local starts.
 
 ## Troubleshooting
 

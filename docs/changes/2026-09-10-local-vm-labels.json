@@ -1,0 +1,40 @@
+{
+  "summary": "Host-local Virtual machines table: label the deployed appliance 'Controller appliance' and every other libvirt VM 'Other VM on this host', and replace the raw engine ownership error with the host-reported sentence 'Local power control is only available for the Controller appliance deployed from this page'. Update polling that expires after 600 x 1 s now returns to idle with an unknown-result note instead of reading as done (local page and Controller Updates panel). VM media insert/eject keeps one request_id per VM+action until success so a retry is the same request. Host ISO availability wording changed to 'Transfer succeeded · not rescanned'.",
+  "paths": [
+    "internal/vmhost/engine.go",
+    "web/src/local.tsx",
+    "web/src/main.tsx",
+    "web/src/managed.tsx",
+    "tests/integration/host_iso_browser.py",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/guide/software-updates.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/qa/host-isos/checks.md",
+    "docs/changes/2026-09-10-local-vm-labels.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operator-visible labels and messages changed: the host-local VM table row labels and blocked-reason sentence, the update-expiry note and what to do about it, and the host ISO availability wording.",
+    "pages": [
+      "docs/guide/deploy-controller-appliance.md",
+      "docs/guide/software-updates.md",
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Existing contract reused: GET /api/local/v1/vms still reports ownership through the existing blocked_reason string field (docs/api/local-openapi.json describes it as an untyped string); only the sentence the host returns changed, and the same sentence is the error for POST /api/local/v1/vms/{id}/actions on a non-appliance VM. The Controller VM media request (POST /api/v1/vms/{id}/media) keeps its request_id semantics; the UI now reuses the id on retry as the contract intends. No schema, endpoint, permission or wire shape changed.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Wording and client-side request-identity fixes only. Appliance ownership stays in the host-side engine deploy journal on Nex Core; the Controller records nothing new.",
+    "record": ""
+  },
+  "verification": {
+    "method": "cd web && npm run typecheck && npm run build (both clean). go test ./internal/vmhost/... ./internal/localcore/... (ok; no test asserted the old string). Simulated browser pass (labelled simulation): served web/dist with python3 -m http.server and ran a Playwright 1.62 Chromium script that mocks /api/local/v1/* with two VMs, the appliance (managed, power_allowed) and a non-owned VM carrying the new blocked_reason, and asserts the rows read 'Controller appliance' with enabled power buttons and 'Other VM on this host' with the blocked sentence and no power buttons, that no old wording remains, and that a 390 px viewport has no horizontal scroll. Update expiry was exercised with page.clock: after Update, the fake clock was advanced 1 s per poll for 600 polls (601 /updates responses), after which the page shows 'Still applying after 10 minutes; the result is unknown…', no 'Done' text, no progress bar, and Update re-enabled. Zero page errors. Captures: scratchpad local-vm-labels/vm-rows.png, vm-rows-mobile.png, update-applying.png, update-expired.png (session scratchpad, not committed). Not exercised: a real host with a hand-made libvirt VM (the blocked sentence there comes from the same engine.deployment error path listed as vm.BlockedReason); the Controller Updates panel expiry path and the media insert/eject retry were not browser-driven, tests/integration/host_iso_browser.py (simulated agent, real Controller build) was updated for the new ISO wording and re-run: PASS with all eight checks including the 'Transfer succeeded · not rescanned' assertions.",
+    "evidence": [
+      "tests/integration/host_iso_browser.py"
+    ]
+  }
+}

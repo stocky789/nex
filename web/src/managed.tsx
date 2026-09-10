@@ -285,7 +285,7 @@ export function HostISOs({ host, media, storage, unavailable }: { host: Host; me
             : host.connection !== "fresh" ? "Availability unknown · host is not freshly connected"
             : !host.capabilities?.includes("managed-vm-v1") ? "Unavailable · host agent upgrade required"
             : destination?.status !== "succeeded" ? "Availability unknown · storage access unverified"
-            : "Transferred · last verified";
+            : "Transfer succeeded · not rescanned";
         }
         return <tr key={image.id}><td>{image.name}</td><td>{destination?.name || image.storage_id}{destination && <small>{destination.path}</small>}</td><td>{(image.size_bytes / GiB).toLocaleString(undefined, { maximumFractionDigits: 2 })} GiB<small>{image.size_bytes.toLocaleString()} bytes</small></td><td>{availability}</td><td>{task(image)}</td></tr>;
       })}</tbody>

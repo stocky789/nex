@@ -7,7 +7,7 @@ Status: Implemented, deployed and verified with independent review.
 
 Each host's **Storage** tab now includes **Host ISO images**, filtered by both
 host and pool. Rows show destination storage/directory, size and transfer results.
-**Transferred · last verified** describes the successful import record. Dispatched
+**Transfer succeeded · not rescanned** (originally **Transferred · last verified**) describes the successful import record. Dispatched
 is not completed; stale/revoked hosts, unavailable Controller data and unverified
 storage do not establish availability. This uses existing Nex transfer records,
 not a host filesystem scanner.
