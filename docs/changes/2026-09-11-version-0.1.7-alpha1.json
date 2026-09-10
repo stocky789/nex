@@ -1,0 +1,23 @@
+{
+  "summary": "Bump the release version to 0.1.7-alpha1 so the next main publish builds and ships Core/Controller at that version.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/changes/2026-09-11-version-0.1.7-alpha1.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Version stamp and changelog only; operator update steps are unchanged."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No API contract change; packaging stamps the new version into binaries and packages."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Release metadata only."
+  },
+  "verification": {
+    "method": "python3 scripts/release-version.py --current --format both",
+    "evidence": ["scripts/release-version.py", "CHANGELOG.md"]
+  }
+}

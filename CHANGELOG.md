@@ -7,13 +7,14 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > and the current `0.1.5~alpha1`. The sections below reconstruct the development **stages** from
 > the commit history and number them across that range; the intermediate versions (0.0.x and
 > 0.1.1–0.1.4) map real stages of work but were not individually built or released. Dates are the
-> commit dates. The current build stamps `0.1.5~alpha1` (Debian package form of `0.1.5-alpha1`).
+> commit dates. The current build stamps from the newest changelog heading (`0.1.7-alpha1` →
+> Debian `0.1.7~alpha1`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
 
-## [0.1.6-alpha1] — 2026-09-11
+## [0.1.7-alpha1] — 2026-09-11
 
 ### Bug Fixes
 
@@ -25,12 +26,17 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the guest is restarted.
 - Fixed the VM CPU model list so it only shows named models this host can actually run, and
   named models start under KVM instead of failing on common baselines such as qemu64.
-- Fixed Controller software-update checks in appliance deployments. The appliance now includes
-  the signed Nex archive configuration and keyring, and its unprivileged service uses its own
-  signed APT index cache instead of failing to write the system package cache.
 - Fixed Controller updates for appliances that were never installed as a Debian package:
   Update now runs a normal apt install (not --only-upgrade), and Available no longer says
   Up to date when the check failed.
+
+## [0.1.6-alpha1] — 2026-09-11
+
+### Bug Fixes
+
+- Fixed Controller software-update checks in appliance deployments. The appliance now includes
+  the signed Nex archive configuration and keyring, and its unprivileged service uses its own
+  signed APT index cache instead of failing to write the system package cache.
 
 ## [0.1.5-alpha1] — 2026-09-09
 
