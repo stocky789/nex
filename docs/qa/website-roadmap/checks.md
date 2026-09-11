@@ -163,6 +163,44 @@ items of the second milestone — and the desktop, expanded-card and 360px captu
 `roadmap/index.html` for the rebuilt page is
 `989b1c281a0dd53ed308dd6fbc644e03775a0f62395440d5ea3f407dab39efe8`.
 
+## Hover preview — floating, not reflowing
+
+Hovering a card now reveals its panel over the cards below instead of pushing them down. The
+markup is unchanged: the effect is CSS layered on top of the existing `<details>`, so nothing
+depends on JavaScript, which the site does not ship (`csr = false`).
+
+`::details-content { content-visibility: visible }` is what makes a closed panel paintable; the
+panel is then absolutely positioned against its card at `top: 100%`. Where that pseudo-element is
+unsupported the card simply stays click-to-open, which is the honest fallback rather than a
+scripted polyfill.
+
+Three deliberate constraints:
+
+- **Hover is an enhancement, never the only way in.** The rules sit behind
+  `@media (hover: hover) and (pointer: fine)`, so a tap cannot strand a touch device in a hover
+  state, and `:focus-within` is inside the same gate so Tab previews the panel exactly as a mouse
+  does. Activating the disclosure still opens it in flow for touch, keyboard and older browsers.
+- **The slide is motion, so it is optional.** The animation lives in a
+  `prefers-reduced-motion: no-preference` block. Under reduced motion the panel still appears —
+  only the movement is dropped, which the walkthrough confirms by exercising hover in a
+  reduced-motion context.
+- **Floating must not become clipping.** The panel is capped at `58vh` with its own scrolling and
+  `overscroll-behavior: contain`, because the second milestone's panel is taller than a viewport.
+
+Measured rather than assumed, at 1440px: the panel is not painted before hover; on hover it
+appears flush with the card (card bottom 809px, panel top 808px) and exactly its width (413px);
+the card two rows below moves **0.0px**; the panel genuinely overlaps it; and there is no
+horizontal overflow. Keyboard focus reveals the same panel, and pressing Enter opens the
+disclosure, which *does* reflow — the difference the checks assert explicitly.
+
+On an emulated touch phone (`hover: none`, `pointer: coarse`) the hover rules correctly do not
+apply: tapping opens the disclosure, the board reflows in flow, and nothing overflows. A floating
+overlay on a narrow screen would be worse than the reflow, so this is the intended outcome.
+
+All of this is guarded in `tests/integration/website_browser.py`, now 13 groups, so a later change
+that turns the float back into a reflow — or makes it mouse-only — fails CI rather than shipping.
+The [hover capture](roadmap-hover-1440.png) was inspected.
+
 ## Keeping the board honest in CI
 
 A roadmap is only worth publishing if it stays true, so the change-record gate now carries a third

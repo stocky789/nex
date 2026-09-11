@@ -125,6 +125,39 @@ def main():
             assert page.locator('.done-list li').count() > 0
             assert page.locator('.open-list li').count() > 0
             assert page.locator('a[download], a[href$=".iso"], a[href$=".deb"], a[href$=".qcow2"]').count() == 0
+            if width == 1440:
+                # The hover preview must float, not push: a panel that reflows the board
+                # moves the card someone was about to click. Checked by measuring a later
+                # card before and after, not by trusting the CSS.
+                card = page.locator('.milestone').nth(1)
+                below = page.locator('.milestone').nth(4)
+                panel = card.locator('.detail')
+                start = below.bounding_box()['y']
+                assert not panel.is_visible(), 'Detail panel paints before any hover'
+                card.locator('summary').hover()
+                page.wait_for_timeout(300)
+                assert panel.is_visible(), 'Hover did not reveal the detail panel'
+                box, card_box = panel.bounding_box(), card.bounding_box()
+                assert below.bounding_box()['y'] == start, 'Hover panel pushed the board instead of floating'
+                assert box['y'] + box['height'] > start, 'Hover panel does not overlap what is below it'
+                assert abs(box['width'] - card_box['width']) <= 2, 'Hover panel is not aligned to its card'
+                assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                page.screenshot(path=str(args.evidence / 'roadmap-hover-1440.png'))
+                # Keyboard must reach the same preview, or hover would be a mouse-only feature.
+                page.mouse.move(0, 0)
+                page.wait_for_timeout(250)
+                assert not panel.is_visible(), 'Panel stayed open after the pointer left'
+                card.locator('summary').focus()
+                page.wait_for_timeout(250)
+                assert panel.is_visible(), 'Keyboard focus does not reveal the detail panel'
+                # And the underlying disclosure still works on activation, for touch and
+                # for browsers without ::details-content.
+                page.keyboard.press('Enter')
+                assert card.locator('details').get_attribute('open') is not None
+                assert below.bounding_box()['y'] > start, 'Opening the disclosure should reflow, unlike hover'
+                page.keyboard.press('Enter')
+                assert card.locator('details').get_attribute('open') is None
+                results.append(f'{width}px: roadmap hover panel floats without reflow, keyboard parity, disclosure still opens')
             page.evaluate('document.activeElement.blur(); window.scrollTo(0, 0)')
             page.screenshot(path=str(args.evidence / f'roadmap-{width}.png'), full_page=True)
             results.append(f'{width}px: roadmap navigation, status legend, milestone built/outstanding lists, skip link, no overflow')

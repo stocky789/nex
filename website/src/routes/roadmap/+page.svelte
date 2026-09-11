@@ -372,6 +372,7 @@
     gap: 20px;
   }
   .milestone {
+    position: relative;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -455,6 +456,50 @@
   .list li::before { position: absolute; left: 0; top: 0; font-size: 10px; line-height: 1.95; }
   .done-list li::before { content: "✓"; color: #1c7a53; }
   .open-list li::before { content: "○"; color: #7d879b; font-size: 8px; }
+
+  /* Hover preview: float the panel over the cards below instead of pushing them down.
+     Layered on top of <details>, never replacing it — clicking still opens the panel in
+     flow, which is what keyboard, touch and older browsers rely on. Gated on a real
+     hovering pointer so a tap cannot leave a touch device stuck in a hover state, and
+     :focus-within is inside the same gate so Tab previews it the same way a mouse does.
+     ::details-content is what makes a closed panel paintable; where it is unsupported
+     the card simply stays click-to-open. */
+  @media (hover: hover) and (pointer: fine) {
+    .milestone:hover,
+    .milestone:focus-within { z-index: 5; }
+    .milestone:hover details:not([open])::details-content,
+    .milestone:focus-within details:not([open])::details-content {
+      content-visibility: visible;
+    }
+    .milestone:hover details:not([open]) .detail,
+    .milestone:focus-within details:not([open]) .detail {
+      position: absolute;
+      left: -1px;
+      right: -1px;
+      top: 100%;
+      max-height: 58vh;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      margin-top: 0;
+      padding: 4px 24px 22px;
+      border: 1px solid var(--line);
+      border-top: 0;
+      background: #fff;
+      box-shadow: 0 18px 34px -16px rgba(23, 35, 59, 0.28);
+    }
+    .milestone:hover details:not([open]) summary,
+    .milestone:focus-within details:not([open]) summary { color: var(--blue); }
+  }
+  @media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+    .milestone:hover details:not([open]) .detail,
+    .milestone:focus-within details:not([open]) .detail {
+      animation: slide-down 0.16s ease-out;
+    }
+    @keyframes slide-down {
+      from { opacity: 0; transform: translateY(-6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  }
 
   .closing { margin-top: 56px; border-top: 1px solid var(--line); padding-block: 40px 72px; }
   .closing h2 { font-size: 26px; }
