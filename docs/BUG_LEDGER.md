@@ -1973,17 +1973,17 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 - Root cause: postinst treated the live installer kernel's AppArmor-enabled flag under
   `/sys` as proof the target could reload profiles. `apparmor_parser -r` then failed under
   `set -e` inside `in-target`, aborting package configure before first boot.
-- Fix: write the libvirtd local include always; require a writable
-  `/sys/kernel/security/apparmor/.load` before demanding `apparmor_parser` or reloading.
-  Installer/chroot configures defer reload to first boot on a live host.
-- Regression: `test_apparmor_live_gate_skips_reload_without_writable_load` and updated
+- Fix: write the libvirtd local include always; reload AppArmor only outside a chroot
+  when `/sys/kernel/security/apparmor/.load` exists. Installer `in-target` defers reload
+  to first boot on the live host.
+- Regression: `test_apparmor_live_gate_skips_reload_in_chroot_or_without_load` and updated
   packaging assertions in `tests/test_storage_packaging.py`. Both GitHub and Gitea phase1
   workflows run these through Python unittest discovery on pushes and pull requests.
   Full ISO reinstall on an AppArmor-capable installer host is still required for end-to-end
   proof after the next Core package rebuild.
 - Avoid: treating `/sys/module/apparmor/parameters/enabled=Y` alone as a usable policy load
-  path inside Debian Installer `in-target`, or making `apparmor_parser` failures fatal when
-  the target cannot load profiles.
+  path inside Debian Installer `in-target`, relying on `[ -w .load ]` under root (mode bits
+  are ignored), or making `apparmor_parser` failures fatal in a chroot.
 
 ## BUG-0090 — Undersized iSCSI registration left session and mount behind
 

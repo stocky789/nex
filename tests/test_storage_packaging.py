@@ -103,29 +103,33 @@ class StoragePackagingTests(unittest.TestCase):
         self.assertIn('apparmor_parser -r "$apparmor_profile"', prerm)
         self.assertIn("AppArmor is active but apparmor_parser is unavailable", postinst)
         self.assertIn("AppArmor is active but apparmor_parser is unavailable", prerm)
-        # BUG-0092: installer in-target sees AppArmor enabled without a usable load interface.
+        # BUG-0092: installer in-target must not reload AppArmor (chroot + .load gate).
         for script in (postinst, prerm):
-            self.assertIn("[ -w /sys/kernel/security/apparmor/.load ]", script)
-            self.assertLess(script.index("[ -w /sys/kernel/security/apparmor/.load ]"),
-                            script.index("apparmor_parser -r"))
+            self.assertIn("/proc/1/root", script)
+            self.assertIn("[ -e /sys/kernel/security/apparmor/.load ]", script)
+            self.assertLess(script.index("/proc/1/root"), script.index("apparmor_parser -r"))
             self.assertIn('apparmor_live=yes', script)
             self.assertIn('[ "$apparmor_live" = yes ]', script)
+            self.assertIn('[ "$in_chroot" = no ]', script)
 
-    def test_apparmor_live_gate_skips_reload_without_writable_load(self):
+    def test_apparmor_live_gate_skips_reload_in_chroot_or_without_load(self):
         """BUG-0092: Debian Installer in-target must not fail package configure on AppArmor."""
-        # Mirrors the postinst/prerm gate with injectable paths so CI can exercise both
-        # branches without a live AppArmor kernel.
+        # Mirrors the postinst/prerm gate with injectable inputs. Do not use chmod to
+        # simulate non-writable .load: CI runs as root and root still passes [ -w ].
         gate = r'''
 set -eu
 root=
-enabled=$1
-load=$2
-profile=$3
-parser_bin=$4
+in_chroot=$1
+enabled=$2
+load=$3
+profile=$4
+parser_bin=$5
 apparmor_live=no
-if [ -z "$root" ] && [ -r "$enabled" ] &&
-   grep -qx 'Y' "$enabled" && [ -f "$profile" ] &&
-   [ -w "$load" ]; then
+if [ -z "$root" ] && [ "$in_chroot" = no ] &&
+   [ -r "$enabled" ] &&
+   grep -qx 'Y' "$enabled" &&
+   [ -f "$profile" ] &&
+   [ -e "$load" ]; then
     apparmor_live=yes
 fi
 if [ "$apparmor_live" = yes ] && ! command -v "$parser_bin" >/dev/null 2>&1; then
@@ -144,36 +148,36 @@ echo "live=$apparmor_live"
             profile = root / "usr.sbin.libvirtd"
             parser = root / "apparmor_parser"
             enabled.write_text("Y\n")
+            load.write_text("")
             profile.write_text("# profile\n")
             parser.write_text("#!/bin/sh\necho parser-ran >>\"$0.log\"\nexit 0\n")
             parser.chmod(0o755)
 
-            def run_gate(*paths):
-                return subprocess.run(["sh", "-c", gate, "gate", *paths],
-                                      capture_output=True, text=True)
+            def run_gate(in_chroot, load_path, parser_path):
+                return subprocess.run(
+                    ["sh", "-c", gate, "gate", in_chroot, str(enabled), load_path,
+                     str(profile), parser_path],
+                    capture_output=True, text=True)
 
-            # Installer-like: AppArmor looks enabled, profile exists, but .load is missing.
-            missing = run_gate(str(enabled), str(root / "missing-load"), str(profile), str(parser))
-            self.assertEqual(missing.returncode, 0, missing.stderr)
-            self.assertIn("live=no", missing.stdout)
+            # Installer-like chroot even when .load exists (bind-mounted sysfs).
+            chroot = run_gate("yes", str(load), str(parser))
+            self.assertEqual(chroot.returncode, 0, chroot.stderr)
+            self.assertIn("live=no", chroot.stdout)
             self.assertFalse(parser.with_suffix(".log").exists())
 
-            # Installer-like: .load exists but is not writable.
-            load.write_text("")
-            load.chmod(0o444)
-            readonly = run_gate(str(enabled), str(load), str(profile), str(parser))
-            self.assertEqual(readonly.returncode, 0, readonly.stderr)
-            self.assertIn("live=no", readonly.stdout)
+            # Missing .load interface.
+            missing = run_gate("no", str(root / "missing-load"), str(parser))
+            self.assertEqual(missing.returncode, 0, missing.stderr)
+            self.assertIn("live=no", missing.stdout)
 
-            # Live host: writable .load requires parser success.
-            load.chmod(0o644)
-            live = run_gate(str(enabled), str(load), str(profile), str(parser))
+            # Live host: .load present requires parser success.
+            live = run_gate("no", str(load), str(parser))
             self.assertEqual(live.returncode, 0, live.stderr)
             self.assertIn("live=yes", live.stdout)
             self.assertTrue(parser.with_suffix(".log").exists())
 
             # Live host without parser must fail closed.
-            missing_parser = run_gate(str(enabled), str(load), str(profile), str(root / "no-parser"))
+            missing_parser = run_gate("no", str(load), str(root / "no-parser"))
             self.assertNotEqual(missing_parser.returncode, 0)
             self.assertIn("apparmor_parser is unavailable", missing_parser.stderr)
 

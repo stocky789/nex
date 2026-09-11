@@ -4,12 +4,19 @@ set -eu
 if [ "$1" = remove ]; then
     /usr/lib/nex/storage-downgrade-guard --core --check
     # Same live-load gate as postinst: installer/chroot trees must not fail remove
-    # because the live kernel AppArmor flag is visible without a usable .load interface.
+    # because the live kernel AppArmor flag is visible without a usable policy load path.
     apparmor_profile=/etc/apparmor.d/usr.sbin.libvirtd
+    in_chroot=no
+    if [ "$(stat -c %d:%i / 2>/dev/null || echo x)" != \
+         "$(stat -Lc %d:%i /proc/1/root 2>/dev/null || echo y)" ]; then
+        in_chroot=yes
+    fi
     apparmor_live=no
-    if [ -z "${DPKG_ROOT:-}" ] && [ -r /sys/module/apparmor/parameters/enabled ] &&
-       grep -qx 'Y' /sys/module/apparmor/parameters/enabled && [ -f "$apparmor_profile" ] &&
-       [ -w /sys/kernel/security/apparmor/.load ]; then
+    if [ -z "${DPKG_ROOT:-}" ] && [ "$in_chroot" = no ] &&
+       [ -r /sys/module/apparmor/parameters/enabled ] &&
+       grep -qx 'Y' /sys/module/apparmor/parameters/enabled &&
+       [ -f "$apparmor_profile" ] &&
+       [ -e /sys/kernel/security/apparmor/.load ]; then
         apparmor_live=yes
     fi
     if [ "$apparmor_live" = yes ] && ! command -v apparmor_parser >/dev/null 2>&1; then

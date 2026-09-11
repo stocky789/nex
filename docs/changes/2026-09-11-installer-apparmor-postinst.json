@@ -21,7 +21,7 @@
     "reason": "Package maintainer scripts; no new Controller or Core durable state."
   },
   "verification": {
-    "method": "Matched installer log (apparmor_parser /proc/mounts warning then postinst exit 1) to postinst set -e reload. Gate now requires writable /sys/kernel/security/apparmor/.load. sh -n on postinst/prerm; test_storage_packaging (8 tests) and core-local postinst identity tests passed.",
+    "method": "Matched installer log (apparmor_parser /proc/mounts warning then postinst exit 1) to postinst set -e reload. Gate now requires non-chroot (/ vs /proc/1/root) and existing /sys/kernel/security/apparmor/.load. Fixed CI flake where chmod 0444 still looked writable as root. sh -n on postinst/prerm; test_storage_packaging passed.",
     "evidence": [
       "packaging/core-local/postinst",
       "packaging/core-local/prerm",

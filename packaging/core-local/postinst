@@ -53,15 +53,22 @@ RELEASE
         [ -f "$banner" ] && sed -i "s/^Nex Core [^ ]*/Nex Core $version/" "$banner" || true
     done
     # Enable in installer chroots too; native Debian policy controls starting services.
-    # Write the local include always; reload the live profile only when this mount
-    # namespace can actually load AppArmor policy. Debian Installer's in-target sees
-    # the live kernel's AppArmor-enabled flag under /sys, but apparmor_parser then
-    # fails (no usable securityfs in /proc/mounts) and would abort package configure.
+    # Write the local include always; reload the live profile only on the booted host.
+    # Debian Installer's in-target sees the live kernel AppArmor flag (and often a
+    # bind-mounted sysfs .load), but apparmor_parser then fails and would abort
+    # package configure under set -e. Defer reload until first boot outside the chroot.
     apparmor_profile=/etc/apparmor.d/usr.sbin.libvirtd
+    in_chroot=no
+    if [ "$(stat -c %d:%i / 2>/dev/null || echo x)" != \
+         "$(stat -Lc %d:%i /proc/1/root 2>/dev/null || echo y)" ]; then
+        in_chroot=yes
+    fi
     apparmor_live=no
-    if [ -z "$root" ] && [ -r /sys/module/apparmor/parameters/enabled ] &&
-       grep -qx 'Y' /sys/module/apparmor/parameters/enabled && [ -f "$apparmor_profile" ] &&
-       [ -w /sys/kernel/security/apparmor/.load ]; then
+    if [ -z "$root" ] && [ "$in_chroot" = no ] &&
+       [ -r /sys/module/apparmor/parameters/enabled ] &&
+       grep -qx 'Y' /sys/module/apparmor/parameters/enabled &&
+       [ -f "$apparmor_profile" ] &&
+       [ -e /sys/kernel/security/apparmor/.load ]; then
         apparmor_live=yes
     fi
     if [ "$apparmor_live" = yes ] && ! command -v apparmor_parser >/dev/null 2>&1; then
