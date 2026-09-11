@@ -113,7 +113,7 @@ def main():
             data['storage'] = []
             page.reload()
             open_iso()
-            expect(page.get_by_text('Register local storage and wait', exact=False)).to_be_visible()
+            expect(page.get_by_text('Register storage and wait', exact=False)).to_be_visible()
             page.get_by_label('ISO source').select_option('url')
             expect(page.get_by_role('button', name='Download ISO', exact=True)).to_be_disabled()
             page.set_viewport_size({'width': 390, 'height': 844})

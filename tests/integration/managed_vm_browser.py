@@ -64,6 +64,8 @@ def simulated(lab):
     # control lets a walkthrough change what the simulated host observes and applies.
     control = {'state': 'shut off'}
     specs = {}
+    managed_storage = {}
+    managed_outcomes = []
     def reports():
         sequence, results, vms = 0, [], []
         while not stopped.wait(.2):
@@ -72,15 +74,38 @@ def simulated(lab):
                 now = datetime.now(timezone.utc).isoformat()
                 for v in vms:
                     v['state'] = control['state']
-                payload = {'version': 1, 'sequence': sequence, 'capabilities': ['managed-vm-v1', 'vm-update-v1'], 'results': results,
+                payload = {'version': 1, 'sequence': sequence,
+                        'capabilities': ['managed-vm-v1', 'vm-update-v1', 'vm-media-v1', 'storage-repositories-v1'],
+                        'results': results,
                         'inventory': {'observed_at': now, 'hostname': 'simulated-browser-host', 'cpu_count': 8, 'cpu_models': ['qemu64', 'Skylake-Server'],
-                        'memory_bytes': 16 * 1024**3, 'vms': vms, 'managed': {'vms': list(specs.values())}, 'checks': [{'name': 'libvirt', 'status': 'healthy', 'observed_at': now, 'last_success': now}], 'nics': [{'name': 'nex1', 'mac': '52:54:00:00:00:11', 'kind': 'physical', 'state': 'up', 'addresses': []}], 'disks': []}}
+                        'memory_bytes': 16 * 1024**3, 'vms': vms,
+                        'managed': {'vms': list(specs.values()), 'storage': list(managed_storage.values()),
+                                    'outcomes': list(managed_outcomes)},
+                        'checks': [{'name': 'libvirt', 'status': 'healthy', 'observed_at': now, 'last_success': now}],
+                        'nics': [{'name': 'nex1', 'mac': '52:54:00:00:00:11', 'kind': 'physical', 'state': 'up', 'addresses': []}], 'disks': []}}
                 request = urllib.request.Request(lab.url + '/api/v1/agent/report', data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'})
                 with urllib.request.urlopen(request, context=context, timeout=5) as response:
                     answer = json.load(response)
                 results = []
                 for command in answer.get('commands') or []:
                     results.append({'operation_id': command['operation_id'], 'status': 'succeeded', 'observed_at': now})
+                    if command.get('storage'):
+                        storage = {**command['storage']}
+                        storage_id = storage.get('id') or ('demo-storage-' + command['operation_id'])
+                        storage.update({
+                            'id': storage_id,
+                            'generation': max(1, int(storage.get('generation') or 1)),
+                            'capabilities': {'vm_disk': True, 'iso': True, 'thin': True},
+                            'access': {'status': 'healthy', 'readable': True, 'writable': True, 'observed_at': now},
+                        })
+                        for key in ('status', 'error', 'operation_id'):
+                            storage.pop(key, None)
+                        managed_storage[storage_id] = storage
+                        managed_outcomes[:] = [o for o in managed_outcomes if o.get('operation_id') != command['operation_id']]
+                        managed_outcomes.append({
+                            'operation_id': command['operation_id'], 'kind': 'storage-register',
+                            'id': storage_id, 'name': storage.get('name', ''), 'status': 'succeeded',
+                        })
                     if command.get('vm'):
                         vm = command['vm']
                         # The host journals the definition and reports it as current; an edit
@@ -95,7 +120,8 @@ def simulated(lab):
                 return
     thread = threading.Thread(target=reports, daemon=True)
     thread.start()
-    eventually(lambda: any(h['connection'] == 'fresh' for h in lab.api('/api/v1/hosts')), 'simulated agent fresh')
+    eventually(lambda: any(h['connection'] == 'fresh' and 'storage-repositories-v1' in (h.get('capabilities') or [])
+                           for h in lab.api('/api/v1/hosts')), 'simulated agent fresh with storage repositories')
     iso = lab.path / 'browser.iso'
     data = bytearray(65536)
     data[32768:32775] = b'\x01CD001\x01'
@@ -123,9 +149,9 @@ def acceptance(config, password, iso, evidence, mode):
         def pool(tab):
             page.goto(config['url'] + '/#/pools/' + config['pool_id'])
             page.get_by_role('navigation', name='Resource views').get_by_role('button', name=tab, exact=True).click()
-        def wait_row(name):
+        def wait_row(name, marker='succeeded'):
             row = page.locator('tr:not([aria-label="ISO upload to Controller"])').filter(has_text=name)
-            expect(row).to_contain_text('succeeded', timeout=180000)
+            expect(row).to_contain_text(marker, timeout=180000)
         pending = []
         page.route('**/api/v1/session', lambda route: pending.append(route))
         page.goto(config['url'])
@@ -164,10 +190,11 @@ def acceptance(config, password, iso, evidence, mode):
             expect(page.get_by_text('No virtual machines in this pool.', exact=False)).to_be_visible()
             capture('empty')
         pool('Storage')
-        page.get_by_role('button', name='Register local storage', exact=True).click()
-        form = page.get_by_role('region', name='Register local storage', exact=True)
+        page.get_by_role('button', name='Register storage', exact=True).click()
+        form = page.get_by_role('region', name='Register storage', exact=True)
         form.get_by_label('Name', exact=True).fill(storage_name)
-        form.locator('select[name=host_id]').select_option(config['host_id'])
+        form.locator('#storage-host').select_option(config['host_id'])
+        form.get_by_label('Repository type').select_option('local')
         form.get_by_label('Existing directory').fill(config.get('storage_path', '/var/lib/libvirt/images/nex-managed-qa'))
         with page.expect_response(lambda r: r.url.endswith('/api/v1/storage') and r.request.method == 'POST') as received:
             page.get_by_role('button', name='Register and check access').click()
@@ -179,7 +206,7 @@ def acceptance(config, password, iso, evidence, mode):
         else:
             assert received.value.ok, received.value.text()
             storage_name = received.value.json()['name']
-        wait_row(storage_name)
+        wait_row(storage_name, 'healthy')
         capture('storage')
         pool('Networking')
         page.get_by_role('button', name='Register network', exact=True).click()

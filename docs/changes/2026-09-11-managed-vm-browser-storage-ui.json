@@ -1,0 +1,28 @@
+{
+  "summary": "Update managed VM and ISO URL browser acceptance for Register storage UI and Core-reported healthy storage access. API impact: none.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/changes/2026-09-11-managed-vm-browser-storage-ui.json",
+    "tests/integration/iso_url_browser.py",
+    "tests/integration/managed_vm_browser.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "CI browser fixtures only; operator guide already uses Register storage."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Simulated-host browser acceptance only; no Controller/Core contract change."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Test fixtures only; no Nex Controller or Core state."
+  },
+  "verification": {
+    "method": "Inspected phase1 job 4462 failing on get_by_role Register local storage after gallery fix. Updated managed_vm_browser to Register storage / #storage-host / wait for healthy access, and simulated host to advertise storage-repositories-v1 with Managed.Storage projection. Updated iso_url_browser empty-storage copy to Register storage and wait.",
+    "evidence": [
+      "tests/integration/managed_vm_browser.py",
+      "tests/integration/iso_url_browser.py"
+    ]
+  }
+}
