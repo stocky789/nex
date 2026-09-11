@@ -119,3 +119,64 @@ Final browser checks cover transfer/status isolation, the searchable 500-site
 fixture, keyboard focus and eight selector groups; all 16 existing Controller
 walkthrough groups also passed. The local UI/source update preserves the backend
 binary and is not a rebuilt installation/release image.
+
+## Public URL ISO downloads — 2026-09-11
+
+The project owner requested a public URL alternative to selecting a local ISO in
+Controller. Keep both sources in **ISO library → Upload ISO**, with an explicit
+validated storage destination. The selected Nex Core host downloads public HTTP(S)
+media itself after Controller submits the request; Controller does not become a
+required download worker. This adds a source to the existing host-local import,
+not automatic distribution to every pool host.
+
+API impact: **new contract** — authenticated, CSRF-protected
+`POST /api/v1/media/download` accepts `request_id`, `storage_id`, `name`, and `url`.
+The existing `iso-import` command carries an optional URL, gated by the host's
+`iso-download-v1` capability. Core validates public destinations at connection time
+and on redirects, bounds transfer time and storage consumption, validates ISO
+content, computes SHA-256, and publishes only completed media. Existing operation
+results and managed inventory report completion and the measured size/hash.
+Uncertain submissions retain their request identity; a terminal failure requires a
+new request after correcting its cause. Downloads continue across Controller
+outages; Core restart reconciles its durable journal before reporting a result.
+Upgrade Controller before Core for the extended report schema.
+
+Durable state owner: **core** — the pool master's managed-VM journal records ISO
+identity, name, storage and resolved size/hash; the image lives in the selected
+storage's `nex-media` directory. Managed inventory and enrollment/report adoption
+recover these on a fresh Controller. Current pools contain only their master;
+future member distribution remains Phase 4 work.
+
+Guide impact: **updated** — document both source choices, host internet access,
+public-only URL restrictions, task results, and safe retry behavior in the
+[VM creation guide](../guide/create-virtual-machine.md).
+
+Acceptance requires focused Core and Controller checks for validation, redirects,
+size/content failures, replay, completed metadata and recovery; UI typecheck/build
+and browser success/error/keyboard/stale checks; API reference and documentation
+checks; independent review. Actual results and any limits belong in
+[URL ISO verification](../qa/iso-url/checks.md). This slice does not close the
+remaining Phase 2 gate or rebuild installed packages or installation media.
+
+URL source implementation, focused Core/Controller checks, browser verification with
+mocked APIs, documentation gates and independent review passed; see the
+[executed evidence and limits](../qa/iso-url/checks.md). The source slice is complete.
+A real public Internet ISO transfer, packaged upgrade and physical-host validation
+were not run, and no installation image or live deployment was changed.
+
+
+### Queue power behind pending tasks — 2026-09-11
+
+Start and other power requests can be accepted behind pending power/edit/media tasks on
+Core advertising vm-power-queue-v1. Core owns durable admission order and same-VM prerequisite
+checks; Controller sends one API request and displays results. No frontend retry loop and
+no automatic retry of real failures. ACPI task completion remains distinct from guest state.
+
+API impact: changed contract — optional VMPowerRequest.after_operation_id, queue capability,
+FIFO report dispatch and queued/terminal managed-outcome adoption. Existing auth, replay and
+outage safety remain. Old Core retains its busy guard; upgrade together for queue behavior.
+Guide impact: updated in the VM power guide. State owner: Core agent state.json command
+journal (order and local prerequisite) plus managed-vms execution journal; inventory outcomes
+recover the queue in a fresh Controller without redispatch. Core receipt establishes host
+persistence; HTTP acceptance alone only establishes pending delivery.
+Evidence and limits: [power queue QA](../qa/power-queue/checks.md).

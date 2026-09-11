@@ -71,6 +71,11 @@ stop and start), and a changed ISO is visible in the guest's CD drive. **Activit
   Shut the VM down with its [Power controls](vm-power.md), then edit.
 - **"stop the VM first to change …":** the VM was running when the request arrived and the
   edit includes a change that needs it stopped; the message names the field.
+- **"stop the VM and save its settings to apply the dedicated memory reservation before live editing":**
+  this dedicated VM has an older memory definition. Shut it down, wait for **shut off**, then
+  use **Edit → Save changes** with the same memory settings. After the task succeeds, start
+  the VM. Its RAM is now physically allocated and locked while running. The rejected live edit
+  makes no device changes; a guest reboot alone does not apply this correction.
 - **"storage, size and provisioning cannot be changed after creation":** add a new disk
   instead, or plan a replacement VM; disk resize is not yet available.
 - **"a change or power request for this VM is still pending":** one request per VM is in
@@ -89,3 +94,6 @@ stop and start), and a changed ISO is visible in the guest's CD drive. **Activit
 
 See the [edit QA report](../qa/vm-edit/checks.md) for the Go, contract and browser checks
 that ran and for what remains untested on a real host.
+
+The [physical reservation QA report](../qa/dedicated-memory/checks.md) records the dedicated
+memory correction and the limits of the existing-VM upgrade verification.

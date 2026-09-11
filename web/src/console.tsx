@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import RFB from "@novnc/novnc";
 import "./console.css";
 
@@ -11,18 +11,14 @@ import "./console.css";
 // hints the clipboard and display controls show, never whether input is allowed.
 export type Guest = { agent: string; os?: string; hostname?: string; addresses?: { interface: string; address: string }[] | null; clipboard: string; resize: boolean };
 export type ConsoleMedia = { currentID?: string; currentName?: string; options: { id: string; name: string }[]; busy?: boolean; note?: string; onInsert: (id: string) => void; onEject: () => void };
-type Props = { name: string; open: () => Promise<string>; disabled?: string; guest?: Guest | null; popout?: string; media?: ConsoleMedia; quality?: boolean };
+type Props = { name: string; open: () => Promise<string>; disabled?: string; guest?: Guest | null; popout?: string; media?: ConsoleMedia };
 type Phase = "idle" | "connecting" | "connected" | "closed";
 type View = "fit" | "actual" | "remote";
-type Quality = "auto" | "low" | "high";
-type Prefs = { view: View; quality: Quality };
+type Prefs = { view: View };
 const retryDelay = 5000;
 const prefsKey = "nex-console-prefs";
 const fromVMLimit = 65536;
-const defaultPrefs: Prefs = { view: "fit", quality: "auto" };
-// Tight encoding levels noVNC negotiates with QEMU: JPEG quality 0-9 and zlib compression 0-9.
-// QEMU only honours JPEG quality when the VNC server was started with lossy=on.
-const qualityLevels: Record<Quality, [number, number]> = { auto: [6, 2], low: [0, 9], high: [9, 0] };
+const defaultPrefs: Prefs = { view: "fit" };
 
 // X11 keysyms (noVNC sends the matching QEMU scancode when a KeyboardEvent code is given).
 const K = { ctrl: [0xffe3, "ControlLeft"], alt: [0xffe9, "AltLeft"], super: [0xffeb, "MetaLeft"], tab: [0xff09, "Tab"], esc: [0xff1b, "Escape"], del: [0xffff, "Delete"], f: (n: number): Key => [0xffbd + n, `F${n}`] } as const;
@@ -41,13 +37,15 @@ const keyCombos: { label: string; keys: Key[] }[] = [
 function loadPrefs(): Prefs {
   try {
     const value = JSON.parse(localStorage.getItem(prefsKey) || "{}");
-    return { view: ["fit", "actual", "remote"].includes(value.view) ? value.view : "fit", quality: ["auto", "low", "high"].includes(value.quality) ? value.quality : "auto" };
+    return { view: ["fit", "actual", "remote"].includes(value.view) ? value.view : "fit" };
   } catch { return defaultPrefs; }
 }
 // keysym for typing one character: Latin-1 maps directly, everything else uses the Unicode keysym range.
 const keysym = (ch: string) => { const cp = ch.codePointAt(0) || 0; return cp === 10 ? 0xff0d : cp === 9 ? 0xff09 : cp < 0x100 ? cp : 0x01000000 | cp; };
 
-export function Console({ name, open, disabled, guest, popout, media, quality: qualityControls = true }: Props) {
+export function Console({ name, open, disabled, guest, popout, media }: Props) {
+  const [toolbarOpen, setToolbarOpen] = useState(true);
+  const toolbarID = useId();
   const section = useRef<HTMLElement>(null);
   const screen = useRef<HTMLDivElement>(null);
   const rfb = useRef<RFB | null>(null);
@@ -71,23 +69,12 @@ export function Console({ name, open, disabled, guest, popout, media, quality: q
   // A remembered "remote" view falls back to fit for a VM whose display cannot be resized.
   const resize = guest ? guest.resize : true;
   const effective = (p: Prefs): View => (p.view === "remote" && !resize ? "fit" : p.view);
-  // Ask for a full framebuffer so a quality change is visible without waiting for guest redraws.
-  function refreshFrame(client: RFB) {
-    const c = client as RFB & { _sock?: object; _fbWidth?: number; _fbHeight?: number; _rfbConnectionState?: string };
-    if (c._rfbConnectionState !== "connected" || !c._sock || !c._fbWidth || !c._fbHeight) return;
-    RFB.messages.fbUpdateRequest(c._sock, false, 0, 0, c._fbWidth, c._fbHeight);
-  }
-  function apply(client: RFB, p: Prefs, refresh = false) {
+  function apply(client: RFB, p: Prefs) {
     const view = effective(p);
     client.scaleViewport = view === "fit";
     client.clipViewport = false;
     client.resizeSession = view === "remote";
-    const [quality, compression] = qualityLevels[p.quality];
-    // Set separately so each setter can renegotiate encodings with the other value already applied.
-    client.qualityLevel = quality;
-    client.compressionLevel = compression;
     client.viewOnly = readOnly.current;
-    if (refresh) refreshFrame(client);
   }
   async function connect() {
     if (busy.current || !screen.current || !mounted.current) return;
@@ -100,7 +87,16 @@ export function Console({ name, open, disabled, guest, popout, media, quality: q
       const client = new RFB(screen.current, url, { shared: true });
       client.background = "#000";
       apply(client, loadPrefs());
-      client.addEventListener("connect", () => { setPhase("connected"); setDetail(""); client.focus({ preventScroll: true }); });
+      client.addEventListener("connect", () => {
+        setPhase("connected"); setDetail(""); client.focus({ preventScroll: true });
+        // noVNC can receive ServerInit while React is still laying out a newly selected tab.
+        // Reset its initial 0 × 0 autoscale after paint, then restore the chosen view.
+        requestAnimationFrame(() => {
+          if (rfb.current !== client) return;
+          client.scaleViewport = false;
+          requestAnimationFrame(() => { if (rfb.current === client) apply(client, loadPrefs()); });
+        });
+      });
       client.addEventListener("disconnect", () => {
         if (rfb.current === client) rfb.current = null;
         setPhase("closed");
@@ -131,7 +127,7 @@ export function Console({ name, open, disabled, guest, popout, media, quality: q
     const p = { ...prefs, ...next };
     setPrefs(p);
     try { localStorage.setItem(prefsKey, JSON.stringify(p)); } catch {}
-    if (rfb.current) apply(rfb.current, p, next.quality !== undefined && next.quality !== prefs.quality);
+    if (rfb.current) apply(rfb.current, p);
   }
   function toggleViewOnly(value: boolean) {
     readOnly.current = value;
@@ -191,12 +187,14 @@ export function Console({ name, open, disabled, guest, popout, media, quality: q
   }
   const live = phase === "connected";
   const view = effective(prefs);
+  const connectionBadge = <span className={`badge ${live ? "fresh" : phase === "connecting" ? "queued" : "stale"}`}>{live ? "connected" : phase === "connecting" ? "connecting" : phase === "closed" ? "disconnected" : "not connected"}</span>;
   const clipboardHint = !guest ? "Clipboard readiness is unknown for this VM; sending works when spice-vdagent runs in the guest."
     : guest.clipboard === "ready" ? "Guest clipboard is ready: text you send appears in the VM and VM copies appear here."
     : guest.clipboard === "waiting" ? "The VM has a clipboard channel but no spice-vdagent is running in the guest. Install the guest tools, or use Type into VM."
     : "This VM was created before console clipboard support. Recreate it to gain a clipboard channel, or use Type into VM.";
-  return <section ref={section} className="panel console" aria-label={`Console for ${name}`}>
-    <div className="section-heading"><h2>Console</h2><span className={`badge ${live ? "fresh" : phase === "connecting" ? "queued" : "stale"}`}>{live ? "connected" : phase === "connecting" ? "connecting" : phase === "closed" ? "disconnected" : "not connected"}</span></div>
+  return <section ref={section} className={`panel console${toolbarOpen ? "" : " console-collapsed"}`} aria-label={`Console for ${name}`}>
+    <div id={toolbarID} hidden={!toolbarOpen}>
+    <div className="section-heading"><h2>Console</h2>{connectionBadge}</div>
     <div className="console-toolbar" role="toolbar" aria-label="Console controls">
       <button disabled={!live} onClick={() => rfb.current?.focus({ preventScroll: true })}>Focus console</button>
       <button disabled={!live || viewOnly} onClick={() => rfb.current?.sendCtrlAltDel()}>Send Ctrl+Alt+Del</button>
@@ -221,13 +219,6 @@ export function Console({ name, open, disabled, guest, popout, media, quality: q
           {resize && <option value="remote">Resize guest to window</option>}
         </select>
       </label>
-      {qualityControls && <label className="console-option">Quality
-        <select aria-label="Image quality" value={prefs.quality} onChange={e => update({ quality: e.target.value as Quality })}>
-          <option value="auto">Balanced</option>
-          <option value="low">Low bandwidth</option>
-          <option value="high">Best image</option>
-        </select>
-      </label>}
       <label className="console-option"><input type="checkbox" checked={viewOnly} onChange={e => toggleViewOnly(e.target.checked)} /> View only</label>
       <button disabled={!live} onClick={screenshot}>Screenshot</button>
       <button disabled={Boolean(disabled) || phase === "connecting"} onClick={() => { stop(); void connect(); }}>Reconnect</button>
@@ -246,10 +237,17 @@ export function Console({ name, open, disabled, guest, popout, media, quality: q
       <div className="actions"><button type="button" disabled={!fromVM} onClick={copyFromVM}>Copy</button></div>
       {clipNote && <p className="help" role="status">{clipNote}</p>}
     </div>}
+    </div>
     {media?.note && <p className="console-status" role="status">{media.note}</p>}
     {disabled && <p className="warning">{disabled}</p>}
     {detail && <p className="console-status" role="status">{detail}</p>}
+    <div className="console-toolbar-edge">
+      <button type="button" className="console-toolbar-toggle" aria-expanded={toolbarOpen} aria-controls={toolbarID} aria-label={toolbarOpen ? "Collapse console toolbar" : "Expand console toolbar"} title={toolbarOpen ? "Collapse console toolbar" : "Expand console toolbar"} onClick={() => setToolbarOpen(v => !v)}>
+        <svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16"><path d={toolbarOpen ? "M3 10l5-5 5 5" : "M3 6l5 5 5-5"} fill="none" stroke="currentColor" strokeWidth="2" /></svg>
+      </button>
+      {!toolbarOpen && connectionBadge}
+    </div>
     <div ref={screen} className="console-screen" data-phase={phase} data-view={view} tabIndex={-1} />
-    <p className="panel-note">Click the screen or use Focus console to type into the VM; keys then go to the guest, not this page. {view === "remote" ? "The guest is asked to match this window's size; guests without a VirtIO display driver keep their own resolution." : view === "actual" ? "Scroll to reach the rest of a large display." : "The display is scaled to fit this panel."}</p>
+    <p hidden={!toolbarOpen} className="panel-note">Click the screen or use Focus console to type into the VM; keys then go to the guest, not this page. {view === "remote" ? "The guest is asked to match this window's size; guests without a VirtIO display driver keep their own resolution." : view === "actual" ? "Scroll to reach the rest of a large display." : "The display is scaled to fit this panel."}</p>
   </section>;
 }

@@ -43,6 +43,14 @@ func TestValidateVMSpec(t *testing.T) {
 		valid bool
 	}{
 		{"unchanged", func(v *VMCreateSpec) {}, true},
+		{"display name", func(v *VMCreateSpec) { v.Name = " QA Web.example – 東京 & <test> " }, true},
+		{"name byte limit", func(v *VMCreateSpec) { v.Name = strings.Repeat("é", 100) }, true},
+		{"name too long", func(v *VMCreateSpec) { v.Name = strings.Repeat("é", 101) }, false},
+		{"blank name", func(v *VMCreateSpec) { v.Name = "   " }, false},
+		{"slash in name", func(v *VMCreateSpec) { v.Name = "guest/one" }, false},
+		{"control in name", func(v *VMCreateSpec) { v.Name = "guest\nnew" }, false},
+		{"invalid UTF8 name", func(v *VMCreateSpec) { v.Name = string([]byte{0xff}) }, false},
+		{"invalid XML name", func(v *VMCreateSpec) { v.Name = "guest\uffff" }, false},
 		{"guest OS optional", func(v *VMCreateSpec) { v.GuestOS = "" }, true},
 		{"guest OS windows", func(v *VMCreateSpec) { v.GuestOS = "windows" }, true},
 		{"guest OS unknown", func(v *VMCreateSpec) { v.GuestOS = "plan9" }, false},

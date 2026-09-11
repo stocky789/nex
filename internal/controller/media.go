@@ -5,12 +5,14 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"nex.local/nex/internal/protocol"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -59,6 +61,22 @@ type mediaRequest struct {
 	SHA256    string `json:"sha256"`
 }
 
+// Media uses Core's current ISO capability, independently of VM-disk capability.
+func storageReadyForMedia(tx *sql.Tx, id, pool, host string) error {
+	cmd, err := readyResource(tx, id, "storage-register", pool, host)
+	if err != nil {
+		return err
+	}
+	if cmd.Storage == nil {
+		return fmt.Errorf("storage repository is unavailable")
+	}
+	s := cmd.Storage
+	if s.Kind != "" && (s.Tombstone || !s.Access.Readable || !s.Access.Writable || !s.Capabilities.ISO) {
+		return fmt.Errorf("storage repository is not writable for ISO media")
+	}
+	return nil
+}
+
 func (c *Controller) media(w http.ResponseWriter, r *http.Request, user, csrf string) {
 	if r.Method == "GET" {
 		c.listResources(w, "iso-import")
@@ -86,6 +104,9 @@ func (c *Controller) media(w http.ResponseWriter, r *http.Request, user, csrf st
 		return
 	}
 	err = c.managedHost(tx, pool, host)
+	if err == nil {
+		err = storageReadyForMedia(tx, v.StorageID, pool, host)
+	}
 	tx.Rollback()
 	if err != nil {
 		fail(w, 409, err.Error())
@@ -160,6 +181,10 @@ func (c *Controller) media(w http.ResponseWriter, r *http.Request, user, csrf st
 		return
 	}
 	if err = c.managedHost(tx, pool, host); err != nil {
+		fail(w, 409, err.Error())
+		return
+	}
+	if err = storageReadyForMedia(tx, v.StorageID, pool, host); err != nil {
 		fail(w, 409, err.Error())
 		return
 	}
@@ -241,4 +266,92 @@ func (c *Controller) agentMedia(w http.ResponseWriter, r *http.Request, host str
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	http.ServeContent(w, r, id, info.ModTime(), f)
+}
+
+// URL transfers run on Core; Controller only queues the durable import command.
+type mediaDownloadRequest struct {
+	RequestID string `json:"request_id"`
+	StorageID string `json:"storage_id"`
+	Name      string `json:"name"`
+	URL       string `json:"url"`
+}
+
+func (c *Controller) downloadMedia(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	var v mediaDownloadRequest
+	if !decode(w, r, &v) {
+		return
+	}
+	if !nameValid(v.RequestID) || !nameValid(v.StorageID) || !nameValid(v.Name) || filepath.Base(v.Name) != v.Name || !strings.HasSuffix(strings.ToLower(v.Name), ".iso") {
+		fail(w, 400, "storage_id, stable request_id and .iso filename required")
+		return
+	}
+	if err := protocol.ValidateISOURL(v.URL); err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	tx, err := c.db.Begin()
+	if err != nil {
+		fail(w, 500, "storage unavailable")
+		return
+	}
+	defer tx.Rollback()
+	if c.replayResource(w, tx, v.RequestID, "iso-import", v) {
+		return
+	}
+	var pool, host, status string
+	if tx.QueryRow("SELECT r.pool_id,r.host_id,o.status FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.id=? AND r.kind='storage-register'", v.StorageID).Scan(&pool, &host, &status) != nil || status != "succeeded" {
+		fail(w, 409, "selected storage must be verified")
+		return
+	}
+	if err = c.managedHost(tx, pool, host); err != nil {
+		fail(w, 409, err.Error())
+		return
+	}
+	if err = storageReadyForMedia(tx, v.StorageID, pool, host); err != nil {
+		fail(w, 409, err.Error())
+		return
+	}
+	var raw string
+	var caps []string
+	if tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", host).Scan(&raw) != nil || json.Unmarshal([]byte(raw), &caps) != nil || !slices.Contains(caps, protocol.ISODownloadCapability) {
+		fail(w, 409, "host must support iso-download-v1; update Nex Core before downloading an ISO")
+		return
+	}
+	id, opID := random(), random()
+	cmd := protocol.Command{OperationID: opID, Kind: "iso-import", Media: &protocol.Media{ID: id, PoolID: pool, HostID: host, StorageID: v.StorageID, Name: v.Name, URL: v.URL, OperationID: opID, Status: "queued"}}
+	op, err := c.saveResource(tx, user, v.RequestID, pool, host, v.Name, id, cmd, v)
+	if err != nil || tx.Commit() != nil {
+		fail(w, 500, "ISO operation storage failed")
+		return
+	}
+	write(w, 201, resourceResponse(cmd, op))
+}
+
+// Completed download metadata comes from the host's durable managed journal.
+func mirrorDownloadedMedia(tx *sql.Tx, host string, md protocol.Media) error {
+	var raw string
+	err := tx.QueryRow("SELECT r.command FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.id=? AND r.host_id=? AND r.kind='iso-import' AND o.status='succeeded'", md.ID, host).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var cmd protocol.Command
+	if err = json.Unmarshal([]byte(raw), &cmd); err != nil {
+		return err
+	}
+	if cmd.Media == nil || cmd.Media.URL == "" {
+		return nil
+	}
+	if md.StorageID != cmd.Media.StorageID || md.Name != cmd.Media.Name || md.SizeBytes < 32774 || !sha256Hex(md.SHA256) {
+		return fmt.Errorf("invalid downloaded ISO metadata")
+	}
+	cmd.Media.SizeBytes, cmd.Media.SHA256 = md.SizeBytes, md.SHA256
+	data, err := json.Marshal(cmd)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec("UPDATE managed_resources SET command=? WHERE id=? AND host_id=?", string(data), md.ID, host)
+	return err
 }

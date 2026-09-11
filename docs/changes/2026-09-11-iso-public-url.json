@@ -1,0 +1,72 @@
+{
+  "summary": "Add public URL ISO downloads through Controller with durable Core execution. API impact: new contract for media/download and URL-bearing iso-import, gated by iso-download-v1.",
+  "paths": [
+    ".gitea/workflows/phase1.yml",
+    ".github/workflows/phase1.yml",
+    "docs/API.md",
+    "docs/api/index.html",
+    "docs/api/openapi.json",
+    "docs/guide/create-virtual-machine.md",
+    "docs/plans/2026-09-09-first-managed-vm.md",
+    "docs/qa/iso-url/browser-results.json",
+    "docs/qa/iso-url/checks.md",
+    "docs/qa/iso-url/mock-empty-mobile.png",
+    "docs/qa/iso-url/mock-error.png",
+    "docs/qa/iso-url/mock-queued.png",
+    "internal/agent/managed_test.go",
+    "internal/agent/run.go",
+    "internal/controller/controller.go",
+    "internal/controller/identity.go",
+    "internal/controller/managed.go",
+    "internal/controller/media.go",
+    "internal/controller/media_download_test.go",
+    "internal/protocol/iso.go",
+    "internal/protocol/iso_test.go",
+    "internal/protocol/managed.go",
+    "internal/vmhost/iso_download.go",
+    "internal/vmhost/iso_download_test.go",
+    "internal/vmhost/managed.go",
+    "tests/integration/iso_url_browser.py",
+    "web/src/managed.tsx",
+    "website/src/routes/roadmap/+page.svelte"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "ISO library offers computer upload or a public URL, with distinct transfer, validation and recovery behavior.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "New authenticated media/download operation and optional Media.url command field, with public destination validation, Core metadata and capability compatibility.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "The existing ISO import item now includes the public URL source; the VM milestone remains in testing.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Downloaded ISO content and metadata belong to the selected pool master; Controller only submits and mirrors host operations.",
+    "record": "Pool master managed-VM journal stores original ISO command and resolved download metadata (identity, name, storage, size, SHA-256); selected storage nex-media contains the image. Applied managed inventory and enrollment/report adoption restore the same record on a fresh Controller."
+  },
+  "verification": {
+    "method": "Focused Controller/Core tests, real Chromium interaction with explicitly mocked API, UI typecheck/build, API and documentation checks, and independent review; actual results and limits recorded in QA.",
+    "evidence": [
+      "docs/qa/iso-url/checks.md",
+      "docs/qa/iso-url/browser-results.json",
+      "internal/controller/media_download_test.go",
+      "internal/protocol/iso_test.go",
+      "internal/vmhost/iso_download_test.go",
+      "tests/integration/iso_url_browser.py"
+    ]
+  }
+}

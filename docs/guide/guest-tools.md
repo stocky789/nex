@@ -67,8 +67,10 @@ the host ask the guest for information; it is not proof that the guest's applica
 A VM created with the **Maximum** [memory mode](create-virtual-machine.md#memory-modes) only
 returns memory it frees while the **virtio balloon driver** runs inside the guest. Until it
 does, the guest keeps every page it has ever touched, so the VM drifts up to its ceiling and
-holds it, behaving like a dedicated VM without the reservation. A **Dedicated** VM is
-unaffected: its memory is reserved either way and its definition carries no balloon device.
+holds its touched pages; maximum mode does not preallocate or lock RAM. A **Dedicated** VM
+with the physical reservation applied is unaffected: its RAM is allocated and locked while
+running, and its definition carries no balloon device. See the
+[existing-VM upgrade steps](create-virtual-machine.md#memory-modes).
 
 - **Linux** has the balloon driver in the kernel and loads it automatically for the device,
   so reclaim needs no extra package. The guest tools remain worth installing for everything

@@ -19,12 +19,14 @@ import (
 )
 
 type JournalEntry struct {
-	Command      *protocol.Command `json:"command,omitempty"`
-	Status       string            `json:"status"`
-	Error        string            `json:"error,omitempty"`
-	RequestedAt  time.Time         `json:"requested_at"`
-	ObservedAt   time.Time         `json:"observed_at"`
-	Acknowledged bool              `json:"acknowledged"`
+	AfterOperationID string            `json:"after_operation_id,omitempty"`
+	Order            uint64            `json:"order,omitempty"`
+	Command          *protocol.Command `json:"command,omitempty"`
+	Status           string            `json:"status"`
+	Error            string            `json:"error,omitempty"`
+	RequestedAt      time.Time         `json:"requested_at"`
+	ObservedAt       time.Time         `json:"observed_at"`
+	Acknowledged     bool              `json:"acknowledged"`
 }
 type State struct {
 	Controller           string `json:"controller"`
@@ -36,17 +38,24 @@ type State struct {
 	// (this host is its pool's master) and presented unchanged to every Controller, including
 	// a replacement one. Hosts enrolled before host-owned identity keep their Controller-issued
 	// HostID and adopt the pool identity the Controller reports.
-	HostID         string                  `json:"host_id"`
-	PendingHostID  string                  `json:"pending_host_id,omitempty"`
-	PoolID         string                  `json:"pool_id,omitempty"`
-	PoolName       string                  `json:"pool_name,omitempty"`
-	KeyPEM         string                  `json:"key_pem"`
-	CSRPEM         string                  `json:"csr_pem"`
-	CertificatePEM string                  `json:"certificate_pem"`
-	PendingKeyPEM  string                  `json:"pending_key_pem,omitempty"`
-	PendingCSRPEM  string                  `json:"pending_csr_pem,omitempty"`
-	Sequence       uint64                  `json:"sequence"`
-	Journal        map[string]JournalEntry `json:"journal"`
+	HostID         string `json:"host_id"`
+	PendingHostID  string `json:"pending_host_id,omitempty"`
+	PoolID         string `json:"pool_id,omitempty"`
+	PoolName       string `json:"pool_name,omitempty"`
+	KeyPEM         string `json:"key_pem"`
+	CSRPEM         string `json:"csr_pem"`
+	CertificatePEM string `json:"certificate_pem"`
+	PendingKeyPEM  string `json:"pending_key_pem,omitempty"`
+	PendingCSRPEM  string `json:"pending_csr_pem,omitempty"`
+	Sequence       uint64 `json:"sequence"`
+	// StorageProtocolReady is set only after this Core has received a positive,
+	// authenticated Controller v2 preflight. It prevents a package upgrade from
+	// sending new storage fields to a strict v1 Controller.
+	StorageProtocolReady bool `json:"storage_protocol_ready,omitempty"`
+	// StorageProtocolLegacy records an explicit v2 rejection by a Controller only
+	// while Core has no v2 storage state. It preserves existing local management.
+	StorageProtocolLegacy bool                    `json:"storage_protocol_legacy,omitempty"`
+	Journal               map[string]JournalEntry `json:"journal"`
 }
 
 type Store struct {

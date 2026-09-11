@@ -18,6 +18,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
+- Fixed registration forms following you between pool views. Opening **Register network**,
+  **Upload ISO** or **Create VM** and then selecting another view left the form sitting above
+  the new content until you clicked **Close**. Each form now stays on its own view, and your
+  entries and wizard progress are still there when you come back to it.
 - Fixed Controller deployment and VM creation failing when libvirt denied execution of the
   console's custom emulator wrapper. New definitions use the standard host emulator;
   console quality presets currently do not enable lossy JPEG image detail changes.

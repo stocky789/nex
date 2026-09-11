@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"nex.local/nex/internal/agent"
+	"nex.local/nex/internal/vmhost"
 	"os"
 	"os/signal"
 	"strings"
@@ -23,7 +24,7 @@ func main() {
 }
 func run() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: nex-core-agent enroll|run|rotate|status [flags]")
+		return fmt.Errorf("usage: nex-core-agent enroll|run|rotate|status|storage-guard [flags]")
 	}
 	mode := os.Args[1]
 	f := flag.NewFlagSet(mode, flag.ContinueOnError)
@@ -41,7 +42,7 @@ func run() error {
 		interval = f.Duration("probe-interval", 10*time.Second, "probe interval")
 		timeout = f.Duration("probe-timeout", 3*time.Second, "independent probe deadline")
 		f.StringVar(&agent.ApplianceJournalDir, "appliance-journal-dir", agent.ApplianceJournalDir, "local appliance engine deploy journal, reported as this host's Controller appliances")
-	case "rotate", "status":
+	case "rotate", "status", "storage-guard":
 	default:
 		return fmt.Errorf("unknown command %q", mode)
 	}
@@ -50,6 +51,11 @@ func run() error {
 	}
 	if f.NArg() != 0 {
 		return fmt.Errorf("unexpected positional arguments")
+	}
+	if mode == "storage-guard" {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		return vmhost.StorageGuard(ctx, *dir, os.Stdin)
 	}
 	s, err := agent.OpenStore(*dir)
 	if err != nil {

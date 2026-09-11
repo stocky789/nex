@@ -32,18 +32,19 @@ type Config struct {
 	AlertDebounce time.Duration
 }
 type Controller struct {
-	db        *sql.DB
-	cfg       Config
-	mediaMu   sync.Mutex
-	mu        sync.Mutex
-	seen      map[string]time.Time
-	ca        *authority
-	lock      *os.File
-	loginGate websecurity.LoginGate
-	observed  map[string]observationReceipt
-	consoles  consoleHub
-	stop      chan struct{}
-	stopped   chan struct{}
+	db          *sql.DB
+	cfg         Config
+	mediaMu     sync.Mutex
+	mu          sync.Mutex
+	seen        map[string]time.Time
+	ca          *authority
+	lock        *os.File
+	loginGate   websecurity.LoginGate
+	observed    map[string]observationReceipt
+	credentials *credentialBroker
+	consoles    consoleHub
+	stop        chan struct{}
+	stopped     chan struct{}
 }
 
 func Open(cfg Config) (*Controller, error) {
@@ -105,7 +106,7 @@ func Open(cfg Config) (*Controller, error) {
 		}
 	}
 
-	c := &Controller{db: db, cfg: cfg, seen: map[string]time.Time{}, lock: lock, observed: map[string]observationReceipt{}, stop: make(chan struct{}), stopped: make(chan struct{})}
+	c := &Controller{db: db, cfg: cfg, seen: map[string]time.Time{}, lock: lock, observed: map[string]observationReceipt{}, credentials: newCredentialBroker(), stop: make(chan struct{}), stopped: make(chan struct{})}
 	// Pool-bound tokens and bootstrap pool records predate automatic pools. Tokens live ten
 	// minutes and completed handoffs never retry bootstrap, so the old tables are dropped.
 	for _, table := range []string{"tokens", "appliance_bootstraps"} {
@@ -276,10 +277,18 @@ func (c *Controller) Handler() http.Handler {
 	m.HandleFunc("GET /api/v1/vms", c.admin(c.appliances))
 	m.HandleFunc("GET /api/v1/storage", c.admin(c.storage))
 	m.HandleFunc("POST /api/v1/storage", c.admin(c.storage))
+	m.HandleFunc("POST /api/v1/storage/{id}/update", c.admin(c.updateStorage))
+	m.HandleFunc("POST /api/v1/storage/{id}/recheck", c.admin(c.recheckStorage))
+	m.HandleFunc("POST /api/v1/storage/{id}/detach", c.admin(c.detachStorage))
+	m.HandleFunc("POST /api/v1/storage/credentials", c.admin(c.storageCredentials))
+	m.HandleFunc("GET /api/v1/storage/credentials", c.admin(c.storageCredentialReceipts))
+	m.HandleFunc("GET /api/v1/storage/credentials/{request_id}", c.admin(c.storageCredentialStatus))
+	m.HandleFunc("POST /api/v1/storage/credentials/{receipt}/retire", c.admin(c.retireStorageCredential))
 	m.HandleFunc("GET /api/v1/networks", c.admin(c.networks))
 	m.HandleFunc("POST /api/v1/networks", c.admin(c.networks))
 	m.HandleFunc("GET /api/v1/media", c.admin(c.media))
 	m.HandleFunc("POST /api/v1/media", c.admin(c.media))
+	m.HandleFunc("POST /api/v1/media/download", c.admin(c.downloadMedia))
 	m.HandleFunc("POST /api/v1/vms", c.admin(c.createVM))
 	m.HandleFunc("PUT /api/v1/vms/{id}", c.admin(c.updateVM))
 	m.HandleFunc("POST /api/v1/vms/{id}/power", c.admin(c.powerVM))
@@ -303,6 +312,8 @@ func (c *Controller) Handler() http.Handler {
 	m.HandleFunc("POST /api/v1/updates/apply", c.admin(c.applyUpdate))
 	m.HandleFunc("POST /api/v1/agent/enroll", c.enroll)
 	m.HandleFunc("POST /api/v1/agent/report", c.agent(c.report))
+	m.HandleFunc("GET /api/v1/agent/storage/credentials/{handle}", c.agent(c.agentStorageCredential))
+	m.HandleFunc("POST /api/v1/agent/storage/credentials/{handle}/ack", c.agent(c.acknowledgeStorageCredential))
 	m.HandleFunc("POST /api/v1/agent/rotate", c.agent(c.rotate))
 	m.HandleFunc("GET /source", func(w http.ResponseWriter, r *http.Request) {
 		if c.cfg.SourcePath == "" {

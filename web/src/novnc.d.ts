@@ -7,12 +7,7 @@ declare module "@novnc/novnc" {
     clipViewport: boolean;
     resizeSession: boolean;
     viewOnly: boolean;
-    qualityLevel: number;
-    compressionLevel: number;
     background: string;
-    static messages: {
-      fbUpdateRequest(sock: object, incremental: boolean, x: number, y: number, w: number, h: number): void;
-    };
     disconnect(): void;
     focus(options?: FocusOptions): void;
     sendCtrlAltDel(): void;

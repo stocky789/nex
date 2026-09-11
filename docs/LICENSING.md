@@ -93,6 +93,22 @@ is implemented by this licensing change.
 This file records scope and required evidence; it does not certify a release
 or substitute for checking each component's license terms.
 
+## VM storage client dependencies — 2026-09-11
+
+The VM-storage repository work adds Debian's `nfs-common`, `cifs-utils` and
+`open-iscsi` as separately executed host client programs. Nex does not copy,
+link, enable a storage target service, or alter their protocol implementations.
+Retain each exact package's copyright notice and corresponding source with the
+component manifest before external distribution, under the release evidence
+gate above.
+
+OpenZFS is intentionally not included in the ISO or `nex-core-local` package.
+It remains an optional existing-host capability pending an exact package/source
+license review, DKMS and supported-kernel build evidence, offline dependency
+evidence, Secure Boot signing/key-handling evidence where applicable, and
+known-good boot recovery testing. This record grants no ZFS redistribution
+clearance and makes no Secure Boot compatibility claim.
+
 ## Custom installer frontend — 2026-09-08
 
 The Nex GUI now combines original AGPL-3.0-only shell code with the pinned cdebconf

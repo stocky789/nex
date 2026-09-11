@@ -56,12 +56,17 @@ func validateInventory(v *protocol.Inventory) error {
 		}
 	}
 	if m := v.Managed; m != nil {
-		if len(m.Storage) > 10000 || len(m.Networks) > 10000 || len(m.Media) > 10000 || len(m.VMs) > 10000 {
+		if len(m.Storage) > 10000 || len(m.Networks) > 10000 || len(m.Media) > 10000 || len(m.VMs) > 10000 || len(m.Outcomes) > 30000 {
 			return errors.New("managed state limits exceeded")
 		}
 		var fields []string
 		for _, s := range m.Storage {
-			fields = append(fields, s.ID, s.Name)
+			fields = append(fields, s.ID)
+			// A detach tombstone intentionally retains only stable identity and
+			// generation; it has no operator-visible registration name.
+			if !s.Tombstone {
+				fields = append(fields, s.Name)
+			}
 		}
 		for _, n := range m.Networks {
 			fields = append(fields, n.ID, n.Name)

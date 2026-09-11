@@ -19,7 +19,7 @@ import (
 
 func managedCommand(kind string) bool {
 	switch kind {
-	case "storage-register", "network-register", "iso-import", "vm-create", "vm-update", "vm-power", "vm-media":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "iso-import", "vm-create", "vm-update", "vm-power", "vm-media":
 		return true
 	}
 	return false
@@ -109,6 +109,11 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 			return
 		case <-ticker.C:
 			defaults()
+			if err := engine.ReconcileStorage(ctx); err != nil {
+				// The retained Core journal carries the actionable detail; do not put
+				// storage sources or credentials into the process log.
+				log.Printf("storage reconciliation did not complete; inspect the Core journal")
+			}
 		case cmd := <-commands:
 			result := protocol.Result{OperationID: cmd.OperationID, Status: "failed", ObservedAt: time.Now().UTC()}
 			var err error
@@ -131,6 +136,14 @@ func commandHost(cmd protocol.Command) string {
 	case "storage-register":
 		if cmd.Storage != nil {
 			return cmd.Storage.HostID
+		}
+	case "storage-update", "storage-recheck", "storage-detach":
+		if cmd.StorageLifecycle != nil {
+			return cmd.StorageLifecycle.HostID
+		}
+	case "storage-credential-retire":
+		if cmd.CredentialRetire != nil {
+			return cmd.CredentialRetire.HostID
 		}
 	case "network-register":
 		if cmd.Network != nil {

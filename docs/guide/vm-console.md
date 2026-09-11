@@ -31,6 +31,13 @@ in a disposable nested-KVM lab; see [Verification](#verification).
 
 ### From Nex Controller
 
+Use the small arrow at the top-left edge of the console screen to **Collapse console
+toolbar** and give the display more room. Select **Expand console toolbar** to restore
+all controls, including any open clipboard draft. Connection status and warnings remain
+visible; collapsing does not disconnect or change **View only**. The toolbar starts
+expanded whenever you reopen the console. This also works in host consoles, the
+host-local console and full-screen or separate-window views.
+
 1. Sign in, select the VM in **Resources**, and open its **Console** tab. Opening the tab
    connects: Controller checks the host connection, the host's console support and the
    VM's observed state, then waits up to 20 seconds for the host to attach the display.
@@ -41,7 +48,9 @@ in a disposable nested-KVM lab; see [Verification](#verification).
    already on this VM's host, or **Eject** to clear the tray. Linux guests usually see
    `/dev/sr0` (often also `/dev/cdrom`); Windows guests see a DVD drive letter. A running
    VM that was created without any ISO needs to be shut down once before the first insert
-   so the host can add a CDROM tray.
+   so the host can add a CDROM tray. **Inserting ISO…** or **Ejecting ISO…** clears
+   when the task succeeds or the host reports the requested tray contents. If the task
+   fails or needs attention, its reason remains visible; inspect it in Recent tasks.
 3. Click inside the screen or select **Focus console** to give the VM keyboard focus.
    Keys and mouse input go to the guest; the pointer is absolute in VMs created with the
    USB tablet device, so it does not drift. Use **Send Ctrl+Alt+Del** for that sequence
@@ -52,11 +61,10 @@ in a disposable nested-KVM lab; see [Verification](#verification).
    panel, **Actual size** shows it 1:1 with scrolling, and **Resize guest to window** asks
    the guest to change its resolution to the panel size. The last option is hidden for a VM
    whose host reports no VirtIO display, and takes effect in guests with a virtio-gpu
-   driver (Linux, including text consoles; Windows with the virtio-win display driver). **Quality**
-   requests image quality and compression presets from the VNC server. Nex uses the standard
-   host emulator, which does not enable lossy JPEG: Low / Balanced / Best may therefore show
-   identical image detail. Both choices are remembered in this
-   browser. Host consoles have no quality control — they only send raw text frames.
+   driver (Linux, including text consoles; Windows with the virtio-win display driver).
+   The View choice is remembered in this browser. The former **Quality** menu has been
+   removed because the supported console configuration does not provide the advertised
+   image-quality changes; consoles use the client's default encoding settings.
 5. Exchange text with the guest through **Clipboard**:
    - **Read my clipboard** loads the browser clipboard into the text box (the browser asks
      for permission once); you can also paste or type into the box.
@@ -149,8 +157,18 @@ tests for the WebSocket bridge, ticket authorization, host pairing and relay, an
 host-local bridge; contract and documentation checks; and browser walkthroughs of the
 Controller **Console** tab and the host-local **Open console** flow against a running
 guest in a disposable nested-KVM lab. The toolbar features (send keys, display resize,
-typing, clipboard in both directions, screenshot, view only, reconnect, quality presets and
+typing, clipboard in both directions, screenshot, view only, reconnect and
 the console-only window) were walked through against a Debian 13 guest with the guest tools
 in the [console features QA report](../qa/console-features/checks.md), with clipboard
 contents verified inside the guest. Hosted CI execution, physical hardware, Windows guests,
 multiple concurrent viewers and long-running sessions have not been exercised.
+
+The [quality-menu removal check](../qa/console-quality/checks.md) covers the current toolbar
+and old saved preferences using the real browser UI with a simulated host; it does not
+re-verify guest rendering or clipboard behavior on a live VM.
+
+The [toolbar collapse check](../qa/console-toolbar/checks.md) covers keyboard toggling,
+screen growth, retained input settings and visible warnings using simulated API/RFB.
+
+[Console media status checks](../qa/console-media-status/checks.md) cover pending, successful
+and failed insert/eject feedback using the real UI with simulated API and display responses.

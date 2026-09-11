@@ -1,0 +1,230 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+package vmhost
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+
+	"nex.local/nex/internal/protocol"
+)
+
+func lifecycleLocalStorage(id, path string) protocol.StorageRegistration {
+	return protocol.StorageRegistration{ID: id, PoolID: "pool-1", HostID: "host-1", Name: id, Path: path}
+}
+
+func lifecycleCommand(op, kind string, v protocol.StorageLifecycleRequest) protocol.Command {
+	return protocol.Command{OperationID: op, Kind: kind, StorageLifecycle: &v}
+}
+
+func lifecyclePtr(s protocol.StorageRegistration) *protocol.StorageRegistration { return &s }
+
+// This uses mocked ZFS and QEMU commands; it exercises journal behavior, not a real mount.
+func TestStorageLifecycleAllowsIndependentRechecksAndGenerationChain(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	e := NewManaged(filepath.Join(root, "state", "managed"))
+	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	oldRun := nativeRun
+	t.Cleanup(func() { nativeRun = oldRun })
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "zfs":
+			return []byte("dataset-guid\n2147483648\nyes\n/tmp\n"), nil
+		case "zpool":
+			if len(args) > 0 && args[0] == "list" {
+				return []byte("ONLINE\n"), nil
+			}
+			return []byte("pool-guid\n"), nil
+		case "findmnt":
+			return []byte("pool/dataset zfs\n"), nil
+		case "id":
+			return []byte(strconv.Itoa(os.Getuid()) + "\n"), nil
+		default:
+			return nil, nil
+		}
+	}
+	base := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: "host-1", Name: "repo-1", Kind: protocol.StorageKindZFS, Source: protocol.StorageSource{ZFS: &protocol.ZFSStorageSource{Pool: "pool", Dataset: "dataset", MountPath: "/tmp"}}, Path: "/tmp", Generation: 1}
+	requested := base
+	requested.Path = ""
+	if err := e.save(managedJournal{Command: protocol.Command{OperationID: "register-1", Kind: "storage-register", Storage: &requested}, Result: protocol.Result{OperationID: "register-1", Status: "succeeded"}, AppliedStorage: &base}); err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range []string{"recheck-1", "recheck-2"} {
+		request := protocol.StorageLifecycleRequest{Action: "recheck", RepositoryID: "repo-1", PoolID: "pool-1", HostID: "host-1"}
+		if result, err := e.Execute(ctx, lifecycleCommand(op, "storage-recheck", request), nil); err != nil || result.Status != "succeeded" {
+			t.Fatalf("%s = %+v, %v", op, result, err)
+		}
+	}
+	for generation, name := range []string{"first", "second"} {
+		next := base
+		next.Name, next.Path = name, ""
+		request := protocol.StorageLifecycleRequest{Action: "update", RepositoryID: "repo-1", PoolID: "pool-1", HostID: "host-1", ExpectedGeneration: uint64(generation + 1), Registration: &next}
+		if result, err := e.Execute(ctx, lifecycleCommand("update-"+name, "storage-update", request), nil); err != nil || result.Status != "succeeded" {
+			t.Fatalf("update %d = %+v, %v", generation+1, result, err)
+		}
+	}
+	got, _ := e.Applied(ctx)
+	if len(got.Storage) != 1 || got.Storage[0].Generation != 3 || got.Storage[0].Name != "second" {
+		t.Fatalf("applied storage = %+v", got.Storage)
+	}
+}
+
+func TestStorageCredentialRetireCanFollowReleasedReference(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	storage := filepath.Join(root, "storage")
+	if err := os.Mkdir(storage, 0711); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(root, "state")
+	e := NewManaged(filepath.Join(state, "managed"))
+	handoff := testCredentialHandoff()
+	receipt, err := SaveStorageCredential(state, handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := lifecycleLocalStorage("repo-1", storage)
+	s.CredentialReceipt, s.CredentialRequestID = receipt.Receipt, handoff.Offer.RegistrationRequestID
+	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := bindCredentialReceipt(state, receipt.Receipt, s.ID, s.PoolID, s.HostID, s.CredentialRequestID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.save(managedJournal{Command: protocol.Command{OperationID: "register-1", Kind: "storage-register", Storage: &s}, Result: protocol.Result{OperationID: "register-1", Status: "succeeded"}}); err != nil {
+		t.Fatal(err)
+	}
+	retire := func(op string) protocol.Command {
+		return protocol.Command{OperationID: op, Kind: "storage-credential-retire", CredentialRetire: &protocol.StorageCredentialRetireRequest{Receipt: receipt.Receipt, PoolID: "pool-1", HostID: "host-1"}}
+	}
+	if result, err := e.Execute(ctx, retire("retire-in-use"), nil); err != nil || result.Status != "failed" || !strings.Contains(result.Error, "attached") {
+		t.Fatalf("in-use retire = %+v, %v", result, err)
+	}
+	detach := protocol.StorageLifecycleRequest{Action: "detach", RepositoryID: "repo-1", PoolID: "pool-1", HostID: "host-1", ExpectedGeneration: 1}
+	if result, err := e.Execute(ctx, lifecycleCommand("detach-1", "storage-detach", detach), nil); err != nil || result.Status != "succeeded" {
+		t.Fatalf("detach = %+v, %v", result, err)
+	}
+	if result, err := e.Execute(ctx, retire("retire-released"), nil); err != nil || result.Status != "succeeded" {
+		t.Fatalf("released retire = %+v, %v", result, err)
+	}
+}
+
+func TestStorageProjectionPreservesRemoteCredentialOnMetadataRename(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		kind   string
+		source protocol.StorageSource
+	}{
+		{"SMB", protocol.StorageKindSMB, protocol.StorageSource{SMB: &protocol.SMBStorageSource{Server: "files.example.test", Share: "vms"}}},
+		{"iSCSI", protocol.StorageKindISCSI, protocol.StorageSource{ISCSI: &protocol.ISCSIStorageSource{Portal: "iscsi.example.test", TargetIQN: "iqn.2026-01.example:vm", WWID: "disk-1", FilesystemUUID: "11111111-1111-4111-8111-111111111111", ExclusiveTarget: true}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: "host-1", Name: "before", Kind: tc.kind, Source: tc.source, Path: "/var/lib/nex-storage/repo-1", Generation: 1, CredentialReceipt: "receipt-1", CredentialPresent: true, CredentialRequestID: "request-1"}
+			next := current
+			next.Name, next.Generation = "after", 2
+			js := []managedJournal{
+				{Command: protocol.Command{Kind: "storage-register", Storage: &current}, Result: protocol.Result{Status: "succeeded"}},
+				{Command: protocol.Command{Kind: "storage-update", StorageLifecycle: &protocol.StorageLifecycleRequest{Action: "update", RepositoryID: current.ID, PoolID: current.PoolID, HostID: current.HostID, ExpectedGeneration: 1, Registration: &protocol.StorageRegistration{Name: "after", Kind: tc.kind, Source: tc.source}}}, Result: protocol.Result{Status: "succeeded"}, AppliedStorage: &next},
+			}
+			got := storageProjection(js)[current.ID]
+			if got.CredentialReceipt != "receipt-1" || !got.CredentialPresent || got.CredentialRequestID != "request-1" || !storageCredentialAttached(js, "receipt-1") {
+				t.Fatalf("metadata rename lost cleanup protection: %+v", got)
+			}
+		})
+	}
+}
+
+func TestStorageRegistrationConflictsCoverUncertainAndObservedAliases(t *testing.T) {
+	remote := func(id, server string) protocol.StorageRegistration {
+		return protocol.StorageRegistration{ID: id, PoolID: "pool-1", HostID: "host-1", Name: id, Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: server, Export: "/vms"}}}
+	}
+	for _, status := range []string{"pending", "needs_attention"} {
+		t.Run(status, func(t *testing.T) {
+			old := remote("first", "nfs.example.test")
+			js := []managedJournal{{Command: protocol.Command{OperationID: "first", Kind: "storage-register", Storage: &old}, Result: protocol.Result{Status: status}}}
+			if err := registrationConflict(js, protocol.Command{OperationID: "second", Kind: "storage-register", Storage: lifecyclePtr(remote("second", "nfs.example.test"))}); err == nil {
+				t.Fatal("uncertain remote registration released its source")
+			}
+			old.Identity = protocol.StorageIdentity{NFS: &protocol.NFSStorageIdentity{Server: "nfs.example.test", Export: "/vms", FilesystemID: "fs-1"}}
+			alias := remote("alias", "other.example.test")
+			alias.Source.NFS.Export = "/other"
+			alias.Identity = protocol.StorageIdentity{NFS: &protocol.NFSStorageIdentity{Server: "other.example.test", Export: "/other", FilesystemID: "fs-1"}}
+			js[0].Command.Storage = &old
+			if err := registrationConflict(js, protocol.Command{OperationID: "alias", Kind: "storage-register", Storage: &alias}); err == nil {
+				t.Fatal("uncertain remote registration released an observed backing identity")
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name      string
+		old, next protocol.StorageRegistration
+	}{
+		{"NFS filesystem alias", protocol.StorageRegistration{ID: "nfs-1", Name: "nfs-1", Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "one.example.test", Export: "/vms"}}, Identity: protocol.StorageIdentity{NFS: &protocol.NFSStorageIdentity{Server: "one.example.test", Export: "/vms", FilesystemID: "fs-1"}}}, protocol.StorageRegistration{ID: "nfs-2", Name: "nfs-2", Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "two.example.test", Export: "/other"}}, Identity: protocol.StorageIdentity{NFS: &protocol.NFSStorageIdentity{Server: "two.example.test", Export: "/other", FilesystemID: "fs-1"}}}},
+		{"SMB filesystem alias", protocol.StorageRegistration{ID: "smb-1", Name: "smb-1", Kind: protocol.StorageKindSMB, Source: protocol.StorageSource{SMB: &protocol.SMBStorageSource{Server: "one.example.test", Share: "vms"}}, Identity: protocol.StorageIdentity{SMB: &protocol.SMBStorageIdentity{Server: "one.example.test", Share: "vms", FilesystemID: "fs-1"}}}, protocol.StorageRegistration{ID: "smb-2", Name: "smb-2", Kind: protocol.StorageKindSMB, Source: protocol.StorageSource{SMB: &protocol.SMBStorageSource{Server: "two.example.test", Share: "other"}}, Identity: protocol.StorageIdentity{SMB: &protocol.SMBStorageIdentity{Server: "two.example.test", Share: "other", FilesystemID: "fs-1"}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			js := []managedJournal{{Command: protocol.Command{Kind: "storage-register", Storage: &tc.old}, Result: protocol.Result{Status: "succeeded"}}}
+			if err := registrationConflict(js, protocol.Command{OperationID: "alias", Kind: "storage-register", Storage: &tc.next}); err == nil {
+				t.Fatal("observed backing alias accepted")
+			}
+		})
+	}
+}
+
+func TestCredentialRotationSafeRejectsUncertainStorageUsers(t *testing.T) {
+	v := managedTestVM()
+	fakeCommand(t, "virsh", `if [ "$3" = domstate ]; then printf 'shut off\n'; fi`)
+	for _, tc := range []struct {
+		name  string
+		entry managedJournal
+	}{
+		{"needs attention disk", managedJournal{Command: protocol.Command{Kind: "vm-update", VM: &v}, Result: protocol.Result{Status: "needs_attention"}}},
+		{"needs attention media", managedJournal{Command: protocol.Command{Kind: "vm-media", VMMedia: &protocol.VMMediaRequest{VMID: v.ID}}, Result: protocol.Result{Status: "needs_attention"}}},
+		{"uncertain ISO import", managedJournal{Command: protocol.Command{Kind: "iso-import", Media: &protocol.Media{StorageID: v.Disks[0].StorageID}}, Result: protocol.Result{Status: "needs_attention"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := credentialRotationSafe(context.Background(), append([]managedJournal{{Command: protocol.Command{Kind: "vm-create", VM: &v}, Result: protocol.Result{Status: "succeeded"}}}, tc.entry), v.Disks[0].StorageID); err == nil {
+				t.Fatal("credential rotation accepted an uncertain storage user")
+			}
+		})
+	}
+}
+
+func TestLocalPathChangeIsNotMetadataOnly(t *testing.T) {
+	root := t.TempDir()
+	first, second := filepath.Join(root, "one"), filepath.Join(root, "two")
+	if err := os.Mkdir(first, 0711); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(second, 0711); err != nil {
+		t.Fatal(err)
+	}
+	e := NewManaged(filepath.Join(root, "state", "managed"))
+	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	current := lifecycleLocalStorage("repo-1", first)
+	current.Generation = 1
+	v := managedTestVM()
+	v.Disks[0].StorageID = current.ID
+	for _, j := range []managedJournal{
+		{Command: protocol.Command{OperationID: "register-1", Kind: "storage-register", Storage: &current}, Result: protocol.Result{OperationID: "register-1", Status: "succeeded"}},
+		{Command: protocol.Command{OperationID: "vm-1", Kind: "vm-create", VM: &v}, Result: protocol.Result{OperationID: "vm-1", Status: "succeeded"}},
+	} {
+		if err := e.save(j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	next := lifecycleLocalStorage("repo-1", second)
+	request := protocol.StorageLifecycleRequest{Action: "update", RepositoryID: current.ID, PoolID: current.PoolID, HostID: current.HostID, ExpectedGeneration: 1, Registration: &next}
+	result, err := e.Execute(context.Background(), lifecycleCommand("move-local", "storage-update", request), nil)
+	if err != nil || result.Status != "failed" || !strings.Contains(result.Error, "cannot update while used") {
+		t.Fatalf("local path change was treated as metadata-only: %+v, %v", result, err)
+	}
+}

@@ -1,0 +1,39 @@
+{
+  "summary": "Add a collapsible shared console toolbar. API impact: none; display-only toggle retains existing console connections and contracts.",
+  "paths": [
+    "web/src/console.tsx",
+    "web/src/console.css",
+    "tests/integration/console_controls_browser.py",
+    "docs/guide/vm-console.md",
+    "docs/plans/2026-09-09-console-features.md",
+    "docs/qa/console-toolbar/checks.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Document arrow, retained controls, connection and default expanded state.",
+    "pages": [
+      "docs/guide/vm-console.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "UI toggle changes no client request, Controller console ticket, console.open agent command, socket attachment, RFB result stream or Core-local authenticated console contract.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Small console presentation improvement does not change milestone scope or acceptance status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Only transient component display state; no durable pool setting or Controller record."
+  },
+  "verification": {
+    "method": "Built-UI browser interaction with simulated API/RFB, capture review, independent code review, typecheck/build and documentation/privacy checks.",
+    "evidence": [
+      "docs/qa/console-toolbar/checks.md",
+      "tests/integration/console_controls_browser.py"
+    ]
+  }
+}

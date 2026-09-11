@@ -69,31 +69,50 @@ Two modes, matching the two behaviours project owner specified.
 
 | Mode | Operator meaning | libvirt |
 |---|---|---|
-| `dedicated` | The VM always has this much; Nex counts all of it against host capacity and never hands it to another VM. | `<memory>N</memory>`, `<currentMemory>N</currentMemory>`, `<memballoon model='none'/>` |
+| `dedicated` | The running VM holds the full amount in physical RAM; a stopped VM retains its Nex capacity commitment. | `<memory>N</memory>`, `<currentMemory>N</currentMemory>`, `<memoryBacking><nosharepages/><locked/><allocation mode="immediate"/></memoryBacking>`, `<memballoon model='none'/>` |
 | `maximum` | The VM may use up to this much but reserves nothing; it consumes what it touches and returns what it frees. | `<memory>N</memory>`, `<memballoon model='virtio' freePageReporting='on'/>` |
 
-Mechanism, because it is easy to ship a field that does nothing: QEMU does not claim guest RAM up
-front — the host populates pages as the guest touches them. What guests do *not* do on their own is
-give pages back, because Linux fills spare RAM with page cache; a guest with an 8 GiB ceiling
-therefore drifts to 8 GiB of real host memory and stays there. The virtio balloon's **free page
-reporting** is what returns them: the guest kernel continuously reports free pages and the host
-reclaims them, with no daemon and no polling. libvirt has supported the attribute since 6.9.0 and
-Nex Core ships libvirt 11.
+**Dedicated-memory correction, 2026-09-11:** project owner requested actual physical reservation
+in libvirt after observing a 4 GiB dedicated VM consume around 1 GiB. Disabling ballooning alone
+had left QEMU allocating on demand. Dedicated now uses immediate allocation, locked memory and
+no KSM page sharing, all persisted in Core's libvirt definition. Physical RAM is held while QEMU
+runs and released on full shutdown. Maximum remains on-demand with virtio free-page reporting.
+
+[Libvirt memory backing](https://libvirt.org/formatdomain.html#memory-backing) defines these native
+controls. Locking also covers QEMU overhead. No guessed `memtune.hard_limit` is introduced:
+[libvirt memory tuning](https://libvirt.org/formatdomain.html#memory-tuning) warns that a limit
+below variable QEMU requirements can kill the guest. The existing 2 GiB host reserve is a
+preflight margin, not a per-process cap or a guarantee against all host memory pressure.
+Deployment-specific overhead/limits require measurement; this fix does not add a tuning policy.
+
+Existing definitions need a full shutdown and a stopped **Save changes** before starting.
+Core does not rewrite or stop running guests during upgrade. Legacy dedicated live edits fail
+before device effects with an instruction to stop and save. Autostart uses the persisted definition;
+upgrading the agent or rebooting the guest alone cannot retrofit the reservation.
+
+API impact: **existing contract** — `VMCreateSpec.memory`, `vm-create`, `vm-update`, `vm-power`
+and `Inventory.managed.vms` retain their fields, authentication, validation and replay/result
+paths. Updated Core enforces the existing dedicated promise; older Core versions do not. Upgrade
+Core before relying on it. Guide impact: **updated** with lifecycle and existing-VM instructions.
+State owner: **core** — the pool master's managed journal holds the mode/size and generated
+libvirt definition; inventory/adoption restores the same VM identity and settings to a fresh
+Controller. No Controller reservation table or background memory manager is added.
+Verification and remaining acceptance limits: [dedicated-memory QA](../qa/dedicated-memory/checks.md).
 
 **Limits to state honestly and not design around:**
 
 - Reclaim requires the balloon driver *running in the guest*. Linux has it built in; Windows needs
-  the virtio-win guest tools. A guest without it behaves like a dedicated VM — it drifts to the
-  ceiling and holds. Per-VM guest tools are already observed
+  the virtio-win guest tools. A guest without it can drift to the
+  ceiling and hold its touched pages, but its RAM is not preallocated or locked. Per-VM guest tools are already observed
   ([console features](2026-09-09-console-features.md)), so a per-VM reclaim-availability indicator
   is possible; **it is not built in this slice** and is recorded as a follow-up. The wizard says
   reclaim depends on guest tools; nothing yet reports whether a given VM actually has them working.
 - There is **no pressure-driven balloon daemon** in this slice. `maximum` means the ceiling exists
   and free pages return; it does not mean Nex actively grows and shrinks guests under host pressure.
 - Host capacity preflight uses the **ceiling** in both modes. A VM that cannot reach its maximum
-  must not pass preflight. `dedicated` is additionally admission-controlled: Controller sums the
+  must not pass preflight. `dedicated` is additionally admission-controlled: Nex Core sums the
   memory already promised by this host's non-failed dedicated VMs and refuses a request that would
-  exceed host RAM less a 2048 MiB host reserve (`hostMemory` in `internal/controller/managed.go`).
+  exceed host RAM less a 2048 MiB host reserve (`dedicatedCommitted`/`dedicatedFits` in `internal/vmhost/managed.go`).
   Creation leaves the VM stopped, so observed host memory proves nothing about what is committed —
   the promise is counted from acceptance. `maximum` reserves nothing and may oversubscribe; an
   in-wizard oversubscription warning is a **follow-up, not built in this slice**.
@@ -222,3 +241,18 @@ Deferred from this slice during review, both recorded rather than silently dropp
   (dedicated admission control) is server-side and is implemented.
 - **Per-VM reclaim-availability indicator** in the VM detail and Guest tools panel, showing whether
   a `maximum` VM's balloon driver is actually running rather than assuming it.
+
+
+### Normal VM display names — 2026-09-11
+
+Accept normal names with spaces, case, dots, punctuation and Unicode when creating or editing
+managed VMs. Keep a nonblank 200 UTF-8 byte limit and reject slash, control characters and
+XML-invalid U+FFFE/U+FFFF. The existing Core managed-journal VMCreateSpec.name and libvirt
+name are the durable record; Inventory.managed.VMs restores the exact name to a fresh Controller.
+UUID identity and disk paths are unchanged; existing disk-label sanitization is reused.
+
+API impact: changed contract — POST /api/v1/vms, PUT /api/v1/vms/{id}, vm-create/vm-update
+and managed inventory adoption use the same expanded name validation. Payloads, authentication,
+authorization, asynchronous results and replay behavior are unchanged. Upgrade Core and
+Controller together; older versions reject the broader syntax. Guide impact: updated.
+Verification and limits: [display-name checks](../qa/vm-display-names/checks.md).

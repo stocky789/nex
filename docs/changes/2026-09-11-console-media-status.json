@@ -1,0 +1,37 @@
+{
+  "summary": "Clear console ISO progress after completed insert/eject. API impact: existing contract; consume returned media operation and existing task/VM observations.",
+  "paths": [
+    "web/src/main.tsx",
+    "tests/integration/console_controls_browser.py",
+    "docs/guide/vm-console.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/console-media-status/checks.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Explain when ISO feedback clears and how failed operations remain visible.",
+    "pages": [
+      "docs/guide/vm-console.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API documentation is unchanged: existing POST /api/v1/vms/{id}/media returns the operation, and GET /api/v1/operations plus GET /api/v1/vms already report completion. No payload, authorization, execution or retry contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Console feedback correction does not change milestone scope or status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Transient browser feedback only; existing Core media state remains authoritative."
+  },
+  "verification": {
+    "method": "Browser regression failed before fix and passed afterward; insertion/ejection, failure and task-history eviction covered. Build/typecheck passed; independent review passed.",
+    "evidence": [
+      "docs/qa/console-media-status/checks.md"
+    ]
+  }
+}

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useRef, useState, type FormEvent } from "react";
 import type { Host, Media, Network, Storage, VM, VMSpec } from "./managed";
-import { adapterNames, adapterNotes, applyTopology, autoDiskName, busNames, cpuName, describeNetwork, readyHost, topologyIssue, type DiskRow, type NICRow } from "./vm-create";
+import { adapterNames, adapterNotes, applyTopology, autoDiskName, busNames, cpuName, describeNetwork, readyHost, topologyIssue, vmNameIssue, type DiskRow, type NICRow } from "./vm-create";
+import { storageUsable } from "./storage";
 
 type API = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
 type Draft = { name: string; description: string; guest_os: string; cpu: VMSpec["cpu"]; memory: VMSpec["memory"]; disks: DiskRow[]; nics: NICRow[]; boot: VMSpec["boot"]; media_id: string; autostart: boolean };
@@ -50,7 +51,7 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
   const edit = (patch: Partial<Draft>) => setDraft(d => ({ ...d, ...patch }));
   const setDisk = (i: number, patch: Partial<DiskRow>) => edit({ disks: draft.disks.map((d, n) => n === i ? { ...d, ...patch } : d) });
   const setNIC = (i: number, patch: Partial<NICRow>) => edit({ nics: draft.nics.map((n, x) => x === i ? { ...n, ...patch } : n) });
-  const hostStorage = storage.filter(s => s.host_id === vm.host_id && s.status === "succeeded");
+  const hostStorage = storage.filter(s => storageUsable(s, vm.host_id));
   const hostNetworks = networks.filter(n => n.host_id === vm.host_id && n.status === "succeeded").sort((a, b) => (a.vlan || 0) - (b.vlan || 0) || a.name.localeCompare(b.name));
   const diskTargets = new Set(draft.disks.map(d => d.storage_id));
   const availableMedia = media.filter(m => m.host_id === vm.host_id && m.status === "succeeded" && diskTargets.has(m.storage_id));
@@ -63,7 +64,7 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
   const macIssue = macs.some(m => !new RegExp(`^${macPattern}$`).test(m)) ? "A manual MAC must be six lower-case hex octets separated by colons and unicast, such as 52:54:00:12:34:56."
     : macs.some((m, i) => macs.indexOf(m) !== i) ? "MAC addresses must be unique within this VM." : "";
   const orderIssue = bootIssue(draft);
-  const issue = topoIssue || diskIssue || macIssue || orderIssue;
+  const issue = vmNameIssue(draft.name) || topoIssue || diskIssue || macIssue || orderIssue;
   const lock = (title = stopFirst) => running ? { disabled: true, title } : {};
 
   function removeDisk(i: number) {
@@ -107,7 +108,7 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
     <fieldset>
       <legend>Identity</legend>
       <div className="vm-fields">
-        <label>Name<input required maxLength={63} pattern={"[a-z0-9]([a-z0-9\\-]{0,61}[a-z0-9])?"} value={draft.name} autoFocus {...lock()} onChange={e => edit({ name: e.target.value })} /></label>
+        <label>Name<input required maxLength={200} ref={el => { el?.setCustomValidity(vmNameIssue(draft.name)); }} value={draft.name} autoFocus {...lock()} onChange={e => edit({ name: e.target.value })} /></label>
         <label>Guest operating system<select value={draft.guest_os} onChange={e => edit({ guest_os: e.target.value })}><option value="linux">Linux</option><option value="windows">Windows</option><option value="other">Other</option></select></label>
       </div>
       <label>Description<textarea rows={2} maxLength={4096} value={draft.description} onChange={e => edit({ description: e.target.value })} /></label>
@@ -120,9 +121,10 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
         <label>Cores per socket<input type="number" min={1} max={maxCPUs} step={1} value={draft.cpu.cores || ""} {...lock()} onChange={e => edit({ cpu: applyTopology(draft.cpu, "cores", e.target.valueAsNumber) })} /></label>
         <label>Threads per core<input type="number" min={1} max={maxCPUs} step={1} value={draft.cpu.threads || ""} {...lock()} onChange={e => edit({ cpu: applyTopology(draft.cpu, "threads", e.target.valueAsNumber) })} /></label>
         <label>CPU model<select value={draft.cpu.model} {...lock()} onChange={e => edit({ cpu: { ...draft.cpu, model: e.target.value } })}><option value="host-passthrough">Host passthrough</option><option value="host-model">Host model</option>{host?.inventory?.cpu_models?.filter(m => m !== "host-passthrough" && m !== "host-model").map(m => <option key={m} value={m}>{cpuName(m)}</option>)}</select></label>
-        <label>Memory mode<select value={draft.memory.mode} {...lock()} onChange={e => edit({ memory: { ...draft.memory, mode: e.target.value } })}><option value="dedicated">Dedicated · always reserved</option><option value="maximum">Maximum · a ceiling only</option></select></label>
+        <label>Memory mode<select value={draft.memory.mode} {...lock()} onChange={e => edit({ memory: { ...draft.memory, mode: e.target.value } })}><option value="dedicated">Dedicated · lock RAM while running</option><option value="maximum">Maximum · a ceiling only</option></select></label>
         <label>Memory (MiB)<input type="number" required min={512} max={maxMiB} step={1} value={num(draft.memory.size_mib)} {...lock()} onChange={e => edit({ memory: { ...draft.memory, size_mib: e.target.valueAsNumber } })} /></label>
       </div>
+      {draft.memory.mode === "dedicated" && <p className="help">Requires updated Nex Core. Dedicated mode allocates and locks the full amount in host RAM while running, preventing swap and sharing. Stopping releases RAM but keeps its Nex capacity commitment. For an existing VM, upgrade Core, stop the VM, then save changes to apply locking.</p>}
       {topoIssue && <p className="task-error">{topoIssue}</p>}
     </fieldset>
     <fieldset>
@@ -133,7 +135,7 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
         return <fieldset key={i}>
           <legend>Disk {i + 1}{existing ? "" : " · new"}</legend>
           <div className="vm-fields">
-            <label>Storage<select required value={d.storage_id} {...fixed} onChange={e => setDisk(i, { storage_id: e.target.value })}><option value="">Select validated local storage</option>{storage.filter(s => s.host_id === vm.host_id && (s.status === "succeeded" || s.id === d.storage_id)).map(s => <option key={s.id} value={s.id}>{s.name} · {s.path}</option>)}</select></label>
+            <label>Storage<select required value={d.storage_id} {...fixed} onChange={e => setDisk(i, { storage_id: e.target.value })}><option value="">Select VM-ready storage</option>{storage.filter(s => storageUsable(s, vm.host_id) || s.id === d.storage_id).map(s => <option key={s.id} value={s.id}>{s.name} · {s.kind || "local"}</option>)}</select></label>
             <label>Disk name<input required maxLength={63} pattern={"[A-Za-z0-9][A-Za-z0-9._\\-]{0,62}"} value={d.name} {...(existing ? { disabled: true, title: "A disk is identified by its name; it cannot be renamed." } : {})} onChange={e => setDisk(i, { name: e.target.value })} /></label>
             <label>Size (GiB)<input type="number" required min={1} max={2048} step={1} value={num(d.size_gib)} {...fixed} onChange={e => setDisk(i, { size_gib: e.target.valueAsNumber })} /></label>
             <label>Bus<select value={d.bus} {...lock()} onChange={e => setDisk(i, { bus: e.target.value })}>{Object.entries(busNames).map(([v, t]) => <option key={v} value={v} disabled={running && v === "sata"}>{t}{running && v === "sata" ? " · stop the VM first" : ""}</option>)}</select></label>

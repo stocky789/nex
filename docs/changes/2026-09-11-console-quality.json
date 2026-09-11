@@ -1,0 +1,44 @@
+{
+  "summary": "Remove ineffective console quality presets. API impact: none; console tickets, agent commands and RFB relay contracts are unchanged.",
+  "paths": [
+    "web/src/console.tsx",
+    "web/src/novnc.d.ts",
+    "web/src/main.tsx",
+    "tests/integration/console_controls_browser.py",
+    "tests/integration/console_features_lab.py",
+    ".github/workflows/phase1.yml",
+    ".gitea/workflows/phase1.yml",
+    "docs/guide/vm-console.md",
+    "docs/plans/2026-09-09-console-features.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/console-quality/checks.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Remove obsolete quality-menu instructions and describe retained View preference.",
+    "pages": [
+      "docs/guide/vm-console.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Shared UI removes a local encoding preference; existing console ticket requests, Controller console.open, Core socket attachment and in-band RFB relay retain their contracts. Core-local /api/local/v1/vms/{id}/console still opens its direct authenticated stream unchanged.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Corrects a misleading control without changing phase status; roadmap has no image-quality preset claim.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable state. Ignore old browser quality preferences; retain existing browser View preference. Pool records and adoption are unchanged."
+  },
+  "verification": {
+    "method": "Run built-UI Playwright regression before and after removal, inspect captures, run UI typecheck/build and repository documentation/privacy checks; details and limits in QA report.",
+    "evidence": [
+      "docs/qa/console-quality/checks.md",
+      "tests/integration/console_controls_browser.py"
+    ]
+  }
+}

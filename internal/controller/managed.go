@@ -120,6 +120,7 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 		return v
 	case cmd.Media != nil:
 		v := *cmd.Media
+		v.URL = ""
 		v.Status = op.Status
 		v.Error = op.Error
 		return v
@@ -127,6 +128,10 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 		return map[string]any{"vm_id": cmd.Power.VMID, "action": cmd.Power.Action, "operation": op}
 	case cmd.VMMedia != nil:
 		return map[string]any{"vm_id": cmd.VMMedia.VMID, "action": cmd.VMMedia.Action, "media_id": cmd.VMMedia.MediaID, "operation": op}
+	case cmd.StorageLifecycle != nil:
+		return map[string]any{"repository_id": cmd.StorageLifecycle.RepositoryID, "action": cmd.StorageLifecycle.Action, "operation": op}
+	case cmd.CredentialRetire != nil:
+		return map[string]any{"receipt": cmd.CredentialRetire.Receipt, "action": "retire", "operation": op}
 	default:
 		return map[string]any{"vm_id": cmd.VM.ID, "operation": op}
 	}
@@ -172,7 +177,6 @@ type registrationRequest struct {
 	VLAN      int    `json:"vlan,omitempty"`
 }
 
-var vmName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 var networkSource = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
 var identifierValid = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`).MatchString
 var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString
@@ -200,7 +204,11 @@ func networkKey(kind, source string) string {
 }
 
 func (c *Controller) storage(w http.ResponseWriter, r *http.Request, user, csrf string) {
-	c.registerResource(w, r, user, "storage-register")
+	if r.Method == "GET" {
+		c.listResources(w, "storage-register")
+		return
+	}
+	c.registerStorage(w, r, user)
 }
 func (c *Controller) networks(w http.ResponseWriter, r *http.Request, user, csrf string) {
 	c.registerResource(w, r, user, "network-register")
@@ -311,7 +319,12 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		json.Unmarshal([]byte(raw), &old)
 		switch kind {
 		case "storage-register":
-			taken["path:"+old.Path] = true
+			var storageOld storageRegisterRequest
+			if json.Unmarshal([]byte(raw), &storageOld) == nil && (storageOld.Kind != "" || storageOld.Path != "") {
+				taken[storageRegistrationKey(protocol.StorageRegistration{Path: storageOld.Path, Kind: storageOld.Kind, Source: storageOld.Source})] = true
+			} else {
+				taken["path:"+old.Path] = true
+			}
 		case "network-register":
 			taken[networkKey(old.Kind, old.Source)] = true
 		default:
@@ -319,6 +332,14 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		}
 	}
 	rows.Close()
+	// Core clears operation fields from its steady-state repository projection. The matching
+	// successful journal outcome carries the Controller operation ID and Core-allocated ID.
+	storageOperation := map[string]string{}
+	for _, outcome := range m.Outcomes {
+		if outcome.Kind == "storage-register" && outcome.Status == "succeeded" && identifierValid(outcome.ID) && identifierValid(outcome.OperationID) {
+			storageOperation[outcome.ID] = outcome.OperationID
+		}
+	}
 	count := func(query string, args ...any) (int, error) {
 		var n int
 		err := tx.QueryRow(query, args...).Scan(&n)
@@ -366,19 +387,48 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		return resolved(kind, id)
 	}
 	for _, s := range m.Storage {
-		if ok, err := held(s.ID, "storage-register"); err != nil || ok {
-			if err != nil {
+		if s.OperationID == "" {
+			s.OperationID = storageOperation[s.ID]
+		}
+		if s.Tombstone {
+			if err = c.mirrorStorageProjection(tx, pool, host, s); err != nil {
 				return err
 			}
 			continue
 		}
+		if ok, err := held(s.ID, "storage-register"); err != nil || ok {
+			if err != nil {
+				return err
+			}
+			if err = c.mirrorStorageProjection(tx, pool, host, s); err != nil {
+				return err
+			}
+			continue
+		}
+		// A Controller-created registration has no repository ID until Core journals it.
+		// Match that pending operation before source-conflict checks, then replace the
+		// synthetic row with Core's durable identity.
+		if s.OperationID != "" {
+			var pending int
+			if err = tx.QueryRow("SELECT count(*) FROM managed_resources WHERE operation_id=? AND kind='storage-register'", s.OperationID).Scan(&pending); err != nil {
+				return err
+			}
+			if pending > 0 {
+				if err = c.mirrorStorageProjection(tx, pool, host, s); err != nil {
+					return err
+				}
+				continue
+			}
+		}
 		reason := ""
-		if !nameValid(s.Name) || !storagePathValid(s.Path) {
-			reason = "invalid storage name or path"
-		} else if ok, err := free(s.ID, "path:"+s.Path); err != nil {
+		if !nameValid(s.Name) {
+			reason = "invalid storage name"
+		} else if err := protocol.ValidateStoredStorageRegistration(s, false); err != nil && (s.Kind != "" || !storagePathValid(s.Path)) {
+			reason = "invalid storage registration"
+		} else if ok, err := free(s.ID, storageRegistrationKey(s)); err != nil {
 			return err
 		} else if !ok {
-			reason = "storage ID or path already registered"
+			reason = "storage ID or source already registered"
 		}
 		if reason != "" {
 			if err = attention("storage", "storage-register", s.ID, s.Name, reason); err != nil {
@@ -386,10 +436,7 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 			}
 			continue
 		}
-		v := registrationRequest{RequestID: "adopt-storage:" + host + ":" + s.ID, PoolID: pool, HostID: host, Name: strings.TrimSpace(s.Name), Path: s.Path}
-		opID := random()
-		cmd := protocol.Command{OperationID: opID, Kind: "storage-register", Storage: &protocol.StorageRegistration{ID: s.ID, PoolID: pool, HostID: host, Name: v.Name, Path: s.Path, OperationID: opID, Status: "succeeded"}}
-		if err = save("storage", v.Name, s.ID, cmd, v); err != nil {
+		if err = c.mirrorStorageProjection(tx, pool, host, s); err != nil {
 			return err
 		}
 	}
@@ -422,6 +469,9 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		}
 	}
 	for _, md := range m.Media {
+		if err := mirrorDownloadedMedia(tx, host, md); err != nil {
+			return err
+		}
 		if ok, err := held(md.ID, "iso-import"); err != nil || ok {
 			if err != nil {
 				return err
@@ -467,7 +517,7 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 			continue
 		}
 		reason := ""
-		if !vmName.MatchString(s.Name) || protocol.ValidateVMSpec(s) != nil || s.CPU.Count > 64 || s.Memory.SizeMiB > 262144 {
+		if protocol.ValidateVMSpec(s) != nil || s.CPU.Count > 64 || s.Memory.SizeMiB > 262144 {
 			reason = "invalid VM name or specification"
 		} else if missing[s.ID] {
 			reason = "VM definition is missing from libvirt on the host"
@@ -517,13 +567,13 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		return err
 	}
 	// The host's operation ID is the Controller's when this Controller issued it; only a
-	// replaced Controller lacks the row. One query resolves every reported outcome.
-	// ponytail: two placeholders per outcome, so the 10000-entry journal ceiling stays under
-	// SQLite's 32766 variables; chunk the IN lists if the journal ceiling ever rises.
+	// replaced Controller lacks the row. Batch two placeholders per outcome below
+	// SQLite's variable limit; automatic-start results can outnumber journal entries.
 	known := map[string]bool{}
-	if len(m.Outcomes) > 0 {
-		ids, requests := make([]any, 0, len(m.Outcomes)), make([]any, 0, len(m.Outcomes))
-		for _, o := range m.Outcomes {
+	for start := 0; start < len(m.Outcomes); start += 10000 {
+		batch := m.Outcomes[start:min(start+10000, len(m.Outcomes))]
+		ids, requests := make([]any, 0, len(batch)), make([]any, 0, len(batch))
+		for _, o := range batch {
 			ids, requests = append(ids, o.OperationID), append(requests, "adopt-outcome:"+host+":"+o.OperationID)
 		}
 		marks := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
@@ -552,8 +602,23 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 	}
 	for _, o := range m.Outcomes {
 		// A creation's automatic start reports as <operation>:start.
-		if !identifierValid(strings.TrimSuffix(o.OperationID, ":start")) || !managedKind(o.Kind) || (o.Status != "failed" && o.Status != "needs_attention") {
+		if !identifierValid(strings.TrimSuffix(o.OperationID, ":start")) || !managedKind(o.Kind) || (o.Status != "queued" && o.Status != "succeeded" && o.Status != "failed" && o.Status != "needs_attention") {
 			continue
+		}
+		// A Core recovery outcome for this Controller's own operation is authoritative too.
+		// Restrict the update to its immutable id/kind/host and nonterminal states so a
+		// stale or cross-host report cannot alter a completed operation.
+		if known[o.OperationID] && o.Status != "queued" {
+			if _, err = tx.Exec("UPDATE operations SET status=?,error=?,updated_at=? WHERE id=? AND host_id=? AND kind=? AND status IN ('queued','dispatched','needs_attention')", o.Status, clip(o.Error, 4096), stamp(), o.OperationID, host, o.Kind); err != nil {
+				return err
+			}
+		}
+		// Adopted tasks are passive mirrors: only Core moves them, and they are never
+		// dispatched by this Controller. Terminal history must not regress to queued.
+		if known["adopt-outcome:"+host+":"+o.OperationID] && o.Status != "queued" {
+			if _, err = tx.Exec("UPDATE operations SET status=?,error=?,updated_at=? WHERE host_id=? AND request_id=? AND status IN ('queued','dispatched','needs_attention')", o.Status, clip(o.Error, 4096), stamp(), host, "adopt-outcome:"+host+":"+o.OperationID); err != nil {
+				return err
+			}
 		}
 		if known[o.OperationID] || known["adopt-outcome:"+host+":"+o.OperationID] {
 			continue
@@ -643,7 +708,7 @@ func (c *Controller) adoptAppliances(tx *sql.Tx, host, pool string, inv *protoco
 
 func managedKind(kind string) bool {
 	switch kind {
-	case "storage-register", "network-register", "iso-import", "vm-create", "vm-update", "vm-power", "vm-media":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "iso-import", "vm-create", "vm-update", "vm-power", "vm-media":
 		return true
 	}
 	return false
@@ -714,7 +779,7 @@ func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf
 	if !decode(w, r, &v) {
 		return
 	}
-	if v.ID != "" || !nameValid(v.RequestID) || !vmName.MatchString(v.Name) {
+	if v.ID != "" || !nameValid(v.RequestID) {
 		fail(w, 400, "valid name and stable request_id required; the Controller assigns the VM identity")
 		return
 	}
@@ -748,7 +813,12 @@ func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf
 		return cmd, e == nil
 	}
 	for _, d := range v.Disks {
-		if _, ok := resolve(d.StorageID, "storage-register", "the disk storage target"); !ok {
+		cmd, ok := resolve(d.StorageID, "storage-register", "the disk storage target")
+		if !ok {
+			return
+		}
+		if err := storageReadyForWrite(cmd); err != nil {
+			fail(w, 409, err.Error())
 			return
 		}
 	}
@@ -805,7 +875,7 @@ func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf
 // host reports as current, so an edit's result is the host's word and a Controller that missed
 // it converges on the next report. The row's payload keeps the original request for replay.
 func (c *Controller) refreshVM(tx *sql.Tx, pool, host string, reported protocol.VMCreateSpec) error {
-	if !vmName.MatchString(reported.Name) || protocol.ValidateVMSpec(reported) != nil {
+	if protocol.ValidateVMSpec(reported) != nil {
 		return nil
 	}
 	var raw string
@@ -869,7 +939,7 @@ func (c *Controller) updateVM(w http.ResponseWriter, r *http.Request, user, csrf
 		return
 	}
 	id := r.PathValue("id")
-	if (v.ID != "" && v.ID != id) || !nameValid(v.RequestID) || !vmName.MatchString(v.Name) {
+	if (v.ID != "" && v.ID != id) || !nameValid(v.RequestID) {
 		fail(w, 400, "valid name and stable request_id required; id must match the path or be omitted")
 		return
 	}
@@ -959,7 +1029,12 @@ func (c *Controller) updateVM(w http.ResponseWriter, r *http.Request, user, csrf
 		return cmd, e == nil
 	}
 	for _, d := range spec.Disks {
-		if _, ok := resolve(d.StorageID, "storage-register", "the disk storage target"); !ok {
+		cmd, ok := resolve(d.StorageID, "storage-register", "the disk storage target")
+		if !ok {
+			return
+		}
+		if err := storageReadyForWrite(cmd); err != nil {
+			fail(w, 409, err.Error())
 			return
 		}
 	}

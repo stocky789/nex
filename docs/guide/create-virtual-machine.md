@@ -2,7 +2,7 @@
 
 ## Status
 
-This development workflow registers existing local storage and guest networking, uploads
+This development workflow registers existing storage repositories and guest networking, uploads or downloads
 installation media, and creates a VM through Nex Controller with a six-page wizard:
 **Identity**, **CPU and memory**, **Disks**, **Networks**, **Boot and media** and **Review**.
 One VM can have up to eight disks and up to eight network interfaces, either
@@ -27,15 +27,11 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
   an older agent cannot execute these operations.
 - A freshly connected, active host with working KVM/QEMU and system libvirt, enough CPU
   and memory for the guest, and local recovery access.
-- An existing writable local ext4, XFS or Btrfs directory for additional storage, or the
-  host's default **ISO** registration at `/var/lib/libvirt/images` (created on install and
-  registered automatically when the host reports). That default path holds both uploaded
-  ISOs and guest disks. Extra paths must not contain symlinks. The directory and every
-  ancestor must be root-owned directories without group or other write permission, and permit
-  directory traversal by other users so QEMU can access the guest files. ACL-only access is
-  not supported in this build. The standalone agent service permits writes under
-  `/var/lib/libvirt/images`; another location also needs an explicit service write allowance.
-  Manual registration does not create the selected directory or format a disk.
+- One or more repositories registered and healthy on the placement host. The default **ISO**
+  registration at `/var/lib/libvirt/images` is a local directory created on install and can hold
+  both uploaded ISOs and guest disks. For local-directory ownership, remote storage preparation,
+  supported filesystem types, credentials and single-host limits, see
+  [Register VM storage repositories](storage-repositories.md).
 - Free space on each storage target for the **full size of every disk placed on it plus about
   4 GiB of headroom**, whether the disks are thin or thick. Thin disks are checked at their
   full size on creation but are not reserved afterwards, so later growth can still fill the
@@ -47,8 +43,11 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
 - Otherwise an existing Linux bridge such as the installer-created `br0`, or an active
   libvirt network on the selected host; that registration changes no host networking.
 - A guest installation `.iso` containing an ISO-9660 volume descriptor (at least ~32 KiB).
-  Size is limited by free space on Controller staging (256 MiB reserved) and on the host
-  storage target, not by a fixed GiB cap.
+  Local uploads need free space on Controller staging (256 MiB reserved) and on the host
+  storage target. URL downloads need free space only on the destination host, with 1 GiB
+  reserved. Neither source has a fixed GiB cap. For URL downloads the host needs direct
+  internet access and public DNS resolution; use a direct HTTP or HTTPS ISO link without
+  login credentials or a URL fragment. Private-network destinations and proxies are not supported.
   Select firmware supported by the guest; UEFI must be advertised by the host's libvirt
   capabilities for KVM, x86-64 and q35. Allow 2 GiB of available memory for the host in
   addition to the requested guest memory.
@@ -66,13 +65,12 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
    upload and VM disks. If that self-registration fails (the directory is missing or not
    writable, for example), no **Storage** row appears: the failure is a failed task in
    **Task history** naming the host's reason, and the host does not retry it. Correct the
-   directory on the host, then register it yourself with **Register local storage** below;
-   a failed registration does not reserve its path. To add another directory, select **Register local storage**,
-   enter a **Name**, select the **Host**, and enter its **Existing directory**, then
-   **Register and check access**. Wait for the access check to show `succeeded`; follow its
-   link to **Task history** if it remains queued or reports an error. A directory the host has
-   already registered under another name is reported by the host as a failed task naming that
-   registration; reuse it instead.
+   directory on the host, then register it yourself with **Register storage** below;
+   a failed registration does not reserve its path. To add local, NFSv4, OpenZFS, SMB3 or iSCSI
+   storage, select **Register storage**, then follow
+   [Register VM storage repositories](storage-repositories.md). Wait for the row to show
+   `healthy`, readable and writable before using it; follow its link to **Task history** if it
+   remains queued or reports an error.
 3. Open **Networking**. The host registers its untagged network (for example **nex0 untagged**
    on the installer-created `br0`) itself and reports it once connected, and adds one for any
    bridge it later gains on a physical NIC or bond; use it for VMs on the management LAN. For a tagged VLAN, select **Register network**. Enter a name and select the same
@@ -85,13 +83,22 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
    libvirt network the host has already registered under another name is reported by the host
    as a failed task naming that registration; reuse it instead.
 4. Open **ISO library**, then **Upload ISO**. Choose the validated **Destination storage**
-   (the default **ISO** registration is fine) and select or drop one **ISO file**. Select
-   **Upload and transfer ISO**. Progress, rate and **Cancel** for the upload to Controller
-   appear under **Recent tasks**; you can close the form and keep working in the UI while
-   that upload runs (keep the Controller tab open). Wait for the separate host transfer
-   task to show `succeeded` before using the image. Upload the ISO to the storage the VM's
-   disks will use: an ISO can only be attached from a storage target one of the VM's own
-   disks sits on.
+   (the default **ISO** registration is fine), then choose **ISO source**:
+   - **Upload from computer**: select or drop one **ISO file**, then select
+     **Upload and transfer ISO**. Progress, rate and **Cancel** for the upload to Controller
+     appear under **Recent tasks**. You can close the form and keep working while the
+     upload runs, but keep the Controller browser tab open.
+   - **Download from public URL**: enter the direct **Public ISO URL** and an **ISO name**
+     ending in `.iso`, then select **Download ISO**. The selected host downloads and
+     validates the image; once accepted, you can close the browser. Once Core has received
+     the task, its download continues if Controller disconnects. This source requires a freshly connected host with URL
+     download support; upgrade Nex Core if the form requests it.
+
+   Wait for the host task to show `succeeded` before using either source. URL download size
+   and SHA-256 appear after the host verifies the completed image; there is no byte-progress
+   or cancel control for host downloads in this build. Each request targets the selected
+   host's storage; it does not copy the image to every host. Choose storage the VM's disks
+   will use: an ISO can only be attached from a storage target one of the VM's own disks sits on.
    To check one host, select it in **Resources**, open **Storage**, and look under
    **Host ISO images**. Each row shows the ISO, destination storage/directory, size,
    availability and transfer task. Return to the pool to continue creating the VM.
@@ -100,10 +107,17 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
    the pool's **Virtual machines** view with the wizard. The heading shows the current page, for
    example **Create VM · 1 of 6: Identity**. **Next** moves on, **Back** corrects an earlier
    page, and **Close** puts the wizard away. Nothing is submitted until the last page.
+   Selecting another view, including with **Open Storage**, **Open Networking** and
+   **Open ISO library** below, hides the wizard while you work there and shows it again,
+   with your entries, when you return to **Virtual machines**. The same applies to the
+   **Register network** and **Upload ISO** forms on their own views.
    1. **Identity**
-      - **VM name** — 1–63 lowercase letters, digits or internal hyphens, starting and
-        ending with a letter or digit. It must be unique in the pool and becomes the libvirt
-        domain name on the host; it can be changed later while the VM is stopped.
+      - **VM name** — use a normal display name such as **Production Web 01** or
+        **guest.example.test**. Spaces, mixed case, punctuation and Unicode are supported.
+        Names must be nonblank and at most 200 UTF-8 bytes; slashes and control characters
+        are not allowed. The name must be unique on the host and is preserved there, so it
+        returns when a replacement Controller adopts the pool. It can be changed later
+        while the VM is stopped. Upgrade Controller and Core together for these naming rules.
       - **Description** — optional, at most 4096 characters, stored with the VM definition
         on the pool master.
       - **Guest operating system** — **Linux**, **Windows** or **Other**. A record and a
@@ -136,7 +150,7 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
         shows the host's reported CPU and memory capacity underneath. This size is the
         ceiling in both modes, and the host must be able to meet it at creation time.
    3. **Disks** — one to eight disks, each its own **Disk 1**, **Disk 2**, … block.
-      - **Storage** — a local storage registration that is validated on the selected host.
+      - **Storage** — a storage repository that is healthy and validated on the selected host.
         Different disks may use different storage targets. If the host has none, use
         **Open Storage** to register one.
       - **Disk name** — 1–63 letters, digits, dots, dashes or underscores, starting with a
@@ -212,16 +226,28 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
 
 | Mode | What the VM gets | When to use it |
 |---|---|---|
-| **Dedicated** | The VM always has this much. It is reserved from the host at the size you chose and is never given to another VM. | Predictable performance; guests without the balloon driver; anything you do not want competing for memory. |
+| **Dedicated** | The full amount is allocated and locked in host RAM before the VM runs, with no swapping or page sharing. Stopping the VM releases physical RAM; Nex still counts its capacity commitment. | Predictable performance; guests without the balloon driver; anything you do not want competing for memory. |
 | **Maximum** | A ceiling only. The VM reserves nothing, uses the memory it actually touches, and gives back memory it frees. | Fitting more guests on a host when their real use is well below the ceiling. |
+
+For an existing **Dedicated** VM created before this correction, upgrade Nex Core, then
+[shut down the VM](vm-power.md), wait for **shut off**, open **General → VM details → Edit**,
+and select **Save changes** with the same memory mode and size. Wait for the `vm-update` task
+to succeed, then start it. Saving while stopped installs the new reservation; an agent upgrade,
+a guest reboot, or stop/start without saving does not change the old definition. Existing guests
+are not stopped automatically. See [Edit a virtual machine](edit-virtual-machine.md).
+
+A running 4096 MiB dedicated VM now holds at least 4096 MiB of host RAM, plus QEMU's overhead,
+even if applications inside the guest use only 1 GiB. Allow headroom for the host and that overhead.
+If the host cannot allocate or lock the memory, startup fails; inspect the task and host libvirt
+logs and free capacity before retrying. The VM definition and disks remain available.
 
 Three limits to know before choosing **Maximum**:
 
 - **Returning freed memory needs the balloon driver running inside the guest.** Linux has it
   built into the kernel. Windows gets it from the virtio-win guest tools; see
   [Install guest tools](guest-tools.md). Until the driver runs, the guest keeps every page it
-  has ever touched, so the VM drifts up to its ceiling and holds it — behaving exactly like a
-  dedicated VM of the same size, without the reservation. Even with the driver, only memory
+  has touched, so usage can drift up to its ceiling. This does not preallocate or lock RAM
+  as dedicated mode does. Even with the driver, only memory
   the guest counts as free comes back; pages it holds as file cache stay with the guest.
 - **Nothing grows or shrinks a guest under host memory pressure.** This build has no daemon
   that reclaims memory when the host runs short. **Maximum** means the ceiling is enforced and
@@ -257,6 +283,18 @@ the host; files are checked again when creating a VM.
 
 ## Troubleshooting
 
+- **A URL download fails:** use a direct public ISO download link, not a web page or a
+  login page. Core rejects non-public addresses even after DNS resolution or redirects,
+  permits at most five redirects, and stops a transfer after two hours. Check host DNS,
+  internet access, TLS trust and available storage. Incomplete or invalid downloads are
+  not published as usable ISOs. After a definite failure, correct the cause and submit a
+  new download. If the submission response was lost, keep the original entries and retry
+  to reconcile that request before starting another.
+- **Core restarts during a download:** partial transfers are not resumed. Inspect
+  **Task history** after reconnecting; a complete published image is checked against its
+  durable size/hash record before success is reported. For an incomplete transfer, resolve
+  the reported result and submit a new request.
+
 - **A dropdown closes as soon as it opens:** some desktops dismiss a browser's own popup
   menus. Nex draws its dropdowns inside the page in current Chromium-based browsers (Chrome,
   Brave, Edge 135 or later), where this cannot happen; in other browsers use the keyboard
@@ -264,10 +302,9 @@ the host; files are checked again when creating a VM.
 - **No selectable host or rejected capability:** reconnect the selected host, confirm it
   belongs to this pool, and install matching Core components if it predates managed-VM
   creation. Revocation and stale connectivity block new work.
-- **Storage check fails:** check the exact existing path, supported local filesystem,
-  root ownership and safe permissions throughout the path, service write allowance and
-  free space. NFS and other shared storage are
-  not supported by this development build. Never format another disk to work around an access error.
+- **Storage check fails:** inspect the Core error, then follow the source-specific recovery
+  steps in [Register VM storage repositories](storage-repositories.md). Do not point a local
+  registration at a remote mount that may disappear.
 - **Network check fails:** for a VLAN network, read the task error: the uplink must be a
   physical NIC or bond reported by the host (a bond member is refused; use the bond), the VLAN must not already belong to another
   bridge (for example the management VLAN), and an untagged network is refused on a NIC that
@@ -363,6 +400,15 @@ the host; files are checked again when creating a VM.
 
 ## Verification
 
+**Public URL ISO downloads (2026-09-11):** see the [URL ISO verification report](../qa/iso-url/checks.md)
+for executable backend and browser checks and their simulation boundaries. Installed
+Controller/Core packages and installation media require a matching rebuild and deployment.
+
+**Storage repositories (2026-09-11) — lab testing in progress.** NFSv4, existing OpenZFS
+datasets, SMB3 shares and iSCSI LUNs now use the storage workflow described above. The
+[storage repository checks](../qa/storage-repositories/checks.md) distinguish runnable checks
+from the pending disposable-lab VM I/O, outage, reboot and Controller-replacement workflows.
+
 **Full VM creation (2026-09-10) — not yet walked through.** The six-page wizard, multiple
 disks and interfaces, the memory modes, per-device boot order, autostart and the follow-on
 start request are new in this build, and **no browser walkthrough or lab run has been
@@ -410,7 +456,7 @@ mocking the APIs. Consult that report for subsequent boot/recovery results and l
 
 The [development verification report](../qa/managed-vm/checks.md) records build identities,
 checks and limits. Default **ISO** auto-registration is covered by Controller unit tests;
-a live enroll walkthrough that skips manual Register local storage is not yet recorded.
+a live enroll walkthrough that skips manual storage registration is not yet recorded.
 The [native browser walkthrough](../qa/managed-vm/browser-native-results.json)
 used Chromium, a real HTTPS Controller and a disposable Debian host with nested KVM/libvirt.
 It exercised sign-in, resource registration/reuse, ISO upload, the creation pages as they
@@ -434,3 +480,9 @@ central power/console controls, physical hardware and arbitrary storage-failure 
 remain unverified; see the [remaining platform gates](../plans/2026-09-08-nex-platform.md).
 
 [Back to the user guide](README.md)
+
+VM naming validation and host-reported adoption are covered by the
+[display-name checks](../qa/vm-display-names/checks.md); browser coverage uses a simulated host.
+
+Dedicated-memory correction checks and limits are recorded in the
+[physical reservation QA report](../qa/dedicated-memory/checks.md).

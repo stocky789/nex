@@ -281,7 +281,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         def with_power(route):
             hosts = route.fetch().json()
             for h in hosts:
-                h['capabilities'] = sorted(set(h.get('capabilities') or []) | {'vm-power-v1'})
+                h['capabilities'] = sorted(set(h.get('capabilities') or []) | {'vm-power-v1', 'vm-power-queue-v1'})
             route.fulfill(json=hosts)
         page.route('**/api/v1/hosts', with_power)
         power_requests = []
@@ -291,7 +291,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
             power_requests.append(route.request.post_data_json)
             if reject_next:
                 reject_next.pop()
-                route.fulfill(status=409, json={'error': 'a power request for this VM is still pending'})
+                route.fulfill(status=409, json={'error': 'the VM host is unavailable'})
             else:
                 route.fulfill(json={'id': 'fixture-power', 'status': 'queued'})
         page.route('**/api/v1/vms/fixture-vm/power', power)
@@ -318,12 +318,12 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         assert power_requests == [], 'escape must not submit'
         toolbar.get_by_role('button', name='Force stop', exact=True).click()
         dialog.get_by_role('button', name='Confirm force stop', exact=True).click()
-        expect(dialog.get_by_role('alert')).to_contain_text('still pending')
+        expect(dialog.get_by_role('alert')).to_contain_text('host is unavailable')
         expect(dialog).to_be_visible()
         capture('power-confirm-rejected')
         dialog.get_by_role('button', name='Confirm force stop', exact=True).click()
         expect(dialog).not_to_be_visible()
-        expect(page.get_by_role('status')).to_contain_text('Force stop requested for Toolbar fixture')
+        expect(page.get_by_role('status')).to_contain_text('Force stop queued for Toolbar fixture')
         assert [r['action'] for r in power_requests] == ['force-stop', 'force-stop']
         assert power_requests[0]['request_id'] == power_requests[1]['request_id'], 'retry must reuse the request identity'
         # Start has no confirmation; a rejected Start opens the dialog as its error surface and retries from there.
@@ -335,17 +335,43 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         expect(toolbar.get_by_role('button', name='Force stop', exact=True)).to_be_disabled()
         toolbar.get_by_role('button', name='Start', exact=True).click()
         expect(dialog).to_contain_text('Start Toolbar fixture?')
-        expect(dialog.get_by_role('alert')).to_contain_text('still pending')
+        expect(dialog.get_by_role('alert')).to_contain_text('host is unavailable')
         capture('power-start-rejected')
         dialog.get_by_role('button', name='Confirm start', exact=True).click()
         expect(dialog).not_to_be_visible()
-        expect(page.get_by_role('status')).to_contain_text('Start requested for Toolbar fixture')
+        expect(page.get_by_role('status')).to_contain_text('Start queued for Toolbar fixture')
         expect(toolbar.get_by_role('button', name='Start', exact=True)).to_be_focused()
         assert [r['action'] for r in power_requests] == ['start', 'start'] and power_requests[0]['request_id'] == power_requests[1]['request_id']
+        # A busy VM accepts Start once as a queued task; the browser never retries the request.
+        power_requests.clear()
+        pending_operations = [{'id': 'fixture-edit', 'host_id': host_id, 'kind': 'vm-update',
+                               'request_id': 'fixture-edit', 'status': 'dispatched', 'actor': 'operator',
+                               'created_at': '2026-09-11T00:00:00Z', 'updated_at': '2026-09-11T00:00:00Z'}]
+        page.route('**/api/v1/operations', lambda route: route.fulfill(json=pending_operations))
+        toolbar.get_by_role('button', name='Refresh view', exact=True).click()
+        expect(page.locator('.activity-dock tr').filter(has_text='fixture-edit')).to_contain_text('dispatched')
+
+        def queued_power(route):
+            power_requests.append(route.request.post_data_json)
+            pending_operations.append({**pending_operations[0], 'id': 'fixture-queued-start',
+                                       'request_id': power_requests[-1]['request_id'], 'kind': 'vm-power', 'status': 'queued'})
+            route.fulfill(status=202, json={'id': 'fixture-queued-start', 'status': 'queued'})
+        page.unroute('**/api/v1/vms/fixture-vm/power')
+        page.route('**/api/v1/vms/fixture-vm/power', queued_power)
+        toolbar.get_by_role('button', name='Start', exact=True).click()
+        expect(page.get_by_role('status')).to_contain_text('Start queued for Toolbar fixture. Follow its progress in Recent tasks.')
+        expect(dialog).not_to_be_visible()
+        expect(page.locator('.activity-dock tr').filter(has_text='fixture-queued-start')).to_contain_text('queued')
+        toolbar.get_by_role('button', name='Refresh view', exact=True).click()
+        expect(page.locator('.activity-dock tr').filter(has_text='fixture-edit')).to_contain_text('dispatched')
+        expect(dialog).not_to_be_visible()
+        assert [r['action'] for r in power_requests] == ['start'], 'queued Start must submit only once'
+        capture('power-start-queued')
+        page.unroute('**/api/v1/operations')
         page.unroute('**/api/v1/vms/fixture-vm/power')
         page.unroute('**/api/v1/hosts')
         page.unroute('**/api/v1/vms')
-        lab.passed('browser simulated VM power from the toolbar: state-dependent enablement, confirmation dialog cancel/escape, rejected request kept in the dialog, accepted retry with the same request identity, rejected Start opening the dialog and returning focus')
+        lab.passed('browser simulated VM power from the toolbar: state-dependent enablement, confirmation dialog cancel/escape, unavailable-host rejection and same-ID retry, rejected Start returning focus, one-click Start queued behind pending work without a dialog or browser retry')
         refresh_route('pools/' + pool_id)
         expect(page.get_by_role('heading', name=pool['name'], exact=True)).to_be_visible()
         expect(page.get_by_text('The pool master controls the pool.', exact=False)).to_be_visible()

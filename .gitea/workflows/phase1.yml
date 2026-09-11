@@ -115,12 +115,18 @@ jobs:
           .cache/phase1-qa-venv/bin/python tests/integration/website_hardening_browser.py --url http://127.0.0.1:8081 --evidence .cache/website-hardening-qa
       - name: Verify enrollment, recovery and browser workflows
         run: .cache/phase1-qa-venv/bin/python tests/integration/phase1.py --browser
+      - name: Verify console controls with simulated host
+        run: .cache/phase1-qa-venv/bin/python tests/integration/console_controls_browser.py --evidence .cache/console-controls-browser
       - name: Verify managed VM browser workflows with simulated host
         run: .cache/phase1-qa-venv/bin/python tests/integration/managed_vm_browser.py --simulated --evidence .cache/managed-vm-browser
       - name: Verify VM editing browser workflow with simulated host
         run: .cache/phase1-qa-venv/bin/python tests/integration/vm_edit_browser.py --evidence .cache/vm-edit-browser
       - name: Verify host storage ISO visibility
         run: .cache/phase1-qa-venv/bin/python tests/integration/host_iso_browser.py --evidence .cache/host-iso-browser
+      - name: Verify ISO public URL and local upload browser workflows
+        run: .cache/phase1-qa-venv/bin/python tests/integration/iso_url_browser.py --evidence .cache/iso-url-browser
+      - name: Verify storage repository browser workflows with simulated host
+        run: .cache/phase1-qa-venv/bin/python tests/integration/storage_repositories_browser.py --evidence .cache/storage-browser
       - name: Verify searchable site selection
         run: .cache/phase1-qa-venv/bin/python tests/integration/site_selector_browser.py --evidence .cache/site-selector-browser
       - name: Verify form select pickers render in the page and stay open

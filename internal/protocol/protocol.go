@@ -3,7 +3,10 @@ package protocol
 
 import "time"
 
-const Version = 1
+const (
+	LegacyVersion = 1
+	Version       = 2
+)
 
 type Site struct {
 	ID   string `json:"id"`
@@ -61,7 +64,8 @@ type ManagedState struct {
 	Appliances []Appliance `json:"appliances,omitempty"`
 	// Outcomes are journal entries that ended failed or needs_attention: task history a
 	// replaced Controller records so host truth is not lost with the old database.
-	Outcomes []ManagedOutcome `json:"outcomes,omitempty"`
+	Outcomes           []ManagedOutcome           `json:"outcomes,omitempty"`
+	CredentialReceipts []StorageCredentialReceipt `json:"credential_receipts,omitempty"`
 }
 
 // Ports lists the physical NICs or bonds enslaved to this bridge.
@@ -133,14 +137,16 @@ type RotateRequest struct {
 	CSRPEM  string `json:"csr_pem"`
 }
 type Command struct {
-	Storage     *StorageRegistration `json:"storage,omitempty"`
-	Network     *NetworkRegistration `json:"network,omitempty"`
-	Media       *Media               `json:"media,omitempty"`
-	VM          *VMCreateSpec        `json:"vm,omitempty"`
-	Power       *VMPowerRequest      `json:"power,omitempty"`
-	VMMedia     *VMMediaRequest      `json:"vm_media,omitempty"`
-	OperationID string               `json:"operation_id"`
-	Kind        string               `json:"kind"`
+	Storage          *StorageRegistration            `json:"storage,omitempty"`
+	Network          *NetworkRegistration            `json:"network,omitempty"`
+	Media            *Media                          `json:"media,omitempty"`
+	VM               *VMCreateSpec                   `json:"vm,omitempty"`
+	Power            *VMPowerRequest                 `json:"power,omitempty"`
+	VMMedia          *VMMediaRequest                 `json:"vm_media,omitempty"`
+	StorageLifecycle *StorageLifecycleRequest        `json:"storage_lifecycle,omitempty"`
+	CredentialRetire *StorageCredentialRetireRequest `json:"credential_retire,omitempty"`
+	OperationID      string                          `json:"operation_id"`
+	Kind             string                          `json:"kind"`
 }
 type Result struct {
 	OperationID string    `json:"operation_id"`
@@ -156,9 +162,18 @@ type ReportRequest struct {
 	Results      []Result   `json:"results"`
 }
 type ReportResponse struct {
-	Commands            []Command        `json:"commands"`
-	AcknowledgedResults []string         `json:"acknowledged_results"`
-	Consoles            []ConsoleRequest `json:"consoles,omitempty"`
+	Commands            []Command                 `json:"commands"`
+	AcknowledgedResults []string                  `json:"acknowledged_results"`
+	Consoles            []ConsoleRequest          `json:"consoles,omitempty"`
+	CredentialOffers    []StorageCredentialOffer  `json:"credential_offers,omitempty"`
+	StorageRepositories *StorageRepositorySupport `json:"storage_repositories,omitempty"`
+}
+
+// StorageRepositorySupport is the Controller-first v2 upgrade acknowledgement. A Core must
+// receive this explicit support before it activates repository features requiring protocol v2.
+type StorageRepositorySupport struct {
+	ProtocolVersion int    `json:"protocol_version"`
+	Capability      string `json:"capability"`
 }
 type Operation struct {
 	ID        string    `json:"id"`

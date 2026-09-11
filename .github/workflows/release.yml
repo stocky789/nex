@@ -14,9 +14,11 @@ name: Release
 #   NEX_APPLIANCE_SIGNING_KEY   Ed25519 PEM private key that signs the Controller
 #                               appliance manifest. Without it the build signs with a
 #                               throwaway key generated for that run, and warns.
-#   NEX_DEPLOY_HOST             website publishing, optional. Without all three the
-#   NEX_DEPLOY_KEY              Gitea release is the only output:
-#   NEX_DEPLOY_KNOWN_HOSTS      host address, publishing user's SSH key, host public key.
+#   NEX_DEPLOY_HOST             website publishing: host address, publishing user, that
+#   NEX_DEPLOY_USER             user's SSH key, and the host's public key. Set all four
+#   NEX_DEPLOY_KEY              or none. With none, the Gitea release is the only output.
+#   NEX_DEPLOY_KNOWN_HOSTS      With some, the release fails rather than quietly skipping
+#                               the website and leaving the download page behind.
 on:
   push:
     branches:
@@ -168,13 +170,34 @@ jobs:
           NEX_DEPLOY_HOST: ${{ secrets.NEX_DEPLOY_HOST }}
           NEX_DEPLOY_KEY: ${{ secrets.NEX_DEPLOY_KEY }}
           NEX_DEPLOY_USER: ${{ secrets.NEX_DEPLOY_USER }}
+          NEX_DEPLOY_KNOWN_HOSTS: ${{ secrets.NEX_DEPLOY_KNOWN_HOSTS }}
         run: |
           set -eu
-          if [ -n "${NEX_DEPLOY_HOST:-}" ] && [ -n "${NEX_DEPLOY_KEY:-}" ] && [ -n "${NEX_DEPLOY_USER:-}" ]; then
+          # Every deploy secret or none. None is a fork or a clone with no website to
+          # publish to, and skipping is right there. A partial set is always a
+          # misconfiguration, and skipping it quietly is how the download page sat three
+          # versions behind a green pipeline: the tag and the Gitea release are created in
+          # an earlier step, so the run still passed and nothing said the website had been
+          # left out. Fail instead, and name the secret that is missing.
+          missing=""
+          for pair in "NEX_DEPLOY_HOST=${NEX_DEPLOY_HOST:-}" \
+                      "NEX_DEPLOY_USER=${NEX_DEPLOY_USER:-}" \
+                      "NEX_DEPLOY_KEY=${NEX_DEPLOY_KEY:-}" \
+                      "NEX_DEPLOY_KNOWN_HOSTS=${NEX_DEPLOY_KNOWN_HOSTS:-}"; do
+            if [ -z "${pair#*=}" ]; then
+              missing="$missing ${pair%%=*}"
+            fi
+          done
+          missing=${missing# }
+          if [ -z "$missing" ]; then
             echo 'enabled=true' >> "$GITHUB_OUTPUT"
-          else
+          elif [ "$missing" = "NEX_DEPLOY_HOST NEX_DEPLOY_USER NEX_DEPLOY_KEY NEX_DEPLOY_KNOWN_HOSTS" ]; then
             echo 'enabled=false' >> "$GITHUB_OUTPUT"
-            echo 'Deploy secrets are not set: the release is published on Gitea only, not on the website.'
+            echo 'No deploy secrets are set: publishing the Gitea release only, not the website.'
+          else
+            echo "Website publishing is half-configured; missing: $missing" >&2
+            echo 'Set every deploy secret or none. Refusing to pass a release that silently skips the website.' >&2
+            exit 1
           fi
       - name: Publish to the website host
         if: steps.deploy.outputs.enabled == 'true'

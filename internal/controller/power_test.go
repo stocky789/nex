@@ -2,6 +2,7 @@
 package controller
 
 import (
+	"fmt"
 	"nex.local/nex/internal/protocol"
 	"strings"
 	"testing"
@@ -127,5 +128,115 @@ func TestPowerAcceptedAfterFailedAutomaticStart(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("start outcome recorded %d times", n)
+	}
+}
+
+func TestPowerQueuePreservesOrderDependenciesAndReplay(t *testing.T) {
+	l := newManagedLab(t, protocol.ManagedVMCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.UpdateCapability)
+	var created createdVM
+	read(t, l.create("create-queue", l.spec("Queued guest"), 202), &created)
+	create := l.report().Commands[0]
+	applied := *create.VM
+	l.reportState("shut off", &protocol.ManagedState{VMs: []protocol.VMCreateSpec{applied}}, protocol.Result{OperationID: create.OperationID, Status: "succeeded"})
+	next := applied
+	next.Description = "before start"
+	edit := l.update("edit-queue", applied.ID, next, 202)
+	editID := edit["operation"].(map[string]any)["id"].(string)
+	body := map[string]string{"request_id": "queued-start", "action": "start"}
+	var power map[string]any
+	read(t, l.a.call("POST", "/api/v1/vms/"+applied.ID+"/power", body, nil, 202), &power)
+	var replay map[string]any
+	read(t, l.a.call("POST", "/api/v1/vms/"+applied.ID+"/power", body, nil, 200), &replay)
+	powerID := power["operation"].(map[string]any)["id"].(string)
+	if replay["operation"].(map[string]any)["id"] != powerID {
+		t.Fatal("replayed queue request created duplicate work")
+	}
+	// Wall-clock changes cannot reorder admission. Both tasks are delivered in one report.
+	if _, err := l.a.c.db.Exec("UPDATE operations SET created_at='2000-01-01T00:00:00Z' WHERE id=?", powerID); err != nil {
+		t.Fatal(err)
+	}
+	cmds := l.report().Commands
+	if len(cmds) != 2 || cmds[0].OperationID != editID || cmds[1].OperationID != powerID || cmds[1].Power.AfterOperationID != editID {
+		t.Fatalf("queue order/dependency: %+v", cmds)
+	}
+	// An older Core must never receive a queued command whose prerequisite it ignores.
+	l.caps = []string{protocol.ManagedVMCapability, protocol.PowerCapability, protocol.UpdateCapability}
+	cmds = l.report().Commands
+	if len(cmds) != 1 || cmds[0].OperationID != editID {
+		t.Fatalf("downgrade dispatch: %+v", cmds)
+	}
+}
+
+func TestHostQueueAdoptedWithoutRedispatch(t *testing.T) {
+	a := newClient(t)
+	host := a.enroll(a.token(a.site(), ""), csr(t))
+	cert := certificate(t, host.CertificatePEM)
+	inv := &protocol.Inventory{Hostname: "core", CPUCount: 4, MemoryBytes: 8 << 30, Managed: hostDefaults(host.HostID)}
+	inv.Managed.Outcomes = []protocol.ManagedOutcome{{OperationID: "host-queued-power", Kind: "vm-power", ID: "guest", Status: "queued"}}
+	for i, status := range []string{"queued", "queued", "succeeded", "queued"} {
+		inv.Managed.Outcomes[0].Status = status
+		r := a.report(cert, protocol.ReportRequest{Version: 1, Sequence: uint64(i + 1), Capabilities: []string{protocol.ManagedVMCapability, protocol.PowerQueueCapability}, Inventory: inv})
+		if len(r.Commands) != 0 {
+			t.Fatalf("adoption redispatched host queue: %+v", r.Commands)
+		}
+		var ops []protocol.Operation
+		read(t, a.call("GET", "/api/v1/operations", nil, nil, 200), &ops)
+		want := "queued"
+		if i >= 2 {
+			want = "succeeded"
+		}
+		if len(ops) != 3 || ops[0].ID != "host-queued-power" || ops[0].Status != want {
+			t.Fatalf("adopted task: %+v", ops)
+		}
+	}
+}
+
+func TestPowerQueueDowngradeDoesNotStarveOtherVM(t *testing.T) {
+	l := newManagedLab(t, protocol.ManagedVMCapability, protocol.PowerCapability, protocol.PowerQueueCapability)
+	vm := "12345678-1234-4234-8234-123456789012"
+	if _, err := l.a.c.db.Exec("INSERT INTO appliances VALUES(?,?,?,?,?)", vm, l.pool, l.host.HostID, "guest", "adopt"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 101; i++ {
+		l.a.call("POST", "/api/v1/vms/"+vm+"/power", map[string]string{"request_id": fmt.Sprintf("power-%d", i), "action": "start"}, nil, 202)
+	}
+	other := "12345678-1234-4234-8234-123456789013"
+	if _, err := l.a.c.db.Exec("INSERT INTO appliances VALUES(?,?,?,?,?)", other, l.pool, l.host.HostID, "other", "adopt-other"); err != nil {
+		t.Fatal(err)
+	}
+	l.a.call("POST", "/api/v1/vms/"+other+"/power", map[string]string{"request_id": "other-vm", "action": "start"}, nil, 202)
+	l.caps = []string{protocol.ManagedVMCapability, protocol.PowerCapability}
+	commands := l.report().Commands
+	if len(commands) != 2 || commands[0].Kind != "vm-power" || commands[1].Power == nil || commands[1].Power.VMID != other {
+		t.Fatalf("compatible commands starved: %+v", commands)
+	}
+}
+
+func TestHostQueueLargeOutcomeHistory(t *testing.T) {
+	a := newClient(t)
+	host := a.enroll(a.token(a.site(), ""), csr(t))
+	cert := certificate(t, host.CertificatePEM)
+	inv := &protocol.Inventory{Managed: &protocol.ManagedState{}}
+	// More than 16383 outcomes exceeded SQLite's two-placeholder lookup limit.
+	for i := 0; i < 16384; i++ {
+		inv.Managed.Outcomes = append(inv.Managed.Outcomes, protocol.ManagedOutcome{OperationID: fmt.Sprintf("completed-%d", i), Kind: "vm-power", ID: "guest", Status: "succeeded"})
+	}
+	for seq := uint64(1); seq <= 2; seq++ {
+		r := a.report(cert, protocol.ReportRequest{Version: 1, Sequence: seq, Capabilities: []string{protocol.ManagedVMCapability, protocol.PowerQueueCapability}, Inventory: inv})
+		if len(r.Commands) != 0 {
+			t.Fatal("history was redispatched")
+		}
+	}
+	var count int
+	if err := a.c.db.QueryRow("SELECT count(*) FROM operations WHERE host_id=?", host.HostID).Scan(&count); err != nil || count != 16384 {
+		t.Fatalf("history count=%d err=%v", count, err)
+	}
+	inv.Managed.Outcomes = make([]protocol.ManagedOutcome, 30000)
+	if err := validateInventory(inv); err != nil {
+		t.Fatal(err)
+	}
+	inv.Managed.Outcomes = append(inv.Managed.Outcomes, protocol.ManagedOutcome{})
+	if err := validateInventory(inv); err == nil {
+		t.Fatal("unbounded outcome inventory accepted")
 	}
 }

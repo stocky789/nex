@@ -207,7 +207,7 @@ func TestAppliedFromJournal(t *testing.T) {
 	if len(got.Storage) != 1 || len(got.Networks) != 1 || len(got.Media) != 1 || len(got.VMs) != 1 {
 		t.Fatalf("applied state %+v", got)
 	}
-	if got.Storage[0] != (protocol.StorageRegistration{ID: "st-1", PoolID: "pool", HostID: "host", Name: "Local", Path: "/srv/vms"}) {
+	if !reflect.DeepEqual(got.Storage[0], protocol.StorageRegistration{ID: "st-1", PoolID: "pool", HostID: "host", Name: "Local", Path: "/srv/vms", Generation: 1}) {
 		t.Fatalf("storage %+v", got.Storage[0])
 	}
 	if got.Networks[0] != (protocol.NetworkRegistration{ID: "net-1", PoolID: "pool", HostID: "host", Name: "Servers", Kind: "vlan", Source: "nex0v15", Uplink: "nex0", VLAN: 15}) {

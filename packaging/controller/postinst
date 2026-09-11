@@ -20,7 +20,11 @@ if [ "$1" = configure ]; then
     # repo's. apply-update rewrites this if the repo URL changes later.
     repo=$(sed -n 's/^repo_url=//p' /etc/nex/updates.conf | head -1)
     [ -n "$repo" ] || repo=https://nexvirtualization.com/apt
-    install -d -m755 /etc/apt/sources.list.d
+    install -d -m755 /etc/apt/sources.list.d /etc/apt/apt.conf.d
+    cat > /etc/apt/apt.conf.d/91nex-controller-storage-downgrade <<'APT'
+DPkg::Pre-Install-Pkgs {"/usr/local/lib/nex/storage-downgrade-guard --controller";};
+DPkg::Tools::Options::/usr/local/lib/nex/storage-downgrade-guard::Version "3";
+APT
     cat > /etc/apt/sources.list.d/nex.sources <<APT
 Types: deb
 URIs: $repo

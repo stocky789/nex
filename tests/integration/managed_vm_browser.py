@@ -107,7 +107,7 @@ def acceptance(config, password, iso, evidence, mode):
     from playwright.sync_api import sync_playwright, expect
     checks, captures = [], []
     suffix = datetime.now().strftime('%H%M%S')
-    storage_name, network_name, vm_name = 'Browser local storage', 'Browser guest network', 'browser-vm-' + suffix
+    storage_name, network_name, vm_name = 'Browser local storage', 'Browser guest network', 'Browser VM.é-' + suffix
     def passed(message):
         checks.append(message)
         print('PASS:', message, flush=True)
@@ -232,9 +232,11 @@ def acceptance(config, password, iso, evidence, mode):
         page.get_by_role('button', name='Close', exact=True).click()
         pool('Virtual machines')
         page.get_by_role('button', name='Create VM', exact=True).click()
-        page.get_by_label('VM name', exact=True).fill('Invalid Uppercase')
-        assert page.get_by_label('VM name', exact=True).evaluate('(el) => el.validity.patternMismatch')
+        for invalid_name in ('   ', 'guest/name', 'é' * 101):
+            page.get_by_label('VM name', exact=True).fill(invalid_name)
+            assert not page.get_by_label('VM name', exact=True).evaluate('(el) => el.checkValidity()')
         page.get_by_label('VM name', exact=True).fill(vm_name)
+        assert page.get_by_label('VM name', exact=True).evaluate('(el) => el.checkValidity()')
         page.get_by_label('Description').fill('Browser acceptance guest')
         page.get_by_label('Guest operating system').select_option('linux')
         page.get_by_label('Placement host').select_option(config['host_id'])
@@ -273,7 +275,7 @@ def acceptance(config, password, iso, evidence, mode):
         # The disk name defaults to <pool>-<vm> and follows the VM name typed on page 1 until
         # the operator overrides it, so an untouched disk must already carry the derived label.
         derived = first_disk.get_by_label('Disk name', exact=True).input_value()
-        assert derived.endswith(vm_name), f'disk name {derived!r} does not derive from VM name {vm_name!r}'
+        assert derived.endswith(re.sub(r"[^a-z0-9._-]+", "-", vm_name.lower())), f'disk name {derived!r} does not derive from VM name {vm_name!r}'
         assert derived != vm_name, f'disk name {derived!r} is missing the pool prefix'
         first_disk.get_by_label('Disk name', exact=True).fill('system')
         first_disk.get_by_label('Size (GiB)', exact=True).fill('1')
@@ -376,6 +378,26 @@ def acceptance(config, password, iso, evidence, mode):
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'details narrow page overflow'
         capture('created-360')
         passed('ISO picker validation, upload and six-step keyboard-accessible VM creation with two disks, two NICs, an explicit topology, maximum memory and an ISO-first boot order; invalid topology, duplicate disk name and malformed MAC refused in place; lost reply retry creates exactly one stopped VM; desktop and 360px checks')
+        if mode == 'simulated':
+            page.set_viewport_size({'width': 1440, 'height': 1000})
+            page.get_by_role('button', name='Edit', exact=True).click()
+            editor = page.get_by_role('form', name='Edit VM', exact=True)
+            expect(editor.get_by_label('Name', exact=True)).to_have_value(vm_name)
+            editor.get_by_label('Name', exact=True).fill('guest/name')
+            expect(editor.get_by_role('button', name='Save changes')).to_be_disabled()
+            vm_name = '--Renamed VM.é-' + suffix
+            editor.get_by_label('Name', exact=True).fill(vm_name)
+            assert editor.get_by_label('Name', exact=True).evaluate('(el) => el.checkValidity()')
+            capture('rename')
+            editor.get_by_role('button', name='Save changes').focus()
+            page.keyboard.press('Enter')
+            expect(page.get_by_role('heading', name=vm_name, exact=True)).to_be_visible(timeout=30000)
+            page.reload()
+            expect(page.get_by_role('heading', name=vm_name, exact=True)).to_be_visible()
+            vms = page.request.get(config['url'] + '/api/v1/vms').json()
+            assert next(v for v in vms if v['name'] == vm_name)['spec']['name'] == vm_name
+            capture('renamed')
+            passed('Normal names with spaces, case, dots and Unicode survive create, uncertain retry, rename and reload; invalid names are blocked in create and edit')
         # Response fault injection validates presentation; it is not a native outage test.
         page.route('**/api/v1/vms', lambda route: route.fulfill(json=[{**v, 'freshness': 'stale'} for v in vms]))
         page.reload()

@@ -15,18 +15,20 @@ build**. Both are for local lab evaluation; the installer does not yet deliver a
    (product information only; separate from Controller management).
 7. [Operate the private website](operate-website.md)
    (authorized maintainers; nginx releases, monitoring and rollback).
-8. [Register resources and create a virtual machine](create-virtual-machine.md)
-9. [Edit a virtual machine](edit-virtual-machine.md)
+8. [Register VM storage repositories](storage-repositories.md)
+   (local directories, NFSv4, existing OpenZFS datasets, SMB3 and iSCSI LUNs).
+9. [Register resources and create a virtual machine](create-virtual-machine.md)
+10. [Edit a virtual machine](edit-virtual-machine.md)
    (change a VM in place on its General tab; live changes where the guest can take them).
-10. [Control VM power](vm-power.md)
-11. [Open a VM or host console](vm-console.md)
+11. [Control VM power](vm-power.md)
+12. [Open a VM or host console](vm-console.md)
    (toolbar with send keys, display scaling and resize, clipboard, typing, screenshots,
    CD/DVD insert/eject on VMs, and a Console tab on hosts).
-12. [Install guest tools and read guest information](guest-tools.md)
+13. [Install guest tools and read guest information](guest-tools.md)
    (QEMU guest agent and spice-vdagent; OS, hostname, addresses and clipboard readiness).
-13. [Check and apply software updates](software-updates.md)
+14. [Check and apply software updates](software-updates.md)
    (Controller and host-local package updates from a configured repo).
-14. [Publish a Nex Core release](publish-a-release.md)
+15. [Publish a Nex Core release](publish-a-release.md)
    (authorized maintainers; tag-driven ISO and package build, and website publication).
 
 Each procedure states its prerequisites, expected outcome, troubleshooting, and verification
@@ -39,7 +41,7 @@ health and inventory, and read-only inventory refresh tasks.
 Pools are created automatically: each enrolled host becomes the pool master of its
 own pool, so there is no pool-creation step.
 The separate appliance slice adds local deployment and restricted VM power recovery.
-The managed-VM creation slice adds pool-owned local storage, VLAN or existing guest networks,
+The managed-VM creation slice adds pool-owned storage repositories, VLAN or existing guest networks,
 ISO upload and creation of a stopped VM with multiple disks and network interfaces, either
 memory mode, an explicit boot order and optional autostart, with separate verification evidence.
 Editing a VM is available and has [its own page](edit-virtual-machine.md).

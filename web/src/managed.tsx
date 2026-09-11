@@ -4,9 +4,11 @@ import type { Guest } from "./console";
 import { Icon } from "./icons";
 import { VMWizard, adapterNames, busNames, cpuNames, describeNetwork, guestNames, readyHost, type DiskRow, type NICRow } from "./vm-create";
 import { VMEditor, editBlocker } from "./vm-edit";
+import { StorageRepositories } from "./storage";
 
 export type Registration = { id: string; pool_id: string; host_id: string; name: string; operation_id: string; status: string; error?: string };
-export type Storage = Registration & { path: string };
+export type StorageSource = { nfs?: { server: string; export: string }; zfs?: { pool: string; dataset: string; mount_path: string }; smb?: { server: string; share: string }; iscsi?: { portal: string; target_iqn: string; lun: number; wwid: string; filesystem_uuid: string; exclusive_target: boolean } };
+export type Storage = Registration & { path: string; kind?: string; source?: StorageSource; identity?: Record<string, unknown>; generation?: number; tombstone?: boolean; credential_present?: boolean; capabilities?: { vm_disk?: boolean; iso?: boolean; thin?: boolean; thick?: boolean; shared?: boolean; eligible_host_ids?: string[] }; access?: { status?: string; readable?: boolean; writable?: boolean; available_bytes?: number; total_bytes?: number; observed_at?: string; error?: string } };
 export type Network = Registration & { kind: string; source: string; uplink?: string; vlan?: number };
 export type Media = Registration & { storage_id: string; size_bytes: number; sha256: string };
 // Arrays are nullable because Go marshals an empty slice as null; render accordingly.
@@ -19,6 +21,9 @@ type Props = { account: string; poolID: string; poolName: string; tab: string; h
 const GiB = 1024 ** 3;
 const status = (value: string) => <span className={`badge ${value}`}>{value || "unknown"}</span>;
 const task = (value: Registration) => <>{status(value.status)}{value.error && <p className="task-error">{value.error}</p>}{value.operation_id && <small><a href="#/tasks">Task {value.operation_id}</a></small>}</>;
+
+// Each registration form belongs to the pool tab that opens it; "" means no form is open.
+export const formTab = (form: string) => ({ vm: "Virtual machines", network: "Networking", iso: "ISO library" })[form] || "";
 
 type Pending = Record<string, { payload: string; id: string }>;
 function pendingRequests(key: string): Pending {
@@ -44,6 +49,11 @@ export function ManagedVMs({ account, poolID, poolName, tab, hosts: allHosts, st
   const [notice, setNotice] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [uploadStorage, setUploadStorage] = useState<string>(restored("iso").storage_id || "");
+  const [isoSource, setIsoSource] = useState(restored("iso").url ? "url" : "file");
+  const [isoURL, setIsoURL] = useState<string>(restored("iso").url || "");
+  const [isoName, setIsoName] = useState<string>(restored("iso").url ? restored("iso").name : "");
+  const downloadHost = hosts.find(h => h.id === storage.find(s => s.id === uploadStorage)?.host_id);
+  const canDownload = Boolean(downloadHost && readyHost(downloadHost) && downloadHost.capabilities?.includes("iso-download-v1"));
   const [networkHost, setNetworkHost] = useState<string>(restored("network").host_id || "");
   const [connection, setConnection] = useState<string>(() => { const r = restored("network"); return r.kind === "vlan" ? `vlan:${r.uplink}` : r.kind ? "custom" : ""; });
   const lock = useRef(false);
@@ -139,23 +149,25 @@ export function ManagedVMs({ account, poolID, poolName, tab, hosts: allHosts, st
   }
   const vmTab = tab === "Virtual machines";
   const relevant = ["Virtual machines", "Storage", "Networking", "ISO library"].includes(tab);
+  // An open form stays mounted across tab switches so restored entries and wizard progress survive
+  // a trip to another tab (the wizard sends the operator to Storage, Networking and ISO library),
+  // but it is only shown on the tab that opened it instead of sitting on top of an unrelated one.
+  const showForm = formTab(form) === tab;
   return <div hidden={!relevant}>
     {error && <p className="alert" role="alert">{error} Your entries are retained. Review Task history before retrying an uncertain result.</p>}
     {notice && <p className="notice" role="status">{notice} <a href="#/tasks">Task history</a></p>}
     {unavailable && <p className="warning">Controller inventory may be out of date. Refresh the view before submitting changes.</p>}
     <div className="managed-actions actions">
       {vmTab && <button className="primary" disabled={busy || unavailable} onClick={() => open("vm")}>Create VM</button>}
-      {tab === "Storage" && <button disabled={busy || unavailable} onClick={() => open("storage")}>Register local storage</button>}
       {tab === "Networking" && <button disabled={busy || unavailable} onClick={() => open("network")}>Register network</button>}
       {tab === "ISO library" && <button disabled={busy || unavailable} onClick={() => open("iso")}>Upload ISO</button>}
     </div>
-    {(form === "storage" || form === "network") && <section className="panel form-panel" aria-label={form === "storage" ? "Register local storage" : "Register network"}>
-      <div className="section-heading"><h2>{form === "storage" ? "Register local storage" : "Register guest network"}</h2><button disabled={busy} onClick={() => setForm("")}>Close</button></div>
-      {form === "storage" && <p>Select an existing directory on one host. Nex checks access and free space; no disk is formatted. Other hosts cannot use this local directory.</p>}
-      <form onSubmit={e => register(e, form as "storage" | "network")}>
+    {form === "network" && <section className="panel form-panel" aria-label="Register network" hidden={!showForm}>
+      <div className="section-heading"><h2>Register guest network</h2><button disabled={busy} onClick={() => setForm("")}>Close</button></div>
+      <form onSubmit={e => register(e, "network")}>
         <label>Name<input name="name" required maxLength={100} autoFocus defaultValue={restored(form).name || ""} /></label>
         <label>Host<select name="host_id" required defaultValue={restored(form).host_id || ""} onChange={e => { setNetworkHost(e.target.value); setConnection(""); }}><option value="">Select host</option>{hosts.map(h => <option key={h.id} value={h.id} disabled={!readyHost(h)}>{h.hostname} · {h.connection}{!h.capabilities?.includes("managed-vm-v1") ? " · agent upgrade required" : ""}</option>)}</select></label>
-        {form === "storage" ? <label>Existing directory<input name="path" required defaultValue={restored("storage").path || ""} pattern="/.*" placeholder="/var/lib/libvirt/images" /><small>Use an absolute directory path on the selected host.</small></label> : <>
+        <>
           <label>Connection<select name="connection" required value={connection} onChange={e => setConnection(e.target.value)}>
             <option value="">{networkHost ? "Select a NIC or bridge" : "Select a host first"}</option>
             {uplinks.map(n => <option key={n.name} value={`vlan:${n.name}`}>{n.name} · {n.kind || "NIC"} · {n.state}{n.mac ? ` · ${n.mac}` : ""}</option>)}
@@ -168,14 +180,25 @@ export function ManagedVMs({ account, poolID, poolName, tab, hosts: allHosts, st
             <label>Existing network or bridge<input name="source" required defaultValue={restored("network").source || ""} maxLength={63} placeholder="br0" /></label>
           </>}
           {networkHost && !nics.length && <p className="help">This host has not reported its interfaces yet. Wait for a fresh inventory or use the "Other" option.</p>}
-        </>}
+        </>
         {!hosts.some(readyHost) && <p className="warning">A freshly connected host with managed-VM support is required. Enroll, reconnect or upgrade the host agent first.</p>}
         <button className="primary" disabled={busy || unavailable || !hosts.some(readyHost)}>{busy ? "Submitting…" : "Register and check access"}</button>
       </form>
     </section>}
-    {form === "iso" && <section className="panel form-panel" aria-label="Upload ISO">
+    {form === "iso" && <section className="panel form-panel" aria-label="Upload ISO" hidden={!showForm}>
       <div className="section-heading"><h2>Upload guest ISO</h2><button onClick={() => setForm("")}>Close</button></div>
-      <form onSubmit={e => { e.preventDefault(); if (!file) { setError("Choose an ISO file first."); return; } const image = file; void run("iso", async () => {
+      <form onSubmit={e => { e.preventDefault();
+        if (isoSource === "url") {
+          if (!canDownload || unavailable) return;
+          const payload = { storage_id: uploadStorage, name: isoName.trim(), url: isoURL.trim() };
+          void run("iso", async () => {
+            const result = await api<Media>("media/download", "POST", { ...payload, request_id: requestID("iso", payload) });
+            clearRequest("iso");
+            await reload(); setNotice(`ISO download ${result.status}. Nex Core downloads to the selected host storage; follow Task history and wait for a succeeded result before use.`);
+          });
+          return;
+        }
+        if (!file) { setError("Choose an ISO file first."); return; } const image = file; void run("iso", async () => {
         const payload = { storage_id: uploadStorage, name: image.name, size: image.size, modified: image.lastModified };
         const query = new URLSearchParams({ storage_id: uploadStorage, name: image.name, request_id: requestID("iso", payload) });
         const result = await startIsoUpload<Media>(`media?${query}`, image);
@@ -183,22 +206,28 @@ export function ManagedVMs({ account, poolID, poolName, tab, hosts: allHosts, st
         if (mounted.current) { setFile(null); if (input.current) input.current.value = ""; }
         await reload(); if (mounted.current) setNotice(`ISO received by Controller; host transfer ${result.status}. Wait for a succeeded result before creating a VM.`);
       }, false); }}>
-        <label>Destination storage<select required value={uploadStorage} onChange={e => setUploadStorage(e.target.value)} disabled={busy || uploading}><option value="">Select validated local storage</option>{storage.filter(s => s.status === "succeeded").map(s => <option key={s.id} value={s.id}>{s.name} · {hostName(s.host_id)}</option>)}</select></label>
-        <div className="iso-drop" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (e.dataTransfer.files.length !== 1) { setError("Drop one ISO image at a time."); return; } chooseFile(e.dataTransfer.files[0]); }}>
+        <label>Destination storage<select required value={uploadStorage} onChange={e => setUploadStorage(e.target.value)} disabled={busy || uploading}><option value="">Select ISO-ready storage</option>{storage.filter(s => s.status === "succeeded" && s.access?.status === "healthy" && s.access?.writable && s.capabilities?.iso).map(s => <option key={s.id} value={s.id}>{s.name} · {hostName(s.host_id)}</option>)}</select></label>
+        <label>ISO source<select value={isoSource} disabled={busy || uploading} onChange={e => { setIsoSource(e.target.value); setError(""); }}><option value="file">Upload from computer</option><option value="url">Download from public URL</option></select></label>
+        {isoSource === "url" ? <>
+          <label>Public ISO URL<input type="url" required maxLength={4096} value={isoURL} disabled={busy} onChange={e => setIsoURL(e.target.value)} placeholder="https://downloads.example.org/installer.iso" /></label>
+          <label>ISO name<input required maxLength={100} pattern=".*[.][iI][sS][oO]" value={isoName} disabled={busy} onChange={e => setIsoName(e.target.value)} placeholder="installer.iso" /></label>
+          <p className="help">Use a direct public HTTP or HTTPS download link. Nex Core downloads and validates the ISO on the selected host; the download continues if you close this page.</p>
+          {uploadStorage && !canDownload && <p className="warning">URL downloads need a freshly connected host with download support. Reconnect or upgrade Nex Core.</p>}
+        </> : <div className="iso-drop" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (e.dataTransfer.files.length !== 1) { setError("Drop one ISO image at a time."); return; } chooseFile(e.dataTransfer.files[0]); }}>
           <label>ISO file<input ref={input} type="file" accept=".iso,application/x-iso9660-image" disabled={busy || uploading} onChange={e => chooseFile(e.target.files?.[0] || null)} /></label>
           <p className="help">Drop one .iso image here or use the file picker. The Controller and host validate its content and available space.</p>
           {file && <p className="iso-filename">{file.name} · {(file.size / GiB).toFixed(2)} GiB</p>}
-        </div>
+        </div>}
         {uploading && <p className="help" role="status">Upload running · see Recent tasks</p>}
-        {!storage.some(s => s.status === "succeeded") && <p className="help">Register local storage and wait for its access check to succeed first.</p>}
-        <button className="primary" disabled={busy || uploading || unavailable || !file || !uploadStorage}>{uploading ? "Uploading…" : "Upload and transfer ISO"}</button>
+        {!storage.some(s => s.status === "succeeded" && s.access?.status === "healthy" && s.access?.writable && s.capabilities?.iso) && <p className="help">Register storage and wait for Core to report ISO access first.</p>}
+        <button className="primary" disabled={busy || uploading || unavailable || !uploadStorage || (isoSource === "url" ? !canDownload || !isoURL.trim() || !isoName.trim() : !file)}>{busy ? "Submitting…" : uploading ? "Uploading…" : isoSource === "url" ? "Download ISO" : "Upload and transfer ISO"}</button>
       </form>
     </section>}
-    {form === "vm" && <VMWizard poolID={poolID} poolName={poolName} hosts={hosts} storage={storage} networks={networks} media={media} restored={() => restored("vm")} create={create} busy={busy} unavailable={unavailable} setTab={setTab} onClose={() => setForm("")} />}
+    {form === "vm" && <div hidden={!showForm}><VMWizard poolID={poolID} poolName={poolName} hosts={hosts} storage={storage} networks={networks} media={media} restored={() => restored("vm")} create={create} busy={busy} unavailable={unavailable} setTab={setTab} onClose={() => setForm("")} /></div>}
     {vmTab && <section className="panel"><div className="section-heading"><h2>Virtual machines</h2><span className="muted">{vms.length} in pool</span></div>{vms.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Assigned host</th><th>Observed state</th><th>Freshness</th><th>Creation task</th></tr></thead><tbody>{vms.map(v => <tr key={v.id}><td><a href={`#/vms/${v.id}`}>{v.name}</a>{v.protected && <small>Protected Controller appliance</small>}</td><td>{hostName(v.host_id)}</td><td>{v.state || "unknown"}</td><td>{status(v.freshness)}</td><td>{v.operation_id ? task(v) : "—"}</td></tr>)}</tbody></table></div> : <p className="empty">No virtual machines in this pool. Register storage and a network, upload an ISO, then create your first VM.</p>}<p className="panel-note">A stale or unreachable host does not mean its VMs have stopped. Creation results and current observations are separate.</p></section>}
-    {tab === "Storage" && <section className="panel"><div className="section-heading"><h2>Pool local storage</h2></div>{storage.length ? <div className="table-scroll"><table><thead><tr><th>Name / directory</th><th>Accessible host</th><th>Access check</th></tr></thead><tbody>{storage.map(s => <tr key={s.id}><td>{s.name}<small>{s.path}</small></td><td>{hostName(s.host_id)}<small>Local only</small></td><td>{task(s)}</td></tr>)}</tbody></table></div> : <p className="empty">No local storage registered. Register an existing host directory to store guest disks and ISO files.</p>}</section>}
+    {tab === "Storage" && <StorageRepositories poolID={poolID} hosts={hosts} storage={storage} api={api} reload={reload} unavailable={unavailable} onNotice={setNotice} />}
     {tab === "Networking" && <section className="panel"><div className="section-heading"><h2>Pool guest networks</h2></div>{networks.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Host</th><th>Connection</th><th>VMs</th><th>Host check</th></tr></thead><tbody>{[...networks].sort((a, b) => (a.vlan || 0) - (b.vlan || 0) || a.name.localeCompare(b.name)).map(n => <tr key={n.id}><td>{n.name}</td><td>{hostName(n.host_id)}</td><td>{describeNetwork(n)}<small className="mono">{n.source}</small></td><td>{vms.filter(v => v.spec?.nics?.some(i => i.network_id === n.id)).length}</td><td>{task(n)}</td></tr>)}</tbody></table></div> : <p className="empty">No networks reported yet.</p>}</section>}
-    {tab === "ISO library" && <section className="panel"><div className="section-heading"><h2>Guest ISO library</h2></div>{media.length ? <div className="table-scroll"><table><thead><tr><th>ISO</th><th>Host / storage</th><th>Size</th><th>Transfer task</th></tr></thead><tbody>{media.map(m => <tr key={m.id}><td>{m.name}<small className="mono">SHA-256: {m.sha256}</small></td><td>{hostName(m.host_id)}<small>{storage.find(s => s.id === m.storage_id)?.name || m.storage_id}</small></td><td>{(m.size_bytes / GiB).toFixed(2)} GiB</td><td>{task(m)}</td></tr>)}</tbody></table></div> : <p className="empty">No ISO images uploaded. Select validated storage and upload installation media.</p>}</section>}
+    {tab === "ISO library" && <section className="panel"><div className="section-heading"><h2>Guest ISO library</h2></div>{media.length ? <div className="table-scroll"><table><thead><tr><th>ISO</th><th>Host / storage</th><th>Size</th><th>Transfer task</th></tr></thead><tbody>{media.map(m => <tr key={m.id}><td>{m.name}<small className="mono">SHA-256: {m.sha256 || "Pending verification"}</small></td><td>{hostName(m.host_id)}<small>{storage.find(s => s.id === m.storage_id)?.name || m.storage_id}</small></td><td>{m.size_bytes > 0 ? `${(m.size_bytes / GiB).toFixed(2)} GiB` : "Unknown until downloaded"}</td><td>{task(m)}</td></tr>)}</tbody></table></div> : <p className="empty">No ISO images uploaded. Select validated storage and upload installation media.</p>}</section>}
   </div>;
 }
 
@@ -216,7 +245,7 @@ export function VMDetails({ vm, hosts, storage, networks, media, api, reload, bu
   const blocker = editBlocker(vm, host);
   return <><section className="panel"><div className="section-heading"><h2>VM details</h2><span className="actions">{status(vm.freshness)}{!editing && <button type="button" disabled={busy || unavailable || Boolean(blocker)} title={blocker || undefined} onClick={() => setEditing(true)}>Edit</button>}</span></div>
     {vm.freshness !== "fresh" && <p className="warning">Current execution state is unknown. Last reported state: {vm.state || "unknown"}. An unreachable host does not prove that this VM stopped.</p>}
-    {editing && spec ? <VMEditor vm={vm} host={host} poolName={host?.hostname || ""} storage={storage} networks={networks} media={media} api={api} reload={reload} unavailable={unavailable} onNotice={onNotice} onClose={() => setEditing(false)} /> : <dl className="details"><dt>VM identity</dt><dd>{vm.id}</dd><dt>Assigned host</dt><dd><a href={`#/hosts/${vm.host_id}`}>{hosts.find(h => h.id === vm.host_id)?.hostname || vm.host_id}</a></dd><dt>Observed state</dt><dd>{vm.state || "unknown"}</dd><dt>Role</dt><dd>{vm.protected ? "Protected Controller appliance" : "Guest VM"}</dd>{spec && <>{spec.description && <><dt>Description</dt><dd>{spec.description}</dd></>}<dt>Guest OS</dt><dd>{guestNames[spec.guest_os] || "Not recorded"}</dd><dt>Virtual CPUs</dt><dd>{spec.cpu.count}<small>{topology(spec.cpu)} · {cpuNames[spec.cpu.model] || spec.cpu.model}</small></dd><dt>Memory</dt><dd>{spec.memory.size_mib} MiB<small>{spec.memory.mode === "dedicated" ? "Dedicated · always reserved for this VM" : "Maximum · a ceiling only; free pages return to the host when the guest reports them"}</small></dd><dt>Disks</dt><dd>{spec.disks?.length ? <ul className="plain">{spec.disks.map((d, i) => <li key={i}>{d.name} · {d.size_gib} GiB · {busNames[d.bus] || d.bus} · {d.thin ? "Thin" : "Thick"}{d.boot_order > 0 ? ` · boot ${d.boot_order}` : ""}<small>{storage.find(s => s.id === d.storage_id)?.name || d.storage_id}</small></li>)}</ul> : "None recorded"}</dd><dt>Networks</dt><dd>{spec.nics?.length ? <ul className="plain">{spec.nics.map((n, i) => <li key={i}>{networks.find(x => x.id === n.network_id)?.name || n.network_id} · {adapterNames[n.model] || n.model}{n.mtu ? ` · MTU ${n.mtu}` : ""}<small className="mono">{n.mac || "MAC derived from the VM identity"}</small></li>)}</ul> : "None"}</dd><dt>Install ISO</dt><dd>{spec.media_id ? media.find(m => m.id === spec.media_id)?.name || spec.media_id : "None · CD drive empty"}{spec.boot.media_boot_order > 0 && <small>CD drive boot order {spec.boot.media_boot_order}</small>}</dd><dt>Firmware</dt><dd>{spec.boot.firmware?.toUpperCase()}<small>Machine type {spec.boot.machine || "q35"}</small></dd><dt>Autostart</dt><dd>{spec.autostart ? "Starts when the host boots" : "Does not start when the host boots"}</dd></>}{vm.operation_id && <><dt>Creation task</dt><dd>{task(vm)}</dd></>}</dl>}
+    {editing && spec ? <VMEditor vm={vm} host={host} poolName={host?.hostname || ""} storage={storage} networks={networks} media={media} api={api} reload={reload} unavailable={unavailable} onNotice={onNotice} onClose={() => setEditing(false)} /> : <dl className="details"><dt>VM identity</dt><dd>{vm.id}</dd><dt>Assigned host</dt><dd><a href={`#/hosts/${vm.host_id}`}>{hosts.find(h => h.id === vm.host_id)?.hostname || vm.host_id}</a></dd><dt>Observed state</dt><dd>{vm.state || "unknown"}</dd><dt>Role</dt><dd>{vm.protected ? "Protected Controller appliance" : "Guest VM"}</dd>{spec && <>{spec.description && <><dt>Description</dt><dd>{spec.description}</dd></>}<dt>Guest OS</dt><dd>{guestNames[spec.guest_os] || "Not recorded"}</dd><dt>Virtual CPUs</dt><dd>{spec.cpu.count}<small>{topology(spec.cpu)} · {cpuNames[spec.cpu.model] || spec.cpu.model}</small></dd><dt>Memory</dt><dd>{spec.memory.size_mib} MiB<small>{spec.memory.mode === "dedicated" ? "Dedicated configured · locks host RAM while running on updated Nex Core. Existing VMs: upgrade Core, stop, then Edit → Save changes. Capacity stays committed when stopped." : "Maximum · a ceiling only; free pages return to the host when the guest reports them"}</small></dd><dt>Disks</dt><dd>{spec.disks?.length ? <ul className="plain">{spec.disks.map((d, i) => <li key={i}>{d.name} · {d.size_gib} GiB · {busNames[d.bus] || d.bus} · {d.thin ? "Thin" : "Thick"}{d.boot_order > 0 ? ` · boot ${d.boot_order}` : ""}<small>{storage.find(s => s.id === d.storage_id)?.name || d.storage_id}</small></li>)}</ul> : "None recorded"}</dd><dt>Networks</dt><dd>{spec.nics?.length ? <ul className="plain">{spec.nics.map((n, i) => <li key={i}>{networks.find(x => x.id === n.network_id)?.name || n.network_id} · {adapterNames[n.model] || n.model}{n.mtu ? ` · MTU ${n.mtu}` : ""}<small className="mono">{n.mac || "MAC derived from the VM identity"}</small></li>)}</ul> : "None"}</dd><dt>Install ISO</dt><dd>{spec.media_id ? media.find(m => m.id === spec.media_id)?.name || spec.media_id : "None · CD drive empty"}{spec.boot.media_boot_order > 0 && <small>CD drive boot order {spec.boot.media_boot_order}</small>}</dd><dt>Firmware</dt><dd>{spec.boot.firmware?.toUpperCase()}<small>Machine type {spec.boot.machine || "q35"}</small></dd><dt>Autostart</dt><dd>{spec.autostart ? "Starts when the host boots" : "Does not start when the host boots"}</dd></>}{vm.operation_id && <><dt>Creation task</dt><dd>{task(vm)}</dd></>}</dl>}
     {!vm.protected && !editing && <p className="panel-note">Creation provisions a stopped VM. Use Start in the toolbar to start it, then open the Console tab. Select Edit to change the VM; changes a running guest can take apply while it runs.</p>}
   </section>
   <GuestTools vm={vm} />
@@ -295,7 +324,7 @@ export function HostISOs({ host, media, storage, unavailable }: { host: Host; me
             : destination?.status !== "succeeded" ? "Availability unknown · storage access unverified"
             : "Transfer succeeded · not rescanned";
         }
-        return <tr key={image.id}><td>{image.name}</td><td>{destination?.name || image.storage_id}{destination && <small>{destination.path}</small>}</td><td>{(image.size_bytes / GiB).toLocaleString(undefined, { maximumFractionDigits: 2 })} GiB<small>{image.size_bytes.toLocaleString()} bytes</small></td><td>{availability}</td><td>{task(image)}</td></tr>;
+        return <tr key={image.id}><td>{image.name}</td><td>{destination?.name || image.storage_id}{destination && <small>{destination.path}</small>}</td><td>{image.size_bytes > 0 ? <>{(image.size_bytes / GiB).toLocaleString(undefined, { maximumFractionDigits: 2 })} GiB<small>{image.size_bytes.toLocaleString()} bytes</small></> : "Unknown until downloaded"}</td><td>{availability}</td><td>{task(image)}</td></tr>;
       })}</tbody>
     </table></div> : <p className="empty">{unavailable ? "ISO records could not be loaded. Retry when the Controller is reachable." : "No ISO transfers recorded for this host. Upload an ISO to this host's storage from the pool's ISO library."}</p>}
     <p className="panel-note">Availability is based on completed transfer records, validated storage and host connectivity. Files are not continuously rescanned; VM creation checks the selected ISO again.</p>
@@ -345,7 +374,7 @@ export function VMPower({ vm, host, api, reload, busy, unavailable, onNotice, de
     try {
       await api(`vms/${encodeURIComponent(vm.id)}/power`, "POST", { request_id: request.current[item.action], action: item.action });
       delete request.current[item.action];
-      onNotice(`${item.label} requested for ${vm.name}.`);
+      onNotice(`${item.label} queued for ${vm.name}. Follow its progress in Recent tasks.`);
       await reload();
       // Close only once the button can take focus back, so the dialog returns focus to it.
       setPending(null);

@@ -241,6 +241,8 @@ ul.plain { margin: 0; padding: 0; list-style: none; }
 .resource > span { float: right; }
 .resource p { margin: 5px 0; }
 .task-error { margin: 4px 0; font-size: 12px; color: var(--danger); }
+.upload-progress { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.upload-progress button { min-height: 24px; padding: 2px 9px; font-size: 11px; }
 .activity-dock { flex-shrink: 0; border-top: 3px solid #bfc5cc; background: #fff; }
 .activity-dock > summary { cursor: pointer; padding: 5px 10px; font-size: 12px; font-weight: 600; color: #10306b; background: linear-gradient(#f3f7ff, #d9e6ff); border-bottom: 1px solid #a9c4f3; }
 .activity-dock > .panel { margin: 0; border: 0; max-height: 180px; overflow: auto; }

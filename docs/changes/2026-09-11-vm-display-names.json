@@ -1,0 +1,55 @@
+{
+  "summary": "Allow normal VM display names through create, rename and host adoption. API impact: changed contract; expanded VMCreateSpec.name validation across client API, vm-create/vm-update and managed inventory; no new fields.",
+  "paths": [
+    "internal/protocol/managed.go",
+    "internal/protocol/managed_test.go",
+    "internal/controller/managed.go",
+    "internal/controller/managed_test.go",
+    "internal/controller/update_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "web/src/vm-create.tsx",
+    "web/src/vm-edit.tsx",
+    "web/src/vm-create.test.mjs",
+    "tests/integration/managed_vm_browser.py",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/create-virtual-machine.md",
+    "docs/plans/2026-09-10-vm-creation-system.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/vm-display-names/checks.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Explain normal names and remaining byte/safety bounds.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Document shared naming rules, durable adoption, unchanged retry/auth/results and paired Core/Controller upgrade requirement.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "VM naming correction does not change milestone scope or acceptance status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "VM name remains durable with the existing host VM definition; no Controller-only alias.",
+    "record": "Pool master managed-journal VMCreateSpec.name and libvirt domain name; Inventory.managed.VMs reports the exact name and UUID for fresh Controller adoption and refresh."
+  },
+  "verification": {
+    "method": "Go suite, UI typecheck/test/build, API reference/contract checks and simulated browser creation/rename/retry/reload passed; independent review checked scope and safety; native libvirt rename execution remains untested.",
+    "evidence": [
+      "docs/qa/vm-display-names/checks.md"
+    ]
+  }
+}

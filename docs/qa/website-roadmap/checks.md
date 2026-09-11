@@ -128,7 +128,7 @@ Roadmap link marked as the current page.
 
 Two defects surfaced only once the check ran against the real deployment:
 
-- [BUG-0073](../../BUG_LEDGER.md#bug-0073--website-browser-check-crashed-against-the-hardened-deployments-image-policy):
+- [BUG-0074](../../BUG_LEDGER.md#bug-0074--website-browser-check-crashed-against-the-hardened-deployments-image-policy):
   the pre-existing logo backdrop assertion re-loads its capture through a `data:` URI, which the
   deployment's `img-src 'self'` correctly refuses, aborting the whole run. It now skips with that
   reason recorded where the policy applies and still runs everywhere else, including both CI

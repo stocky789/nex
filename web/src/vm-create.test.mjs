@@ -16,9 +16,10 @@ const file = join(dir, "vm-create.mjs");
 // which is types only, erased by the transform) so the module loads standalone.
 const stubbed = code
   .replace('from "react"', 'from "data:text/javascript,export const useRef=()=>({}),useState=()=>[undefined,()=>{}];"')
-  .replace('from "./managed"', 'from "data:text/javascript,"');
+  .replace('from "./managed"', 'from "data:text/javascript,"')
+  .replace('from "./storage"', 'from "data:text/javascript,export const storageUsable=()=>true;"');
 writeFileSync(file, stubbed);
-const { restoredNICs, autoDiskName, topologyIssue } = await import(`file://${file}`);
+const { restoredNICs, autoDiskName, topologyIssue, vmNameIssue } = await import(`file://${file}`);
 
 // BUG-0062: a restored draft with nics: [] (every interface explicitly removed) must stay [],
 // not be replaced by the one-NIC blank template.
@@ -31,5 +32,14 @@ assert.deepEqual(restoredNICs(kept), kept);
 // Sanity: other pure exports still load and behave (guards against a broken transform hiding the check).
 assert.equal(autoDiskName("pool", "vm", 0), "pool-vm");
 assert.equal(topologyIssue({ count: 4, sockets: 1, cores: 2, threads: 2 }), "");
+
+// VM display names retain ordinary punctuation, Unicode, case and surrounding spaces.
+for (const name of ["Production Web 01", "guest.example.test", " 東京 Débian ", "<Guest> & 'test'", "a".repeat(200), "é".repeat(100)]) {
+  assert.equal(vmNameIssue(name), "", name);
+}
+for (const name of ["", "  ", "a/b", "guest\nname", "guest\u007fname", "guest\u0085name", "guest\uffff", "guest\ufffe", "a".repeat(201), "é".repeat(101)]) {
+  assert.notEqual(vmNameIssue(name), "", name);
+}
+assert.equal(autoDiskName("pool", "東京 Débian 13.1", 0), "pool--d-bian-13.1");
 
 console.log("vm-create.test.mjs: ok");

@@ -16,9 +16,20 @@ ExecStart=/usr/local/lib/nex/nex-core-agent run --state-dir /var/lib/nex-core-ag
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=yes
+# The QEMU access probe intentionally drops to libvirt-qemu with runuser.
+# Keep only the capability needed for that UID transition.
+AmbientCapabilities=CAP_SETUID
 ProtectSystem=strict
 ReadWritePaths=-/var/lib/libvirt/images
 ReadWritePaths=-/etc/network
+# Core requests host-visible repository mounts through system-manager-owned .mount units;
+# the agent must never rely on mounts made inside this service's private namespace.
+ReadWritePaths=-/var/lib/nex-storage
+ReadWritePaths=-/var/lib/nex-core-agent/storage-credentials
+ReadWritePaths=-/etc/systemd/system
+# Debian open-iscsi persists Nex-owned node records here and serializes iscsiadm updates.
+ReadWritePaths=-/var/lib/iscsi
+ReadWritePaths=-/run/lock/iscsi
 ProtectHome=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes

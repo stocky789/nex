@@ -431,12 +431,9 @@ def main():
             eventually(lambda: sum(1 for a in lab.api('/api/v1/audit') if a['action'] == 'console.open') == tickets + 1, 'reconnect ticket audited', timeout=10)
             lab.passed('View only disables input controls; Reconnect re-attaches with a new audited ticket')
 
-            # Low bandwidth quality renders frames without errors.
-            page.get_by_label('Image quality').select_option('low')
-            time.sleep(2)
-            assert (canvas(page) or {}).get('lit', 0) > 500
-            page.get_by_label('Image quality').select_option('auto')
-            lab.passed('Quality presets switch without breaking the stream')
+            # Unsupported quality presets must not be offered on a working stream.
+            assert page.get_by_label('Image quality').count() == 0
+            lab.passed('Console omits unsupported image quality presets')
 
             # Separate window: the console-only page connects with a second ticket.
             with context.expect_page() as popup_info:

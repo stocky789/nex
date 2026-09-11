@@ -60,6 +60,19 @@ report inventory carry the new specification; authentication, operations, replay
 unchanged. **Guide impact: updated** — the creation workflow, both memory modes and their limits,
 and the guest-tools dependency for memory reclaim.
 
+**Storage repository implementation priority, 2026-09-11:** project owner authorized Terra
+5.6 medium workers to implement and locally test OpenZFS/ZFS, iSCSI, NFS and SMB VM repositories.
+See the [storage implementation plan](2026-09-11-vm-storage-repositories.md) and
+[current checks](../qa/storage-repositories/checks.md). Core consumes existing storage and keeps
+registrations, identities and credentials; Controller submits operations and displays inventory.
+Single-host code is in testing, not completed backend acceptance. Multi-host placement retains
+Phase 4 ownership and exclusion gates; existing-target iSCSI consumption does not add SAN
+provisioning. Disk formatting, storage-server administration, migration and HA remain outside scope.
+**API impact: changed/new contracts** — typed registration, credential handoff, lifecycle,
+protocol negotiation and inventory/adoption are implemented on both sides.
+**Guide impact: updated** — storage registration and VM creation document the development workflow.
+All durable repository state lives on the Core master's journal and private credential store.
+
 ## Build order: basics first
 
 Each milestone must work end to end before the next one expands the scope. The feature review is a source of follow-on features, not a requirement to build an enterprise feature set before Nex can run a VM.

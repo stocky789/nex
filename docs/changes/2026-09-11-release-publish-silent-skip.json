@@ -1,0 +1,32 @@
+{
+  "summary": "BUG-0075: releases stopped reaching the website after 0.1.6~alpha1 while the pipeline stayed green. The deploy-credentials step skipped publishing whenever a secret was unset, and the tag and Gitea release are created before it, so a release could complete with nothing published and no signal. Require every deploy secret or none: all four publish, none skips with a notice for forks, any partial combination fails and names the missing secret. API impact: none — release automation and artifact publishing only, with no Controller operation, Core agent command or client-facing contract involved.",
+  "paths": [
+    ".gitea/workflows/release.yml",
+    ".github/workflows/release.yml",
+    "docs/BUG_LEDGER.md",
+    "tests/test_ci_security.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator-facing steps are unchanged. Publishing a release is maintainer automation covered by docs/guide/publish-a-release.md, and the documented workflow, commands and outcome are the same; only a misconfigured pipeline now fails instead of silently skipping the website."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "CI release automation. No Controller operation, Core agent command, observed-state or result flow, and no client-facing service API; the published artifacts and their paths are unchanged."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone changed status. This restores the publishing path for artifacts the board already describes; the board makes no claim about which version the download page serves."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "A workflow condition and its tests. Nothing durable is stored by Nex Controller or Nex Core; the release artifacts and the APT repository are existing publishing outputs owned by the website host."
+  },
+  "verification": {
+    "method": "python3 -m unittest tests.test_ci_security — 5 tests, OK. The tests extract the step's shell body from each workflow file and execute it under sh with each secret combination, so they exercise the script CI runs rather than a copy: all four present enables publishing, none present skips with enabled=false, and each of the four individually absent fails with that secret named on stderr. Mutation-checked by restoring the previous silent-skip logic, which fails 4 of the 5 including the exact reported scenario. Both workflow files are byte-identical and parse-checked by locating the step and its gated successors. Diagnosis evidence: /srv/nex-downloads and /srv/nex-apt both stop at 0.1.6~alpha1 (2026-09-10) while v0.1.7-alpha1 and v0.1.8 exist as remote tags; release-publish.py --keep 3 retains three releases yet only one is present; no deploy-key SSH session appears in the host auth log after 2026-09-09; and the release workflow is byte-identical between v0.1.6-alpha1 and v0.1.7-alpha1. Not done: the Gitea repository is private with no API token available, so actual run logs were not read, and the secrets themselves cannot be set from here — 0.1.7 and 0.1.8 stay unpublished on the website until a release runs with publishing configured.",
+    "evidence": [
+      "tests/test_ci_security.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

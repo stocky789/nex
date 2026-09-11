@@ -41,7 +41,7 @@
         "Reported host inventory: CPU, memory, virtualization features, network interfaces, disks, health checks and how fresh each observation is",
         "Durable tasks with a history of who did what, honest stale and degraded states, and reconciliation after a reconnect",
         "Pool-level storage registration, and pool networks on a VLAN or an existing bridge",
-        "ISO upload that keeps running in the background while you close the dialog",
+        "ISO upload that keeps running in the background while you close the dialog, or a public URL download to selected host storage",
         "Full VM creation: name and guest OS, vCPU count and topology, CPU model, a dedicated or maximum memory mode, several disks, several network interfaces, firmware, machine type, boot order, start after creation and autostart",
         "Editing a VM in place, applying the changes a running guest can accept and saying which ones need a stop",
         "Power control: start, graceful shutdown, restart and an explicit force stop kept visually apart from it",
@@ -49,6 +49,7 @@
         "Guest tools reporting: agent state, operating system, hostname, addresses and clipboard readiness, with install advice when no agent answers"
       ],
       open: [
+        "NFS, local OpenZFS datasets, SMB3 and exclusive-host iSCSI repositories: implemented for one host, with native VM data and failure-recovery testing in progress",
         "Deleting a VM, with a separate choice about keeping or removing its disks",
         "The end-to-end check for this milestone: install a real guest operating system from an uploaded ISO through the browser console, reboot it, and confirm the data it wrote is still there"
       ]

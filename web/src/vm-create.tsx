@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useRef, useState } from "react";
 import type { Host, Media, Network, Storage } from "./managed";
+import { storageUsable } from "./storage";
 
 export const describeNetwork = (n: Network) => n.kind === "network" ? `libvirt network ${n.source}` : n.uplink ? (n.vlan ? `VLAN ${n.vlan} on ${n.uplink}` : `Untagged on ${n.uplink}`) : `Existing bridge ${n.source}`;
 export const readyHost = (h: Host) => !h.revoked && h.connection === "fresh" && Boolean(h.capabilities?.includes("managed-vm-v1"));
@@ -97,6 +98,13 @@ export function restoredNICs(nics: unknown): NICRow[] {
   return Array.isArray(nics) ? (nics as NICRow[]) : blank.nics;
 }
 
+export function vmNameIssue(name: string): string {
+  if (!name.trim()) return "Enter a VM name.";
+  if (new TextEncoder().encode(name).length > 200) return "Use at most 200 UTF-8 bytes for the VM name.";
+  if (/[\/\u0000-\u001f\u007f-\u009f\ufffe\uffff]/u.test(name)) return "VM names cannot contain slashes or control characters.";
+  return "";
+}
+
 // A disk name is an operator label: the host writes disk-<n>.qcow2 inside the VM's own
 // directory regardless. Default it to <pool>-<vm>, suffixed after the first disk because the
 // protocol requires the names to be unique within a VM. Trimmed to fit the 63-character limit
@@ -129,7 +137,7 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
   const setNIC = (i: number, patch: Partial<NICRow>) => edit({ nics: draft.nics.map((n, x) => x === i ? { ...n, ...patch } : n) });
   const selectedHost = hosts.find(h => h.id === draft.host_id);
   const hostName = (id: string) => hosts.find(h => h.id === id)?.hostname || id;
-  const hostStorage = storage.filter(s => s.host_id === draft.host_id && s.status === "succeeded");
+  const hostStorage = storage.filter(s => storageUsable(s, draft.host_id));
   const readyNetworks = (id: string) => networks.filter(n => n.host_id === id && n.status === "succeeded").sort((a, b) => (a.vlan || 0) - (b.vlan || 0) || a.name.localeCompare(b.name));
   const hostNetworks = readyNetworks(draft.host_id);
   const hostMedia = media.filter(m => m.host_id === draft.host_id && m.status === "succeeded");
@@ -158,12 +166,12 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
     : "That ISO is no longer available on this host. Choose another or continue without install media.";
   const stepIssue = ["", topoIssue, diskIssue || (staleDisks ? staleText : ""), macIssue || (staleNICs ? staleText : ""), mediaIssue, ""][step];
   const hostReady = Boolean(selectedHost && readyHost(selectedHost));
-  const blocked = !hostReady || staleDisks || staleNICs || staleMedia || Boolean(topoIssue || diskIssue || macIssue);
+  const blocked = Boolean(vmNameIssue(draft.name)) || !hostReady || staleDisks || staleNICs || staleMedia || Boolean(topoIssue || diskIssue || macIssue);
   const setTopo = (field: "sockets" | "cores" | "threads", raw: number) =>
     setDraft(d => renumber({ ...d, cpu: applyTopology(d.cpu, field, raw) }));
 
   function chooseHost(id: string) {
-    const s = storage.filter(x => x.host_id === id && x.status === "succeeded");
+    const s = storage.filter(x => storageUsable(x, id));
     const n = readyNetworks(id);
     edit({ host_id: id, media_id: "", disks: draft.disks.map(d => ({ ...d, storage_id: s.length === 1 ? s[0].id : "" })), nics: draft.nics.map(x => ({ ...x, network_id: n.length === 1 ? n[0].id : "" })) });
   }
@@ -188,7 +196,7 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
     <div className="section-heading"><h2 ref={heading} tabIndex={-1}>Create VM · {step + 1} of 6: {steps[step]}</h2><button disabled={busy} onClick={onClose}>Close</button></div>
     <form onSubmit={e => { e.preventDefault(); if (step < 5) go(step + 1); else void create({ ...draft, pool_id: poolID }); }}>
       {step === 0 && <>
-        <label>VM name<input required maxLength={63} pattern={"[a-z0-9]([a-z0-9\\-]{0,61}[a-z0-9])?"} title="Use 1–63 lowercase letters, digits or hyphens; start and end with a letter or digit." value={draft.name} autoFocus onChange={e => renameVM(e.target.value)} /></label>
+        <label>VM name<input required maxLength={200} ref={el => { el?.setCustomValidity(vmNameIssue(draft.name)); }} value={draft.name} autoFocus onChange={e => renameVM(e.target.value)} /></label>
         <label>Description<textarea rows={2} maxLength={4096} value={draft.description} onChange={e => edit({ description: e.target.value })} /><small>Optional. At most 4096 characters; stored with the VM definition on the pool master.</small></label>
         <label>Guest operating system<select value={draft.guest_os} onChange={e => edit({ guest_os: e.target.value })}><option value="linux">Linux</option><option value="windows">Windows</option><option value="other">Other</option></select><small>A hint used for device advice only. Nex does not install or configure the guest.</small></label>
         <label>Placement host<select required value={draft.host_id} onChange={e => chooseHost(e.target.value)}><option value="">Select host</option>{hosts.map(h => <option key={h.id} value={h.id} disabled={!readyHost(h)}>{h.hostname} · {h.connection}{!h.capabilities?.includes("managed-vm-v1") ? " · agent upgrade required" : ""}</option>)}</select></label>
@@ -209,19 +217,19 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
         <fieldset>
           <legend>Memory mode</legend>
           <label className="console-option"><input type="radio" style={{ width: "auto" }} name="vm-memory-mode" value="dedicated" checked={draft.memory.mode === "dedicated"} onChange={() => edit({ memory: { ...draft.memory, mode: "dedicated" } })} /> Dedicated</label>
-          <p className="help">The VM always has this much. It is reserved from the host and never given to another VM.</p>
+          <p className="help">Requires updated Nex Core. Dedicated mode allocates and locks the full amount in host RAM while running, preventing swap and sharing. Stopping releases RAM but keeps its Nex capacity commitment.</p>
           <label className="console-option"><input type="radio" style={{ width: "auto" }} name="vm-memory-mode" value="maximum" checked={draft.memory.mode === "maximum"} onChange={() => edit({ memory: { ...draft.memory, mode: "maximum" } })} /> Maximum</label>
           <p className="help">The VM may use up to this much but reserves nothing. It returns memory it frees, which requires guest tools running in the guest.</p>
         </fieldset>
         <label>Memory (MiB)<input type="number" required min={512} max={maxMiB} step={1} value={num(draft.memory.size_mib)} onChange={e => edit({ memory: { ...draft.memory, size_mib: e.target.valueAsNumber } })} /></label>
         <p className="help">Host-reported capacity: {selectedHost?.inventory ? `${selectedHost.inventory.cpu_count} CPUs · ${Math.floor(selectedHost.inventory.memory_bytes / 1024 ** 2)} MiB total memory` : "unknown"}. Nex checks current availability before creation and uses this size as the ceiling in both modes.</p>
-        {draft.memory.mode === "maximum" && draft.guest_os === "windows" && <p className="help">Windows guests only return freed memory once the virtio-win guest tools are installed. Until then this VM behaves like a dedicated one.</p>}
+        {draft.memory.mode === "maximum" && draft.guest_os === "windows" && <p className="help">Windows guests only return freed memory once the virtio-win guest tools are installed. Until then freed pages stay allocated; maximum mode does not lock host RAM.</p>}
       </>}
       {step === 2 && <>
         {draft.disks.map((d, i) => <fieldset key={i}>
           <legend>Disk {i + 1}</legend>
           <div className="vm-fields">
-            <label>Storage<select required value={d.storage_id} onChange={e => setDisk(i, { storage_id: e.target.value })}><option value="">Select validated local storage</option>{hostStorage.map(s => <option key={s.id} value={s.id}>{s.name} · {s.path}</option>)}</select></label>
+            <label>Storage<select required value={d.storage_id} onChange={e => setDisk(i, { storage_id: e.target.value })}><option value="">Select VM-ready storage</option>{hostStorage.map(s => <option key={s.id} value={s.id}>{s.name} · {s.kind || "local"}</option>)}</select></label>
             <label>Disk name<input required maxLength={63} pattern={"[A-Za-z0-9][A-Za-z0-9._\\-]{0,62}"} title="Use 1–63 letters, digits, dots, dashes or underscores; start with a letter or digit." aria-describedby={diskIssue ? "vm-disk-issue" : undefined} value={d.name} onChange={e => setDisk(i, { name: e.target.value })} /></label>
             <label>Size (GiB)<input type="number" required min={1} max={2048} step={1} value={num(d.size_gib)} onChange={e => setDisk(i, { size_gib: e.target.valueAsNumber })} /></label>
             <label>Bus<select value={d.bus} onChange={e => setDisk(i, { bus: e.target.value })}>{Object.entries(busNames).map(([v, t]) => <option key={v} value={v}>{t}</option>)}</select></label>
@@ -233,7 +241,7 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
         {staleDisks && <p className="warning">{staleText}</p>}
         <div className="actions"><button type="button" disabled={busy || draft.disks.length >= 8} onClick={addDisk}>Add disk</button></div>
         <p className="help">A VM needs 1 to 8 disks. Each disk is created inside this VM's own directory on the selected storage; existing files are never reused.</p>
-        {!hostStorage.length && <p className="help">No validated local storage on this host. <button type="button" onClick={() => setTab("Storage")}>Open Storage</button></p>}
+        {!hostStorage.length && <p className="help">No VM-ready storage on this host. <button type="button" onClick={() => setTab("Storage")}>Open Storage</button></p>}
       </>}
       {step === 3 && <>
         {draft.nics.map((n, i) => <fieldset key={i}>
@@ -277,7 +285,7 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
           <dt>Guest OS</dt><dd>{guestNames[draft.guest_os] || "Unset"}</dd>
           <dt>Assigned host</dt><dd>{hostName(draft.host_id)}</dd>
           <dt>CPU</dt><dd>{count} vCPUs · {(sockets || cores || threads) !== 0 ? `${sockets} × ${cores} × ${threads}` : `1 socket × ${count} cores × 1 thread`} · {cpuNames[draft.cpu.model] || draft.cpu.model}</dd>
-          <dt>Memory</dt><dd>{draft.memory.size_mib} MiB · {draft.memory.mode === "dedicated" ? "Dedicated · reserved from the host" : "Maximum · reserves nothing, returns freed memory when guest tools run"}</dd>
+          <dt>Memory</dt><dd>{draft.memory.size_mib} MiB · {draft.memory.mode === "dedicated" ? "Dedicated policy · locks host RAM while running; requires updated Nex Core" : "Maximum · reserves nothing, returns freed memory when guest tools run"}</dd>
           <dt>Disks</dt><dd><ul className="plain">{draft.disks.map((d, i) => <li key={i}>{d.name} · {storage.find(s => s.id === d.storage_id)?.name || "Unavailable"} · {d.size_gib} GiB · {busNames[d.bus] || d.bus} · {d.thin ? "Thin" : "Thick"}</li>)}</ul></dd>
           <dt>Network interfaces</dt><dd>{draft.nics.length ? <ul className="plain">{draft.nics.map((n, i) => <li key={i}>{(x => x ? `${x.name} · ${describeNetwork(x)}` : "Unavailable")(networks.find(x => x.id === n.network_id))} · {adapterNames[n.model] || n.model} · {n.mac ? <span className="mono">{n.mac}</span> : "Automatic MAC"}{n.mtu ? ` · MTU ${n.mtu}` : ""}</li>)}</ul> : "None"}</dd>
           <dt>Firmware</dt><dd>{draft.boot.firmware.toUpperCase()}</dd>

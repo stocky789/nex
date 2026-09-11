@@ -8,6 +8,8 @@ openssh-server
 nftables
 chrony
 nfs-common
+cifs-utils
+open-iscsi
 sudo
 ca-certificates
 ifupdown

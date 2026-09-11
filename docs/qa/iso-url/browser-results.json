@@ -1,0 +1,11 @@
+{
+  "mode": "real Chromium UI with fully mocked API; no host/download correctness claim",
+  "checks": [
+    "Native URL and ISO name validation; submitting state disables duplicate submission and source changes",
+    "Keyboard submission; uncertain response retained across reload; retry kept request identity; queued size/hash remain unknown",
+    "Old Core and stale host block URL download",
+    "Empty destination storage prevents submission; narrow viewport inspected",
+    "Existing local upload still submits through upload endpoint (mock content validation)"
+  ],
+  "page_errors": []
+}

@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 const ManagedVMCapability = "managed-vm-v1"
@@ -22,7 +24,7 @@ type Appliance struct {
 	Role      string `json:"role"`
 }
 
-// ManagedOutcome is a journal entry that did not succeed, keyed by the host's operation ID.
+// ManagedOutcome reports queued work and retained outcomes, keyed by the host's operation ID.
 type ManagedOutcome struct {
 	OperationID string `json:"operation_id"`
 	Kind        string `json:"kind"`
@@ -41,6 +43,17 @@ type StorageRegistration struct {
 	OperationID string `json:"operation_id"`
 	Status      string `json:"status"`
 	Error       string `json:"error,omitempty"`
+	// Kind is local, nfs, zfs, smb or iscsi. Empty Kind with Path remains a v1 local record.
+	Kind                string              `json:"kind,omitempty"`
+	Source              StorageSource       `json:"source,omitempty"`
+	Identity            StorageIdentity     `json:"identity,omitempty"`
+	Generation          uint64              `json:"generation,omitempty"`
+	Tombstone           bool                `json:"tombstone,omitempty"`
+	CredentialReceipt   string              `json:"credential_receipt,omitempty"`
+	CredentialRequestID string              `json:"credential_request_id,omitempty"`
+	CredentialPresent   bool                `json:"credential_present,omitempty"`
+	Capabilities        StorageCapabilities `json:"capabilities,omitempty"`
+	Access              StorageAccess       `json:"access,omitempty"`
 }
 type NetworkRegistration struct {
 	ID          string `json:"id"`
@@ -57,6 +70,7 @@ type NetworkRegistration struct {
 }
 
 type Media struct {
+	URL         string `json:"url,omitempty"`
 	ID          string `json:"id"`
 	PoolID      string `json:"pool_id"`
 	HostID      string `json:"host_id"`
@@ -79,7 +93,8 @@ type VMCPU struct {
 	Model   string `json:"model"`
 }
 
-// VMMemory is the ceiling in both modes: "dedicated" reserves it, "maximum" only caps it.
+// VMMemory is the ceiling in both modes: dedicated preallocates and locks it while running;
+// stopped dedicated VMs retain their Core capacity commitment. Maximum only caps it.
 type VMMemory struct {
 	Mode    string `json:"mode"`
 	SizeMiB int    `json:"size_mib"`
@@ -235,6 +250,11 @@ func DerivedMAC(vmID string, index int) string {
 // specification. Identity, resource references, pool-wide MAC uniqueness and host capacity
 // belong to their owners and are not checked here.
 func ValidateVMSpec(v VMCreateSpec) error {
+	if !utf8.ValidString(v.Name) || len(v.Name) > 200 || strings.TrimSpace(v.Name) == "" || strings.ContainsFunc(v.Name, func(r rune) bool {
+		return r == '/' || unicode.IsControl(r) || r == '\ufffe' || r == '\uffff'
+	}) {
+		return errors.New("VM name must be nonblank, at most 200 UTF-8 bytes, without slashes or control characters")
+	}
 	if v.GuestOS != "" && v.GuestOS != "linux" && v.GuestOS != "windows" && v.GuestOS != "other" {
 		return errors.New("guest OS must be linux, windows or other")
 	}

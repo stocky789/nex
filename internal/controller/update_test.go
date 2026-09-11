@@ -44,7 +44,7 @@ func (l *managedLab) update(request, id string, v protocol.VMCreateSpec, want in
 
 func TestUpdateVMValidatesFreezesMACsDispatchesAndRefreshes(t *testing.T) {
 	l := newManagedLab(t, protocol.ManagedVMCapability, protocol.PowerCapability, protocol.UpdateCapability)
-	spec := l.spec("guest")
+	spec := l.spec(" QA Web.example – 東京 ")
 	var created createdVM
 	read(t, l.create("create-1", spec, 202), &created)
 	id := created.VMID
@@ -57,6 +57,7 @@ func TestUpdateVMValidatesFreezesMACsDispatchesAndRefreshes(t *testing.T) {
 
 	next := spec
 	next.Description = "edited"
+	next.Name = "--QA Web.example & 東京 (renamed)"
 	next.NICs = []protocol.VMNIC{{NetworkID: l.network, Model: "virtio", MAC: protocol.DerivedMAC(id, 0)}, {NetworkID: l.network, Model: "e1000e"}}
 	l.update("edit-0", "0f3f7a86-1d0e-4e3c-a1a4-7c5d3f1e2b91", next, 404)
 	moved := next
@@ -92,14 +93,14 @@ func TestUpdateVMValidatesFreezesMACsDispatchesAndRefreshes(t *testing.T) {
 		t.Fatalf("dispatch %+v", commands)
 	}
 	sent := *commands[0].VM
-	if sent.ID != id || sent.Revision != 1 || sent.Description != "edited" || len(sent.NICs) != 2 || sent.NICs[0].MAC != protocol.DerivedMAC(id, 0) || sent.NICs[1].MAC != protocol.DerivedMAC(id, 1) || sent.StartAfterCreate {
+	if sent.ID != id || sent.Name != next.Name || sent.Revision != 1 || sent.Description != "edited" || len(sent.NICs) != 2 || sent.NICs[0].MAC != protocol.DerivedMAC(id, 0) || sent.NICs[1].MAC != protocol.DerivedMAC(id, 1) || sent.StartAfterCreate {
 		t.Fatalf("dispatched definition %+v", sent)
 	}
 	// The host applies it and reports the new definition as current; the mirror follows.
 	l.reportState("shut off", &protocol.ManagedState{VMs: []protocol.VMCreateSpec{sent}}, protocol.Result{OperationID: commands[0].OperationID, Status: "succeeded"})
 	var vms []managedAppliance
 	read(t, l.a.call("GET", "/api/v1/vms", nil, nil, 200), &vms)
-	if len(vms) != 1 || vms[0].Spec == nil || vms[0].Spec.Revision != 1 || vms[0].Spec.Description != "edited" || len(vms[0].Spec.NICs) != 2 || vms[0].Spec.NICs[1].MAC != protocol.DerivedMAC(id, 1) {
+	if len(vms) != 1 || vms[0].Spec == nil || vms[0].Name != next.Name || vms[0].Spec.Name != next.Name || vms[0].Spec.Revision != 1 || vms[0].Spec.Description != "edited" || len(vms[0].Spec.NICs) != 2 || vms[0].Spec.NICs[1].MAC != protocol.DerivedMAC(id, 1) {
 		t.Fatalf("mirror after report %+v", vms)
 	}
 	// The next edit builds on revision 1. Uniqueness of the frozen addresses against other VMs

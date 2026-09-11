@@ -14,6 +14,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"slices"
@@ -60,13 +61,33 @@ func (e *ManagedEngine) observer() func(context.Context, managedJournal, string)
 // stage "starting" and recording libvirt's answer, and the domain is not running now.
 const startInterrupted = "interrupted before the automatic start completed"
 
+// errPowerRequestUncertain marks a failure after libvirt received a power request.
+// Preflight state validation stays terminal; after the request crosses the process
+// boundary only a subsequent observation can prove whether it took effect.
+var errPowerRequestUncertain = errors.New("power request outcome is uncertain")
+
+type powerRequestError struct {
+	action string
+	cause  error
+}
+
+func (e powerRequestError) Error() string {
+	return "libvirt refused the " + e.action + " request; inspect the VM on its host: " + e.cause.Error()
+}
+
+func (e powerRequestError) Unwrap() []error { return []error{errPowerRequestUncertain, e.cause} }
+
 type managedJournal struct {
-	Command   protocol.Command `json:"command"`
-	Result    protocol.Result  `json:"result"`
-	Stage     string           `json:"stage"`
-	Disks     []string         `json:"disks,omitempty"`
-	MediaPath string           `json:"media_path,omitempty"`
-	Domain    []byte           `json:"domain,omitempty"`
+	Command         protocol.Command `json:"command"`
+	Result          protocol.Result  `json:"result"`
+	Stage           string           `json:"stage"`
+	Disks           []string         `json:"disks,omitempty"`
+	MediaPath       string           `json:"media_path,omitempty"`
+	DownloadedMedia *protocol.Media  `json:"downloaded_media,omitempty"`
+	// AppliedStorage is Core's verified projection of a storage command. Command remains the
+	// original request so idempotent replay compares exactly what the caller sent.
+	AppliedStorage *protocol.StorageRegistration `json:"applied_storage,omitempty"`
+	Domain         []byte                        `json:"domain,omitempty"`
 	// Start records the outcome of start_after_create: "started", or why it did not start.
 	// It is recorded in the same entry so a retried or reconciled creation never starts twice.
 	Start string `json:"start,omitempty"`
@@ -118,6 +139,18 @@ func (e *ManagedEngine) readJournal(name string) (managedJournal, error) {
 	}
 	if err = validateManaged(j.Command); err != nil || name != j.Command.OperationID+".json" || j.Result.OperationID != j.Command.OperationID {
 		return j, errors.New("invalid managed journal identity or command")
+	}
+	if j.DownloadedMedia != nil {
+		if j.Command.Kind != "iso-import" || j.Command.Media.URL == "" {
+			return j, errors.New("unexpected downloaded ISO metadata")
+		}
+		resolved := *j.Command.Media
+		resolved.URL, resolved.SizeBytes, resolved.SHA256 = "", j.DownloadedMedia.SizeBytes, j.DownloadedMedia.SHA256
+		cmd := j.Command
+		cmd.Media = &resolved
+		if resolved != *j.DownloadedMedia || validateManaged(cmd) != nil {
+			return j, errors.New("invalid downloaded ISO metadata")
+		}
 	}
 	switch j.Result.Status {
 	case "pending", "succeeded", "failed", "needs_attention":
@@ -208,11 +241,24 @@ func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch f
 		return result, errors.New("managed journal full; manual recovery required")
 	}
 	j := managedJournal{Command: c, Result: result, Stage: "validating"}
+	if c.Kind == "storage-register" && c.Storage.ID == "" {
+		allocated := *c.Storage
+		allocated.ID, allocated.Generation = hostID(), 1
+		j.AppliedStorage = &allocated
+	}
 	// Reserve every resource ID, even when its operation was interrupted or failed. A failed
 	// or needs_attention vm-update is the exception: Applied does not treat either as the
 	// current definition (only succeeded revisions are), so the revision they named is still
 	// the next one the Controller sends; update's revision check serialises the retries.
 	for _, old := range js {
+		if c.StorageLifecycle != nil && old.Command.StorageLifecycle != nil && old.Command.StorageLifecycle.RepositoryID == c.StorageLifecycle.RepositoryID && (old.Result.Status == "pending" || old.Result.Status == "needs_attention") {
+			j.Result.Error = "storage lifecycle operation is unresolved; inspect or reconcile it before retrying"
+			return j.Result, e.save(j)
+		}
+		if c.CredentialRetire != nil && old.Command.CredentialRetire != nil && old.Command.CredentialRetire.Receipt == c.CredentialRetire.Receipt && (old.Result.Status == "pending" || old.Result.Status == "needs_attention") {
+			j.Result.Error = "storage credential retirement is unresolved; inspect or reconcile it before retrying"
+			return j.Result, e.save(j)
+		}
 		if old.Command.Kind == "vm-update" && (old.Result.Status == "failed" || old.Result.Status == "needs_attention") {
 			continue
 		}
@@ -232,7 +278,7 @@ func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch f
 		j.Result.Error = ""
 	} else {
 		j.Result.Status = "failed"
-		if j.Stage == "allocating" || j.Stage == "defining" || j.Stage == "starting" || j.Stage == "attaching" {
+		if errors.Is(err, ErrStorageRollbackUncertain) || errors.Is(err, errPowerRequestUncertain) || j.Stage == "allocating" || j.Stage == "defining" || j.Stage == "starting" || j.Stage == "attaching" {
 			j.Result.Status = "needs_attention"
 		}
 		j.Result.Error = err.Error()
@@ -242,7 +288,14 @@ func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch f
 func managedResourceID(c protocol.Command) string {
 	switch c.Kind {
 	case "storage-register":
+		if c.Storage.ID == "" {
+			return "storage-op:" + c.OperationID
+		}
 		return "storage:" + c.Storage.ID
+	case "storage-update", "storage-recheck", "storage-detach":
+		return "storage-lifecycle:" + c.StorageLifecycle.RepositoryID + ":" + c.OperationID
+	case "storage-credential-retire":
+		return "storage-credential-retire:" + c.CredentialRetire.Receipt + ":" + c.OperationID
 	case "network-register":
 		return "network:" + c.Network.ID
 	case "iso-import":
@@ -266,7 +319,7 @@ func validateManaged(c protocol.Command) error {
 		return errors.New("invalid operation ID")
 	}
 	count := 0
-	for _, present := range []bool{c.Storage != nil, c.Network != nil, c.Media != nil, c.VM != nil, c.Power != nil, c.VMMedia != nil} {
+	for _, present := range []bool{c.Storage != nil, c.Network != nil, c.Media != nil, c.VM != nil, c.Power != nil, c.VMMedia != nil, c.StorageLifecycle != nil, c.CredentialRetire != nil} {
 		if present {
 			count++
 		}
@@ -282,9 +335,25 @@ func validateManaged(c protocol.Command) error {
 		}
 		s := c.Storage
 		id, pool, host = s.ID, s.PoolID, s.HostID
-		if !filepath.IsAbs(s.Path) || filepath.Clean(s.Path) != s.Path || s.Path == "/" {
-			return errors.New("storage requires a canonical absolute non-root directory")
+		if err := protocol.ValidateStorageRegistration(*s, true); err != nil {
+			return err
 		}
+	case "storage-update", "storage-recheck", "storage-detach":
+		if c.StorageLifecycle == nil || c.StorageLifecycle.Action != strings.TrimPrefix(c.Kind, "storage-") {
+			return errors.New("storage lifecycle payload does not match command")
+		}
+		if err := protocol.ValidateStorageLifecycle(*c.StorageLifecycle); err != nil {
+			return err
+		}
+		id, pool, host = c.StorageLifecycle.RepositoryID, c.StorageLifecycle.PoolID, c.StorageLifecycle.HostID
+	case "storage-credential-retire":
+		if c.CredentialRetire == nil {
+			return errors.New("storage credential retirement payload required")
+		}
+		if err := protocol.ValidateStorageCredentialRetire(*c.CredentialRetire); err != nil {
+			return err
+		}
+		id, pool, host = c.CredentialRetire.Receipt, c.CredentialRetire.PoolID, c.CredentialRetire.HostID
 	case "network-register":
 		if c.Network == nil {
 			return errors.New("network payload required")
@@ -304,6 +373,15 @@ func validateManaged(c protocol.Command) error {
 		}
 		m := c.Media
 		id, pool, host = m.ID, m.PoolID, m.HostID
+		if m.URL != "" {
+			if err := protocol.ValidateISOURL(m.URL); err != nil {
+				return err
+			}
+			if !identifier.MatchString(m.StorageID) || m.SizeBytes != 0 || m.SHA256 != "" {
+				return errors.New("URL ISO requires storage and host-computed size and SHA-256")
+			}
+			break
+		}
 		h, err := hex.DecodeString(m.SHA256)
 		if !identifier.MatchString(m.StorageID) || m.SizeBytes < 32774 || err != nil || len(h) != 32 || strings.ToLower(m.SHA256) != m.SHA256 {
 			return errors.New("invalid ISO storage, size or SHA-256")
@@ -314,7 +392,7 @@ func validateManaged(c protocol.Command) error {
 		}
 		v := c.VM
 		id, pool, host = v.ID, v.PoolID, v.HostID
-		if !uuidPattern.MatchString(id) || !hostname.MatchString(v.Name) || v.CPU.Count > 64 || v.Memory.SizeMiB > 262144 {
+		if !uuidPattern.MatchString(id) || v.CPU.Count > 64 || v.Memory.SizeMiB > 262144 {
 			return errors.New("invalid VM identity, vCPU count or memory")
 		}
 		// Creation is revision 0; an edit names the revision it produces and never starts a guest.
@@ -348,6 +426,9 @@ func validateManaged(c protocol.Command) error {
 		if !uuidPattern.MatchString(p.VMID) || !protocol.ValidPowerAction(p.Action) {
 			return errors.New("invalid VM identity or power action")
 		}
+		if p.AfterOperationID != "" && (!identifier.MatchString(p.AfterOperationID) || p.AfterOperationID == c.OperationID) {
+			return errors.New("invalid predecessor operation ID")
+		}
 	case "vm-media":
 		if c.VMMedia == nil {
 			return errors.New("media-change payload required")
@@ -366,7 +447,7 @@ func validateManaged(c protocol.Command) error {
 	default:
 		return errors.New("unsupported managed command")
 	}
-	if !identifier.MatchString(id) || !identifier.MatchString(pool) || !identifier.MatchString(host) {
+	if ((c.Kind != "storage-register" || id != "") && !identifier.MatchString(id)) || !identifier.MatchString(pool) || !identifier.MatchString(host) {
 		return errors.New("invalid resource scope")
 	}
 	return nil
@@ -418,6 +499,100 @@ func localStorage(path string, required uint64) error {
 	}
 	return nil
 }
+
+// managedStorageReady is the sole path from a durable repository record to a
+// writable directory.  In particular, remote storage may not silently fall
+// back to an empty mountpoint after a mount/session is lost.
+func managedStorageReady(ctx context.Context, s protocol.StorageRegistration, required uint64) (storageAccess, error) {
+	a, err := storageInspect(ctx, s)
+	if err != nil {
+		return storageAccess{}, err
+	}
+	if a.ReadOnly {
+		return storageAccess{}, errors.New("storage is read-only")
+	}
+	if a.Path == "" || (s.Path != "" && filepath.Clean(a.Path) != s.Path) {
+		return storageAccess{}, errors.New("storage mount identity does not match its registered path")
+	}
+	if err = storageVerify(ctx, s, a); err != nil {
+		return storageAccess{}, err
+	}
+	if a.Available < required {
+		return storageAccess{}, errors.New("insufficient free storage including reserve")
+	}
+	return a, nil
+}
+
+// managedStoragePrepare is reserved for registration and configuration changes. Ordinary
+// lifecycle reads must inspect an existing mount/session and never replay login or mount work.
+func (e *ManagedEngine) managedStoragePrepare(ctx context.Context, s protocol.StorageRegistration, required uint64) (storageAccess, error) {
+	prepared, err := storagePrepareAt(ctx, s, filepath.Join(filepath.Dir(e.stateDir), credentialDirectory))
+	if err != nil {
+		return storageAccess{}, err
+	}
+	verified := s
+	verified.Path, verified.Identity = prepared.Path, prepared.Observed
+	return managedStorageReady(ctx, verified, required)
+}
+
+func storageRegistrationPath(s protocol.StorageRegistration) string {
+	if s.Path != "" {
+		return s.Path
+	}
+	if s.Source.ZFS != nil {
+		return s.Source.ZFS.MountPath
+	}
+	if s.Source.ISCSI != nil {
+		return s.Source.ISCSI.MountPath
+	}
+	return filepath.Join(storageMountRoot, s.ID)
+}
+
+// storageCorePaths fills paths Core owns rather than accepting them from a client. The command
+// journal keeps the original request; callers use this execution copy for native work.
+func storageCorePaths(s *protocol.StorageRegistration) {
+	if s.Source.ISCSI != nil && s.Source.ISCSI.MountPath == "" {
+		source := *s.Source.ISCSI
+		source.MountPath = filepath.Join(storageMountRoot, s.ID)
+		s.Source.ISCSI = &source
+	}
+}
+
+func storageCapabilities(s protocol.StorageRegistration) protocol.StorageCapabilities {
+	thick := s.StorageKind() == protocol.StorageKindLocal || s.StorageKind() == protocol.StorageKindNFS || s.StorageKind() == protocol.StorageKindISCSI
+	return protocol.StorageCapabilities{VMDisk: true, ISO: true, Thin: true, Thick: thick, EligibleHostIDs: []string{s.HostID}}
+}
+
+func managedStorageByID(ctx context.Context, js []managedJournal, id string, required uint64) (protocol.StorageRegistration, storageAccess, error) {
+	s, err := managedStorage(js, id)
+	if err != nil {
+		return protocol.StorageRegistration{}, storageAccess{}, err
+	}
+	a, err := managedStorageReady(ctx, s, required)
+	return s, a, err
+}
+
+// ensureVMStorage rechecks every repository immediately before a guest can
+// start. A controller report is only an observation; libvirt must never start
+// a guest against a replaced or missing mount.
+func ensureVMStorage(ctx context.Context, js []managedJournal, v protocol.VMCreateSpec) error {
+	seen := map[string]bool{}
+	for _, d := range v.Disks {
+		if seen[d.StorageID] {
+			continue
+		}
+		seen[d.StorageID] = true
+		if _, err := managedStorage(js, d.StorageID); err != nil {
+			// Older host-local domains predate repository records. They are guarded by
+			// libvirt's existing local path checks and are not a storage repository.
+			continue
+		}
+		if _, _, err := managedStorageByID(ctx, js, d.StorageID, 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 func managedVirsh(ctx context.Context, args ...string) ([]byte, error) {
 	return (&Engine{config: Config{VirshURI: "qemu:///system"}}).virsh(ctx, args...)
 }
@@ -446,12 +621,184 @@ func verifyNetwork(ctx context.Context, n protocol.NetworkRegistration) error {
 // Host-side references match by resource ID only: pool and host IDs in the journal belong
 // to whichever Controller issued the command and change when the host is re-enrolled.
 func managedStorage(js []managedJournal, id string) (protocol.StorageRegistration, error) {
-	for _, j := range js {
-		if j.Result.Status == "succeeded" && j.Command.Storage != nil && j.Command.Storage.ID == id {
-			return *j.Command.Storage, nil
-		}
+	if s, ok := storageProjection(js)[id]; ok {
+		return s, nil
 	}
 	return protocol.StorageRegistration{}, errors.New("storage is not registered on this host")
+}
+
+func storageWasPrepared(js []managedJournal, id string) bool {
+	for _, j := range js {
+		// New repository registrations keep the caller's empty ID in Command and
+		// place Core's allocated ID in AppliedStorage.  Match that projection first
+		// so media and VM checks re-inspect the actual repository instead of treating
+		// it as an old unprepared local record.
+		if j.AppliedStorage != nil && j.AppliedStorage.ID == id {
+			return true
+		}
+		if j.Command.Storage != nil && j.Command.Storage.ID == id && j.AppliedStorage != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// storageProjection folds successful journal events by generation.  A detach is a tombstone,
+// so an older successful registration cannot reappear after Controller replacement.
+func storageProjection(js []managedJournal) map[string]protocol.StorageRegistration {
+	out := map[string]protocol.StorageRegistration{}
+	tombstone := map[string]uint64{}
+	for _, j := range js {
+		if j.Result.Status != "succeeded" {
+			continue
+		}
+		if s := j.Command.Storage; s != nil {
+			copy := *s
+			if j.AppliedStorage != nil {
+				copy = *j.AppliedStorage
+			}
+			if copy.Generation == 0 {
+				copy.Generation = 1
+			}
+			if copy.Generation > tombstone[copy.ID] {
+				if prior, ok := out[copy.ID]; !ok || copy.Generation >= prior.Generation {
+					out[copy.ID] = copy
+				}
+			}
+		}
+	}
+	// Journal filenames are operation IDs, not an event sequence. Repeated passes apply the
+	// generation chain independently of directory order; each successful pass advances one
+	// repository and the bounded loop cannot spin on malformed history.
+	for pass := 0; pass < len(js); pass++ {
+		changed := false
+		for _, j := range js {
+			if j.Result.Status != "succeeded" || j.Command.StorageLifecycle == nil {
+				continue
+			}
+			v := j.Command.StorageLifecycle
+			s, known := out[v.RepositoryID]
+			if !known || s.Generation != v.ExpectedGeneration {
+				continue
+			}
+			switch v.Action {
+			case "update":
+				if v.Registration == nil {
+					continue
+				}
+				next := *v.Registration
+				if j.AppliedStorage != nil {
+					next = *j.AppliedStorage
+				}
+				next.ID, next.PoolID, next.HostID, next.Generation = v.RepositoryID, v.PoolID, v.HostID, s.Generation+1
+				if v.CredentialReceipt != "" {
+					next.CredentialReceipt, next.CredentialPresent = v.CredentialReceipt, true
+				}
+				out[v.RepositoryID], changed = next, true
+			case "detach":
+				delete(out, v.RepositoryID)
+				tombstone[v.RepositoryID], changed = s.Generation+1, true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+	return out
+}
+
+func storageTombstones(js []managedJournal) map[string]protocol.StorageRegistration {
+	out := map[string]protocol.StorageRegistration{}
+	for _, j := range js {
+		if j.Result.Status != "succeeded" || j.Command.StorageLifecycle == nil || j.Command.StorageLifecycle.Action != "detach" {
+			continue
+		}
+		v := j.Command.StorageLifecycle
+		if prior, ok := out[v.RepositoryID]; ok && prior.Generation >= v.ExpectedGeneration+1 {
+			continue
+		}
+		out[v.RepositoryID] = protocol.StorageRegistration{ID: v.RepositoryID, PoolID: v.PoolID, HostID: v.HostID, Generation: v.ExpectedGeneration + 1, Tombstone: true}
+	}
+	return out
+}
+
+func storageCredentialAttached(js []managedJournal, receipt string) bool {
+	if receipt == "" {
+		return false
+	}
+	for _, s := range storageProjection(js) {
+		if s.CredentialReceipt == receipt {
+			return true
+		}
+	}
+	for _, j := range js {
+		if j.Result.Status != "pending" && j.Result.Status != "needs_attention" {
+			continue
+		}
+		if j.Command.Storage != nil && j.Command.Storage.CredentialReceipt == receipt || j.Command.StorageLifecycle != nil && j.Command.StorageLifecycle.CredentialReceipt == receipt {
+			return true
+		}
+	}
+	return false
+}
+
+// storageDependencies names durable references which make detach unsafe.  Retained disks
+// count too: an edit must never turn unregister into data loss by hiding an old disk.
+func storageDependencies(js []managedJournal, id string) []string {
+	var out []string
+	for vmID, v := range currentDefinitions(js) {
+		if slices.ContainsFunc(v.Disks, func(d protocol.VMDisk) bool { return d.StorageID == id }) {
+			out = append(out, "VM "+vmID)
+		}
+	}
+	for _, j := range js {
+		if j.Result.Status != "succeeded" {
+			continue
+		}
+		if j.Command.Media != nil && j.Command.Media.StorageID == id {
+			out = append(out, "ISO "+j.Command.Media.ID)
+		}
+		if len(j.Retained) == 0 || j.Command.VM == nil {
+			continue
+		}
+		s, err := managedStorage(js, id)
+		if err == nil {
+			for _, path := range j.Retained {
+				if path == s.Path || strings.HasPrefix(path, s.Path+"/") {
+					out = append(out, "retained disk for VM "+j.Command.VM.ID)
+					break
+				}
+			}
+		}
+	}
+	return out
+}
+
+func credentialRotationSafe(ctx context.Context, js []managedJournal, id string) error {
+	for vmID, v := range currentDefinitions(js) {
+		if !slices.ContainsFunc(v.Disks, func(d protocol.VMDisk) bool { return d.StorageID == id }) {
+			continue
+		}
+		state, err := managedVirsh(ctx, "domstate", vmID)
+		if err != nil || strings.TrimSpace(string(state)) != "shut off" {
+			return errors.New("stop every VM using this storage before rotating credentials")
+		}
+	}
+	for _, j := range js {
+		if j.Result.Status != "pending" && j.Result.Status != "needs_attention" {
+			continue
+		}
+		if j.Command.VM != nil && (j.Command.Kind == "vm-create" || j.Command.Kind == "vm-update") && slices.ContainsFunc(j.Command.VM.Disks, func(d protocol.VMDisk) bool { return d.StorageID == id }) {
+			return errors.New("storage has a pending VM disk operation")
+		}
+		if j.Command.VMMedia != nil {
+			return errors.New("storage has a pending media operation")
+		}
+		if j.Command.Media != nil && j.Command.Media.StorageID == id {
+			return errors.New("storage has a pending ISO operation")
+		}
+	}
+	return nil
 }
 
 func managedNetwork(js []managedJournal, id string) (protocol.NetworkRegistration, error) {
@@ -467,7 +814,7 @@ func managedNetwork(js []managedJournal, id string) (protocol.NetworkRegistratio
 func managedMedia(js []managedJournal, id string) (protocol.Media, string, error) {
 	for _, j := range js {
 		if j.Result.Status == "succeeded" && j.Command.Media != nil && j.Command.Media.ID == id {
-			return *j.Command.Media, j.MediaPath, nil
+			return journalMedia(j), j.MediaPath, nil
 		}
 	}
 	return protocol.Media{}, "", errors.New("ISO is not imported on this host")
@@ -494,10 +841,18 @@ func managedDiskPlan(js []managedJournal, v protocol.VMCreateSpec) ([]managedTar
 			if err != nil {
 				return nil, nil, err
 			}
+			caps := s.Capabilities
+			if !caps.VMDisk { // v1 records have no explicit capabilities.
+				caps = storageCapabilities(s)
+			}
+			if (d.Thin && !caps.Thin) || (!d.Thin && !caps.Thick) {
+				return nil, nil, errors.New("storage does not support the selected disk provisioning mode")
+			}
 			index = len(targets)
 			at[d.StorageID] = index
 			// Every target keeps the same headroom a single-disk VM required.
-			targets = append(targets, managedTarget{ID: d.StorageID, Path: s.Path, Dir: filepath.Join(s.Path, "nex-vms", v.ID), Bytes: 4 << 30})
+			path := storageRegistrationPath(s)
+			targets = append(targets, managedTarget{ID: d.StorageID, Path: path, Dir: filepath.Join(path, "nex-vms", v.ID), Bytes: 4 << 30})
 		}
 		targets[index].Bytes += uint64(d.SizeGiB) << 30
 		disks[i] = filepath.Join(targets[index].Dir, fmt.Sprintf("disk-%d.qcow2", i))
@@ -517,7 +872,7 @@ func qemuCreateArgs(path string, d protocol.VMDisk) []string {
 
 // Applied lists the pool-scoped configuration this host has durably applied, for a replaced
 // Controller to mirror, with the checks that qualify it. Per-operation fields are cleared.
-// Entries that ended failed or needs_attention are reported as outcomes, as is a pending entry
+// Terminal entries are reported as outcomes, as is a pending entry
 // no longer executing in this process (an earlier process died with it) and a creation whose
 // automatic start failed (outcome <operation>:start, kind vm-power, while the VM itself stays
 // a normal managed VM); interrupted creations are re-observed first (see promote); VMs
@@ -530,12 +885,19 @@ func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []
 	js, bad := e.readable()
 	running := maps.Clone(inFlight.ids)
 	inFlight.Unlock()
+	// Preserve local interrupted-operation recovery, but never let heartbeat reporting probe a
+	// remote repository. Remote entries remain uncertain until an explicit retry reconciles them.
 	js = e.promote(ctx, js, running)
 	for _, j := range js {
 		c := j.Command
 		id, name := managedIdentity(c)
+		if c.Kind == "storage-register" && j.AppliedStorage != nil {
+			id, name = j.AppliedStorage.ID, j.AppliedStorage.Name
+		}
 		outcome := protocol.ManagedOutcome{OperationID: c.OperationID, Kind: c.Kind, ID: id, Name: name, Status: j.Result.Status, Error: j.Result.Error}
 		switch j.Result.Status {
+		case "succeeded":
+			out.Outcomes = append(out.Outcomes, outcome)
 		case "failed", "needs_attention":
 			out.Outcomes = append(out.Outcomes, outcome)
 			continue
@@ -550,16 +912,13 @@ func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []
 			out.Outcomes = append(out.Outcomes, protocol.ManagedOutcome{OperationID: c.OperationID + ":start", Kind: "vm-power", ID: id, Name: name, Status: "failed", Error: "VM created but not started: " + j.Start})
 		}
 		switch c.Kind {
-		case "storage-register":
-			s := *c.Storage
-			s.OperationID, s.Status, s.Error = "", "", ""
-			out.Storage = append(out.Storage, s)
+		case "storage-register", "storage-update", "storage-recheck", "storage-detach":
 		case "network-register":
 			n := *c.Network
 			n.OperationID, n.Status, n.Error = "", "", ""
 			out.Networks = append(out.Networks, n)
 		case "iso-import":
-			m := *c.Media
+			m := journalMedia(j)
 			m.OperationID, m.Status, m.Error = "", "", ""
 			out.Media = append(out.Media, m)
 		case "vm-create", "vm-update":
@@ -578,6 +937,19 @@ func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []
 				out.VMs = append(out.VMs, *c.VM)
 			}
 		}
+	}
+	for _, s := range storageProjection(js) {
+		s.OperationID, s.Status, s.Error = "", "", ""
+		out.Storage = append(out.Storage, s)
+	}
+	for _, s := range storageTombstones(js) {
+		out.Storage = append(out.Storage, s)
+	}
+	if receipts, err := StorageCredentialReceipts(filepath.Dir(e.stateDir)); err == nil {
+		for i := range receipts {
+			receipts[i].RetireEligible = receipts[i].Status == "ready" && !storageCredentialAttached(js, receipts[i].Receipt)
+		}
+		out.CredentialReceipts = receipts
 	}
 	now := time.Now().UTC()
 	journal := protocol.Check{Name: "managed-journal", Status: "healthy", ObservedAt: now}
@@ -602,11 +974,53 @@ func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []
 	return out, []protocol.Check{journal, vms}
 }
 
+// ReconcileStorage retries one durable unresolved storage operation using its original command.
+// The managed worker calls this from its periodic lane, never from heartbeat reporting.
+func (e *ManagedEngine) ReconcileStorage(ctx context.Context) error {
+	lock, err := (&Engine{config: Config{StateDir: e.stateDir}}).lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock(lock)
+	js, err := e.journals()
+	if err != nil {
+		return err
+	}
+	due := nextStorageReconcile(js, time.Now().UTC())
+	if due != nil {
+		_, err = e.reconcile(ctx, *due)
+		return err
+	}
+	return nil
+}
+
+func nextStorageReconcile(js []managedJournal, now time.Time) *managedJournal {
+	var due *managedJournal
+	for i := range js {
+		j := &js[i]
+		if (j.Result.Status != "pending" && j.Result.Status != "needs_attention") || !strings.HasPrefix(j.Command.Kind, "storage-") || now.Sub(j.Result.ObservedAt) < time.Minute {
+			continue
+		}
+		if due == nil || j.Result.ObservedAt.Before(due.Result.ObservedAt) || (j.Result.ObservedAt.Equal(due.Result.ObservedAt) && j.Command.OperationID < due.Command.OperationID) {
+			due = j
+		}
+	}
+	return due
+}
+
 // managedIdentity is the resource ID and operator name a command addresses.
 func managedIdentity(c protocol.Command) (string, string) {
 	switch c.Kind {
 	case "storage-register":
 		return c.Storage.ID, c.Storage.Name
+	case "storage-update", "storage-recheck", "storage-detach":
+		if c.StorageLifecycle != nil {
+			return c.StorageLifecycle.RepositoryID, ""
+		}
+	case "storage-credential-retire":
+		if c.CredentialRetire != nil {
+			return c.CredentialRetire.Receipt, ""
+		}
 	case "network-register":
 		return c.Network.ID, c.Network.Name
 	case "iso-import":
@@ -635,7 +1049,7 @@ func domains(ctx context.Context) map[string]bool {
 	return out
 }
 
-// promote settles vm-create and vm-update entries an interruption left pending or
+// promote settles completed ISO publications and vm-create/vm-update entries left pending or
 // needs_attention after the definition step, and none of them is executing here: when the
 // persistent domain matches the journaled definition the operation succeeded (an edit in the
 // state it left the guest), and a creation that died at the start step is settled from
@@ -646,7 +1060,10 @@ func domains(ctx context.Context) map[string]bool {
 func (e *ManagedEngine) promote(ctx context.Context, js []managedJournal, running map[string]bool) []managedJournal {
 	var due []int
 	for i, j := range js {
-		observable := (j.Command.Kind == "vm-create" && createObservable(j.Stage)) || (j.Command.Kind == "vm-update" && updateObservable(j.Stage))
+		if promotionUsesRemoteStorage(js, j) {
+			continue
+		}
+		observable := (j.Command.Kind == "iso-import" && j.Command.Media.URL != "" && j.MediaPath != "") || (j.Command.Kind == "vm-create" && createObservable(j.Stage)) || (j.Command.Kind == "vm-update" && updateObservable(j.Stage))
 		if observable && (j.Result.Status == "needs_attention" || j.Result.Status == "pending") && !running[j.Command.OperationID] && time.Since(j.Result.ObservedAt) >= time.Minute {
 			due = append(due, i)
 		}
@@ -668,7 +1085,12 @@ func (e *ManagedEngine) promote(ctx context.Context, js []managedJournal, runnin
 		if err != nil || (j.Result.Status != "needs_attention" && j.Result.Status != "pending") {
 			continue
 		}
-		if j.Stage == "starting" || j.Stage == "started" {
+		if j.Command.Kind == "iso-import" {
+			err = verifyISO(j.MediaPath, journalMedia(j))
+			if err != nil {
+				_ = os.Remove(j.MediaPath + ".partial")
+			}
+		} else if j.Stage == "starting" || j.Stage == "started" {
 			err = settleStart(ctx, &j)
 		} else if err = observe(ctx, j, updateState(j)); err == nil {
 			j.Stage = "defined"
@@ -687,6 +1109,19 @@ func (e *ManagedEngine) promote(ctx context.Context, js []managedJournal, runnin
 		}
 	}
 	return js
+}
+
+func promotionUsesRemoteStorage(js []managedJournal, j managedJournal) bool {
+	if j.Command.VM == nil {
+		return false
+	}
+	for _, d := range j.Command.VM.Disks {
+		s, err := managedStorage(js, d.StorageID)
+		if err == nil && s.StorageKind() != protocol.StorageKindLocal {
+			return true
+		}
+	}
+	return false
 }
 
 // createObservable reports whether a vm-create stage has a definition to observe.
@@ -730,27 +1165,132 @@ func managedSubdir(path string) error {
 	if err := trustedManagedPath(filepath.Dir(path)); err != nil {
 		return err
 	}
-	err := os.Mkdir(path, 0711)
-	if err == nil {
-		return os.Chmod(path, 0711)
-	}
-	if !errors.Is(err, os.ErrExist) {
+	info, created, err := managedDirectory(path)
+	if err != nil {
 		return err
 	}
-	real, err := filepath.EvalSymlinks(path)
-	if err != nil || real != path {
-		return errors.New("managed directory uses a symlink")
+	if created {
+		return nil
 	}
-	info, err := os.Stat(path)
-	if err != nil || !info.IsDir() {
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("managed path is not a directory")
 	}
 	return trustedManagedPath(path)
+}
+
+// managedDirectory creates a Core-owned directory with the intended traversal mode even
+// when the agent service runs with UMask=0077. Existing directories are never chmodded here:
+// on remote repositories their ownership and mode can be controlled by the storage server.
+func managedDirectory(path string) (os.FileInfo, bool, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		if err = os.Mkdir(path, 0711); err != nil {
+			return nil, false, err
+		}
+		// The remote mount leaf may be writable by the storage server. Never chmod by
+		// pathname after mkdir: an attacker could replace it with a symlink between
+		// those calls. Open the newly created directory without following links, set
+		// its mode through that descriptor, then prove the pathname still names it.
+		fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+		if err != nil {
+			return nil, false, err
+		}
+		f := os.NewFile(uintptr(fd), path)
+		defer f.Close()
+		if err = f.Chmod(0711); err != nil {
+			return nil, false, err
+		}
+		info, err = f.Stat()
+		if err != nil {
+			return nil, false, err
+		}
+		atPath, err := os.Lstat(path)
+		if err != nil || atPath.Mode()&os.ModeSymlink != 0 || !os.SameFile(info, atPath) {
+			return nil, false, errors.New("managed directory changed during creation")
+		}
+		return info, true, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, false, errors.New("managed directory uses a symlink")
+	}
+	return info, false, nil
+}
+
+// managedRepositorySubdir keeps local storage's strict root-owned ancestry rule. Remote
+// mounts are different: the verified mount leaf may be owned/mapped by the file server for
+// libvirt-qemu, so only its trusted local parent and every no-symlink component are required.
+func managedRepositorySubdir(ctx context.Context, js []managedJournal, id, path string) error {
+	s, access, err := managedStorageByID(ctx, js, id, 0)
+	if err != nil {
+		return err
+	}
+	if s.StorageKind() == protocol.StorageKindLocal {
+		return managedSubdir(path)
+	}
+	root := access.Path
+	if !strings.HasPrefix(path, root+"/") || filepath.Clean(path) != path {
+		return errors.New("managed storage directory escapes its repository mount")
+	}
+	if err := trustedManagedPath(filepath.Dir(root)); err != nil {
+		return err
+	}
+	check := func(p string) error {
+		info, _, err := managedDirectory(p)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("managed storage directory is unavailable or uses a symlink")
+		}
+		return nil
+	}
+	if err := check(root); err != nil {
+		return err
+	}
+	p := root
+	for _, part := range strings.Split(strings.TrimPrefix(path, root+"/"), "/") {
+		p = filepath.Join(p, part)
+		if err := check(p); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []managedJournal, fetch func(context.Context, string) (io.ReadCloser, error)) error {
 	c := j.Command
 	switch c.Kind {
 	case "vm-power":
+		if c.Power.AfterOperationID != "" {
+			ready := false
+			for _, before := range js {
+				if before.Command.OperationID != c.Power.AfterOperationID {
+					continue
+				}
+				switch before.Command.Kind {
+				case "vm-create", "vm-update", "vm-power", "vm-media":
+					id, _ := managedIdentity(before.Command)
+					if id != c.Power.VMID {
+						return errors.New("predecessor operation belongs to another VM")
+					}
+					if before.Result.Status != "succeeded" {
+						return fmt.Errorf("predecessor operation did not succeed (%s); inspect it before requesting power again", before.Result.Status)
+					}
+					ready = true
+				}
+				break
+			}
+			if !ready {
+				return errors.New("predecessor VM operation not found on this host")
+			}
+		}
+		if c.Power.Action == "start" {
+			v, currentErr := managedCurrent(js, c.Power.VMID)
+			if currentErr == nil && len(v.Disks) > 0 {
+				if err := ensureVMStorage(ctx, js, *v.Command.VM); err != nil {
+					return err
+				}
+			}
+		}
 		// Stage "powering" is persisted before the single virsh call so an interruption is
 		// reconciled by observation instead of a second request.
 		j.Stage = "powering"
@@ -762,17 +1302,52 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 		// changeMedia persists Stage "changing-media" itself, immediately before its virsh
 		// call: an interruption before that point issued nothing, so reconcile re-runs it.
 		return e.changeMedia(ctx, j, js)
+	case "storage-credential-retire":
+		return retireStorageCredential(filepath.Dir(e.stateDir), c.CredentialRetire.Receipt, c.CredentialRetire.PoolID, c.CredentialRetire.HostID, storageCredentialAttached(js, c.CredentialRetire.Receipt))
 	case "storage-register":
-		if c.Storage.Path == e.stateDir || strings.HasPrefix(e.stateDir, c.Storage.Path+"/") || strings.HasPrefix(c.Storage.Path, e.stateDir+"/") {
+		requested := *c.Storage
+		if j.AppliedStorage != nil {
+			requested.ID = j.AppliedStorage.ID
+		}
+		storageCorePaths(&requested)
+		if requested.CredentialReceipt != "" {
+			if err := bindCredentialReceipt(filepath.Dir(e.stateDir), requested.CredentialReceipt, requested.ID, requested.PoolID, requested.HostID, requested.CredentialRequestID); err != nil {
+				return err
+			}
+			requested.CredentialPresent = true
+		}
+		if requested.Path != "" && (requested.Path == e.stateDir || strings.HasPrefix(e.stateDir, requested.Path+"/") || strings.HasPrefix(requested.Path, e.stateDir+"/")) {
 			return errors.New("storage must be separate from agent state")
 		}
-		if err := localStorage(c.Storage.Path, 1<<30); err != nil {
+		conflict := c
+		conflict.Storage = &requested
+		if err := registrationConflict(js, conflict); err != nil {
 			return err
 		}
-		if err := registrationConflict(js, c); err != nil {
+		access, err := e.managedStoragePrepare(ctx, requested, 1<<30)
+		if err != nil {
 			return err
 		}
-		f, err := os.CreateTemp(c.Storage.Path, ".nex-access-")
+		// Source aliases can only be proven after Core observes the mounted backing
+		// identity. Tear down the just-created Core-owned attachment before rejecting it.
+		observed := requested
+		observed.Path, observed.Identity = access.Path, access.Observed
+		postPrepare := c
+		postPrepare.Storage = &observed
+		if err := registrationConflict(js, postPrepare); err != nil {
+			_ = storageDetachAt(ctx, observed, filepath.Join(filepath.Dir(e.stateDir), credentialDirectory))
+			return err
+		}
+		if access.Path == e.stateDir || strings.HasPrefix(e.stateDir, access.Path+"/") || strings.HasPrefix(access.Path, e.stateDir+"/") {
+			return errors.New("storage must be separate from agent state")
+		}
+		applied := requested
+		applied.Path, applied.Generation = access.Path, 1
+		applied.Identity = access.Observed
+		applied.Capabilities = storageCapabilities(applied)
+		applied.Access = protocol.StorageAccess{Status: access.Health, Readable: true, Writable: !access.ReadOnly, TotalBytes: access.Total, AvailableBytes: &access.Available, ObservedAt: time.Now().UTC()}
+		j.AppliedStorage = &applied
+		f, err := os.CreateTemp(access.Path, ".nex-access-")
 		if err != nil {
 			return errors.New("storage is not writable")
 		}
@@ -787,6 +1362,76 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 			return err
 		}
 		return removeErr
+	case "storage-update", "storage-recheck", "storage-detach":
+		v := c.StorageLifecycle
+		current, err := managedStorage(js, v.RepositoryID)
+		if err != nil {
+			return err
+		}
+		if v.Action != "recheck" && current.Generation != v.ExpectedGeneration {
+			return errors.New("storage generation is no longer current; refresh storage and retry")
+		}
+		switch v.Action {
+		case "recheck":
+			_, err := managedStorageReady(ctx, current, 0)
+			return err
+		case "detach":
+			if deps := storageDependencies(js, current.ID); len(deps) > 0 {
+				return errors.New("storage cannot detach while used by " + strings.Join(deps, ", "))
+			}
+			return storageDetachAt(ctx, current, filepath.Join(filepath.Dir(e.stateDir), credentialDirectory))
+		case "update":
+			next := *v.Registration
+			next.ID, next.PoolID, next.HostID, next.Generation = current.ID, current.PoolID, current.HostID, current.Generation+1
+			storageCorePaths(&next)
+			sourceChanged := storageSourceChanged(next, current) || (next.StorageKind() == protocol.StorageKindLocal && next.Path != current.Path)
+			credentialChanged := v.CredentialReceipt != ""
+			transportChanged := sourceChanged || credentialChanged
+			if !transportChanged {
+				// A metadata-only rename does not disturb an active mount/session.
+				next.Path, next.Identity, next.Capabilities, next.Access = current.Path, current.Identity, current.Capabilities, current.Access
+				next.CredentialReceipt, next.CredentialPresent, next.CredentialRequestID = current.CredentialReceipt, current.CredentialPresent, current.CredentialRequestID
+				j.AppliedStorage = &next
+				return nil
+			}
+			if sourceChanged {
+				if err := registrationConflict(js, protocol.Command{OperationID: c.OperationID, Kind: "storage-register", Storage: &next}); err != nil {
+					return err
+				}
+				if deps := storageDependencies(js, current.ID); len(deps) > 0 {
+					return errors.New("storage cannot update while used by " + strings.Join(deps, ", "))
+				}
+			} else if credentialChanged {
+				if err := credentialRotationSafe(ctx, js, current.ID); err != nil {
+					return err
+				}
+			}
+			if v.CredentialReceipt != "" {
+				if err := credentialReceiptValid(filepath.Dir(e.stateDir), v.CredentialReceipt, next.ID, next.PoolID, next.HostID); err != nil {
+					return err
+				}
+				next.CredentialReceipt, next.CredentialPresent = v.CredentialReceipt, true
+			} else {
+				next.CredentialReceipt, next.CredentialPresent = current.CredentialReceipt, current.CredentialPresent
+			}
+			access, err := storagePrepareWithPrevious(allowStorageRemount(ctx), next, filepath.Join(filepath.Dir(e.stateDir), credentialDirectory), current)
+			if err != nil {
+				return err
+			}
+			next.Path, next.Identity = access.Path, access.Observed
+			if err = storageVerify(allowStorageRemount(ctx), next, access); err != nil || access.ReadOnly || access.Available < 1<<30 {
+				if err != nil {
+					return err
+				}
+				return errors.New("storage is unavailable, read-only, or lacks reserve capacity")
+			}
+			next.Path = access.Path
+			next.Identity = access.Observed
+			next.Capabilities = storageCapabilities(next)
+			next.Access = protocol.StorageAccess{Status: access.Health, Readable: true, Writable: !access.ReadOnly, TotalBytes: access.Total, AvailableBytes: &access.Available, ObservedAt: time.Now().UTC()}
+			j.AppliedStorage = &next
+			return nil
+		}
 	case "network-register":
 		if err := registrationConflict(js, c); err != nil {
 			return err
@@ -797,21 +1442,31 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 		return verifyNetwork(ctx, *c.Network)
 	case "iso-import":
 		m := c.Media
-		s, err := managedStorage(js, m.StorageID)
+		_, access, err := managedStorageByID(ctx, js, m.StorageID, uint64(m.SizeBytes)+(1<<30))
 		if err != nil {
 			return err
 		}
-		if err = localStorage(s.Path, uint64(m.SizeBytes)+(1<<30)); err != nil {
-			return err
-		}
-		dir := filepath.Join(s.Path, "nex-media")
-		if err = managedSubdir(dir); err != nil {
+		dir := filepath.Join(access.Path, "nex-media")
+		if err = managedRepositorySubdir(ctx, js, m.StorageID, dir); err != nil {
 			return err
 		}
 		j.MediaPath = filepath.Join(dir, m.ID+".iso")
 		j.Stage = "receiving"
 		if err = e.save(*j); err != nil {
 			return err
+		}
+		if m.URL != "" {
+			var stat syscall.Statfs_t
+			if err := syscall.Statfs(access.Path, &stat); err != nil {
+				return err
+			}
+			limit := int64(stat.Bavail)*stat.Bsize - (1 << 30)
+			if limit < 32774 {
+				return errors.New("insufficient free storage including reserve")
+			}
+			client := publicISOClient()
+			defer client.CloseIdleConnections()
+			return e.downloadISO(ctx, j, client, limit)
 		}
 		if fetch == nil {
 			return errors.New("ISO transfer unavailable")
@@ -829,7 +1484,18 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 	}
 	return errors.New("unsupported managed command")
 }
+func journalMedia(j managedJournal) protocol.Media {
+	if j.DownloadedMedia != nil {
+		return *j.DownloadedMedia
+	}
+	return *j.Command.Media
+}
+
 func receiveISO(ctx context.Context, path string, m protocol.Media, body io.Reader) error {
+	return receiveISOContent(ctx, path, m, body, m.SizeBytes, nil)
+}
+
+func receiveISOContent(ctx context.Context, path string, m protocol.Media, body io.Reader, limit int64, record func(protocol.Media) error) error {
 	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 		return errors.New("ISO destination already exists or cannot be inspected")
 	}
@@ -840,11 +1506,14 @@ func receiveISO(ctx context.Context, path string, m protocol.Media, body io.Read
 	defer os.Remove(f.Name())
 	defer f.Close()
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(&managedContextReader{ctx, body}, m.SizeBytes+1))
+	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(&managedContextReader{ctx, body}, limit+1))
 	if err != nil {
 		return err
 	}
-	if n != m.SizeBytes || hex.EncodeToString(h.Sum(nil)) != m.SHA256 {
+	if n > limit {
+		return errors.New("ISO exceeds available storage including reserve")
+	}
+	if m.URL == "" && (n != m.SizeBytes || hex.EncodeToString(h.Sum(nil)) != m.SHA256) {
 		return errors.New("ISO transfer length or SHA-256 mismatch")
 	}
 	marker := make([]byte, 5)
@@ -859,6 +1528,14 @@ func receiveISO(ctx context.Context, path string, m protocol.Media, body io.Read
 	}
 	if err = f.Close(); err != nil {
 		return err
+	}
+	// Save computed metadata before publication so a crash can verify the final file
+	// without fetching the URL again; the original command remains immutable.
+	if record != nil {
+		m.SizeBytes, m.SHA256, m.URL = n, hex.EncodeToString(h.Sum(nil)), ""
+		if err := record(m); err != nil {
+			return err
+		}
 	}
 	// Link publishes without overwriting an existing destination, unlike Rename.
 	if err = os.Link(path+".partial", path); err != nil {
@@ -960,12 +1637,26 @@ type cpuModelXML struct {
 	Value    string `xml:",chardata"`
 }
 
-// managedBalloon is what makes the memory mode real: "maximum" needs a virtio balloon reporting
-// free guest pages back to the host, "dedicated" must not have one at all.
+// Maximum uses a virtio balloon to report free guest pages; dedicated has no balloon
+// and uses physical memory backing below.
 type managedBalloon struct {
 	Model             string `xml:"model,attr"`
 	FreePageReporting string `xml:"freePageReporting,attr,omitempty"`
 }
+type managedMemoryBacking struct {
+	NoSharePages *struct{} `xml:"nosharepages,omitempty"`
+	Locked       *struct{} `xml:"locked,omitempty"`
+	Allocation   struct {
+		Mode string `xml:"mode,attr"`
+	} `xml:"allocation"`
+}
+
+func dedicatedMemoryBacking() *managedMemoryBacking {
+	b := &managedMemoryBacking{NoSharePages: &struct{}{}, Locked: &struct{}{}}
+	b.Allocation.Mode = "immediate"
+	return b
+}
+
 type managedNIC struct {
 	XMLName xml.Name `xml:"interface"`
 	Type    string   `xml:"type,attr"`
@@ -987,16 +1678,17 @@ type mtuXML struct {
 	Size int `xml:"size,attr"`
 }
 type managedDomain struct {
-	XMLName       xml.Name    `xml:"domain"`
-	Type          string      `xml:"type,attr"`
-	Name          string      `xml:"name"`
-	UUID          string      `xml:"uuid"`
-	Memory        memoryXML   `xml:"memory"`
-	CurrentMemory *memoryXML  `xml:"currentMemory,omitempty"`
-	VCPU          int         `xml:"vcpu"`
-	OS            managedOS   `xml:"os"`
-	Features      featuresXML `xml:"features"`
-	CPU           managedCPU  `xml:"cpu"`
+	XMLName       xml.Name              `xml:"domain"`
+	Type          string                `xml:"type,attr"`
+	Name          string                `xml:"name"`
+	UUID          string                `xml:"uuid"`
+	Memory        memoryXML             `xml:"memory"`
+	CurrentMemory *memoryXML            `xml:"currentMemory,omitempty"`
+	MemoryBacking *managedMemoryBacking `xml:"memoryBacking,omitempty"`
+	VCPU          int                   `xml:"vcpu"`
+	OS            managedOS             `xml:"os"`
+	Features      featuresXML           `xml:"features"`
+	CPU           managedCPU            `xml:"cpu"`
 	Devices       struct {
 		Disks       []managedDisk       `xml:"disk"`
 		Controllers []managedController `xml:"controller"`
@@ -1076,11 +1768,13 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 	if v.Boot.Firmware == "uefi" {
 		d.OS.Firmware = "efi"
 	}
-	// dedicated holds the ceiling as the guest's allocation and removes the balloon entirely;
-	// maximum only caps it and lets the guest hand free pages back.
+	// Dedicated claims physical RAM before guest execution, prevents swapping/KSM and removes
+	// the balloon. A stopped domain retains only its admission commitment. Do not guess a QEMU
+	// hard_limit: it includes variable process overhead and an undersized limit kills the VM.
 	if v.Memory.Mode == "dedicated" {
 		current := memoryXML{"MiB", v.Memory.SizeMiB}
 		d.CurrentMemory = &current
+		d.MemoryBacking = dedicatedMemoryBacking()
 		d.Devices.Memballoon = managedBalloon{Model: "none"}
 	} else {
 		d.Devices.Memballoon = managedBalloon{Model: "virtio", FreePageReporting: "on"}
@@ -1285,7 +1979,14 @@ func (e *ManagedEngine) create(ctx context.Context, j *managedJournal, js []mana
 		return err
 	}
 	for _, t := range targets {
-		if err = localStorage(t.Path, t.Bytes); err != nil {
+		_, access, readyErr := managedStorageByID(ctx, js, t.ID, t.Bytes)
+		if readyErr != nil || access.Path != t.Path {
+			if readyErr != nil {
+				return readyErr
+			}
+			return errors.New("storage mount identity changed before disk allocation")
+		}
+		if err = managedRepositorySubdir(ctx, js, t.ID, filepath.Join(access.Path, "nex-vms")); err != nil {
 			return err
 		}
 	}
@@ -1314,6 +2015,11 @@ func (e *ManagedEngine) create(ctx context.Context, j *managedJournal, js []mana
 		if on == "" || path != filepath.Join(on, "nex-media", m.ID+".iso") {
 			return errors.New("the install ISO must be published on one of the VM's storage targets")
 		}
+		if storageWasPrepared(js, m.StorageID) {
+			if _, _, err = managedStorageByID(ctx, js, m.StorageID, 0); err != nil {
+				return err
+			}
+		}
 		if err = verifyISO(path, m); err != nil {
 			return err
 		}
@@ -1339,7 +2045,7 @@ func (e *ManagedEngine) create(ctx context.Context, j *managedJournal, js []mana
 			return errors.New("VM UUID already exists")
 		}
 	}
-	for _, name := range strings.Split(strings.TrimSpace(string(names)), "\n") {
+	for _, name := range strings.Split(string(names), "\n") {
 		if name == v.Name {
 			return errors.New("VM name " + v.Name + " already exists on this host")
 		}
@@ -1361,7 +2067,7 @@ func (e *ManagedEngine) create(ctx context.Context, j *managedJournal, js []mana
 		}
 	}
 	for _, t := range targets {
-		if err = managedSubdir(filepath.Join(t.Path, "nex-vms")); err != nil {
+		if err = managedRepositorySubdir(ctx, js, t.ID, filepath.Join(t.Path, "nex-vms")); err != nil {
 			return err
 		}
 	}
@@ -1445,12 +2151,28 @@ func (e *ManagedEngine) startCreated(ctx context.Context, j *managedJournal) err
 		return nil
 	}
 	j.Stage = "starting"
+	js, err := e.journals()
+	if err != nil {
+		return err
+	}
+	if len(j.Disks) > 0 {
+		if err = ensureVMStorage(ctx, js, *j.Command.VM); err != nil {
+			return err
+		}
+	}
 	if err := e.save(*j); err != nil {
 		return err
 	}
 	j.Start, j.Stage = "started", "started"
 	if err := powerVM(ctx, protocol.VMPowerRequest{VMID: j.Command.VM.ID, Action: "start"}); err != nil {
-		j.Start = err.Error()
+		// The create journal has historically exposed a stable concise start outcome;
+		// direct vm-power results retain the bounded native diagnostic for recovery.
+		var powerErr powerRequestError
+		if errors.As(err, &powerErr) {
+			j.Start = "libvirt refused the start request; inspect the VM on its host"
+		} else {
+			j.Start = err.Error()
+		}
 	}
 	return nil
 }
@@ -1460,18 +2182,108 @@ func (e *ManagedEngine) startCreated(ctx context.Context, j *managedJournal) err
 // registration releases its resource. VLAN and plain bridge registrations share the bridge
 // namespace; libvirt networks have their own.
 func registrationConflict(js []managedJournal, c protocol.Command) error {
+	if c.Storage != nil {
+		for _, old := range storageProjection(js) {
+			if old.ID == c.Storage.ID || old.ID == c.OperationID {
+				continue
+			}
+			sameSource := storageSourcesConflict(old, *c.Storage)
+			sameIdentity := storageSameBacking(old.Identity, c.Storage.Identity)
+			if sameSource || sameIdentity || storageRegistrationPath(old) == storageRegistrationPath(*c.Storage) {
+				if old.Path != "" && old.Path == c.Storage.Path {
+					return errors.New("storage path " + c.Storage.Path + " is already registered on this host as " + old.Name)
+				}
+				return errors.New("storage source is already registered on this host as " + old.Name)
+			}
+		}
+	}
 	for _, old := range js {
 		if old.Command.OperationID == c.OperationID || old.Result.Status == "failed" {
 			continue
 		}
-		if c.Storage != nil && old.Command.Storage != nil && old.Command.Storage.Path == c.Storage.Path {
-			return errors.New("storage path " + c.Storage.Path + " is already registered on this host as " + old.Command.Storage.Name)
+		if c.Storage != nil && old.Command.Storage != nil {
+			// Successful registrations are represented by storageProjection above,
+			// including detach tombstones. This pass only reserves unresolved native
+			// work, so an old source cannot block its own update or a later detach and
+			// re-registration forever.
+			if old.Result.Status != "pending" && old.Result.Status != "needs_attention" {
+				continue
+			}
+			sameSource := storageSourcesConflict(*old.Command.Storage, *c.Storage)
+			oldIdentity := old.Command.Storage.Identity
+			if old.AppliedStorage != nil {
+				oldIdentity = old.AppliedStorage.Identity
+			}
+			if sameSource || storageSameBacking(oldIdentity, c.Storage.Identity) || (c.Storage.Path != "" && old.Command.Storage.Path == c.Storage.Path) {
+				return errors.New("storage source is already registered on this host as " + old.Command.Storage.Name)
+			}
 		}
 		if c.Network != nil && old.Command.Network != nil && old.Command.Network.Source == c.Network.Source && (old.Command.Network.Kind == "network") == (c.Network.Kind == "network") {
 			return errors.New("network " + c.Network.Source + " is already registered on this host as " + old.Command.Network.Name)
 		}
 	}
 	return nil
+}
+
+// storageSourcesConflict compares ownership-bearing connection identity. iSCSI mount paths
+// are Core-generated per repository and cannot distinguish a second claimant. One target and
+// portal session belongs to one repository; matching WWID/filesystem UUID also rejects portal
+// aliases before another login can affect the first session.
+func storageSourcesConflict(a, b protocol.StorageRegistration) bool {
+	if a.StorageKind() == protocol.StorageKindLocal || a.StorageKind() != b.StorageKind() {
+		return false
+	}
+	if a.StorageKind() != protocol.StorageKindISCSI {
+		return reflect.DeepEqual(a.Source, b.Source)
+	}
+	av, bv := a.Source.ISCSI, b.Source.ISCSI
+	if av == nil || bv == nil {
+		return false
+	}
+	sameSession := av.TargetIQN == bv.TargetIQN && strings.EqualFold(iscsiPortalAddress(av.Portal), iscsiPortalAddress(bv.Portal))
+	sameBacking := av.WWID != "" && canonicalWWID(av.WWID) == canonicalWWID(bv.WWID) && av.FilesystemUUID != "" && strings.EqualFold(av.FilesystemUUID, bv.FilesystemUUID)
+	return sameSession || sameBacking
+}
+
+// storageSourceChanged compares actual update settings while ignoring only Core's iSCSI
+// mount path. It deliberately differs from storageSourcesConflict: a changed LUN is a source
+// mutation even though a second repository may not share a session.
+func storageSourceChanged(a, b protocol.StorageRegistration) bool {
+	if a.StorageKind() != b.StorageKind() {
+		return true
+	}
+	if a.StorageKind() != protocol.StorageKindISCSI {
+		return !reflect.DeepEqual(a.Source, b.Source)
+	}
+	av, bv := a.Source.ISCSI, b.Source.ISCSI
+	if av == nil || bv == nil {
+		return av != bv
+	}
+	return av.TargetIQN != bv.TargetIQN || !strings.EqualFold(iscsiPortalAddress(av.Portal), iscsiPortalAddress(bv.Portal)) || av.LUN != bv.LUN || canonicalWWID(av.WWID) != canonicalWWID(bv.WWID) || !strings.EqualFold(av.FilesystemUUID, bv.FilesystemUUID) || av.ExclusiveTarget != bv.ExclusiveTarget
+}
+
+func storageSameBacking(a, b protocol.StorageIdentity) bool {
+	if a.NFS != nil && b.NFS != nil && a.NFS.FilesystemID != "" && a.NFS.FilesystemID == b.NFS.FilesystemID {
+		return true
+	}
+	if a.SMB != nil && b.SMB != nil {
+		// CIFS filesystem IDs are reconnect diagnostics, not durable identity. Once
+		// both registrations carry Core's marker, only that marker may establish an
+		// alias; two distinct markers must never collide just because statfs reused
+		// an ID. Mixed marker/legacy records retain the older strict nonempty
+		// filesystem-ID comparison; exact source equality is checked independently
+		// by registrationConflict.
+		if a.SMB.MarkerID != "" && b.SMB.MarkerID != "" {
+			return a.SMB.MarkerID == b.SMB.MarkerID
+		}
+		if a.SMB.FilesystemID != "" && a.SMB.FilesystemID == b.SMB.FilesystemID {
+			return true
+		}
+	}
+	if a.ISCSI != nil && b.ISCSI != nil && a.ISCSI.WWID != "" && canonicalWWID(a.ISCSI.WWID) == canonicalWWID(b.ISCSI.WWID) && a.ISCSI.FilesystemUUID != "" && strings.EqualFold(a.ISCSI.FilesystemUUID, b.ISCSI.FilesystemUUID) {
+		return true
+	}
+	return !reflect.DeepEqual(a, protocol.StorageIdentity{}) && reflect.DeepEqual(a, b)
 }
 
 // vmMACs lists a VM's effective interface addresses: the supplied MAC, or the one derived
@@ -1517,11 +2329,19 @@ func (e *ManagedEngine) observeDefinition(ctx context.Context, j managedJournal,
 	if j.Command.VM == nil || len(j.Domain) == 0 || len(j.Disks) != len(j.Command.VM.Disks) {
 		return errors.New("VM definition evidence unavailable")
 	}
+	js, err := e.journals()
+	if err != nil {
+		return err
+	}
 	// Ownership is observed once per disk: exclusiveDisk rescans every domain each call, so this
 	// costs disks × domains virsh calls. Batch it there if hosts ever carry many domains.
 	for i, disk := range j.Disks {
-		if err := localStorage(filepath.Dir(disk), 0); err != nil {
+		s, access, err := managedStorageByID(ctx, js, j.Command.VM.Disks[i].StorageID, 0)
+		if err != nil {
 			return err
+		}
+		if !strings.HasPrefix(disk, filepath.Join(access.Path, "nex-vms", j.Command.VM.ID)+"/") || s.ID != j.Command.VM.Disks[i].StorageID {
+			return errors.New("created disk is outside its registered storage mount")
 		}
 		real, err := filepath.EvalSymlinks(disk)
 		if err != nil || real != disk {
@@ -1626,10 +2446,26 @@ func validateManagedDefinition(b, expected []byte) error {
 	if len(got.OS.Boot) != 0 {
 		return errors.New("VM boot order changed")
 	}
-	// The balloon carries the memory mode: no device for dedicated, virtio free page reporting
+	// The balloon distinguishes the modes: no device for dedicated, virtio free page reporting
 	// for maximum. A libvirt that does not echo the attribute must not fail every such VM.
 	if got.Devices.Memballoon.Model != want.Devices.Memballoon.Model || (got.Devices.Memballoon.FreePageReporting != "" && got.Devices.Memballoon.FreePageReporting != want.Devices.Memballoon.FreePageReporting) {
 		return errors.New("VM memory mode changed")
+	}
+	if !reflect.DeepEqual(got.MemoryBacking, want.MemoryBacking) {
+		return errors.New("VM physical memory reservation differs from requested configuration")
+	}
+	if want.CurrentMemory != nil {
+		current := got.Memory // libvirt defaults an omitted currentMemory to memory.
+		if got.CurrentMemory != nil {
+			current = *got.CurrentMemory
+		}
+		if current.Unit == "KiB" || current.Unit == "k" {
+			if current.Value != want.CurrentMemory.Value*1024 {
+				return errors.New("VM current memory differs from requested allocation")
+			}
+		} else if current.Unit != "MiB" || current.Value != want.CurrentMemory.Value {
+			return errors.New("VM current memory differs from requested allocation")
+		}
 	}
 	var devices domainXML
 	if xml.Unmarshal(b, &devices) != nil || len(devices.Devices.Hostdev) != 0 || len(devices.Devices.Filesystems) != 0 || len(got.Devices.Graphics) != 1 || got.Devices.Graphics[0].Type != "vnc" || got.Devices.Graphics[0].Listen.Type != "socket" {
@@ -1674,7 +2510,7 @@ func sameMTU(got, want *mtuXML) bool {
 func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protocol.Result, error) {
 	j.Result.Status = "needs_attention"
 	j.Result.Error = "interrupted operation retained; inspect host resources before creating a new request; no effects replayed"
-	if j.Command.Kind == "storage-register" || j.Command.Kind == "network-register" {
+	if j.Command.Kind == "storage-register" || j.Command.Kind == "storage-update" || j.Command.Kind == "storage-recheck" || j.Command.Kind == "storage-detach" || j.Command.Kind == "storage-credential-retire" || j.Command.Kind == "network-register" {
 		js, err := e.journals()
 		if err != nil {
 			return j.Result, err
@@ -1683,7 +2519,11 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protoc
 			j.Result.Status = "succeeded"
 			j.Result.Error = ""
 		} else {
-			j.Result.Status = "failed"
+			if errors.Is(err, ErrStorageRollbackUncertain) {
+				j.Result.Status = "needs_attention"
+			} else {
+				j.Result.Status = "failed"
+			}
 			j.Result.Error = err.Error()
 		}
 	}
@@ -1726,7 +2566,11 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protoc
 				j.Result.Status = "succeeded"
 				j.Result.Error = ""
 			} else {
-				j.Result.Status = "failed"
+				if errors.Is(err, errPowerRequestUncertain) {
+					j.Result.Status = "needs_attention"
+				} else {
+					j.Result.Status = "failed"
+				}
 				j.Result.Error = err.Error()
 			}
 		} else if err := powerObserved(ctx, *j.Command.Power); err == nil {
@@ -1760,7 +2604,7 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protoc
 		}
 	}
 	if j.Command.Kind == "iso-import" && j.MediaPath != "" {
-		if err := verifyISO(j.MediaPath, *j.Command.Media); err == nil {
+		if err := verifyISO(j.MediaPath, journalMedia(j)); err == nil {
 			j.Result.Status = "succeeded"
 			j.Result.Error = ""
 		} else {
@@ -1806,7 +2650,7 @@ func powerVM(ctx context.Context, p protocol.VMPowerRequest) error {
 		return errors.New("VM is " + current + "; resolve that state before a power request")
 	}
 	if _, err = managedVirsh(ctx, command, p.VMID); err != nil {
-		return errors.New("libvirt refused the " + p.Action + " request; inspect the VM on its host")
+		return powerRequestError{action: p.Action, cause: err}
 	}
 	return nil
 }
@@ -1852,6 +2696,11 @@ func (e *ManagedEngine) changeMedia(ctx context.Context, j *managedJournal, js [
 		}
 		if !on {
 			return errors.New("the install ISO must be on one of the VM's disk storage targets")
+		}
+		if storageWasPrepared(js, m.StorageID) {
+			if _, _, err = managedStorageByID(ctx, js, m.StorageID, 0); err != nil {
+				return err
+			}
 		}
 		if err = verifyISO(mediaPath, m); err != nil {
 			return err
@@ -2169,7 +3018,8 @@ func managedUpdateLayout(js []managedJournal, cur managedJournal, v protocol.VMC
 		if !ok {
 			index = len(l.Targets_)
 			at[d.StorageID] = index
-			l.Targets_ = append(l.Targets_, managedTarget{ID: d.StorageID, Path: s.Path, Dir: filepath.Join(s.Path, "nex-vms", v.ID), Bytes: 4 << 30})
+			path := storageRegistrationPath(s)
+			l.Targets_ = append(l.Targets_, managedTarget{ID: d.StorageID, Path: path, Dir: filepath.Join(path, "nex-vms", v.ID), Bytes: 4 << 30})
 		}
 		l.Targets_[index].Bytes += uint64(d.SizeGiB) << 30
 		dir := l.Targets_[index].Dir
@@ -2235,12 +3085,24 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 		}
 		return errors.New("stop the VM first to change " + strings.Join(names, ", "))
 	}
+	if running && v.Memory.Mode == "dedicated" {
+		// Live device edits cannot retrofit memory backing. Refuse before allocating or
+		// attaching anything, so an older guest can be upgraded with a stopped save.
+		b, err := managedVirsh(ctx, "dumpxml", v.ID, "--inactive")
+		var domain managedDomain
+		if err != nil || xml.Unmarshal(b, &domain) != nil {
+			return errors.New("cannot verify dedicated memory reservation before editing")
+		}
+		if !reflect.DeepEqual(domain.MemoryBacking, dedicatedMemoryBacking()) {
+			return errors.New("stop the VM and save its settings to apply the dedicated memory reservation before live editing")
+		}
+	}
 	if v.Name != cur.Command.VM.Name {
 		names, err := managedVirsh(ctx, "list", "--all", "--name")
 		if err != nil {
 			return err
 		}
-		for _, name := range strings.Split(strings.TrimSpace(string(names)), "\n") {
+		for _, name := range strings.Split(string(names), "\n") {
 			if name == v.Name {
 				return errors.New("VM name already exists")
 			}
@@ -2251,8 +3113,12 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 		return err
 	}
 	for _, t := range layout.Targets_ {
-		if err = localStorage(t.Path, t.Bytes); err != nil {
-			return err
+		_, access, readyErr := managedStorageByID(ctx, js, t.ID, t.Bytes)
+		if readyErr != nil {
+			return readyErr
+		}
+		if access.Path != t.Path {
+			return errors.New("storage mount identity changed before disk allocation")
 		}
 	}
 	nets := make([]protocol.NetworkRegistration, len(v.NICs))
@@ -2274,12 +3140,15 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 		for _, d := range v.Disks {
 			if d.StorageID == m.StorageID {
 				if s, err := managedStorage(js, d.StorageID); err == nil {
-					on = s.Path
+					on = storageRegistrationPath(s)
 				}
 			}
 		}
 		if on == "" || path != filepath.Join(on, "nex-media", m.ID+".iso") {
 			return errors.New("the install ISO must be published on one of the VM's storage targets")
+		}
+		if _, _, err = managedStorageByID(ctx, js, m.StorageID, 0); err != nil {
+			return err
 		}
 		if err = verifyISO(path, m); err != nil {
 			return err
@@ -2300,10 +3169,10 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 		return err
 	}
 	for _, t := range layout.Targets_ {
-		if err = managedSubdir(filepath.Join(t.Path, "nex-vms")); err != nil {
+		if err = managedRepositorySubdir(ctx, js, t.ID, filepath.Join(t.Path, "nex-vms")); err != nil {
 			return err
 		}
-		if err = managedSubdir(t.Dir); err != nil {
+		if err = managedRepositorySubdir(ctx, js, t.ID, t.Dir); err != nil {
 			return err
 		}
 	}
@@ -2327,7 +3196,7 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 		}
 	} else {
 		if v.Name != cur.Command.VM.Name {
-			if _, err = managedVirsh(ctx, "domrename", v.ID, v.Name); err != nil {
+			if _, err = managedVirsh(ctx, "domrename", v.ID, "--", v.Name); err != nil {
 				return fmt.Errorf("libvirt refused the rename (%v); inspect the VM on its host", err)
 			}
 		}

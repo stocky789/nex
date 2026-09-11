@@ -244,11 +244,13 @@ class ManagedVMContractTests(unittest.TestCase):
     def test_managed_request_fields_and_command_payloads_match_runtime(self):
         api = json.loads((ROOT / 'docs/api/openapi.json').read_text())
         schemas = api['components']['schemas']
-        source = (ROOT / 'internal/controller/managed.go').read_text()
-        registration = re.search(r'type registrationRequest struct\s*{(.*?)}', source, re.S)[1]
-        fields = set(re.findall(r'`json:"([^",]+)', registration))
-        for name in ('StorageRegistrationRequest', 'NetworkRegistrationRequest'):
-            self.assertEqual(set(schemas[name]['properties']), fields)
+        source = ((ROOT / 'internal/controller/managed.go').read_text() + '\n' +
+                  (ROOT / 'internal/controller/storage.go').read_text())
+        for name, struct_name in [('StorageRegistrationRequest', 'storageRegisterRequest'),
+                                  ('NetworkRegistrationRequest', 'registrationRequest')]:
+            registration = re.search(r'type ' + struct_name + r' struct\s*{(.*?)}', source, re.S)[1]
+            self.assertEqual(set(schemas[name]['properties']),
+                             set(re.findall(r'`json:"([^",]+)', registration)))
         request = re.search(r'type createVMRequest struct\s*{(.*?)}', source, re.S)[1]
         self.assertIn('protocol.VMCreateSpec', request)
         self.assertEqual(set(schemas['CreateVMRequest']['properties']),

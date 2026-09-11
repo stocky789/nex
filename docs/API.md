@@ -447,6 +447,103 @@ The browser uses its administrator session, exact HTTPS Origin and CSRF token. T
 outbound report response. `storage-register` and `network-register` check an existing
 local directory or bridge/active libvirt network without formatting or configuring networks.
 
+### VM storage repositories
+
+API impact: **changed contract** — protocol v2 adds `storage-repositories-v1`, typed
+`StorageRegistration` sources, `storage-update`, `storage-recheck` and `storage-detach`, and
+the Core-only credential handoff. Core owns the durable repository journal, canonical identity,
+generation, access observation and credential receipt. Controller holds only a disposable
+projection recovered from `Inventory.managed.storage`; a new Controller does not need paths or
+secrets re-entered.
+
+`POST /api/v1/storage` keeps the v1 `{path}` local-directory form. Typed registrations select
+`kind` and exactly one non-secret `source`: NFS `{server,export}`, existing mounted ZFS
+`{pool,dataset,mount_path}`, SMB `{server,share}`, or iSCSI `{portal,target_iqn,lun,wwid,
+filesystem_uuid,exclusive_target}`. Core allocates the repository ID and chooses the iSCSI
+mount path under `/var/lib/nex-storage/<repository-id>`; client input must not supply it. It verifies the
+source as its real QEMU identity, and reports canonical identity, capacity, access, capabilities
+and generation. NFS uses a Core-owned hard NFSv4 mount; ZFS only recognizes an imported mounted
+dataset and its GUID/health, then exposes its original `source.zfs.mount_path` through a
+Core-owned bind alias at `/var/lib/nex-storage/<repository-id>` recorded as `StorageRegistration.path`.
+VM disk references use that alias. Core never changes ZFS properties and detach removes only the
+alias; SMB uses an encrypted SMB3 mount with strict cache/locking; iSCSI
+uses the stable WWID and an existing ext4/XFS filesystem. Registration never formats a LUN,
+creates or imports a zpool, changes ZFS properties, creates a target/export, or configures
+multipath. Each repository has one writable Core in this release; `shared` observation never
+permits a second writer. Core rejects duplicate iSCSI target/portal sessions, including a
+second LUN on the same session, and canonical WWID/filesystem aliases before initiator effects.
+Generated mount paths do not distinguish ownership claims.
+
+For a newly registered SMB repository, Core atomically creates a durable marker at the share
+root and records its lowercase 32-hex `identity.smb.marker_id`. CIFS `filesystem_id` remains
+diagnostic because it can change on reconnect; Core verifies the marker against the exact SMB
+source and options before reuse. Existing legacy records without a marker are preserved without
+auto-upgrade and fail closed under their prior strict filesystem-ID check.
+
+For new NFS registrations, `identity.nfs.filesystem_id` is the NFSv4 kernel protocol profile
+`nfs4:<server-address-hex>:<port-hex>:<fsid-major-hex>:<fsid-minor-hex>`, rather than a
+`statfs` filesystem ID. Core binds the profile to the mounted path's exact `stat.Dev`, requires
+one matching `/proc/fs/nfsfs/volumes` row, and separately verifies the requested NFS source and
+hard NFSv4 mount options. A missing or ambiguous row fails closed; a zero protocol FSID is valid.
+The initial server-address profile is part of the identity, so a changed address fails closed;
+this release makes no NFS HA failover promise. Preserved older records that contain a `statfs`
+identity are not rewritten and fail closed instead of being silently upgraded.
+
+`POST /api/v1/storage/{id}/update`, `/recheck` and `/detach` carry a stable request ID, pool,
+host and expected generation. Update changes typed configuration; recheck only observes it;
+detach is refused while disks, retained disks, media or active work depend on it and never
+deletes backing data. HTTP `202` means Core work is queued. Retry an identical request ID to
+recover an interrupted client reply; a changed replay or stale generation is `409`. Core blocks
+disk, media and guest-start writes if its source identity has changed, a mount is missing,
+read-only or inaccessible, or capacity is insufficient. It never writes into an unmounted
+directory.
+
+Changing only a repository name is metadata-only: it preserves the existing Core credential and
+does not reconnect the backend. Changing a source or detaching a repository uses the full
+dependency guard. Credential-only rotation may keep an attached receipt, but only after every VM
+using the repository is shut off and no pending or `needs_attention` disk, media, or ISO work
+refers to it. If Core cannot prove rollback restored the previous backend state, it reports
+`needs_attention`; it does not present that uncertainty as a safe failed update.
+
+An identical Controller request replay only returns its original accepted operation; it does not
+send a second storage command. Separately, Core's managed worker runs `ReconcileStorage` in its
+periodic one-minute lane, outside heartbeat reporting. It serializes with storage mutations and
+retries at most one due original `storage-*` journal entry in `pending` or `needs_attention`
+state, retaining the original operation/result. Definitively failed entries are excluded. This
+continues while Controller is unavailable, so an accepted uncertain SMB or other storage action
+can reconcile without a browser or Controller replay.
+
+`POST /api/v1/storage/credentials` is administrator-session and CSRF protected. It accepts a
+credential request ID, target pool/host, at least one of a new registration request ID or
+existing repository ID, and `{username?,secret}`. Controller retains the bytes only for the 15-second
+bounded delivery window. The addressed authenticated Core redeems an opaque report offer,
+persists its secret locally, then acknowledges a durable receipt; only then does the endpoint
+return `201`. `503` means delivery is uncertain: retry the same request ID. Ordinary commands,
+inventory, operations, diagnostics and Controller persistence contain only opaque receipts or
+the redacted `credential_present` state. Older Cores remain protocol v1; an upgraded Core first
+receives the `storage_repositories` v2 acknowledgement in its report response, persists that
+fact, then advertises `storage-repositories-v1`. Upgrade Controller before Core.
+
+After an interrupted credential request, `GET /api/v1/storage/credentials/{request_id}` with
+the same pool/host and repository or registration-request scope returns Core-reported redacted
+receipt metadata when delivery completed. It never returns the credential bytes.
+
+`GET /api/v1/storage/credentials?pool_id=<pool>&host_id=<host>` lists only Core-reported
+redacted receipts currently eligible for explicit cleanup. Eligibility is an observation, not a
+reservation: `POST /api/v1/storage/credentials/{receipt}/retire` queues a Core-only command
+with `{request_id,pool_id,host_id}`, and Core rechecks that the receipt has no active or pending
+repository references before deleting its local secret. A refused cleanup changes nothing. A
+retired receipt cannot restore or recreate a secret through request replay; no Controller table
+or secret state is used for cleanup.
+
+The package also installs a QEMU prepare hook that invokes the internal
+`nex-core-agent storage-guard --state-dir <agent-state-dir>` (or
+`nex-core-local storage-guard`), passing at most 1 MiB of domain XML on stdin. It only reads
+the managed journal and native storage observations; it makes no libvirt calls and takes no
+journal lock. It blocks managed disks when journal or repository validation is unavailable,
+while leaving independent unknown appliance disks alone. This guard is a last admission check;
+it does not prove fencing against an unmanaged initiator.
+
 **Pool VLAN networks (changed contract, 2026-09-09):** `POST /api/v1/networks` also accepts
 `kind: "vlan"` with `uplink` (host NIC or bond name, at most 10 characters) and `vlan`
 (0–4094; 0 = untagged). `source` must be omitted; Controller derives the bridge name
@@ -499,17 +596,20 @@ Controller.
 `ManagedState` gains `appliances` (`Appliance`: the Controller appliance VMs the host
 deployed, from the appliance engine's deploy journal under the nex-core-local data directory,
 `/var/lib/nex/core-local/vmhost` by default; the standalone agent takes
-`--appliance-journal-dir`), `outcomes` (`ManagedOutcome`: every journal entry that ended
-`failed` or `needs_attention`, with the host's operation ID, kind, resource ID, name, status
+`--appliance-journal-dir`), `outcomes` (`ManagedOutcome`: terminal managed journal entries, with the host's
+operation ID, kind, resource ID, name, status
 and error, plus two derived outcomes: a failed automatic start after `vm-create`, reported
-under ID `<operation-id>:start` with kind `vm-power` and status `failed`, and every `pending`
-entry the host is not currently executing — orphaned by an agent process death or a
-persistence failure, never by a Controller replacement, which does not stop the agent —
-reported with status `needs_attention` and error `interrupted before completion; retry from a
-new request`; an entry still executing is not reported. The host re-observes a `vm-create` or
-`vm-update` entry interrupted after its definition step at most once a minute and promotes it
-to `succeeded` when the persistent domain matches, so a settled outcome leaves later reports;
-Controller then marks its `adopt-outcome:<host>:<operation_id>` row `succeeded`) and `missing_vms` (IDs of `vms` entries whose persistent domain
+under ID `<operation-id>:start` with kind `vm-power` and status `failed`, and received queued
+work from the Core command journal. A non-executing orphaned **non-storage** pending entry is
+reported as `needs_attention` with `interrupted before completion; retry from a new request`.
+Storage originals are different: Core's periodic recovery lane retries at most one due
+`storage-*` entry in `pending` or `needs_attention` state each minute, retaining the original
+operation ID and result; definitive storage failures are not retried. The host re-observes a
+`vm-create` or `vm-update` entry interrupted after its definition step at most once a minute
+and promotes it to `succeeded` when the persistent domain matches. The exact Core engine
+outcome overrides stale transport-journal results; Controller updates its matching operation
+from that raw outcome, while a replacement Controller records an unknown operation as passive
+`adopt-outcome:<host>:<operation_id>` history) and `missing_vms` (IDs of `vms` entries whose persistent domain
 `virsh list --all --uuid` no longer reports). Two host checks qualify the report:
 `managed-journal` is `failed` when a journal file cannot be read — that file is skipped and
 named in the error while every other entry is still reported, instead of the whole state
@@ -522,9 +622,8 @@ Controller, each managed report also: inserts the `appliances` row for a reporte
 the healthy libvirt observation lists (keyed by VM UUID, moved to the reporting host when the
 previous owner is revoked, audit `appliance.adopt`); records each outcome it does not hold as
 an operation with the host's operation ID, kind, status and error (actor `system`,
-`request_id adopt-outcome:<host>:<operation_id>`, audit `adopt.outcome`; the issuing
-Controller already holds its own row and ignores the outcome, so an interrupted `pending`
-entry reaches Task history only on a replacement Controller); and never skips an
+`request_id adopt-outcome:<host>:<operation_id>`, audit `adopt.outcome`) and updates an
+already-held nonterminal operation directly from Core's reported outcome; and never skips an
 entry silently — an entry already held under the same ID and kind is current, and any other
 entry it cannot adopt (invalid, conflicting ID/path/source/name, references not adopted on
 the host, missing from libvirt, or an appliance the host does not observe) leaves one
@@ -546,11 +645,26 @@ definitions return with their IDs and names. Not recovered, because it is Contro
 sites, administrator accounts and roles, audit history, enrollment tokens and the Controller
 CA. Each pool master lands in a newly created pool named after its hostname on the new
 Controller, as enrollment already does.
-`iso-import` fetches only the assigned media from the enrolled Controller over host mTLS;
+`iso-import` without `media.url` fetches only assigned media from the enrolled Controller over host mTLS;
 redirects and another host's media are refused. Controller stages a raw upload bounded by available staging free space minus a 256 MiB
 reserve, computes its size/SHA-256 and checks its ISO descriptor. There is no fixed
 per-image GiB cap. Core checks size, hash and descriptor again before publishing
 read-only media. See the OpenAPI operations for admission errors.
+
+`POST /api/v1/media/download` accepts JSON `{request_id, storage_id, name, url}` with
+administrator authentication, CSRF and same-origin protection. The selected verified storage
+chooses the host and pool; a fresh host must advertise `iso-download-v1` in addition to
+`managed-vm-v1`. Controller queues `iso-import` with `media.url`, zero size and empty hash.
+Core performs the public HTTP(S) download, checks DNS and redirect destinations against
+non-public addresses, omits Controller credentials and environment proxies, bounds bytes by
+storage capacity, validates ISO9660 and records computed size/SHA-256 in its durable journal.
+Controller never downloads or stages these URL bytes. URLs are limited to 4096 characters and
+cannot contain credentials or fragments; client responses and applied inventory omit them.
+Identical request retries return the same operation; changed payloads conflict. Poll media and
+operations for completion: initial zero size and empty hash become host-reported metadata.
+Older hosts reject admission and never receive URL commands. Core journal recovery handles
+Controller outages and ambiguous interrupted imports require attention. A replacement Controller
+recovers completed ISO identity, name, storage, size and hash from managed inventory.
 
 `vm-create` preserves pool membership separately from host placement, allocates a stable
 UUID and requires successful registrations/media for the same host and pool. Core rechecks
@@ -560,7 +674,8 @@ the definition is verified. The shared host engine's
 `NewManaged(stateDir)` selects its private journal;
 `Execute(ctx, command, fetch)` validates scope and payload, serializes effects and returns
 the durable `Result` separately from journal/persistence errors. The agent supplies the
-authenticated media fetcher; commands cannot supply a download URL.
+authenticated staging fetcher; Core constructs a separate public URL transport. Only hosts advertising
+`iso-download-v1` receive the optional public `media.url` source.
 The existing VM list still includes adopted Controller appliances with
 `role: controller` and `protected: true`; generic guests add `spec`, `operation_id`,
 `status` and optional `error`, with `role: guest`. Creation status never substitutes for
@@ -572,10 +687,17 @@ command payload and the VM list/report inventory carry `VMCreateSpec` in its com
 Controller and Core by `protocol.ValidateVMSpec`; existence of referenced resources, pool-wide
 MAC uniqueness and host capacity stay with their owners.
 
-- **Identity.** `name` (`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`; uniqueness is the host's
-  check, see *Host-owned defaults and validation*), `description` at most 4096 characters, and `guest_os` (`""`, `linux`,
+- **Identity.** `name` (nonblank, at most 200 UTF-8 bytes; spaces, mixed case, dots,
+  punctuation and Unicode are accepted, except `/`, control characters and XML-invalid
+  U+FFFE/U+FFFF; uniqueness is the host's check, see *Host-owned defaults and validation*), `description` at most 4096 characters, and `guest_os` (`""`, `linux`,
   `windows`, `other`) recorded for display and guest-tools advice. It installs nothing and does
   not change the VM's devices: disk bus and NIC model are chosen per device.
+  Names are preserved exactly in the Core managed journal and libvirt definition, including
+  surrounding spaces; UUIDs remain the identity for operations and disk paths. Create/update
+  reject invalid names with 400; Core validates the same rule before effects. Inventory adoption
+  and refresh retain the host's name. Authentication, authorization, request replay and async
+  results are unchanged. Upgrade Controller and Core together: older versions reject names
+  outside the former hostname syntax; protocol v1 and payload fields are unchanged.
 - **`cpu`.** `count` at least 1; Controller caps it at 64 and at host capacity. `sockets`,
   `cores` and `threads` all `0` select the documented default topology — one socket, `count`
   cores, one thread — instead of libvirt's own default; otherwise each must be at least 1 and
@@ -590,7 +712,15 @@ MAC uniqueness and host capacity stay with their owners.
   reported by every destination before planning a migration.
 - **`memory`.** `size_mib` at least 512, capped by Controller at 262144, is the ceiling in both
   modes. `dedicated` reserves it: `<memory>`/`<currentMemory>` at the ceiling, no balloon device,
-  and the whole amount counted against host capacity and never handed to another VM. `maximum`
+  and `<memoryBacking>` with `<allocation mode="immediate"/>`, `<locked/>`, `<nosharepages/>`.
+  Core verifies the persistent backing and current allocation after definition. Physical RAM
+  is allocated before execution and held without swapping or KSM sharing while QEMU runs;
+  stopped VMs retain only their Nex capacity commitment. QEMU overhead is locked too; no guessed
+  process hard limit is imposed. Existing VMs need updated Core, a full shutdown and a successful
+  stopped `vm-update` save before starting. Legacy dedicated live edits are refused before device
+  effects with a stop-and-save error. Agent upgrade, autostart or guest reboot alone does not
+  rewrite existing definitions. These are existing request/result contracts, with unchanged
+  authentication and retry handling; older Core cannot enforce this physical reservation. `maximum`
   caps without reserving: the same ceiling plus a virtio balloon with free page reporting, so the
   guest returns pages it frees. Reclaim needs the balloon driver running in the guest (built into
   Linux; virtio-win guest tools on Windows) — without it a guest drifts to its ceiling and holds
@@ -730,33 +860,54 @@ recovery remain independent of Controller availability. The
 
 ## Central VM power requests
 
-API impact: **new contract** — `powerVM` (`POST /api/v1/vms/{id}/power`), the `vm-power`
-command with its `power` payload (`VMPowerRequest`) in the report response, the
-`vm-power-v1` host capability and the `vm-power` operation/audit kind. Schemas, statuses and
-limits are in the generated reference.
+API impact: **changed contract** — `POST /api/v1/vms/{id}/power`, `vm-power`,
+`VMPowerRequest.after_operation_id`, `vm-power-queue-v1`, and managed task outcome adoption.
 
-Flow: an administrator posts `{request_id, action}` with `start`, `shutdown`, `reboot` or
-`force-stop`. Controller verifies the VM (adopted appliance or successfully created guest),
-its assigned host (fresh, unrevoked, in the VM's pool, reporting `managed-vm-v1` and
-`vm-power-v1`) and that no other power request for that VM is queued or dispatched, then
-stores a durable operation exactly like other managed commands; the same `request_id`
-replays the same operation. Core journals the stage before issuing the single libvirt
-request (`start`, `shutdown`, `reboot`, `destroy`): start and force-stop are idempotent
-against the observed state, shutdown and reboot are ACPI requests the guest may ignore, and
-paused or transitional states are refused. An interruption around the request is reconciled
-by observation only: `succeeded` when the observed state proves the outcome (running after
-start, shut off after shutdown or force-stop), otherwise `needs_attention`; a request is
-never re-issued. The observed VM state in host reports, not the task result, says what
-happened. Power requests are not pool-scoped settings, so they are excluded from the applied
-state a replaced Controller re-adopts. Older Core ignores the command with an
-"unsupported agent command" failure only if the capability gate is bypassed; Controller
-refuses with 409 when `vm-power-v1` is absent.
+An administrator posts `{request_id, action}` with `start`, `shutdown`, `reboot` or
+`force-stop`. Authentication, same-Origin/CSRF, fresh assigned host, pool and capability
+checks are unchanged. `request_id` replay returns the original operation; changed input
+under that ID is 409. With `vm-power-queue-v1`, another pending power, edit or media task
+no longer causes a busy refusal: Controller sends the latest pending operation ID as
+`after_operation_id` and returns 202. Older hosts retain the single-pending-request guard
+and its 409 upgrade message; requests carrying a prerequisite are withheld if a host
+stops advertising queue support. The browser closes confirmation after acceptance and
+shows the queued task; it does not retry in a loop.
 
-Checks: `internal/vmhost` (idempotent start/stop, refused shutdown, invalid action, paused
-guest, both interruption points) and `internal/controller` (404/400/409 refusals,
-capability gate, replay, pending-request conflict, dispatch payload, result, no leakage into
-the VM list); the [console QA report](qa/console/checks.md) records the lab walkthrough
-of Start, Reboot and Force stop from the browser.
+Controller dispatch preserves database insertion order, independent of wall-clock changes.
+Core persists each command and a monotonic admission order in its private agent `state.json`
+journal before running it through the existing single managed worker. Repeated delivery keeps
+the same position. A power request without an explicit prerequisite also records the latest
+pending same-VM operation locally, covering new requests after Controller replacement.
+Core checks that the prerequisite's managed journal belongs to the same VM and succeeded;
+missing, failed or uncertain prerequisites fail the power task before any effects. No
+prerequisite IDs or unsafe failures are guessed or blindly retried.
+
+Once Core has received the command, closing the browser, losing Controller connectivity,
+restarting the agent or replacing Controller does not discard it. Enrollment retains managed
+queue entries and their order, marks old transport results acknowledged, and reports queued
+and terminal tasks through `Inventory.managed.outcomes`. A replacement Controller adopts
+these as passive `adopt-outcome:<host>:<operation>` rows and follows Core's reported status;
+it never redispatches adopted tasks. Terminal adopted results do not regress to queued.
+Before Core receives a request, Controller acceptance is delivery-pending, not proof of
+host persistence. Outcome adoption batches database lookups and accepts at most 30,000 outcomes (execution
+entries, derived automatic-start results and additional queued commands). The 16 MiB report
+body limit still applies. The existing 10,000-entry journal ceiling still requires manual recovery
+when full; no automatic pruning or unbounded retry loop is added.
+
+Core journals the stage before its single libvirt request. Start and force-stop are
+idempotent against observed state; shutdown and reboot are ACPI requests. **Queue order
+waits for earlier task completion, not guest shutdown:** an ACPI task can succeed while the
+guest remains running. Check observed state before requesting a subsequent state change.
+Paused or transitional states are refused as task errors. Interrupted requests reconcile
+by observation only, never by blindly issuing another power effect; ambiguous outcomes
+remain `needs_attention`. A libvirt power-call error or timeout after the request could have
+taken effect is also uncertain, including when resuming a command before its first effect.
+Preflight refusals remain failed. Same-command Core reconciliation observes state without
+issuing the effect again; Controller request-ID replay alone does not schedule that reconciliation.
+Genuine task failures require inspection before a new request.
+
+Checks and limits: [power queue QA](qa/power-queue/checks.md). Existing native power behavior
+is recorded separately in the [console QA report](qa/console/checks.md).
 
 ## VM editing
 

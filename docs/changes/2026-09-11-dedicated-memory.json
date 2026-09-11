@@ -1,0 +1,58 @@
+{
+  "summary": "Physically preallocate and lock dedicated VM RAM with libvirt. API impact: existing contract; Core enforces VMCreateSpec.memory through vm-create/vm-update, retains vm-power outcomes and inventory adoption. Older definitions need a stopped save.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/memory_test.go",
+    "internal/vmhost/memory_libvirt_test.go",
+    "internal/protocol/managed.go",
+    "web/src/vm-create.tsx",
+    "web/src/vm-edit.tsx",
+    "web/src/managed.tsx",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/guide/guest-tools.md",
+    "docs/plans/2026-09-10-vm-creation-system.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/dedicated-memory/checks.md",
+    "docs/qa/dedicated-memory/create-memory.png",
+    "docs/qa/dedicated-memory/details-mobile.png",
+    "docs/qa/dedicated-memory/editor-mobile.png"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Explain running physical reservation versus stopped capacity commitment, Core upgrade and stopped-save steps, overhead and failure recovery.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/edit-virtual-machine.md",
+      "docs/guide/guest-tools.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Existing fields and auth/retry contracts; document native enforcement and existing definition/Core compatibility.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Correct an implemented memory mode; no milestone scope or acceptance status changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Dedicated memory is enforced by the host, with no Controller-owned reservation state.",
+    "record": "Pool master managed-journal VMCreateSpec.memory plus persistent libvirt domain backing. Inventory.managed.vms reports the same UUID/mode/size for fresh Controller adoption; no rewrite or interruption of running guests."
+  },
+  "verification": {
+    "method": "Focused red/green regression, Go race suites, native disposable libvirt RAM/locking/failure checks, API checks and simulated Chromium copy/layout review; see report for actual results and untested limits.",
+    "evidence": [
+      "docs/qa/dedicated-memory/checks.md"
+    ]
+  }
+}

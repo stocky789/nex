@@ -26,7 +26,8 @@ or listed under follow-ups with its reason:
 | Clipboard browser → guest and guest → browser | RFB extended clipboard; QEMU `qemu-vdagent` channel + `spice-vdagent` in the guest | yes |
 | Type text as keystrokes (works in installers and text consoles) | noVNC `sendKey` per character | yes |
 | Screenshot of the current display | noVNC `toBlob`, browser download | yes |
-| View-only mode, quality presets, manual reconnect | noVNC `viewOnly`, `qualityLevel`/`compressionLevel`, ticket re-issue | yes |
+| View-only mode, manual reconnect | noVNC `viewOnly`, ticket re-issue | yes |
+| Image quality presets | Requires verified host-side lossy encoding support | removed 2026-09-11; unsupported by current configuration |
 | Full screen with the toolbar, console-only browser window | Fullscreen API on the panel; `#/console/<vm>` route | yes |
 | Absolute pointer in any guest | USB tablet input device in the VM definition | yes |
 | Guest agent facts (OS, hostname, addresses) and channel readiness | `qemu-agent-command` and live channel states reported per running VM | yes |
@@ -119,3 +120,31 @@ Serial console; stopped-VM editing including a console device upgrade for older 
 tools slices 2 and 3 (set guest address through `guest-exec`, first-boot seeds); Windows guest
 walkthrough (virtio-win guest tools); multiple viewers, session listing and role scoping in
 Phase 8; graceful shutdown through the guest agent when it is connected.
+
+## Quality menu removal — 2026-09-11
+
+Remove the quality selector, saved quality handling and private noVNC framebuffer refresh
+hook from the shared Controller/Core-local console. The previous lab check proved only
+that the stream survived selecting presets, not that image quality changed. Current Core
+uses the standard emulator without lossy VNC; restoring the wrapper would repeat BUG-0069.
+Use noVNC's default encoding settings and keep the existing View controls. Image presets
+can return only with supported host integration and measured rendering/traffic evidence.
+
+API impact: **none** — the UI still requests the same console ticket, Controller issues
+`console.open`, the agent connects the same Core VNC socket and the relay carries RFB;
+Core-local `/api/local/v1/vms/{id}/console` still opens its direct authenticated stream.
+No client-facing or Controller/Core schema, command, authorization or result changes.
+Guide impact: **updated** — remove the obsolete menu instructions. State owner: **none**;
+no new durable state, and old browser quality preferences are ignored. The existing local
+View preference is retained. [Verification](../qa/console-quality/checks.md).
+
+## Collapsible toolbar — 2026-09-11
+
+A small arrow at the screen's top-left edge hides/restores the shared console heading,
+actions, clipboard panel and help footer. Keep connection status and errors visible,
+retain the live canvas and input settings, and enlarge the embedded display; popout and
+fullscreen views reclaim the freed space. Default expanded; per-mount UI state only.
+API impact: **none** — existing Controller console tickets, `console.open`, agent socket
+attachment, RFB relay and Core-local authenticated streams are unchanged. No client API
+changes or durable records. Guide impact: **updated**. No phase gate status change.
+[Browser verification and limits](../qa/console-toolbar/checks.md).

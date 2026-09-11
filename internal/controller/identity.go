@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"time"
 )
 
@@ -110,7 +111,7 @@ func (c *Controller) enroll(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &v) {
 		return
 	}
-	if v.Version != protocol.Version {
+	if v.Version != protocol.LegacyVersion && v.Version != protocol.Version {
 		fail(w, 409, "unsupported protocol version")
 		return
 	}
@@ -275,7 +276,7 @@ func (c *Controller) rotate(w http.ResponseWriter, r *http.Request, host string)
 	if !decode(w, r, &v) {
 		return
 	}
-	if v.Version != protocol.Version {
+	if v.Version != protocol.LegacyVersion && v.Version != protocol.Version {
 		fail(w, 409, "unsupported protocol version")
 		return
 	}
@@ -315,7 +316,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	if !decodeLimit(w, r, &v, 16<<20) {
 		return
 	}
-	if v.Version != protocol.Version {
+	if v.Version != protocol.LegacyVersion && v.Version != protocol.Version {
 		fail(w, 409, "unsupported protocol version")
 		return
 	}
@@ -363,6 +364,14 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		return
 	}
 	out := protocol.ReportResponse{Commands: []protocol.Command{}, AcknowledgedResults: []string{}}
+	// A v2 Core asks for this acknowledgement before it advertises the repository
+	// capability. v1 peers receive their original response shape unchanged.
+	if v.Version == protocol.Version {
+		out.StorageRepositories = &protocol.StorageRepositorySupport{ProtocolVersion: protocol.Version, Capability: protocol.StorageRepositoryCapability}
+		if slices.Contains(v.Capabilities, protocol.StorageRepositoryCapability) {
+			out.CredentialOffers = c.credentials.offers(host)
+		}
+	}
 	for _, res := range v.Results {
 		var status string
 		err = tx.QueryRow("SELECT status FROM operations WHERE id=? AND host_id=?", res.OperationID, host).Scan(&status)
@@ -398,6 +407,9 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 			return
 		}
 		if v.Inventory != nil {
+			if v.Inventory.Managed != nil {
+				c.credentials.observeReceipts(host, v.Inventory.Managed.CredentialReceipts)
+			}
 			if previous.Valid {
 				if err = json.Unmarshal([]byte(previous.String), &merged); err != nil {
 					fail(w, 500, "stored inventory invalid")
@@ -433,7 +445,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		}
 	}
 	out.Consoles = c.consoles.pending(host)
-	rows, err := tx.Query("SELECT id,kind FROM operations WHERE host_id=? AND status IN ('queued','dispatched') ORDER BY created_at LIMIT 100", host)
+	rows, err := tx.Query("SELECT o.id,o.kind FROM operations o WHERE o.host_id=? AND o.status IN ('queued','dispatched') AND NOT (o.request_id='adopt-outcome:'||o.host_id||':'||o.id AND NOT EXISTS (SELECT 1 FROM managed_resources r WHERE r.operation_id=o.id)) ORDER BY o.rowid", host)
 	if err != nil {
 		fail(w, 500, "command lookup failed")
 		return
@@ -465,7 +477,19 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 				return
 			}
 		}
+		if cmd.Power != nil && cmd.Power.AfterOperationID != "" && !slices.Contains(v.Capabilities, protocol.PowerQueueCapability) {
+			continue
+		}
+		if cmd.Media != nil && cmd.Media.URL != "" && !slices.Contains(v.Capabilities, protocol.ISODownloadCapability) {
+			continue
+		}
+		if storageRepositoryCommand(cmd) && (v.Version != protocol.Version || !slices.Contains(v.Capabilities, protocol.StorageRepositoryCapability)) {
+			continue
+		}
 		filtered = append(filtered, cmd)
+		if len(filtered) == 100 {
+			break
+		}
 	}
 	out.Commands = filtered
 	for _, cmd := range out.Commands {
@@ -494,6 +518,16 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	}
 	c.cleanMedia()
 	write(w, 200, out)
+}
+
+func storageRepositoryCommand(cmd protocol.Command) bool {
+	if cmd.StorageLifecycle != nil {
+		return true
+	}
+	if cmd.CredentialRetire != nil {
+		return true
+	}
+	return cmd.Kind == "storage-register" && cmd.Storage != nil && cmd.Storage.StorageKind() != protocol.StorageKindLocal
 }
 
 func transactionIdentity(tx *sql.Tx, r *http.Request, host string) bool {

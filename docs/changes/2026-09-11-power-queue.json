@@ -1,0 +1,61 @@
+{
+  "summary": "Queue VM power behind pending work on Core instead of reopening a busy-error dialog. API impact: changed contract; power prerequisite, queue capability, FIFO delivery and passive outcome adoption.",
+  "paths": [
+    "internal/protocol/power.go",
+    "internal/protocol/managed.go",
+    "internal/agent/state.go",
+    "internal/agent/run.go",
+    "internal/agent/client.go",
+    "internal/agent/queue_test.go",
+    "internal/controller/power.go",
+    "internal/controller/power_test.go",
+    "internal/controller/identity.go",
+    "internal/controller/managed.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/managed_update_test.go",
+    "internal/vmhost/power_test.go",
+    "web/src/managed.tsx",
+    "tests/integration/phase1_browser.py",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/vm-power.md",
+    "docs/plans/2026-09-09-first-managed-vm.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/power-queue/checks.md",
+    "internal/controller/monitor.go"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Describe queued acceptance, predecessor failure, recovery, older Core and ACPI limits.",
+    "pages": [
+      "docs/guide/vm-power.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Document optional VMPowerRequest.after_operation_id, vm-power-queue-v1, host FIFO/persistence, queued/terminal outcomes and passive adoption without redispatch.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Corrects pending power behavior without changing milestone scope or acceptance status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Core owns received work, execution order, prerequisites and outcome; Controller only delivers and mirrors.",
+    "record": "Pool master Core agent state.json Journal stores full commands, Order and local AfterOperationID; managed-vms journal stores execution prerequisites/results. Inventory.managed.outcomes recovers queued and terminal tasks in a fresh Controller as passive adopted operations, never redispatched."
+  },
+  "verification": {
+    "method": "Go suite, UI checks/build, API reference/contract checks and simulated browser queue flow passed. Independent review findings fixed with focused regression checks; native queued guest execution not claimed.",
+    "evidence": [
+      "docs/qa/power-queue/checks.md"
+    ]
+  }
+}

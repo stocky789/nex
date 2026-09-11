@@ -267,7 +267,7 @@ func TestAppliedPromotesInterruptedEdit(t *testing.T) {
 	}
 	fakeCommand(t, "virsh", "printf '%s\\n' "+v0.ID)
 	got, _ := e.Applied(context.Background())
-	if len(states) != 1 || states[0] != "op-1:shut off" || len(got.Outcomes) != 0 || len(got.VMs) != 1 || got.VMs[0].Revision != 1 {
+	if len(states) != 1 || states[0] != "op-1:shut off" || len(got.Outcomes) != 2 || got.Outcomes[0].Status != "succeeded" || got.Outcomes[1].Status != "succeeded" || len(got.VMs) != 1 || got.VMs[0].Revision != 1 {
 		t.Fatalf("interrupted edit not promoted: %v %+v", states, got)
 	}
 	saved, err := e.readJournal("op-1.json")

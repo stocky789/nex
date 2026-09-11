@@ -7,8 +7,82 @@ import (
 	"nex.local/nex/internal/protocol"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
+
+func TestManagedPowerDependencies(t *testing.T) {
+	for _, tc := range []struct{ name, kind, status string }{
+		{"create", "vm-create", "succeeded"},
+		{"edit", "vm-update", "succeeded"},
+		{"power", "vm-power", "succeeded"},
+		{"media", "vm-media", "succeeded"},
+		{"failed", "vm-update", "failed"},
+		{"uncertain", "vm-update", "needs_attention"},
+		{"pending", "vm-update", "pending"},
+		{"missing", "vm-update", "succeeded"},
+		{"wrong-vm", "vm-update", "succeeded"},
+		{"not-vm", "storage-register", "succeeded"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := NewManaged(t.TempDir())
+			log := filepath.Join(t.TempDir(), "calls")
+			t.Setenv("VMHOST_LOG", log)
+			fakeCommand(t, "virsh", `echo "$3" >> "$VMHOST_LOG"; case "$3" in domstate) echo 'shut off';; start) exit 0;; *) exit 1;; esac`)
+			v := managedTestVM()
+			v.Revision = 1
+			p := protocol.VMPowerRequest{VMID: v.ID, PoolID: v.PoolID, HostID: v.HostID, Action: "start", AfterOperationID: "before"}
+			before := protocol.Command{OperationID: "before", Kind: tc.kind}
+			switch tc.kind {
+			case "vm-create":
+				v.Revision = 0
+				before.VM = &v
+			case "vm-update":
+				before.VM = &v
+			case "vm-power":
+				before.Power = &protocol.VMPowerRequest{VMID: v.ID, PoolID: v.PoolID, HostID: v.HostID, Action: "shutdown"}
+			case "vm-media":
+				before.VMMedia = &protocol.VMMediaRequest{VMID: v.ID, PoolID: v.PoolID, HostID: v.HostID, Action: "eject"}
+			case "storage-register":
+				before.Storage = &protocol.StorageRegistration{ID: v.ID, PoolID: v.PoolID, HostID: v.HostID, Name: "Storage", Path: "/srv/vms"}
+			}
+			if tc.name == "wrong-vm" {
+				v.ID = "11111111-2222-4333-a444-555555555555"
+			}
+			if tc.name != "missing" {
+				if err := e.save(managedJournal{Command: before, Result: protocol.Result{OperationID: before.OperationID, Status: tc.status}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			c := protocol.Command{OperationID: "after", Kind: "vm-power", Power: &p}
+			want := "failed"
+			if tc.name == "create" || tc.name == "edit" || tc.name == "power" || tc.name == "media" {
+				want = "succeeded"
+			}
+			for i := 0; i < 2; i++ {
+				r, err := NewManaged(e.stateDir).Execute(context.Background(), c, nil)
+				if err != nil || r.Status != want || (want == "failed" && r.Error == "") {
+					t.Fatalf("attempt %d: %+v %v", i, r, err)
+				}
+			}
+			calls, err := os.ReadFile(log)
+			if want == "succeeded" {
+				if err != nil || string(calls) != "domstate\nstart\n" {
+					t.Fatalf("power must execute exactly once: %q %v", calls, err)
+				}
+			} else if len(calls) != 0 {
+				t.Fatalf("failed dependency caused host effects: %q", calls)
+			}
+		})
+	}
+	for _, dependency := range []string{"../escape", strings.Repeat("x", 65), "self"} {
+		c := protocol.Command{OperationID: "self", Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: managedTestVM().ID, PoolID: "p", HostID: "h", Action: "start", AfterOperationID: dependency}}
+		if validateManaged(c) == nil {
+			t.Fatalf("invalid dependency accepted: %q", dependency)
+		}
+	}
+}
 
 func TestManagedPowerRequests(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
@@ -36,8 +110,8 @@ func TestManagedPowerRequests(t *testing.T) {
 		t.Fatalf("reboot %+v", r)
 	}
 	t.Setenv("VMHOST_FAIL", "shutdown")
-	if r, _ := e.Execute(context.Background(), command("p4", "shutdown"), nil); r.Status != "failed" || r.Error == "" {
-		t.Fatalf("refused shutdown must fail honestly: %+v", r)
+	if r, _ := e.Execute(context.Background(), command("p4", "shutdown"), nil); r.Status != "needs_attention" || r.Error == "" {
+		t.Fatalf("unconfirmed shutdown must remain uncertain: %+v", r)
 	}
 	t.Setenv("VMHOST_FAIL", "")
 	if r, _ := e.Execute(context.Background(), command("p5", "explode"), nil); r.Status != "failed" {
@@ -81,5 +155,107 @@ func TestManagedPowerRequests(t *testing.T) {
 	}
 	if applied, _ := e.Applied(context.Background()); len(applied.VMs) != 0 {
 		t.Fatal("power requests must not appear as applied settings")
+	}
+}
+
+func TestManagedPowerRequestCancellationSettlesFromObservation(t *testing.T) {
+	for _, fromStage := range []string{"initial", "validating"} {
+		t.Run(fromStage, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "state")
+			state := filepath.Join(t.TempDir(), "state")
+			log := filepath.Join(t.TempDir(), "virsh.log")
+			if err := os.WriteFile(state, []byte("shut off\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("VMHOST_POWER_STATE", state)
+			t.Setenv("VMHOST_POWER_LOG", log)
+			fakeCommand(t, "virsh", `case "$3" in
+domstate) cat "$VMHOST_POWER_STATE";;
+start) echo start >> "$VMHOST_POWER_LOG"; echo running > "$VMHOST_POWER_STATE"; sleep 2;;
+esac`)
+			e := NewManaged(dir)
+			c := protocol.Command{OperationID: "start-deadline", Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: "11111111-2222-4333-a444-555555555555", PoolID: "pool1", HostID: "host1", Action: "start"}}
+			if fromStage == "validating" {
+				if err := os.MkdirAll(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := e.save(managedJournal{Command: c, Result: protocol.Result{OperationID: c.OperationID, Status: "pending"}, Stage: "validating"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			result := make(chan struct {
+				r   protocol.Result
+				err error
+			}, 1)
+			go func() {
+				r, err := e.Execute(ctx, c, nil)
+				result <- struct {
+					r   protocol.Result
+					err error
+				}{r, err}
+			}()
+			until := time.After(2 * time.Second)
+			for {
+				if calls, _ := os.ReadFile(log); string(calls) == "start\n" {
+					break
+				}
+				select {
+				case <-until:
+					t.Fatal("start request did not reach libvirt before cancellation")
+				case <-time.After(5 * time.Millisecond):
+				}
+			}
+			cancel()
+			firstResult := <-result
+			first, err := firstResult.r, firstResult.err
+			if err != nil || first.Status != "needs_attention" || first.Error == "" {
+				t.Fatalf("deadline start = %+v, %v", first, err)
+			}
+			second, err := e.Execute(context.Background(), c, nil)
+			if err != nil || second.Status != "succeeded" {
+				t.Fatalf("replayed observed start = %+v, %v", second, err)
+			}
+			calls, err := os.ReadFile(log)
+			if err != nil || string(calls) != "start\n" {
+				t.Fatalf("start must be issued once, calls=%q err=%v", calls, err)
+			}
+		})
+	}
+}
+
+func TestManagedPowerPostEffectFailureIsUncertain(t *testing.T) {
+	for _, tc := range []struct {
+		action, before, after, wantReplay string
+	}{
+		{"shutdown", "running", "shut off", "succeeded"},
+		{"reboot", "running", "running", "needs_attention"},
+		{"force-stop", "running", "shut off", "succeeded"},
+	} {
+		t.Run(tc.action, func(t *testing.T) {
+			state := filepath.Join(t.TempDir(), "state")
+			if err := os.WriteFile(state, []byte(tc.before+"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("VMHOST_POWER_STATE", state)
+			log := filepath.Join(t.TempDir(), "virsh.log")
+			t.Setenv("VMHOST_POWER_LOG", log)
+			fakeCommand(t, "virsh", `case "$3" in domstate) cat "$VMHOST_POWER_STATE";; *) echo "$3" >> "$VMHOST_POWER_LOG"; echo "$VMHOST_POWER_AFTER" > "$VMHOST_POWER_STATE"; exit 1;; esac`)
+			t.Setenv("VMHOST_POWER_AFTER", tc.after)
+			c := protocol.Command{OperationID: "uncertain-" + tc.action, Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: "11111111-2222-4333-a444-555555555555", PoolID: "pool1", HostID: "host1", Action: tc.action}}
+			e := NewManaged(filepath.Join(t.TempDir(), "managed"))
+			r, err := e.Execute(context.Background(), c, nil)
+			if err != nil || r.Status != "needs_attention" {
+				t.Fatalf("post-effect %s = %+v, %v", tc.action, r, err)
+			}
+			replayed, err := e.Execute(context.Background(), c, nil)
+			if err != nil || replayed.Status != tc.wantReplay {
+				t.Fatalf("replayed %s = %+v, %v", tc.action, replayed, err)
+			}
+			calls, err := os.ReadFile(log)
+			if err != nil || strings.Count(string(calls), "\n") != 1 {
+				t.Fatalf("replayed %s issued a second action: %q, %v", tc.action, calls, err)
+			}
+		})
 	}
 }

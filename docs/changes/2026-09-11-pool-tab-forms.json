@@ -1,0 +1,36 @@
+{
+  "summary": "BUG-0080: a pool registration form (Register network, Upload ISO, Create VM wizard) stayed on screen after the operator selected another pool view, so the page appeared not to change until Close was clicked. Each form is now paired with the view that opens it and hidden elsewhere, while staying mounted so entries and wizard progress survive the wizard's own Open Storage / Open Networking / Open ISO library round trip. API impact: none (UI rendering only).",
+  "paths": [
+    "web/src/managed.tsx",
+    "web/src/managed.test.mjs",
+    "web/package.json",
+    "docs/guide/create-virtual-machine.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/pool-tab-forms/checks.md",
+    "docs/changes/2026-09-11-pool-tab-forms.json",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Visible behaviour changed for a documented workflow: the guide describes leaving the wizard for Storage, Networking or the ISO library and returning, so it now states that the wizard and the registration forms are hidden while another view is selected and come back with their entries.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Only which pool view renders an already-loaded form changed. No Controller or Core endpoint, request body, response, agent command, event or stream is involved, and no request identity or retry behaviour changed.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state is added or changed. The open form is browser-local component state, and its pending-request identity in session storage is unchanged."
+  },
+  "verification": {
+    "method": "npm --prefix web run typecheck, npm --prefix web run test (new web/src/managed.test.mjs renders the pool view for every form and every view and asserts hidden-away-from-its-own-view; confirmed failing on the pre-fix markup with 'network form on Virtual machines: wrong visibility'), npm --prefix web run build. Browser review in headless Chromium through a throwaway harness that mounts the real pool view with fixture data and replays operator clicks; captures inspected. tests/integration/managed_vm_browser.py --simulated could not complete: it stops at the 'Register local storage' control renamed by unrelated in-progress storage work, so this change is not covered by the simulated Controller suite.",
+    "evidence": [
+      "web/src/managed.test.mjs",
+      "docs/qa/pool-tab-forms/checks.md"
+    ]
+  }
+}

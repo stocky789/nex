@@ -25,12 +25,14 @@ that a guest without ACPI support, such as a firmware boot menu, ignores. Editin
    and **Force stop** buttons act on this VM; only the ones that fit the observed state are
    enabled, and hovering a greyed button shows the same reason.
 2. Select **Start** for a stopped VM. The request is submitted immediately and the notice
-   says it was requested.
+   says it was queued. If an earlier task is still working on this VM, the host runs
+   the power task after it finishes; you do not need to keep pressing Start.
 3. For a running VM, select **Shut down**, **Reboot** or **Force stop**. A confirmation
    dialog opens; read it, then select **Confirm shut down**, **Confirm reboot** or
    **Confirm force stop**. **Cancel** or Escape closes the dialog without any request. If
    the Controller rejects a request the dialog stays open (for Start, it opens) and shows
-   the error; confirming again retries the same request.
+   the error; confirming again retries the same request. An already-pending task is queued
+   behind automatically on an updated host, without opening a busy-error dialog.
 4. Follow the `vm-power` task under **Recent tasks** or **Task history**, then check the
    observed state under the VM's name after the next host report.
 
@@ -39,7 +41,8 @@ that a guest without ACPI support, such as a firmware boot menu, ignores. Editin
 The task shows `succeeded` when the host issued the request. Within a host report interval
 the observed state changes to `running` after Start, or `shut off` after Force stop. After
 Shut down or Reboot the state follows what the guest does: a guest that handles ACPI shuts
-down or restarts; the Debian installer boot menu, for example, stays running. **Activity**
+down or restarts; the Debian installer boot menu, for example, stays running. Queue order waits for task completion; it does not wait for an ACPI shutdown to finish.
+Check observed state before asking for the next state change. **Activity**
 records `vm-power` with the administrator.
 
 ## Troubleshooting
@@ -51,13 +54,19 @@ records `vm-power` with the administrator.
   state is unchanged by the Controller connection.
 - **"The host agent does not support central power requests":** upgrade Nex Core on that
   host to a build reporting `vm-power-v1`.
-- **"a power request for this VM is still pending":** one request per VM is in flight at a
-  time. Wait for its task to finish, then submit again.
+- **"still pending; upgrade Nex Core to queue power requests":** this host runs an older
+  Core. Upgrade Controller and Core together to queue power behind existing tasks.
+- **Task is waiting:** follow the earlier task in Recent tasks. Once the host receives your
+  request, it retains it across browser closure, Controller outage and agent restart.
+  A replacement Controller recovers the host's queue. Acceptance before host delivery does
+  not establish that the host has saved it.
+- **A prerequisite task failed or needs attention:** the queued power task fails without
+  issuing power. Resolve the earlier task, then submit a new power request.
 - **Task reports `failed`:** read its error. Common causes are a VM in a paused or
-  transitional state, or libvirt refusing the request on the host. Inspect the VM on its
-  host before retrying.
-- **Task reports `needs_attention`:** the host was interrupted around the request and the
-  observed state cannot confirm the outcome (for example a reboot, or a shutdown of a VM
+  transitional state, or a prerequisite that failed before the power request was issued.
+  Inspect the VM on its host before retrying.
+- **Task reports `needs_attention`:** the host was interrupted, or the libvirt call failed or timed out
+  after the request could have taken effect, and the observed state cannot confirm the outcome (for example a reboot, or a shutdown of a VM
   still running). Check the VM's current state and submit a new request; Nex never
   re-issues an interrupted power request on its own.
 - **Shut down or Reboot succeeded but the VM is still running:** the guest ignored the
@@ -76,3 +85,7 @@ replay and dispatch; contract and documentation checks; and the browser walkthro
 Start, Reboot (ignored by the boot menu) and Force stop against a real guest in a
 disposable nested-KVM lab. Shut down of a guest that honors ACPI, physical hardware and
 hosted CI were not exercised.
+
+The [power queue checks](../qa/power-queue/checks.md) cover queued admission, ordering,
+restart/replacement, prerequisite failures and the one-click Start browser flow using
+simulation; native guest state changes were not repeated for this queue change.

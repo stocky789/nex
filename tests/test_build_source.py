@@ -21,7 +21,7 @@ class SourceArchiveTests(unittest.TestCase):
                          'internal/server.key', 'installer/private.go', '.env', '.cache/password',
                          'appliance/firstboot.py', 'appliance/signing.key',
                          'packaging/core-local/build.py', 'packaging/core-local/nex-root-auth.c',
-                         'packaging/core-local/nex-core-local.pam', 'docs/api/local-openapi.json'):
+                         'packaging/core-local/nex-core-local.pam', 'packaging/core-local/libvirtd-apparmor-policy.py', 'docs/api/local-openapi.json'):
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('source')
@@ -32,7 +32,7 @@ class SourceArchiveTests(unittest.TestCase):
             self.assertTrue((target / 'docs/brand/README.md').exists())
             for name in ('appliance/firstboot.py', 'packaging/core-local/build.py',
                          'packaging/core-local/nex-root-auth.c', 'packaging/core-local/nex-core-local.pam',
-                         'docs/api/local-openapi.json'):
+                         'packaging/core-local/libvirtd-apparmor-policy.py', 'docs/api/local-openapi.json'):
                 self.assertTrue((target / name).exists())
             for name in ('internal/server.key', 'installer/private.go', '.env', '.cache/password',
                          'appliance/signing.key'):

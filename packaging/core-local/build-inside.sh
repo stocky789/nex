@@ -8,7 +8,7 @@ go build -mod=vendor -trimpath -ldflags "-X nex.local/nex/internal/version.Versi
 (cd web && npm ci && npm run typecheck && npm run build)
 cc -Wall -Wextra -Werror -O2 packaging/core-local/nex-root-auth.c -lpam -o /build/nex-root-auth
 pkg=/build/package
-install -d "$pkg/DEBIAN" "$pkg/usr/lib/nex" "$pkg/usr/lib/systemd/system" "$pkg/usr/share/nex/core-local/web" "$pkg/usr/share/nex/appliance" "$pkg/usr/share/doc/nex-core-local"
+install -d "$pkg/DEBIAN" "$pkg/usr/lib/nex" "$pkg/usr/lib/systemd/system" "$pkg/usr/share/nex/core-local/web" "$pkg/usr/share/nex/appliance" "$pkg/usr/share/doc/nex-core-local" "$pkg/etc/libvirt/hooks/qemu.d" "$pkg/usr/share/nex/core-local"
 install -d "$pkg/usr/share/keyrings"
 install -d "$pkg/etc/pam.d" "$pkg/etc/nex"
 printf 'repo_url=https://nexvirtualization.com/apt\n' > "$pkg/etc/nex/updates.conf"
@@ -20,6 +20,10 @@ printf '/etc/pam.d/nex-core-local\n/etc/nex/updates.conf\n' > "$pkg/DEBIAN/conff
 install -m755 /build/nex-root-auth "$pkg/usr/lib/nex/"
 install -m755 /build/nex-core-local "$pkg/usr/lib/nex/"
 install -m755 packaging/core-local/core-local-setup "$pkg/usr/lib/nex/"
+install -m755 packaging/core-local/libvirtd-apparmor-policy.py "$pkg/usr/lib/nex/libvirtd-apparmor-policy"
+install -m755 packaging/core-local/storage-downgrade-guard.py "$pkg/usr/lib/nex/storage-downgrade-guard"
+printf '2\n' > "$pkg/usr/share/nex/core-local/storage-format-v2"
+install -m755 packaging/core-local/nex-storage-guard.sh "$pkg/etc/libvirt/hooks/qemu.d/nex-storage-guard"
 # Retain the wrapper for existing domain definitions; new VMs use libvirt's emulator.
 install -m755 packaging/core-local/qemu-vnc-lossy "$pkg/usr/lib/nex/"
 install -m755 appliance/host-recovery.py "$pkg/usr/lib/nex/host-recovery"
@@ -48,7 +52,7 @@ Package: nex-core-local
 Version: ${NEX_VERSION}
 Architecture: amd64
 Maintainer: Nex contributors
-Depends: init-system-helpers, libc6 (>= 2.41), python3, openssl, libpam0g, libpam-modules, iproute2, libvirt-clients, libvirt-daemon-system, qemu-system-x86, qemu-utils, genisoimage
+Depends: init-system-helpers, libc6 (>= 2.41), python3, openssl, libpam0g, libpam-modules, iproute2, libvirt-clients, libvirt-daemon-system, qemu-system-x86, qemu-utils, genisoimage, nfs-common, cifs-utils, open-iscsi
 Section: admin
 Priority: optional
 Description: Nex Core local management and Controller virtual appliance

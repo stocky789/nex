@@ -1542,7 +1542,28 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 - Avoid: fixing a shared layout defect in one page's scoped styles, which leaves every other page
   carrying it until something new exposes it.
 
-## BUG-0073 — Website browser check crashed against the hardened deployment's image policy
+## BUG-0073 — Private identities appeared in public repository content
+
+- Date: 2026-09-11
+- Symptom: documentation, QA evidence, installer examples, and publishing defaults exposed
+  personal names, private infrastructure details, and observed environment identifiers.
+- Root cause: historical notes and lab output were retained without anonymization; the
+  existing privacy check covered website inputs only. APT bootstrap also hard-coded the
+  sudoers account instead of using its configured publishing account.
+- Fix: sanitize current files, use role labels and consistent anonymous evidence aliases,
+  require configured publishing accounts, and add the public-repository rule to AGENTS.md.
+- Regression evidence: `python3 -m unittest tests.test_repository_privacy
+  tests.test_apt_bootstrap_privacy tests.test_apt_publish tests.test_website_public_files
+  tests.test_ci_security tests.test_api_contract tests.test_build_source -v` — 36 passed.
+  The privacy check rejects original paths and observed QA IDs. The two temporary/stubbed bootstrap checks
+  detect the prior missing/invalid-account behavior and pass with the fix. Both Phase 1
+  workflows discover these tests on pushes and pull requests; hosted CI was not run.
+  Full local discovery ran 135 tests with one setup error because nginx is unavailable.
+  Details and limitations: [privacy cleanup](qa/2026-09-11-public-repository-privacy.md).
+- Avoid: embedding private identities in regression fixtures, treating website-only scans
+  as repository coverage, or claiming current-file cleanup removes published Git history.
+
+## BUG-0074 — Website browser check crashed against the hardened deployment's image policy
 
 - Date: 2026-09-11
 - Symptom: running `tests/integration/website_browser.py` against the deployed private backend
@@ -1566,23 +1587,362 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 - Avoid: relaxing a deployment's security headers so a test can run, or letting a check that could
   not execute report the same result as one that passed.
 
-## BUG-0073 — Private identities appeared in public repository content
+## BUG-0075 — Releases stopped publishing to the website and the pipeline stayed green
 
 - Date: 2026-09-11
-- Symptom: documentation, QA evidence, installer examples, and publishing defaults exposed
-  personal names, private infrastructure details, and observed environment identifiers.
-- Root cause: historical notes and lab output were retained without anonymization; the
-  existing privacy check covered website inputs only. APT bootstrap also hard-coded the
-  sudoers account instead of using its configured publishing account.
-- Fix: sanitize current files, use role labels and consistent anonymous evidence aliases,
-  require configured publishing accounts, and add the public-repository rule to AGENTS.md.
-- Regression evidence: `python3 -m unittest tests.test_repository_privacy
-  tests.test_apt_bootstrap_privacy tests.test_apt_publish tests.test_website_public_files
-  tests.test_ci_security tests.test_api_contract tests.test_build_source -v` — 36 passed.
-  The privacy check rejects original paths and observed QA IDs. The two temporary/stubbed bootstrap checks
-  detect the prior missing/invalid-account behavior and pass with the fix. Both Phase 1
-  workflows discover these tests on pushes and pull requests; hosted CI was not run.
-  Full local discovery ran 135 tests with one setup error because nginx is unavailable.
-  Details and limitations: [privacy cleanup](qa/2026-09-11-public-repository-privacy.md).
-- Avoid: embedding private identities in regression fixtures, treating website-only scans
-  as repository coverage, or claiming current-file cleanup removes published Git history.
+- Symptom: https://nexvirtualization.com/downloads/latest/ still offered 0.1.6~alpha1 while the
+  changelog was at 0.1.8. On the website host `/srv/nex-downloads/` held only `0.1.6~alpha1`
+  (2026-09-10) with `latest` pointing at it, and `/srv/nex-apt/` likewise stopped at
+  `0.1.6~alpha1` for both packages. `scripts/release-publish.py --keep 3` retains three
+  releases, so a single retained version means exactly one publish has ever succeeded.
+- Root cause: the `Check for deploy credentials` step wrote `enabled=false` and continued
+  whenever a deploy secret was unset, and both the publish and reachability steps are gated on
+  that output. `Create or replace the release` runs *before* it, so the tag and the Gitea
+  release were created, the job finished green, and nothing reported that the website had been
+  skipped. `v0.1.7-alpha1` and `v0.1.8` exist on the remote while no artifact of either reached
+  the host, and no deploy-key SSH session appears in the host's auth log after 2026-09-09 —
+  the step was skipped, not failed. Commit `0b1d12e` then removed the `NEX_DEPLOY_USER`
+  default and made it a fourth required secret, so the same silent skip now applies until that
+  secret is configured. The release workflow itself was byte-identical between
+  `v0.1.6-alpha1` and `v0.1.7-alpha1`, so the trigger was the secret configuration, not a
+  workflow change.
+- Fix: require every deploy secret or none. All four set enables publishing; none set is a fork
+  or a clone with nowhere to publish and still skips with a notice; any partial combination
+  fails the release and names the missing secret. A half-configured deploy is always a
+  misconfiguration, and it is the only state that produced this silent drift.
+- Regression evidence: `python3 -m unittest tests.test_ci_security` — 5 tests, OK. The new tests
+  extract the step's shell body from each workflow and execute it, so they exercise what CI
+  actually runs rather than a copy. Mutation-checked: restoring the previous silent-skip logic
+  fails 4 of the 5, including `NEX_DEPLOY_KNOWN_HOSTS missing must fail, not skip the website`.
+  Both `.github/workflows/phase1.yml` and `.gitea/workflows/phase1.yml` run
+  `python3 -m unittest discover -s tests -p 'test_*.py' -v` on pushes and pull requests.
+- Outstanding: the fix makes the condition visible; it cannot set the secrets. Configuring
+  `NEX_DEPLOY_USER` (and confirming the other three) in the Gitea repository is required before
+  a release reaches the website again, and 0.1.7 and 0.1.8 remain unpublished there until a
+  release runs with publishing enabled. Run logs were not readable: the repository is private
+  and no API token was available, so the skip-versus-failure conclusion rests on host-side
+  evidence and the step ordering above.
+- Avoid: gating a publishing step on a condition whose false branch only prints. If skipping is
+  legitimate for some repositories, distinguish "deliberately not configured" from "configured
+  wrong" and fail the second, or a green release will keep meaning nothing was published.
+
+
+## BUG-0076 — VM display names were restricted to hostnames
+
+- Date: 2026-09-11.
+- Symptom: creating or renaming a VM rejected normal names containing spaces, uppercase,
+  dots or Unicode; merely relaxing the UI would still fail at Core or lose adoption.
+- Root cause: duplicated hostname regexes in the UI, Controller create/update/adoption,
+  and Core command validation, despite stable UUIDs already owning paths and operations.
+- Fix: shared bounded nonblank display-name validation, exact Core journal/libvirt retention,
+  matching create/edit validation and unchanged disk-label sanitization. Preserve surrounding
+  spaces in duplicate-name checks and terminate virsh options before rename arguments.
+- Regression: `go test ./...`, `npm --prefix web test`, UI typecheck/build and
+  `tests/integration/managed_vm_browser.py --simulated` passed. Both phase1 CI workflows
+  already run these suites on pushes and pull requests. Original guards/parser restored via
+  temporary overlays fail the new Core checks; fresh-Controller adoption failed before fix.
+  [Evidence and native-execution limits](qa/vm-display-names/checks.md).
+- Avoid: a frontend-only display-name alias or relaxed UI regex with hostname checks still
+  present in the host, update or adoption paths.
+
+## BUG-0077 — Console quality presets advertised unavailable image changes
+
+- Date: 2026-09-11.
+- Symptom: Low bandwidth, Balanced and Best image showed identical image detail.
+- Root cause: noVNC encoding preferences reached a native Core VNC server without lossy
+  JPEG enabled. The earlier emulator-wrapper attempt broke VM definition (BUG-0069)
+  and was removed, but the selector remained. The old lab assertion checked only that
+  frames still appeared, not quality or bandwidth differences.
+- Fix: remove the unsupported selector, old saved-quality handling and private framebuffer
+  refresh hook from the shared console; retain View and noVNC's default encoding settings.
+- Regression: `tests/integration/console_controls_browser.py` failed against the old build
+  because Image quality was present; after removal all four browser groups passed, with
+  no page errors. Both `.github/workflows/phase1.yml` and
+  `.gitea/workflows/phase1.yml` invoke it on pushes and pull requests. Actual post-fix
+  results, commands and simulation limits: [console quality QA](qa/console-quality/checks.md).
+- Avoid: treating a successful setter or visible framebuffer as proof of image-quality
+  changes, or replacing the hypervisor executable to implement a display preference.
+
+
+## BUG-0078 — Start repeatedly reopened a busy-error confirmation
+
+- Date: 2026-09-11.
+- Symptom: Start was refused while a power/edit task remained pending; each confirmation
+  repeated the busy error instead of accepting work into Recent tasks.
+- Root cause: Controller enforced one pending action, while the Core worker selected its
+  persisted commands from an unordered map and enrollment discarded received pending work.
+  Removing the guard alone could start a VM before its preceding edit finished.
+- Fix: capability-gated power queue, Core-owned durable FIFO order and same-VM successful
+  prerequisites; retained queue through restart/replacement and passive task adoption.
+  UI reports acceptance as queued. Actual failures still require recovery, not a retry loop.
+- Regression: `go test ./...`, UI typecheck/test/build, 21 API contract tests and
+  `tests/integration/phase1.py --browser` passed. Both GitHub/Gitea phase1 workflows already
+  execute these suites on pushes and pull requests. Prerequisite-rejection checks failed
+  before their guard; review added actual engine-promotion and capability-starvation cases.
+  [Evidence and simulation limits](qa/power-queue/checks.md).
+- Avoid: a Controller or browser retry timer, dropping the pending guard without ordered
+  Core execution, or replaying an uncertain power effect until it appears to succeed.
+
+
+## BUG-0079 — Console ISO progress remained after successful media change
+
+- Date: 2026-09-11.
+- Symptom: CD/DVD showed Empty after eject, but Ejecting ISO… never cleared. Insert had
+  the same stale feedback path.
+- Root cause: the UI wrote a progress string after API acceptance without following its
+  returned operation or the host-reported VM media state.
+- Fix: track the existing operation and requested media, clear completed feedback, and
+  retain failed/needs-attention reasons even after recent task history evicts the operation.
+- Regression: `tests/integration/console_controls_browser.py` reproduced the old stuck
+  message, then passed insert/eject completion, failure and task-eviction checks. The same
+  suite runs in both GitHub/Gitea phase1 workflows on pushes and pull requests. UI build
+  and typecheck passed. [Evidence and simulation limits](qa/console-media-status/checks.md).
+- Avoid: a timeout that hides ongoing work or errors, or merely hiding the string while
+  retaining an old queued state that can reappear after the tray changes again.
+
+## BUG-0080 — Pool registration forms stayed open on unrelated tabs
+
+- Date: 2026-09-11.
+- Symptom: opening **Register network**, **Upload ISO** or the **Create VM** wizard and then
+  selecting another pool view left that form above the new view's content. Only **Close**
+  removed it, so the page appeared not to change when the operator switched tabs.
+- Root cause: the pool view rendered each form from one `form` state that no view checked.
+  Every other panel was gated on the selected tab; the forms were not.
+- Fix: pair each form with the view that opens it and hide it elsewhere. The form stays
+  mounted so entries and wizard progress survive a trip to Storage, Networking or the ISO
+  library and return when the operator does.
+- Regression: `web/src/managed.test.mjs` renders the pool view for every form and every tab and
+  asserts the panel is present but hidden away from its own view. It fails on the pre-fix
+  markup (`network form on Virtual machines: wrong visibility`) and passes with the fix. Runs
+  as `npm --prefix web run test` in the existing GitHub and Gitea `phase1` workflows on pushes
+  and pull requests. UI typecheck and build passed.
+  [Evidence and limits](qa/pool-tab-forms/checks.md).
+- Avoid: unmounting the form on a tab change. The wizard's own **Open Storage**,
+  **Open Networking** and **Open ISO library** buttons switch tabs, so discarding its state
+  would lose a part-completed VM definition.
+
+
+## BUG-0081 — Dedicated VM memory was promised but not physically reserved
+
+- Date: 2026-09-11.
+- Symptom: a VM assigned 4 GiB of dedicated RAM could consume around 1 GiB on the host.
+- Root cause: Core set `memory`/`currentMemory` and disabled ballooning but omitted libvirt
+  memory backing, leaving allocation on demand and allowing swapping and KSM sharing.
+- Fix: the shared Core definition builder preallocates, locks and disables page sharing for
+  dedicated RAM. Observation verifies the backing and guest allocation. Maximum stays reclaimable;
+  stopped VMs retain admission accounting only. Older dedicated VMs require shutdown, stopped
+  save and start; legacy live edits fail before device effects with those instructions.
+- Regression: `go test ./internal/vmhost -run
+  'TestManaged(DedicatedMemoryReservation|LegacyDedicatedLiveEditRequiresStop)$' -count=1`
+  failed before the fix and passed afterward. It detects missing/weakened backing, reduced
+  current memory and unsafe legacy live edits. Existing GitHub and Gitea `phase1.yml` run this
+  suite through `go test -race ./...` on pushes and pull requests; no hosted run was executed.
+- Native regression: `NEX_MEMORY_LIBVIRT_TEST=1` enables `TestDedicatedMemoryLibvirt` on an
+  explicitly disposable libvirt host. See the [QA report](qa/dedicated-memory/checks.md) for
+  actual before/after results and verification limits; ordinary Go runs skip this native test.
+- Avoid: treating equal `memory`/`currentMemory`, balloon removal, or admission arithmetic as
+  proof of physical reservation; guessing a QEMU hard limit that can kill a guest.
+
+
+## BUG-0082 — Storage adoption and startup validation lost Core evidence
+
+- Date: 2026-09-11.
+- Symptom: a successful native NFS registration remained queued without its Core-generated ID;
+  source replacement and filesystem access also needed explicit startup and freshness checks.
+- Root cause: Controller matched a cleared projection operation ID instead of Core's successful
+  outcome; storage event replay originally depended on filename order, and filesystem-only
+  observations did not prove current QEMU access.
+- Fix: correlate adoption through the Core outcome, fold durable generations and tombstones,
+  retain observed backend identity/capabilities, accept nameless tombstones without rejecting
+  host reports, use stored-source validation during fresh Controller adoption, bound QEMU
+  access observations, and guard native libvirt startup against missing/replaced repositories
+  and aliased disk paths. Native regressions also cover repeated lifecycle operations, pending
+  attachment aliases, engine-scoped initiator ownership outside its scanned node directory,
+  existing-session login, duplicate identical mount rows and verified credential rollback.
+  Packaged testing also exposed remote VM directories created as `0700` under the service's
+  `0077` umask: the remote directory helper omitted the explicit post-create mode already used
+  by the local helper. The observed iSCSI guest could start after restoring traversal to `0711`;
+  the shared creator now explicitly sets `0711` only on newly created Core directories.
+  It opens the directory without following symlinks, changes mode through the descriptor and
+  checks inode identity, preventing a remote path replacement from redirecting `chmod`.
+  `TestManagedDirectoryPreservesQEMUTraversalUnderPrivateUmask` verifies that mode in a
+  subprocess with umask `0077`; full vmhost tests pass. Existing server-owned directories are
+  left unchanged.
+- Regression: focused controller/agent/protocol/vmhost suites passed; the live disposable NFS
+  registration now projects its Core ID, identity, capabilities and current access. The root
+  startup/monitor check `go test ./internal/vmhost -run
+  'TestStorageStartup|TestStorageGuard|TestStorageMonitor' -count=1` passed. Both GitHub and Gitea
+  run these Go tests through `go test -race ./...` on pushes and pull requests. The browser
+  regression runs in both workflows as `tests/integration/storage_repositories_browser.py`.
+  Full `go test -race ./...` passed after the independently reviewed native corrections;
+  packaged service and live backend acceptance remain open in the linked evidence.
+  [Current evidence and remaining native gates](qa/storage-repositories/checks.md).
+- Avoid: treating a successful mount or a green mocked test as proof of source identity, VM write
+  access, durable adoption or safe recovery; use real backend failures to verify those boundaries.
+
+## BUG-0083 — First console connection had a zero-sized Fit viewport
+
+- Date: 2026-09-11.
+- Symptom: the installed storage-test guest showed a login prompt over direct VNC, but Nex's
+  connected browser console was black until the operator selected Actual size.
+- Root cause: initial noVNC autoscaling could run before the selected console had usable layout,
+  leaving its canvas CSS dimensions at zero despite a populated framebuffer.
+- Fix: after connection and layout, reset scaling and reapply the selected view; ignore callbacks
+  for replaced clients.
+- Regression: `tests/integration/console_controls_browser.py` now asserts a visible canvas and
+  passed against the built UI. Both GitHub and Gitea phase1 workflows run this check on pushes
+  and pull requests. Actual disposable Debian guest first-load Fit displayed its login prompt
+  at 1280×800 with no browser errors; worker and root inspected the capture. Web typecheck,
+  unit tests and build passed. [Storage QA](qa/storage-repositories/checks.md) records remaining
+  installed-guest interaction checks separately.
+- Avoid: equating a connected WebSocket or nonempty framebuffer with a visible console.
+
+## BUG-0084 — Timed-out VM power requests were reported as failed after taking effect
+
+- Date: 2026-09-11.
+- Symptom: an NFS outage test reported a failed start, but the same VM had already started
+  and was later found running during Core shutdown. Correlated operation and libvirt timestamps
+  established that this was the same request, not a later retry or autostart.
+- Root cause: the managed result classifier treated a returned libvirt error as definitive
+  failure even after persisting the power-effect boundary. The pre-effect replay branch had
+  the same classification gap. A client timeout does not cancel a request libvirt accepted.
+- Fix: preserve the native diagnostic and classify errors from the actual power request as
+  `needs_attention` in both execution paths. Preflight refusals remain failed. Reconciliation
+  of the same Core command observes state without issuing another power effect; reboot remains
+  uncertain when running state alone cannot establish whether it happened.
+- Regression: `TestManagedPowerRequestCancellationSettlesFromObservation` synchronizes
+  cancellation after the fake start takes effect and covers initial execution and pre-effect
+  replay. `TestManagedPowerPostEffectFailureIsUncertain` covers shutdown, reboot and force-stop,
+  including same-command replay and exactly one native action. Full vmhost tests passed;
+  independent focused race review passed in 2.160 s. Both GitHub and Gitea phase1 workflows
+  run these tests through `go test -race ./...` on pushes and pull requests. Native rerun is
+  recorded separately in [storage QA](qa/storage-repositories/checks.md).
+- Avoid: interpreting a timed-out command as proof no side effect occurred, or retrying the
+  power effect merely to obtain a successful response.
+
+## BUG-0085 — SMB repository identity changed after host restart
+
+- Date: 2026-09-11.
+- Symptom: an unchanged SMB share and saved VM were refused after Core restarted because
+  the recorded CIFS filesystem ID no longer matched.
+- Root cause: Linux CIFS includes SMB volume creation time in `statfs` identity, and Samba
+  derives that value from the share root. This is not a stable repository identity. The
+  observed serial portion stayed the same while the creation-time portion changed.
+- Fix: new SMB registrations atomically create or reuse `.nex-storage-marker`, persist its
+  opaque ID in Core and verify it with exact mounted source and strict options before use.
+  Core compares markers for duplicate backing aliases; filesystem IDs remain diagnostic.
+  Marker files are bounded, regular, single-link and opened without following symlinks.
+  File sync is mandatory; narrowly unsupported CIFS directory sync requires close/reopen
+  verification. Missing, altered or unsafe markers fail closed. Detach retains the marker.
+  Legacy development records remain strict and are never silently assigned a new identity.
+- Regression: `TestSMBMarkerDurableIdentity`, `TestSMBMarkerRejectsUnsafeFilesAndConcurrentCreate`,
+  `TestSMBMarkerDirectorySyncPolicy`, `TestSMBMarkerLegacyFSIDRemainsStrict`, and
+  `TestSMBMarkerBackingConflictPrefersDurableMarker` passed, including independent full vmhost
+  review. Both GitHub and Gitea phase1 workflows run these through `go test -race ./...` on
+  pushes and pull requests. Native marker creation/restart acceptance remains separately
+  recorded in [storage QA](qa/storage-repositories/checks.md).
+- Avoid: truncating an unstable identifier to make an existing journal match, or replacing
+  identity automatically after a mismatch.
+
+## BUG-0086 — Managed libvirt observation could delay heartbeat reporting
+
+- Date: 2026-09-11.
+- Symptom: report construction synchronously allowed a managed-VM libvirt list command to
+  consume its full native timeout before sending a heartbeat.
+- Root cause: the report path passed its transport context into managed observation without
+  the configured probe timeout. This code-path issue was identified while investigating an
+  outage attempt against an obsolete Controller endpoint; that attempt does not establish
+  runtime causality for the heartbeat delay.
+- Fix: bound only report-time managed observation by `ProbeTimeout`, cancel that child
+  context, and retain the parent for report transport. Unverified VM definitions are unknown,
+  never fabricated as missing. Storage probing remains outside the heartbeat path.
+- Regression: `TestReportBoundsManagedLibvirtObservation` uses a managed VM journal, a
+  blocking native-command substitute and an HTTP receiver. A 100 ms probe budget still
+  delivers the report with an unknown check and no missing VMs. Independent race review
+  passed five repetitions at approximately 0.12–0.14 s each. Both GitHub and Gitea phase1
+  workflows run the regression through `go test -race ./...` on pushes and pull requests.
+- Avoid: extending heartbeat test waits to conceal synchronous work, or identifying an outage
+  cause without verifying the Controller endpoint and clock used by the evidence.
+
+## BUG-0087 — Duplicate iSCSI registration could disturb an owned session
+
+- Date: 2026-09-11.
+- Symptom: a second registration of an isolated test LUN reached login and its failure
+  cleanup disturbed the first repository's session; subsequent detach also failed when the
+  session was already absent.
+- Root cause: source equality included the mount path generated from each new repository ID,
+  so otherwise identical iSCSI claims differed before native preparation. Native rollback
+  and detach also needed to distinguish an existing session from an effect owned by this
+  attempt, and a deleted node from its remaining ownership receipt. Session parsing also
+  expected invented comma-separated portal output, so actual Debian `host:port,tpgt` output
+  was missed and detach attempted node deletion while still logged in.
+- Fix: compare canonical target/portal and WWID/filesystem claims before any native effect,
+  allowing one repository per session in this profile. Ignore generated paths in source
+  identity, retain mutation checks and normalize WWID prefixes and UUID case. Current
+  projection owns successful claims; obsolete successful history does not reserve a detached
+  or replaced source, while unresolved claims remain protected. Rollback logs out only a
+  session created by that attempt. Detach verifies ownership and handles an already-absent
+  session or node without altering unrelated initiator state; absence requires native typed
+  exit 21 rather than matching arbitrary error text. Parse the observed `host:port,tpgt`
+  grammar strictly, including bracketed IPv6, bounded ports and numeric portal-group tags.
+- Regression: `TestISCSIRegistrationConflictPreventsSecondSessionPreparation`,
+  `TestISCSISourceChangeIgnoresCoreMountPathButConflictsWithOtherRepository`,
+  `TestISCSINoActiveSessionsErrorRequiresTypedExit21`, `TestISCSISessionPortalStrictGrammar`, and
+  `TestDetachISCSICleansOwnerAfterNodeDeleteCrash` passed independent focused and full vmhost
+  review. Both GitHub and Gitea phase1 workflows run them through `go test -race ./...` on
+  pushes and pull requests. Actual wrong-WWID/UUID rejection and the original duplicate
+  failure were observed in isolated disposable fixtures. The corrected live duplicate claim
+  was rejected before initiator activity and preserved the original session and mount;
+  the parser-fixed deployed build then completed the partial detach and a fresh registration.
+  Root verified both succeeded Core journal results; further evidence remains tracked in
+  [storage QA](qa/storage-repositories/checks.md).
+- Avoid: using allocated mount paths to distinguish ownership of the same LUN, or ignoring
+  every logout error to make a retry appear idempotent.
+
+## BUG-0088 — Debian confinement and hook discovery blocked storage startup protection
+
+- Date: 2026-09-11.
+- Symptom: libvirt invoked the installed prepare hook but AppArmor denied execution of the
+  Core-local storage guard. Adding a hook to an already-running daemon also left it undiscovered.
+- Root cause: Debian's libvirtd profile did not permit the packaged executable, and installing
+  a `qemu.d` script requires daemon activation; a systemd unit reload does not discover hooks.
+- Fix: maintain one exact `rix` rule in the administrator-owned local include without owning
+  that file. Reject malformed owned blocks and non-regular policy files without modification;
+  preserve administrator bytes, ownership and mode. Require a parser when the live profile
+  needs reloading, then restart only an active libvirtd. The hook ignores reconnect events.
+- Regression: `test_packaged_hook_preserves_admin_apparmor_policy` exercises idempotent
+  install/removal, unrelated rule preservation, malformed blocks and symlink refusal, plus
+  safe empty-root path selection. Packaging checks assert policy/reload/activation ordering.
+  Seven storage packaging tests and independent shell syntax review passed; both GitHub and
+  Gitea phase1 workflows run these via Python unittest discovery on pushes and pull requests.
+  Native policy reload and libvirtd restart preserved a running SMB guest's hash, boot ID and
+  QEMU PID. Complete hook refusal and package lifecycle evidence remains in
+  [storage QA](qa/storage-repositories/checks.md).
+- Avoid: owning Debian's administrator local include, disabling AppArmor, treating a static
+  hook file as activation evidence, or skipping activation whenever a guest is running.
+
+## BUG-0089 — NFS statfs identifiers falsely collided across distinct filesystems
+
+- Date: 2026-09-11.
+- Symptom: a separate disposable NFS export was rejected as already registered because its
+  client `statfs` filesystem ID and the original export's ID were both zero.
+- Root cause: Linux NFS does not provide a usable protocol filesystem identity through that
+  `statfs` field. Equality of those unavailable values falsely established common backing.
+- Fix: bind the actual mounted path's device to exactly one NFSv4 kernel volume-table record.
+  Store its protocol filesystem ID together with the mounted server address and port. Require
+  the expected table format and exact source checks; missing, malformed or ambiguous identity
+  blocks use. Protocol FSID `0:0` is valid and differs from unavailable statfs identity.
+  Preserve legacy records as unavailable instead of silently assigning a new identity.
+- Regression: `TestNFSKernelFilesystemIdentity`,
+  `TestNFSKernelFilesystemIdentityBindsPathDevice`,
+  `TestNFSKernelFilesystemIdentityIPv6AndZeroProtocolFSID`,
+  `TestNFSKernelFilesystemIdentityRejectsUnavailableOrAmbiguousRows`,
+  `TestNFSKernelFilesystemIdentityChangesWhenServerOrFilesystemChanges`, and
+  `TestNFSIdentityRejectsLegacyStatfsAndChangedProtocolProfiles` passed independent full
+  vmhost review and the focused vmhost/agent/protocol race run (8.877 s, 2.877 s, 1.021 s).
+  Both GitHub and Gitea phase1 workflows run these through `go test -race ./...` on pushes
+  and pull requests. Final native-profile evidence is tracked in
+  [storage QA](qa/storage-repositories/checks.md).
+- Avoid: treating zero statfs values as identities, dropping duplicate detection to admit
+  another export, comparing unnamespaced filesystem IDs across servers, or silently replacing
+  a stored identity after a mismatch.

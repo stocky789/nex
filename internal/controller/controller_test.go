@@ -334,7 +334,7 @@ func TestReportRejectsInvalidInventory(t *testing.T) {
 	} {
 		a.call("POST", "/api/v1/agent/report", protocol.ReportRequest{Version: 1, Sequence: 1, Inventory: inventory}, cert, 400)
 	}
-	a.call("POST", "/api/v1/agent/report", protocol.ReportRequest{Version: 2, Sequence: 1}, cert, 409)
+	a.call("POST", "/api/v1/agent/report", protocol.ReportRequest{Version: 3, Sequence: 1}, cert, 409)
 	a.call("POST", "/api/v1/agent/report", protocol.ReportRequest{Version: 1, Sequence: 0}, cert, 400)
 	if a.hosts()[0].Connection != "unknown" {
 		t.Fatal("invalid report updated host state")

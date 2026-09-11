@@ -159,7 +159,7 @@ func TestManagedSlowCommandKeepsReportingAndCancels(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		if !slices.Contains(req.Capabilities, protocol.ManagedVMCapability) || !slices.Contains(req.Capabilities, protocol.ConsoleCapability) || !slices.Contains(req.Capabilities, protocol.PowerCapability) || !slices.Contains(req.Capabilities, protocol.MediaCapability) {
+		if !slices.Contains(req.Capabilities, protocol.ManagedVMCapability) || !slices.Contains(req.Capabilities, protocol.ConsoleCapability) || !slices.Contains(req.Capabilities, protocol.PowerCapability) || !slices.Contains(req.Capabilities, protocol.MediaCapability) || !slices.Contains(req.Capabilities, protocol.ISODownloadCapability) {
 			t.Error("managed capability missing")
 		}
 		count := reports.Add(1)
@@ -189,6 +189,80 @@ func TestManagedSlowCommandKeepsReportingAndCancels(t *testing.T) {
 	if s.State.Journal["slow-network"].Status == "succeeded" {
 		t.Fatal("cancelled command was incorrectly completed")
 	}
+}
+
+func TestReportBoundsManagedLibvirtObservation(t *testing.T) {
+	bin := t.TempDir()
+	started := filepath.Join(bin, "virsh-started")
+	script := "#!/bin/sh\ncase \"$*\" in\n *'list --all --uuid'*) touch \"$NEX_TEST_VIRSH_STARTED\"; exec sleep 30 ;;\n *) exit 1 ;;\nesac\n"
+	if err := os.WriteFile(filepath.Join(bin, "virsh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Setenv("NEX_TEST_VIRSH_STARTED", started)
+
+	reports := make(chan protocol.ReportRequest, 1)
+	_, identity := testManagedIdentity(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.ReportRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+			return
+		}
+		reports <- req
+		json.NewEncoder(w).Encode(protocol.ReportResponse{})
+	}))
+	s := testStore(t)
+	s.State = identity
+	vm := protocol.VMCreateSpec{
+		ID: "12345678-1234-4234-8234-123456789012", PoolID: "pool-1", HostID: "host-1", Name: "guest", GuestOS: "linux",
+		CPU: protocol.VMCPU{Count: 1, Model: "host-passthrough"}, Memory: protocol.VMMemory{Mode: "dedicated", SizeMiB: 512},
+		Disks: []protocol.VMDisk{{StorageID: "storage-1", Name: "system", SizeGiB: 1, Bus: "virtio", BootOrder: 1}},
+		Boot:  protocol.VMBoot{Firmware: "uefi"},
+	}
+	journal := struct {
+		Command protocol.Command `json:"command"`
+		Result  protocol.Result  `json:"result"`
+		Stage   string           `json:"stage"`
+	}{
+		Command: protocol.Command{OperationID: "create-1", Kind: "vm-create", VM: &vm},
+		Result:  protocol.Result{OperationID: "create-1", Status: "succeeded"},
+		Stage:   "defined",
+	}
+	data, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	managedDir := filepath.Join(s.dir, "managed-vms")
+	if err = os.MkdirAll(managedDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(managedDir, "create-1.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	if err = report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: 100 * time.Millisecond}); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("report waited for libvirt observation: %v", elapsed)
+	}
+	if _, err := os.Stat(started); err != nil {
+		t.Fatalf("blocking virsh was not invoked: %v", err)
+	}
+	req := <-reports
+	if req.Inventory.Managed == nil || len(req.Inventory.Managed.MissingVMs) != 0 {
+		t.Fatalf("unverified libvirt state fabricated missing VMs: %+v", req.Inventory.Managed)
+	}
+	for _, check := range req.Inventory.Checks {
+		if check.Name == "managed-vms" {
+			if check.Status != "unknown" {
+				t.Fatalf("managed VM check = %+v, want unknown", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("managed VM check absent: %+v", req.Inventory.Checks)
 }
 
 func TestResultBacklogDrainsInControllerSizedBatches(t *testing.T) {

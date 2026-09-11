@@ -398,7 +398,7 @@ func TestHostReportedManagedStateIsAdopted(t *testing.T) {
 	sha := strings.Repeat("ab", 32)
 	// The journal's start-after-creation belongs to a creation that already finished; a
 	// rebuilt Controller must adopt the VM without powering it on.
-	adopted := vmSpec("old-pool", "old-host", "guest1", "stor-1", "net-default", "iso-1")
+	adopted := vmSpec("old-pool", "old-host", " QA Web.example – 東京 ", "stor-1", "net-default", "iso-1")
 	adopted.ID, adopted.StartAfterCreate = "vm-1", true
 	// Every operator-visible choice is pool-scoped state the master owns, so a rebuilt
 	// Controller must recover the operator's disk label, adapter model and MTU too, not just
@@ -444,7 +444,7 @@ func TestHostReportedManagedStateIsAdopted(t *testing.T) {
 	if len(media) != 1 || media[0].ID != "iso-1" || media[0].StorageID != "stor-1" || media[0].PoolID != pool || media[0].HostID != host.HostID || media[0].SHA256 != sha || media[0].Status != "succeeded" {
 		t.Fatalf("media %+v", media)
 	}
-	if len(vms) != 1 || vms[0].ID != "vm-1" || vms[0].Name != "guest1" || vms[0].PoolID != pool || vms[0].HostID != host.HostID || vms[0].Status != "succeeded" || vms[0].Spec == nil || vms[0].Spec.MediaID != "iso-1" || vms[0].Spec.PoolID != pool ||
+	if len(vms) != 1 || vms[0].ID != "vm-1" || vms[0].Name != adopted.Name || vms[0].PoolID != pool || vms[0].HostID != host.HostID || vms[0].Status != "succeeded" || vms[0].Spec == nil || vms[0].Spec.MediaID != "iso-1" || vms[0].Spec.PoolID != pool ||
 		len(vms[0].Spec.Disks) != 1 || vms[0].Spec.Disks[0].StorageID != "stor-1" || len(vms[0].Spec.NICs) != 2 || vms[0].Spec.NICs[0].NetworkID != "net-default" || vms[0].Spec.StartAfterCreate {
 		t.Fatalf("vms %+v", vms)
 	}
@@ -513,7 +513,7 @@ func TestCreateVMSpecificationReferencesAndScope(t *testing.T) {
 		},
 		"repeated boot": func(v *protocol.VMCreateSpec) { v.Boot.MediaBootOrder = v.Disks[0].BootOrder },
 		"supplied id":   func(v *protocol.VMCreateSpec) { v.ID = "chosen-by-the-client" },
-		"invalid name":  func(v *protocol.VMCreateSpec) { v.Name = "Guest_1" },
+		"invalid name":  func(v *protocol.VMCreateSpec) { v.Name = "Guest/1" },
 	} {
 		v := l.spec("guest1")
 		bad(&v)
@@ -640,7 +640,7 @@ func TestAdoptionRebuildsApplianceOutcomesAndAttention(t *testing.T) {
 	cert := certificate(t, host.CertificatePEM)
 	pool := a.poolOf(host.HostID)
 	appliance := "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-	guest := vmSpec("old-pool", "old-host", "guest1", "stor-1", "net-default", "")
+	guest := vmSpec("old-pool", "old-host", " QA Web.example – 東京 ", "stor-1", "net-default", "")
 	guest.ID = "12345678-1234-4234-8234-123456789012"
 	gone := vmSpec("old-pool", "old-host", "gone", "stor-1", "net-default", "")
 	gone.ID = "12345678-1234-4234-8234-123456789013"
@@ -804,5 +804,57 @@ func TestAdoptedOutcomeClosesWhenHostSettlesIt(t *testing.T) {
 	}
 	if op := ops["adopt-outcome:"+host.HostID+":op-failed"]; op.Status != "failed" {
 		t.Fatalf("reported failure was closed: %+v", op)
+	}
+}
+
+func TestCoreRecoverySettlesControllerOperation(t *testing.T) {
+	a := newClient(t)
+	host := a.enroll(a.token(a.site(), ""), csr(t))
+	pool := a.poolOf(host.HostID)
+	cert := certificate(t, host.CertificatePEM)
+	seq := uint64(0)
+	report := func(results []protocol.Result, outcomes []protocol.ManagedOutcome) protocol.ReportResponse {
+		seq++
+		return a.report(cert, protocol.ReportRequest{Version: protocol.LegacyVersion, Sequence: seq, Capabilities: []string{protocol.ManagedVMCapability}, Results: results, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{Outcomes: outcomes}}})
+	}
+	report(nil, nil)
+	req := storageRegisterRequest{RequestID: "recovered-storage", PoolID: pool, HostID: host.HostID, Name: "Local", Path: "/var/lib/nex/vms"}
+	var queued protocol.StorageRegistration
+	read(t, a.call("POST", "/api/v1/storage", req, nil, 201), &queued)
+	commands := report(nil, nil).Commands
+	if len(commands) != 1 || commands[0].OperationID != queued.OperationID {
+		t.Fatalf("storage command %#v", commands)
+	}
+	report([]protocol.Result{{OperationID: queued.OperationID, Status: "needs_attention", Error: "interrupted before completion"}}, nil)
+	var operations []protocol.Operation
+	read(t, a.call("GET", "/api/v1/operations", nil, nil, 200), &operations)
+	if len(operations) == 0 || operations[0].ID != queued.OperationID || operations[0].Status != "needs_attention" {
+		t.Fatalf("interrupted operation %+v", operations)
+	}
+	// Outcomes cannot retarget an operation: both kind and reporting host are immutable.
+	report(nil, []protocol.ManagedOutcome{{OperationID: queued.OperationID, Kind: "network-register", ID: queued.ID, Status: "succeeded"}})
+	var still protocol.StorageRegistration
+	read(t, a.call("POST", "/api/v1/storage", req, nil, 200), &still)
+	if still.Status != "needs_attention" {
+		t.Fatalf("mismatched kind changed operation: %+v", still)
+	}
+	other := a.enroll(a.token(a.site(), ""), csr(t))
+	a.report(certificate(t, other.CertificatePEM), protocol.ReportRequest{Version: protocol.LegacyVersion, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{Outcomes: []protocol.ManagedOutcome{{OperationID: queued.OperationID, Kind: "storage-register", ID: queued.ID, Status: "succeeded"}}}}})
+	read(t, a.call("POST", "/api/v1/storage", req, nil, 200), &still)
+	if still.Status != "needs_attention" {
+		t.Fatalf("cross-host outcome changed operation: %+v", still)
+	}
+	// A later Core journal recovery is not another transport result. It must still settle the
+	// Controller's original operation and make the same client request replay as succeeded.
+	report(nil, []protocol.ManagedOutcome{{OperationID: queued.OperationID, Kind: "storage-register", ID: queued.ID, Name: queued.Name, Status: "succeeded"}})
+	var replay protocol.StorageRegistration
+	read(t, a.call("POST", "/api/v1/storage", req, nil, 200), &replay)
+	if replay.Status != "succeeded" || replay.OperationID != queued.OperationID {
+		t.Fatalf("Core recovery did not settle replay: %+v", replay)
+	}
+	report(nil, []protocol.ManagedOutcome{{OperationID: queued.OperationID, Kind: "storage-register", ID: queued.ID, Status: "needs_attention", Error: "stale"}})
+	read(t, a.call("POST", "/api/v1/storage", req, nil, 200), &replay)
+	if replay.Status != "succeeded" {
+		t.Fatalf("stale recovery outcome downgraded success: %+v", replay)
 	}
 }

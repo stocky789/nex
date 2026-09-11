@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"nex.local/nex/internal/agent"
 	"nex.local/nex/internal/localcore"
+	"nex.local/nex/internal/vmhost"
 	"os"
 	"os/signal"
 	"syscall"
@@ -16,6 +17,20 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "storage-guard" {
+		flags := flag.NewFlagSet("storage-guard", flag.ExitOnError)
+		dir := flags.String("state-dir", "/var/lib/nex-core-agent", "private agent identity and journal directory")
+		flags.Parse(os.Args[2:])
+		if flags.NArg() != 0 {
+			log.Fatal("storage-guard accepts no positional arguments")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := vmhost.StorageGuard(ctx, *dir, os.Stdin); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	var cfg localcore.Config
 	var listen, cert, key, recoveryFile string
 	flag.StringVar(&cfg.DataDir, "data-dir", "/var/lib/nex/core-local", "private local service state")

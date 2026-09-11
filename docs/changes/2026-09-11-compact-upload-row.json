@@ -1,0 +1,33 @@
+{
+  "summary": "Compact ISO upload task controls. API impact: none; UploadRow presentation only, with unchanged browser upload, cancellation, Controller media API and Core import flow.",
+  "paths": [
+    "web/src/main.tsx",
+    "web/src/style.css"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Only button size and placement change; upload and cancellation steps remain the same.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No client or Controller/Core request, authorization, command or result changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Presentation adjustment does not change milestone scope or status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable state; existing browser upload state is unchanged."
+  },
+  "verification": {
+    "method": "UI typecheck and build passed. Headless Chromium exercised the built UI with mocked API data and a held upload: Cancel measured 54.25 by 24 pixels and aligned beside progress at 1440, 768 and 390 pixel viewport widths. Row heights were 55, 55 and 62.89 pixels. Desktop and narrow captures inspected; narrow view retains existing horizontal table scrolling. Keyboard Enter cancelled and removed Cancel. No browser page errors. Local harness and captures are in .cache/compact-upload; no real host transfer tested. Independent read-only review found no issues.",
+    "evidence": [
+      "web/src/main.tsx",
+      "web/src/style.css"
+    ]
+  }
+}

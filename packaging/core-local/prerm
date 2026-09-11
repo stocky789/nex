@@ -2,11 +2,24 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 set -eu
 if [ "$1" = remove ]; then
+    /usr/lib/nex/storage-downgrade-guard --core --check
+    if [ -z "${DPKG_ROOT:-}" ] && [ -r /sys/module/apparmor/parameters/enabled ] &&
+       grep -qx 'Y' /sys/module/apparmor/parameters/enabled && [ -f /etc/apparmor.d/usr.sbin.libvirtd ] &&
+       ! command -v apparmor_parser >/dev/null 2>&1; then
+        echo "AppArmor is active but apparmor_parser is unavailable; cannot remove Nex storage guard policy" >&2
+        exit 1
+    fi
+    /usr/lib/nex/libvirtd-apparmor-policy "${DPKG_ROOT:-}" remove
+    if [ -z "${DPKG_ROOT:-}" ] && [ -r /sys/module/apparmor/parameters/enabled ] &&
+       grep -qx 'Y' /sys/module/apparmor/parameters/enabled &&
+       command -v apparmor_parser >/dev/null 2>&1 && [ -f /etc/apparmor.d/usr.sbin.libvirtd ]; then
+        apparmor_parser -r /etc/apparmor.d/usr.sbin.libvirtd
+    fi
     if [ -d /run/systemd/system ]; then
         deb-systemd-invoke stop nex-core-local.service
     fi
     deb-systemd-helper disable nex-core-local.service
     # Remove the generated apt source so removal never leaves a source whose key is gone.
-    rm -f "${DPKG_ROOT:-}/etc/apt/sources.list.d/nex.sources"
+    rm -f "${DPKG_ROOT:-}/etc/apt/sources.list.d/nex.sources" "${DPKG_ROOT:-}/etc/apt/apt.conf.d/91nex-core-storage-downgrade"
 fi
 # Guest disks, VM definitions, configuration and credentials intentionally survive removal.

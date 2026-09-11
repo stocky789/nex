@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -198,6 +199,347 @@ func TestManagedReferencesAndXML(t *testing.T) {
 				t.Fatalf("expected exactly one display: %s", b)
 			}
 		}
+	}
+}
+
+func TestStorageProjectionUsesGenerationsAndTombstones(t *testing.T) {
+	base := protocol.StorageRegistration{ID: "storage-1", PoolID: "pool-1", HostID: "host-1", Name: "old", Path: "/srv/old"}
+	next := protocol.StorageRegistration{Name: "new", Path: "/srv/new"}
+	js := []managedJournal{
+		// Deliberately reverse a natural event order; journal filenames have no sequence.
+		{Command: protocol.Command{Kind: "storage-detach", StorageLifecycle: &protocol.StorageLifecycleRequest{Action: "detach", RepositoryID: base.ID, PoolID: base.PoolID, HostID: base.HostID, ExpectedGeneration: 2}}, Result: protocol.Result{Status: "succeeded"}},
+		{Command: protocol.Command{Kind: "storage-update", StorageLifecycle: &protocol.StorageLifecycleRequest{Action: "update", RepositoryID: base.ID, PoolID: base.PoolID, HostID: base.HostID, ExpectedGeneration: 1, Registration: &next}}, Result: protocol.Result{Status: "succeeded"}, AppliedStorage: &protocol.StorageRegistration{ID: base.ID, PoolID: base.PoolID, HostID: base.HostID, Name: "new", Path: "/srv/new", Generation: 2}},
+		{Command: protocol.Command{Kind: "storage-register", Storage: &base}, Result: protocol.Result{Status: "succeeded"}},
+	}
+	if got := storageProjection(js); len(got) != 0 {
+		t.Fatalf("detached storage reappeared from historical journal: %+v", got)
+	}
+}
+
+func TestStorageProjectionUsesCoreAllocatedRegistration(t *testing.T) {
+	request := protocol.StorageRegistration{PoolID: "pool-1", HostID: "host-1", Name: "remote", Kind: protocol.StorageKindNFS}
+	applied := request
+	applied.ID, applied.Generation, applied.Path = "core-storage-1", 1, "/var/lib/nex-storage/core-storage-1"
+	applied.Capabilities = storageCapabilities(applied)
+	js := []managedJournal{{Command: protocol.Command{Kind: "storage-register", Storage: &request}, Result: protocol.Result{Status: "succeeded"}, AppliedStorage: &applied}}
+	got, err := managedStorage(js, applied.ID)
+	if err != nil || got.ID != applied.ID || got.Generation != 1 || !got.Capabilities.VMDisk || !got.Capabilities.ISO {
+		t.Fatalf("Core allocation was not projected: %+v %v", got, err)
+	}
+}
+
+func TestStorageCorePathsAllocatesISCSIMount(t *testing.T) {
+	s := protocol.StorageRegistration{ID: "core-storage-1", Source: protocol.StorageSource{ISCSI: &protocol.ISCSIStorageSource{TargetIQN: "iqn.2026-01.example:vm"}}}
+	storageCorePaths(&s)
+	if got, want := s.Source.ISCSI.MountPath, filepath.Join(storageMountRoot, s.ID); got != want {
+		t.Fatalf("iSCSI mount path = %q, want Core path %q", got, want)
+	}
+}
+
+func TestISCSIRegistrationConflictPreventsSecondSessionPreparation(t *testing.T) {
+	oldRun := nativeRun
+	t.Cleanup(func() { nativeRun = oldRun })
+	calls := 0
+	nativeRun = func(context.Context, string, ...string) ([]byte, error) {
+		calls++
+		return nil, errors.New("native preparation must not run")
+	}
+	iscsi := func(portal, id string, lun uint64) protocol.StorageRegistration {
+		return protocol.StorageRegistration{ID: id, PoolID: "pool-1", HostID: "host-1", Name: id, Kind: protocol.StorageKindISCSI, Source: protocol.StorageSource{ISCSI: &protocol.ISCSIStorageSource{Portal: portal, TargetIQN: "iqn.2026-01.example:vm", LUN: lun, WWID: "3600508b400105e210000900000490000", FilesystemUUID: "01234567-89ab-cdef-0123-456789abcdef", ExclusiveTarget: true}}}
+	}
+	e := NewManaged(filepath.Join(t.TempDir(), "state"))
+	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	firstRequest := iscsi("iscsi.example.test", "", 0)
+	firstApplied := iscsi("iscsi.example.test", "first", 0)
+	firstApplied.Source.ISCSI.MountPath, firstApplied.Path = filepath.Join(storageMountRoot, "first"), filepath.Join(storageMountRoot, "first")
+	if err := e.save(managedJournal{Command: protocol.Command{OperationID: "first-op", Kind: "storage-register", Storage: &firstRequest}, Result: protocol.Result{OperationID: "first-op", Status: "succeeded"}, AppliedStorage: &firstApplied}); err != nil {
+		t.Fatal(err)
+	}
+	second := iscsi("other-portal.example.test", "", 1) // distinct Core mount path and portal alias
+	second.Source.ISCSI.WWID = "0x" + second.Source.ISCSI.WWID
+	second.Source.ISCSI.FilesystemUUID = strings.ToUpper(second.Source.ISCSI.FilesystemUUID)
+	r, err := e.Execute(context.Background(), protocol.Command{OperationID: "second-op", Kind: "storage-register", Storage: &second}, nil)
+	if err != nil || r.Status != "failed" || calls != 0 {
+		t.Fatalf("second iSCSI registration = %+v, %v, native calls=%d", r, err, calls)
+	}
+	alias := iscsi("other-portal.example.test", "second", 2)
+	alias.Source.ISCSI.MountPath = filepath.Join(storageMountRoot, "second")
+	if err := registrationConflict([]managedJournal{{Command: protocol.Command{OperationID: "first-op", Kind: "storage-register", Storage: &firstRequest}, Result: protocol.Result{OperationID: "first-op", Status: "needs_attention"}, AppliedStorage: &firstApplied}}, protocol.Command{OperationID: "alias-op", Kind: "storage-register", Storage: &alias}); err == nil {
+		t.Fatal("portal alias for the same iSCSI WWID/filesystem was accepted")
+	}
+}
+
+func TestISCSISourceChangeIgnoresCoreMountPathButConflictsWithOtherRepository(t *testing.T) {
+	base := protocol.StorageRegistration{ID: "one", Kind: protocol.StorageKindISCSI, Source: protocol.StorageSource{ISCSI: &protocol.ISCSIStorageSource{Portal: "iscsi.example.test", TargetIQN: "iqn.2026-01.example:vm", WWID: "3600508b400105e210000900000490000", FilesystemUUID: "01234567-89ab-cdef-0123-456789abcdef", MountPath: filepath.Join(storageMountRoot, "one"), ExclusiveTarget: true}}}
+	otherPath := base
+	otherPath.Source.ISCSI = &protocol.ISCSIStorageSource{Portal: base.Source.ISCSI.Portal, TargetIQN: base.Source.ISCSI.TargetIQN, WWID: base.Source.ISCSI.WWID, FilesystemUUID: base.Source.ISCSI.FilesystemUUID, MountPath: filepath.Join(storageMountRoot, "two"), ExclusiveTarget: true}
+	if storageSourceChanged(base, otherPath) {
+		t.Fatal("Core-generated iSCSI mount path was treated as a source mutation")
+	}
+	otherLUN := otherPath
+	otherLUN.Source.ISCSI = &protocol.ISCSIStorageSource{Portal: otherPath.Source.ISCSI.Portal, TargetIQN: otherPath.Source.ISCSI.TargetIQN, WWID: otherPath.Source.ISCSI.WWID, FilesystemUUID: otherPath.Source.ISCSI.FilesystemUUID, MountPath: otherPath.Source.ISCSI.MountPath, ExclusiveTarget: otherPath.Source.ISCSI.ExclusiveTarget}
+	otherLUN.Source.ISCSI.LUN = 1
+	if !storageSourceChanged(base, otherLUN) {
+		t.Fatal("iSCSI LUN update was not treated as a source mutation")
+	}
+	if !storageSourcesConflict(base, otherLUN) {
+		t.Fatal("source update could claim another repository's iSCSI session")
+	}
+	formatted := otherPath
+	formatted.Source.ISCSI = &protocol.ISCSIStorageSource{Portal: otherPath.Source.ISCSI.Portal, TargetIQN: otherPath.Source.ISCSI.TargetIQN, WWID: "0x" + otherPath.Source.ISCSI.WWID, FilesystemUUID: strings.ToUpper(otherPath.Source.ISCSI.FilesystemUUID), MountPath: otherPath.Source.ISCSI.MountPath, ExclusiveTarget: true}
+	if storageSourceChanged(otherPath, formatted) {
+		t.Fatal("equivalent iSCSI WWID/UUID spelling triggered a source update")
+	}
+	observedA := protocol.StorageIdentity{ISCSI: &protocol.ISCSIStorageIdentity{WWID: otherPath.Source.ISCSI.WWID, FilesystemUUID: otherPath.Source.ISCSI.FilesystemUUID}}
+	observedB := protocol.StorageIdentity{ISCSI: &protocol.ISCSIStorageIdentity{WWID: formatted.Source.ISCSI.WWID, FilesystemUUID: formatted.Source.ISCSI.FilesystemUUID}}
+	if !storageSameBacking(observedA, observedB) {
+		t.Fatal("equivalent observed iSCSI WWID/UUID spelling was not recognized")
+	}
+	// A successful historical command is folded through active projection; after a
+	// detach it must not reserve its old source forever. Unresolved work still does.
+	firstCommand := base
+	firstCommand.ID = "one"
+	candidate := otherPath
+	candidate.ID = "two"
+	detached := []managedJournal{
+		{Command: protocol.Command{OperationID: "one-register", Kind: "storage-register", Storage: &firstCommand}, Result: protocol.Result{OperationID: "one-register", Status: "succeeded"}},
+		{Command: protocol.Command{OperationID: "one-detach", Kind: "storage-detach", StorageLifecycle: &protocol.StorageLifecycleRequest{Action: "detach", RepositoryID: "one", PoolID: "pool-1", HostID: "host-1", ExpectedGeneration: 1}}, Result: protocol.Result{OperationID: "one-detach", Status: "succeeded"}},
+	}
+	if err := registrationConflict(detached, protocol.Command{OperationID: "two-register", Kind: "storage-register", Storage: &candidate}); err != nil {
+		t.Fatalf("detached iSCSI source remained reserved: %v", err)
+	}
+	pending := []managedJournal{{Command: protocol.Command{OperationID: "one-pending", Kind: "storage-register", Storage: &firstCommand}, Result: protocol.Result{OperationID: "one-pending", Status: "pending"}}}
+	if err := registrationConflict(pending, protocol.Command{OperationID: "two-pending", Kind: "storage-register", Storage: &candidate}); err == nil {
+		t.Fatal("pending iSCSI source was released")
+	}
+	active := []managedJournal{{Command: protocol.Command{OperationID: "one-register", Kind: "storage-register", Storage: &firstCommand}, Result: protocol.Result{OperationID: "one-register", Status: "succeeded"}}}
+	updatedOwn := otherLUN
+	updatedOwn.ID = "one"
+	if err := registrationConflict(active, protocol.Command{OperationID: "one-update", Kind: "storage-register", Storage: &updatedOwn}); err != nil {
+		t.Fatalf("own iSCSI source update conflicted with immutable history: %v", err)
+	}
+	if err := registrationConflict(active, protocol.Command{OperationID: "two-update", Kind: "storage-register", Storage: &candidate}); err == nil {
+		t.Fatal("iSCSI source update could claim another active repository session")
+	}
+}
+
+func TestZFSCoreAliasIsProjectedWithoutRepointingLegacyMount(t *testing.T) {
+	alias := filepath.Join(storageMountRoot, "zfs-new")
+	legacy := protocol.StorageRegistration{
+		ID: "zfs-legacy", PoolID: "pool-1", HostID: "host-1", Name: "legacy", Kind: protocol.StorageKindZFS,
+		Path: "/srv/prototype", Generation: 1,
+		Source: protocol.StorageSource{ZFS: &protocol.ZFSStorageSource{Pool: "tank", Dataset: "prototype", MountPath: "/srv/prototype"}},
+	}
+	newRequest := protocol.StorageRegistration{
+		PoolID: "pool-1", HostID: "host-1", Name: "new", Kind: protocol.StorageKindZFS,
+		Source: protocol.StorageSource{ZFS: &protocol.ZFSStorageSource{Pool: "tank", Dataset: "final", MountPath: "/srv/final"}},
+	}
+	newApplied := newRequest
+	newApplied.ID, newApplied.Generation, newApplied.Path = "zfs-new", 1, alias
+	js := []managedJournal{
+		{Command: protocol.Command{Kind: "storage-register", Storage: &legacy}, Result: protocol.Result{Status: "succeeded"}},
+		{Command: protocol.Command{Kind: "storage-register", Storage: &newRequest}, Result: protocol.Result{Status: "succeeded"}, AppliedStorage: &newApplied},
+	}
+	projected := storageProjection(js)
+	if got := storageRegistrationPath(projected["zfs-new"]); got != alias {
+		t.Fatalf("new ZFS repository path = %q, want Core alias %q", got, alias)
+	}
+	if got := storageRegistrationPath(projected["zfs-legacy"]); got != "/srv/prototype" {
+		t.Fatalf("legacy ZFS repository was repointed to %q", got)
+	}
+	v := managedTestVM()
+	v.Disks = []protocol.VMDisk{{StorageID: "zfs-new", Name: "system", SizeGiB: 20, Bus: "virtio", Thin: true}}
+	targets, _, err := managedDiskPlan(js, v)
+	if err != nil || len(targets) != 1 || targets[0].Path != alias {
+		t.Fatalf("new VM target = %+v, %v; want Core alias", targets, err)
+	}
+}
+
+func TestStorageWasPreparedUsesCoreAllocatedRepositoryID(t *testing.T) {
+	request := protocol.StorageRegistration{PoolID: "pool-1", HostID: "host-1", Name: "zfs", Kind: protocol.StorageKindZFS}
+	applied := request
+	applied.ID = "core-zfs"
+	if !storageWasPrepared([]managedJournal{{Command: protocol.Command{Kind: "storage-register", Storage: &request}, AppliedStorage: &applied}}, applied.ID) {
+		t.Fatal("Core-allocated repository was not recognized as prepared")
+	}
+}
+
+func TestSMBMarkerBackingConflictPrefersDurableMarker(t *testing.T) {
+	identity := func(marker, fs string) protocol.StorageIdentity {
+		return protocol.StorageIdentity{SMB: &protocol.SMBStorageIdentity{Server: "files.example.test", Share: "vms", MarkerID: marker, FilesystemID: fs}}
+	}
+	markerA := "0123456789abcdef0123456789abcdef"
+	markerB := "fedcba9876543210fedcba9876543210"
+	if !storageSameBacking(identity(markerA, "volatile-one"), identity(markerA, "volatile-two")) {
+		t.Fatal("same durable SMB marker was not recognized across aliases")
+	}
+	if storageSameBacking(identity(markerA, "shared-diagnostic"), identity(markerB, "shared-diagnostic")) {
+		t.Fatal("distinct durable SMB markers collided on a volatile filesystem ID")
+	}
+	if !storageSameBacking(identity("", "legacy-fs"), identity("", "legacy-fs")) {
+		t.Fatal("legacy SMB filesystem identity was not retained")
+	}
+	if !storageSameBacking(identity(markerA, "legacy-fs"), identity("", "legacy-fs")) {
+		t.Fatal("marker and legacy SMB identities lost their matching legacy filesystem collision")
+	}
+	if storageSameBacking(identity(markerA, "marker-fs"), identity("", "legacy-fs")) {
+		t.Fatal("mixed SMB profiles with distinct filesystem IDs collided")
+	}
+
+	storage := func(id, server, share, marker, fs string) protocol.StorageRegistration {
+		return protocol.StorageRegistration{ID: id, PoolID: "pool-1", HostID: "host-1", Name: id, Kind: protocol.StorageKindSMB, Source: protocol.StorageSource{SMB: &protocol.SMBStorageSource{Server: server, Share: share}}, Identity: identity(marker, fs)}
+	}
+	old := storage("first", "one.example.test", "vms", markerA, "volatile-one")
+	sameMarker := storage("second", "two.example.test", "other", markerA, "volatile-two")
+	differentMarker := storage("third", "three.example.test", "other", markerB, "volatile-one")
+	legacyDifferentFS := storage("legacy-other", "four.example.test", "other", "", "legacy-fs")
+	legacySameFS := storage("legacy-same", "five.example.test", "other", "", "volatile-one")
+	for _, status := range []string{"succeeded", "pending", "needs_attention"} {
+		t.Run(status, func(t *testing.T) {
+			js := []managedJournal{{Command: protocol.Command{OperationID: "first", Kind: "storage-register", Storage: &old}, Result: protocol.Result{Status: status}}}
+			if err := registrationConflict(js, protocol.Command{OperationID: "second", Kind: "storage-register", Storage: &sameMarker}); err == nil {
+				t.Fatal("same-marker SMB alias accepted")
+			}
+			if err := registrationConflict(js, protocol.Command{OperationID: "third", Kind: "storage-register", Storage: &differentMarker}); err != nil {
+				t.Fatalf("different-marker SMB alias collided on filesystem diagnostic: %v", err)
+			}
+			if err := registrationConflict(js, protocol.Command{OperationID: "legacy-other", Kind: "storage-register", Storage: &legacyDifferentFS}); err != nil {
+				t.Fatalf("unrelated legacy SMB source was globally blocked: %v", err)
+			}
+			if err := registrationConflict(js, protocol.Command{OperationID: "legacy-same", Kind: "storage-register", Storage: &legacySameFS}); err == nil {
+				t.Fatal("mixed SMB profiles with matching legacy filesystem ID did not collide")
+			}
+		})
+	}
+}
+
+// The package service uses UMask=0077. Use a subprocess so this process's other
+// tests cannot observe the process-wide mask change.
+func TestManagedDirectoryPreservesQEMUTraversalUnderPrivateUmask(t *testing.T) {
+	const helper = "NEX_MANAGED_DIRECTORY_UMASK_HELPER"
+	if os.Getenv(helper) == "1" {
+		_ = syscall.Umask(0077) // dedicated helper process; no other tests observe this mask
+		dir := filepath.Join(os.Getenv("NEX_MANAGED_DIRECTORY_ROOT"), "nex-vms")
+		info, created, err := managedDirectory(dir)
+		if err != nil || !created || !info.IsDir() || info.Mode().Perm() != 0711 {
+			t.Fatalf("remote repository directory = %+v created=%t err=%v", info, created, err)
+		}
+		return
+	}
+	root := t.TempDir()
+	if err := os.Chmod(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestManagedDirectoryPreservesQEMUTraversalUnderPrivateUmask$")
+	cmd.Env = append(os.Environ(), helper+"=1", "NEX_MANAGED_DIRECTORY_ROOT="+root)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("private-umask helper: %v\n%s", err, out)
+	}
+	info, err := os.Stat(filepath.Join(root, "nex-vms"))
+	if err != nil || info.Mode().Perm() != 0711 {
+		t.Fatalf("QEMU traversal directory = %v, %v", info, err)
+	}
+}
+
+func TestManagedDirectoryPreservesExistingRemoteDirectoryAndRejectsSymlink(t *testing.T) {
+	root := t.TempDir()
+	existing := filepath.Join(root, "server-owned")
+	if err := os.Mkdir(existing, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err := managedDirectory(existing); err != nil || created {
+		t.Fatalf("existing remote directory = created=%t err=%v", created, err)
+	}
+	info, err := os.Stat(existing)
+	if err != nil || info.Mode().Perm() != 0750 {
+		t.Fatalf("existing remote directory mode changed: %v, %v", info, err)
+	}
+	link := filepath.Join(root, "repository-link")
+	if err := os.Symlink(existing, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := managedDirectory(link); err == nil {
+		t.Fatal("symlinked repository directory accepted")
+	}
+}
+
+func TestCredentialRotationSafe(t *testing.T) {
+	v := managedTestVM()
+	js := []managedJournal{{Command: protocol.Command{Kind: "vm-create", VM: &v}, Result: protocol.Result{Status: "succeeded"}}}
+	for _, tc := range []struct {
+		name, state string
+		pending     *managedJournal
+		wantErr     bool
+	}{
+		{"stopped", "shut off", nil, false},
+		{"running", "running", nil, true},
+		{"paused", "paused", nil, true},
+		{"unknown", "", nil, true},
+		{"pending disk", "shut off", &managedJournal{Command: protocol.Command{Kind: "vm-update", VM: &v}, Result: protocol.Result{Status: "pending"}}, true},
+		{"pending media", "shut off", &managedJournal{Command: protocol.Command{Kind: "vm-media", VMMedia: &protocol.VMMediaRequest{VMID: v.ID}}, Result: protocol.Result{Status: "pending"}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeCommand(t, "virsh", `if [ "$3" = domstate ]; then [ -n "$VMHOST_STATE" ] || exit 1; printf '%s\n' "$VMHOST_STATE"; fi`)
+			t.Setenv("VMHOST_STATE", tc.state)
+			cases := append([]managedJournal{}, js...)
+			if tc.pending != nil {
+				cases = append(cases, *tc.pending)
+			}
+			err := credentialRotationSafe(context.Background(), cases, v.Disks[0].StorageID)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("credentialRotationSafe: %v", err)
+			}
+		})
+	}
+}
+
+func TestNextStorageReconcileOldestDue(t *testing.T) {
+	now := time.Now().UTC()
+	entry := func(id, status string, age time.Duration) managedJournal {
+		return managedJournal{Command: protocol.Command{OperationID: id, Kind: "storage-recheck", StorageLifecycle: &protocol.StorageLifecycleRequest{Action: "recheck", RepositoryID: "repo", PoolID: "pool", HostID: "host"}}, Result: protocol.Result{Status: status, ObservedAt: now.Add(-age)}}
+	}
+	js := []managedJournal{entry("later", "needs_attention", 2*time.Minute), entry("failed", "failed", 10*time.Minute), entry("first", "needs_attention", 3*time.Minute)}
+	if got := nextStorageReconcile(js, now); got == nil || got.Command.OperationID != "first" {
+		t.Fatalf("oldest due storage reconciliation = %+v", got)
+	}
+	js[0].Result.ObservedAt = js[2].Result.ObservedAt
+	if got := nextStorageReconcile(js, now); got == nil || got.Command.OperationID != "first" {
+		t.Fatalf("operation ID tie-break = %+v", got)
+	}
+}
+
+func TestReconcileStoragePersistsOldestOriginalCommand(t *testing.T) {
+	e := NewManaged(t.TempDir())
+	now := time.Now().UTC()
+	registration := func(id string) protocol.StorageRegistration {
+		return protocol.StorageRegistration{ID: id, PoolID: "pool", HostID: "host", Name: id, Path: "/srv/" + id, Generation: 1}
+	}
+	for _, id := range []string{"repo-a", "repo-b"} {
+		s := registration(id)
+		if err := e.save(managedJournal{Command: protocol.Command{OperationID: "register-" + id, Kind: "storage-register", Storage: &s}, Result: protocol.Result{OperationID: "register-" + id, Status: "succeeded"}, AppliedStorage: &s}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	failed := managedJournal{Command: protocol.Command{OperationID: "failed", Kind: "storage-detach", StorageLifecycle: &protocol.StorageLifecycleRequest{Action: "detach", RepositoryID: "repo-a", PoolID: "pool", HostID: "host", ExpectedGeneration: 1}}, Result: protocol.Result{OperationID: "failed", Status: "failed", ObservedAt: now.Add(-3 * time.Minute)}}
+	due := managedJournal{Command: protocol.Command{OperationID: "oldest", Kind: "storage-detach", StorageLifecycle: &protocol.StorageLifecycleRequest{Action: "detach", RepositoryID: "repo-b", PoolID: "pool", HostID: "host", ExpectedGeneration: 1}}, Result: protocol.Result{OperationID: "oldest", Status: "needs_attention", ObservedAt: now.Add(-2 * time.Minute)}}
+	if err := e.save(failed); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.save(due); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ReconcileStorage(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.readJournal("oldest.json")
+	if err != nil || got.Result.Status != "succeeded" || got.Command.OperationID != "oldest" {
+		t.Fatalf("reconciled journal = %+v, %v", got, err)
+	}
+	kept, err := e.readJournal("failed.json")
+	if err != nil || kept.Result.Status != "failed" {
+		t.Fatalf("terminal failure replayed: %+v, %v", kept, err)
 	}
 }
 
@@ -668,7 +1010,7 @@ func TestManagedVMCommandValidation(t *testing.T) {
 		change func(*protocol.VMCreateSpec)
 	}{
 		{"UUID", func(s *protocol.VMCreateSpec) { s.ID = "guest" }},
-		{"name", func(s *protocol.VMCreateSpec) { s.Name = "Guest Machine" }},
+		{"name", func(s *protocol.VMCreateSpec) { s.Name = "Guest/Machine" }},
 		{"vCPUs", func(s *protocol.VMCreateSpec) { s.CPU.Count = 65 }},
 		{"memory", func(s *protocol.VMCreateSpec) { s.Memory.SizeMiB = 262145 }},
 		{"no disks", func(s *protocol.VMCreateSpec) { s.Disks = nil }},
@@ -685,6 +1027,58 @@ func TestManagedVMCommandValidation(t *testing.T) {
 			tc.change(&bad)
 			if validateManaged(protocol.Command{OperationID: "op", Kind: "vm-create", VM: &bad}) == nil {
 				t.Fatal("invalid VM accepted")
+			}
+		})
+	}
+}
+
+func TestManagedVMRenameRejectsPaddedDuplicate(t *testing.T) {
+	cur := managedTestVM()
+	next := cur
+	next.Name, next.Revision = "  Guest Machine  ", 1
+	js := []managedJournal{{Command: protocol.Command{Kind: "vm-create", VM: &cur}, Result: protocol.Result{Status: "succeeded"}, Disks: []string{"/disk.qcow2"}}}
+	j := managedJournal{Command: protocol.Command{OperationID: "rename", Kind: "vm-update", VM: &next}}
+	fakeCommand(t, "virsh", `case "$3" in
+domstate) printf 'shut off\n';;
+list) printf '  Guest Machine  \n';;
+*) exit 1;;
+esac`)
+	err := NewManaged(t.TempDir()).update(context.Background(), &j, js)
+	if err == nil || err.Error() != "VM name already exists" {
+		t.Fatalf("padded duplicate name was not rejected: %v", err)
+	}
+}
+
+func TestManagedVMHumanNames(t *testing.T) {
+	for _, name := range []string{"Guest Machine", "app.example.test", "数据库 & <Test>", "--help", "  Guest Machine  "} {
+		t.Run(name, func(t *testing.T) {
+			v := managedTestVM()
+			v.Name = name
+			for _, kind := range []string{"vm-create", "vm-update"} {
+				if kind == "vm-update" {
+					v.Revision = 1
+				}
+				c := protocol.Command{OperationID: "op-name", Kind: kind, VM: &v}
+				if err := validateManaged(c); err != nil {
+					t.Fatalf("%s rejected name: %v", kind, err)
+				}
+				b, err := testDomainXML(v, []protocol.NetworkRegistration{{Kind: "network", Source: "default"}}, []string{"/disk.qcow2"}, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				var d managedDomain
+				if err = xml.Unmarshal(b, &d); err != nil || d.Name != name || d.UUID != v.ID {
+					t.Fatalf("XML changed VM identity: %+v %v", d, err)
+				}
+				e := NewManaged(t.TempDir())
+				if err = e.save(managedJournal{Command: c, Domain: b, Result: protocol.Result{OperationID: c.OperationID, Status: "succeeded"}}); err != nil {
+					t.Fatal(err)
+				}
+				fakeCommand(t, "virsh", "printf '%s\\n' '"+v.ID+"'")
+				got, checks := NewManaged(e.stateDir).Applied(context.Background())
+				if len(got.VMs) != 1 || got.VMs[0].Name != name || got.VMs[0].ID != v.ID || got.VMs[0].Revision != v.Revision {
+					t.Fatalf("reopened journal lost VM identity: %+v %+v", got, checks)
+				}
 			}
 		})
 	}
@@ -860,8 +1254,8 @@ func TestAppliedSkipsPendingEntriesInFlight(t *testing.T) {
 	if r := <-done; r.Status != "succeeded" {
 		t.Fatalf("power %+v", r)
 	}
-	if got, _ := e.Applied(context.Background()); len(got.Outcomes) != 0 {
-		t.Fatalf("finished operation reported: %+v", got.Outcomes)
+	if got, _ := e.Applied(context.Background()); len(got.Outcomes) != 1 || got.Outcomes[0].Status != "succeeded" {
+		t.Fatalf("finished operation missing: %+v", got.Outcomes)
 	}
 }
 
@@ -911,7 +1305,7 @@ func TestManagedStartFailureKeepsCreationSucceeded(t *testing.T) {
 		t.Fatalf("VM not reported as managed: %+v %+v", got, checks)
 	}
 	want := protocol.ManagedOutcome{OperationID: "create:start", Kind: "vm-power", ID: v.ID, Name: "guest", Status: "failed", Error: "VM created but not started: " + reason}
-	if len(got.Outcomes) != 1 || got.Outcomes[0] != want {
+	if len(got.Outcomes) != 2 || got.Outcomes[0].Status != "succeeded" || got.Outcomes[1] != want {
 		t.Fatalf("start outcome %+v, want %+v", got.Outcomes, want)
 	}
 	calls()
@@ -924,7 +1318,7 @@ func TestManagedStartFailureKeepsCreationSucceeded(t *testing.T) {
 	if saved, err = e.readJournal("create.json"); err != nil || saved.Start != reason {
 		t.Fatalf("retry lost the start reason: %+v %v", saved, err)
 	}
-	// A start that succeeds reports no outcome.
+	// A start that succeeds reports its successful creation, without a failed start outcome.
 	t.Setenv("VMHOST_FAIL", "")
 	v2 := v
 	v2.ID, v2.Name = "12345678-1234-4234-8234-123456789013", "guest2"
@@ -937,7 +1331,7 @@ func TestManagedStartFailureKeepsCreationSucceeded(t *testing.T) {
 		t.Fatalf("started creation %+v %v", r, err)
 	}
 	t.Setenv("VMHOST_DOMAINS", v.ID+" "+v2.ID)
-	if got, _ = e.Applied(context.Background()); len(got.VMs) != 2 || len(got.Outcomes) != 1 || got.Outcomes[0].OperationID != "create:start" {
+	if got, _ = e.Applied(context.Background()); len(got.VMs) != 2 || len(got.Outcomes) != 3 || got.Outcomes[2].OperationID != "create:start" {
 		t.Fatalf("started creation reported an outcome: %+v", got)
 	}
 }
@@ -977,7 +1371,7 @@ func TestManagedInterruptedStartSettlesFromLibvirt(t *testing.T) {
 	t.Setenv("VMHOST_STATE", "shut off")
 	t.Setenv("VMHOST_DOMAINS", running.VM.ID+" "+stopped.VM.ID+" "+legacy.VM.ID)
 	got, _ := e.Applied(context.Background())
-	if len(got.VMs) != 3 || len(got.Outcomes) != 2 {
+	if len(got.VMs) != 3 || len(got.Outcomes) != 5 {
 		t.Fatalf("settled creations: %+v", got)
 	}
 	by := map[string]protocol.ManagedOutcome{}
@@ -1030,7 +1424,7 @@ func TestAppliedPromotesInterruptedCreation(t *testing.T) {
 	}
 	e.observe = func(context.Context, managedJournal, string) error { calls++; return nil }
 	fakeCommand(t, "virsh", "printf '%s\\n' "+v.ID)
-	if got, _ = e.Applied(context.Background()); calls != 2 || len(got.VMs) != 1 || len(got.Outcomes) != 0 || len(got.MissingVMs) != 0 {
+	if got, _ = e.Applied(context.Background()); calls != 2 || len(got.VMs) != 1 || len(got.Outcomes) != 1 || got.Outcomes[0].Status != "succeeded" || len(got.MissingVMs) != 0 {
 		t.Fatalf("matching domain not promoted: %+v", got)
 	}
 	saved, err := e.readJournal("create.json")

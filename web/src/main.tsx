@@ -148,11 +148,13 @@ function UploadRow({ upload, onCancel }: { upload: Upload; onCancel: () => void 
       <td>
         {/* Only the outcome is announced; percent changes far too often for a live region. */}
         <span role="status"><Badge value={upload.state} /></span>
-        <small className="mono">
-          <progress max={100} value={upload.percent} aria-label={`Upload progress for ${upload.name}`} style={{ width: 90, verticalAlign: "middle" }} />{" "}
-          {upload.percent}% · {running ? rate(upload.rate) : size(upload.total)}
-        </small>
-        {running && <small><button onClick={onCancel}>Cancel</button></small>}
+        <div className="upload-progress">
+          <small className="mono">
+            <progress max={100} value={upload.percent} aria-label={`Upload progress for ${upload.name}`} style={{ width: 90, verticalAlign: "middle" }} />{" "}
+            {upload.percent}% · {running ? rate(upload.rate) : size(upload.total)}
+          </small>
+          {running && <button onClick={onCancel}>Cancel</button>}
+        </div>
       </td>
       <td>{upload.actor}</td>
       <td>{date(upload.updated_at)}</td>
@@ -265,6 +267,7 @@ function App() {
   const [upload, setUpload] = useState<Upload | null>(null);
   const [createVM, setCreateVM] = useState(false);
   const [mediaNote, setMediaNote] = useState("");
+  const [mediaChange, setMediaChange] = useState<{ vmID: string; action: "insert" | "eject"; mediaID: string; operation: Operation } | null>(null);
   const [mediaBusy, setMediaBusy] = useState(false);
   const uploadRequest = useRef<XMLHttpRequest | null>(null);
   const uploadCancelled = useRef(false);
@@ -406,19 +409,30 @@ function App() {
   // One request identity per VM+action until it succeeds, so a retry after an uncertain outcome
   // is the same request rather than a second change.
   const mediaRequest = useRef<Record<string, string>>({});
+  useEffect(() => {
+    if (!mediaChange) return;
+    const task = data.operations.find(o => o.id === mediaChange.operation.id) || mediaChange.operation;
+    const target = data.vms.find(v => v.id === mediaChange.vmID);
+    if (task.status === "failed" || task.status === "needs_attention") {
+      if (task !== mediaChange.operation) setMediaChange({ ...mediaChange, operation: task });
+    } else if (task.status === "succeeded" || (target?.spec && (target.spec.media_id || "") === mediaChange.mediaID)) {
+      setMediaChange(null);
+    }
+  }, [mediaChange, data.operations, data.vms]);
   async function changeVMMedia(vmID: string, action: "insert" | "eject", mediaID?: string) {
     setMediaBusy(true);
     setMediaNote("");
+    setMediaChange(null);
     const key = `${vmID}/${action}`;
     mediaRequest.current[key] ??= crypto.randomUUID();
     try {
-      await api(`vms/${encodeURIComponent(vmID)}/media`, "POST", {
+      const { operation } = await api<{ operation: Operation }>(`vms/${encodeURIComponent(vmID)}/media`, "POST", {
         request_id: mediaRequest.current[key],
         action,
         ...(action === "insert" ? { media_id: mediaID } : {}),
       });
       delete mediaRequest.current[key];
-      setMediaNote(action === "insert" ? "Inserting ISO…" : "Ejecting ISO…");
+      setMediaChange({ vmID, action, mediaID: mediaID || "", operation });
       await reload();
     } catch (e) {
       setMediaNote((e as Error).message);
@@ -428,6 +442,15 @@ function App() {
   }
   function vmMediaControls(target: VM) {
     const host = data.hosts.find(h => h.id === target.host_id);
+    let note = mediaNote;
+    if (!note && mediaChange?.vmID === target.id) {
+      const task = data.operations.find(o => o.id === mediaChange.operation.id) || mediaChange.operation;
+      if (task.status === "failed" || task.status === "needs_attention") {
+        note = task.error || "ISO change did not complete. Check Recent tasks.";
+      } else if (task.status !== "succeeded" && (!target.spec || (target.spec.media_id || "") !== mediaChange.mediaID)) {
+        note = mediaChange.action === "insert" ? "Inserting ISO…" : "Ejecting ISO…";
+      }
+    }
     if (!host?.capabilities?.includes("vm-media-v1")) {
       return { currentID: target.spec?.media_id, currentName: data.media.find(m => m.id === target.spec?.media_id)?.name, options: [] as { id: string; name: string }[], busy: true, note: mediaNote || "This host cannot change media yet. Upgrade Nex Core.", onInsert: () => {}, onEject: () => {} };
     }
@@ -437,7 +460,7 @@ function App() {
       currentName: data.media.find(m => m.id === target.spec?.media_id)?.name,
       options,
       busy: mediaBusy,
-      note: mediaNote,
+      note,
       onInsert: (id: string) => void changeVMMedia(target.id, "insert", id),
       onEject: () => void changeVMMedia(target.id, "eject"),
     };
@@ -511,6 +534,7 @@ function App() {
       setToken(null);
       setNotice("");
       setMediaNote("");
+      setMediaChange(null);
       resetAddHost();
       requestID.current = null;
     };
@@ -641,7 +665,7 @@ function App() {
       <div className="console-page">
         {kind === "host-console" ? <>
           <div className="console-page-bar"><a href={`#/hosts/${id}`}>Nex Controller</a><strong>{host ? (host.hostname || host.id) : "Host console"}</strong>{host && <span className="muted">{host.connection}</span>}</div>
-          {host ? <Console key={host.id} name={host.hostname || host.id} disabled={hostConsoleBlocker(host)} open={() => openHostConsole(host.id)} quality={false} />
+          {host ? <Console key={host.id} name={host.hostname || host.id} disabled={hostConsoleBlocker(host)} open={() => openHostConsole(host.id)} />
             : <p className="empty">{loading ? "Loading…" : error || "This host is not known to Nex Controller. Choose it from the Resources tree."}</p>}
         </> : <>
           <div className="console-page-bar"><a href={`#/vms/${id}`}>Nex Controller</a><strong>{vm ? vm.name : "VM console"}</strong>{vm && <span className="muted">{vm.state || "unknown"}</span>}</div>
@@ -1151,7 +1175,7 @@ function App() {
               {pool && !host && !vm && <ManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} poolName={pool.name} tab={tab} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={setTab} unavailable={Boolean(error)} uploading={upload?.state === "uploading"} startIsoUpload={startIsoUpload} createVM={createVM} onCreateVMShown={() => setCreateVM(false)} />}
               {vm && tab === "General" && <VMDetails vm={vm} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} api={api} reload={reload} busy={busy} unavailable={Boolean(error)} onNotice={setNotice} />}
               {vm && tab === "Console" && <Console key={vm.id} name={vm.name} guest={vm.guest} popout={`#/console/${vm.id}`} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={() => openConsole(vm.id)} media={vmMediaControls(vm)} />}
-              {host && !vm && tab === "Console" && <Console key={host.id} name={host.hostname || host.id} popout={`#/host-console/${host.id}`} disabled={hostConsoleBlocker(host)} open={() => openHostConsole(host.id)} quality={false} />}
+              {host && !vm && tab === "Console" && <Console key={host.id} name={host.hostname || host.id} popout={`#/host-console/${host.id}`} disabled={hostConsoleBlocker(host)} open={() => openHostConsole(host.id)} />}
               <div hidden={Boolean(vm) || tab === "Activity" || tab === "Console" || Boolean(pool && !host && tab !== "General")}>
               {!host && (
                 <div className="metrics">
