@@ -924,7 +924,6 @@ type featuresXML struct {
 	APIC struct{} `xml:"apic"`
 }
 type devicesXML struct {
-	Emulator    string         `xml:"emulator,omitempty"`
 	Disks       []diskXML      `xml:"disk"`
 	Interfaces  []interfaceXML `xml:"interface"`
 	Channels    []channelXML   `xml:"channel"`
@@ -1013,7 +1012,6 @@ func makeDomain(j journal, s DeploySpec) domainXML {
 	nic.Model.Type = "virtio"
 	d.Devices.Interfaces = []interfaceXML{nic}
 	d.Devices.Channels = []channelXML{{Type: "unix", Target: targetXML{Type: "virtio", Name: "org.qemu.guest_agent.0"}}}
-	d.Devices.Emulator = qemuEmulator()
 	g := graphicsXML{Type: "vnc", Autoport: "no"}
 	g.Listen.Type = "socket"
 	d.Devices.Graphics = []graphicsXML{g}

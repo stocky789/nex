@@ -1,0 +1,20 @@
+{
+  "summary": "Bump the release version to 0.1.8 and place the console emulator regression fix under its release notes. API impact: none; release metadata only.",
+  "paths": ["CHANGELOG.md", "tests/test_release_version.py"],
+  "guide": {
+    "impact": "none",
+    "reason": "Release version and notes only; operator workflows are unchanged."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Builds consume the existing changelog version resolver; no client-facing API, Controller operation, Core command or observed-state contract changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Release metadata does not create runtime state."
+  },
+  "verification": {
+    "method": "python3 scripts/release-version.py --current --format both and --tag v0.1.8 --format both each returned 0.1.8 0.1.8. python3 -m unittest tests.test_release_version -v passed all 10 tests; python3 scripts/check_docs.py --worktree passed. No build, tag or publish performed.",
+    "evidence": ["scripts/release-version.py", "tests/test_release_version.py", "CHANGELOG.md"]
+  }
+}

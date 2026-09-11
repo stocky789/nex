@@ -7,12 +7,20 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > and the current `0.1.5~alpha1`. The sections below reconstruct the development **stages** from
 > the commit history and number them across that range; the intermediate versions (0.0.x and
 > 0.1.1–0.1.4) map real stages of work but were not individually built or released. Dates are the
-> commit dates. The current build stamps from the newest changelog heading (`0.1.7-alpha1` →
-> Debian `0.1.7~alpha1`).
+> commit dates. The current build stamps from the newest changelog heading (`0.1.8` →
+> Debian `0.1.8`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.1.8] — 2026-09-11
+
+### Bug Fixes
+
+- Fixed Controller deployment and VM creation failing when libvirt denied execution of the
+  console's custom emulator wrapper. New definitions use the standard host emulator;
+  console quality presets currently do not enable lossy JPEG image detail changes.
 
 ## [0.1.7-alpha1] — 2026-09-11
 

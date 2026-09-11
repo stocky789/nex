@@ -1,0 +1,25 @@
+{
+  "summary": "Reserve commits and all remote Git operations for Matt.",
+  "paths": [
+    "AGENTS.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor workflow only; operator instructions are unchanged."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Contributor workflow only; no Nex API changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation policy persists no product state."
+  },
+  "verification": {
+    "method": "python3 scripts/check_docs.py --worktree",
+    "evidence": [
+      "AGENTS.md",
+      "docs/changes/2026-09-11-agent-git-ownership.json"
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "summary": "Restore libvirt's standard emulator for appliance deployment and managed VMs. API impact: existing contract; only internal host domain generation changes.",
+  "paths": [
+    "internal/vmhost/engine.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/emulator_test.go",
+    "internal/vmhost/qemu_vnc.go",
+    "internal/vmhost/qemu_vnc_test.go",
+    "packaging/core-local/build-inside.sh",
+    "docs/guide/vm-console.md",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/plans/2026-09-09-console-features.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Disclose the JPEG quality limitation and that upgrading does not automatically recover a failed appliance definition.",
+    "pages": ["docs/guide/vm-console.md", "docs/guide/deploy-controller-appliance.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Local deployment and agent vm-create/vm-update still create host-owned libvirt definitions and return existing operation results; console streams, authorization, validation, retries, observed state and client-facing contracts are unchanged.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "VM definitions stay durable on Core; this removes a generated emulator override and adds no Controller state.",
+    "record": "Existing libvirt domain XML and appliance/managed operation journals on Core, reported through appliance and managed inventory for fresh Controller adoption with the same VM identity."
+  },
+  "verification": {
+    "method": "Both emulator-selection regression checks failed against the old selectable wrapper. go test -race ./internal/vmhost ./internal/localcore passed after the fix; python3 -m unittest tests.test_build_source -v passed all 5 tests.",
+    "evidence": ["internal/vmhost/emulator_test.go", "internal/vmhost/managed_test.go", "docs/BUG_LEDGER.md"],
+    "limits": "No rebuilt package, live AppArmor-enforced deployment, affected-host recovery or browser walkthrough. Hosted CI not run; both phase1 workflows already run the regression suite."
+  }
+}

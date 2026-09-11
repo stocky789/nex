@@ -201,19 +201,14 @@ func TestManagedReferencesAndXML(t *testing.T) {
 	}
 }
 
-func TestManagedDomainXMLUsesLossyVNCEmulator(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "qemu-vnc-lossy")
-	old := qemuVNCLossyPath
-	qemuVNCLossyPath = path
-	defer func() { qemuVNCLossyPath = old }()
+func TestManagedDomainXMLUsesDefaultEmulator(t *testing.T) {
 	v := managedTestVM()
 	b, err := testDomainXML(v, []protocol.NetworkRegistration{{Kind: "network", Source: "default"}}, []string{"/disk.qcow2"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), "<emulator>"+path+"</emulator>") {
-		t.Fatalf("domain lacks lossy VNC emulator: %s", b)
+	if strings.Contains(string(b), "<emulator>") {
+		t.Fatalf("domain overrides libvirt's standard emulator: %s", b)
 	}
 	if !strings.Contains(string(b), `mode="host-passthrough" check="none"`) {
 		t.Fatalf("host-passthrough must request check=none: %s", b)

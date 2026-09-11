@@ -1459,3 +1459,31 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
   pass. Covered by phase1 `Check contracts and contributor tools` in both workflows.
 - Avoid: shipping any new packaging path through `build-inside.sh` without adding
   extensionless files to FILES (or giving them a TREES-covered suffix).
+
+## BUG-0069 — Console emulator wrapper blocked VM definition
+
+- Date: 2026-09-11
+- Symptom: Controller deployment needs recovery after libvirt reports permission denied
+  probing `/usr/lib/nex/qemu-vnc-lossy`; managed VM creation uses the same wrapper.
+- Root cause: the console quality change replaced libvirt's standard emulator with an
+  executable outside its usual security-policy paths. Packaging sets mode 0755, but that
+  does not establish permission for confined libvirt. AppArmor is consistent with the
+  reported error; the affected host's audit log has not been inspected to confirm it.
+- Fix: remove the override in both domain builders and the runtime installer; retain the
+  packaged wrapper for existing definitions so upgrading cannot remove their emulator.
+  Keep native VNC socket configuration. Quality presets still request compression,
+  but lossy JPEG remains unavailable. Existing domains/journals are not rewritten.
+- Regression evidence: `TestApplianceDomainUsesDefaultEmulator` and
+  `TestManagedDomainXMLUsesDefaultEmulator` both failed before the fix when the old wrapper
+  path was redirected to a writable temporary directory, exposing the offending emulator
+  in both XML outputs. After removing the wrapper and that test-only path override,
+  `go test -race ./internal/vmhost ./internal/localcore` passed. Both workflows run these
+  checks through `go test -race ./...` in `.github/workflows/phase1.yml` and
+  `.gitea/workflows/phase1.yml` on pushes and pull requests. Source retention checks passed:
+  `python3 -m unittest tests.test_build_source -v` (5 tests).
+- Limits: these are local automated checks, not an AppArmor-enforced host deployment,
+  console browser walkthrough, recovered failed appliance, rebuilt package or hosted CI run.
+  Deployment/recovery acceptance on the affected build remains open.
+- Avoid: replacing a hypervisor executable for a display preference, treating chmod as
+  proof of security-policy compatibility, or telling an operator to deploy another VM
+  before the retained operation, definition and disk ownership have been reconciled.

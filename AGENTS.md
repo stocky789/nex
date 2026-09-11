@@ -74,6 +74,9 @@ when blocked; do not repeatedly ask permission for already authorized work.
 
 - The primary owns intent, decomposition, coordination, user decisions, acceptance, and synthesis.
   It may implement work itself and remains responsible for the final result.
+- Agents must never create commits, amend commits, push, tag, rebase, merge, or otherwise change Git
+  history. Matt alone handles all Git commits and remote operations; agents leave completed changes
+  unstaged unless explicitly told otherwise.
 - Use subagents proactively for independent, bounded work, especially research, exploration, review,
   and test triage. Use useful concurrency; do not delegate trivial commands to inflate agent count.
 - Assign each worker an objective, scope, relevant sources, acceptance criteria, required checks,

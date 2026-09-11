@@ -103,6 +103,18 @@ Evidence: [console features QA report](../qa/console-features/checks.md).
 
 ## Follow-ups
 
+2026-09-11 regression correction: remove the lossy VNC emulator wrapper from appliance
+and managed VM definitions; libvirt must select the standard host emulator. Retain the
+packaged script so upgrades do not remove an executable existing definitions still reference.
+JPEG quality changes remain unavailable until a supported, verified host integration exists.
+Existing definitions and failed deployment journals are not silently rewritten.
+API impact: **existing contract** — local appliance deployment and agent `vm-create`/`vm-update`
+still produce host-owned libvirt definitions and report the same operation results; client
+and Controller/Core wire contracts are unchanged. Guide impact: **updated** — disclose the
+quality limitation and failed-deployment recovery boundary. State remains in Core's libvirt
+definitions and operation journals, reported through existing inventory/adoption.
+Regression evidence and live verification limits: [BUG-0069](../BUG_LEDGER.md#bug-0069--console-emulator-wrapper-blocked-vm-definition).
+
 Serial console; stopped-VM editing including a console device upgrade for older VMs; guest
 tools slices 2 and 3 (set guest address through `guest-exec`, first-boot seeds); Windows guest
 walkthrough (virtio-win guest tools); multiple viewers, session listing and role scoping in

@@ -998,7 +998,6 @@ type managedDomain struct {
 	Features      featuresXML `xml:"features"`
 	CPU           managedCPU  `xml:"cpu"`
 	Devices       struct {
-		Emulator    string              `xml:"emulator,omitempty"`
 		Disks       []managedDisk       `xml:"disk"`
 		Controllers []managedController `xml:"controller"`
 		Interfaces  []managedNIC        `xml:"interface"`
@@ -1155,7 +1154,6 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 		d.Devices.Interfaces = append(d.Devices.Interfaces, nic)
 	}
 	consoleDevices(&d)
-	d.Devices.Emulator = qemuEmulator()
 	g := graphicsXML{Type: "vnc", Autoport: "no"}
 	g.Listen.Type = "socket"
 	d.Devices.Graphics = []graphicsXML{g}

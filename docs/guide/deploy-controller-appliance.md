@@ -166,6 +166,14 @@ remain read-only here; manage them from Controller. Unknown ownership prevents l
 - **Waiting for network:** allow the guest to boot and obtain its DHCP lease. If it cannot
   find one usable address within five minutes, fix the DHCP/bridge connection and retry
   the original operation; do not create another Controller VM.
+- **Permission denied probing `qemu-vnc-lossy`:** this console regression is corrected in
+  source by restoring the standard emulator for new definitions. An updated Core build
+  does not repair an existing failed deployment or rewrite its saved definition. Keep its
+  operation and disks; inspect the recorded VM UUID, saved definition and actual libvirt
+  state before recovering that same appliance. **Retry deployment** only reconciles observed
+  state and cannot recreate a VM whose definition failed. Do not disable host security or
+  create a second appliance to bypass this error. Recovery of an affected host has not yet
+  been verified for this fix.
 - **Controller DHCP address changed:** restart `nex-core-local` from the host console to
   refresh the address and reconnect the existing host identity, including ready deployments.
   Retry the original operation if it still needs attention; do not create another VM.
