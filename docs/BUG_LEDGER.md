@@ -1946,3 +1946,28 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 - Avoid: treating zero statfs values as identities, dropping duplicate detection to admit
   another export, comparing unnamespaced filesystem IDs across servers, or silently replacing
   a stored identity after a mismatch.
+
+## BUG-0090 — Undersized iSCSI registration left session and mount behind
+
+- Date: 2026-09-11.
+- Symptom: an isolated undersized iSCSI registration returned
+  `insufficient free storage including reserve`, but its session, node and mount remained.
+- Root cause: native iSCSI preparation marked itself complete before the shared readiness and
+  capacity check ran. Capacity refusal then returned without detaching the provisional
+  attachment.
+- Fix: treat native preparation as provisional until readiness and capacity succeed, then
+  detach on refusal. Keep registration attachments provisional through post-prepare conflict
+  and writable-probe checks, and surface cleanup failures as uncertain. Source-changing
+  updates that fail admission after replacing the previous attachment also detach the refused
+  new attachment and report uncertain rollback.
+- Regression: `TestManagedStoragePrepareRollsBackCapacityRefusal`,
+  `TestManagedStoragePrepareReportsUncertainCapacityCleanup`, and
+  `TestPrepareISCSIRollbackRemovesEngineOwnerReceipt` passed the focused
+  `go test -race -vet=off ./internal/vmhost ./internal/agent ./internal/protocol -count=1`
+  run (8.407 s, 2.795 s, 1.013 s). Both GitHub and Gitea phase1 workflows run these through
+  `go test -race ./...` on pushes and pull requests. A disposable undersized LUN registration
+  failed with `insufficient free storage including reserve` and left no session, node, mount
+  unit or ownership receipt; see [storage QA](qa/storage-repositories/checks.md).
+- Avoid: treating a capacity refusal as complete cleanup, disarming prepare rollback before
+  admission finishes, discarding detach errors after a rejected registration, or rolling back
+  iSCSI preparation with a bare background context that drops the engine owner-root.

@@ -523,16 +523,109 @@ func managedStorageReady(ctx context.Context, s protocol.StorageRegistration, re
 	return a, nil
 }
 
+// Test hooks keep admission/rollback coverage free of a full native prepare. Production
+// keeps the real prepare and readiness helpers.
+var (
+	storagePrepareAtFn    = storagePrepareAt
+	managedStorageReadyFn = managedStorageReady
+)
+
 // managedStoragePrepare is reserved for registration and configuration changes. Ordinary
 // lifecycle reads must inspect an existing mount/session and never replay login or mount work.
+// Native preparation is provisional until readiness and capacity succeed; otherwise Core
+// tears the attachment down so a refused registration cannot leave sessions or mounts behind.
 func (e *ManagedEngine) managedStoragePrepare(ctx context.Context, s protocol.StorageRegistration, required uint64) (storageAccess, error) {
-	prepared, err := storagePrepareAt(ctx, s, filepath.Join(filepath.Dir(e.stateDir), credentialDirectory))
+	credentialRoot := filepath.Join(filepath.Dir(e.stateDir), credentialDirectory)
+	prepared, err := storagePrepareAtFn(ctx, s, credentialRoot)
 	if err != nil {
 		return storageAccess{}, err
 	}
 	verified := s
 	verified.Path, verified.Identity = prepared.Path, prepared.Observed
-	return managedStorageReady(ctx, verified, required)
+	access, err := managedStorageReadyFn(ctx, verified, required)
+	if err == nil {
+		return access, nil
+	}
+	if cleanupErr := storageDetachAt(context.Background(), verified, credentialRoot); cleanupErr != nil {
+		return storageAccess{}, errors.Join(err, fmt.Errorf("%w: clean up rejected storage preparation: %v", ErrStorageRollbackUncertain, cleanupErr))
+	}
+	return storageAccess{}, err
+}
+
+// registerStorage keeps a successful native prepare provisional until post-prepare
+// conflict checks and the writable probe succeed. Cleanup failures become uncertain.
+func (e *ManagedEngine) registerStorage(ctx context.Context, j *managedJournal, js []managedJournal, c protocol.Command) (retErr error) {
+	requested := *c.Storage
+	if j.AppliedStorage != nil {
+		requested.ID = j.AppliedStorage.ID
+	}
+	storageCorePaths(&requested)
+	if requested.CredentialReceipt != "" {
+		if err := bindCredentialReceipt(filepath.Dir(e.stateDir), requested.CredentialReceipt, requested.ID, requested.PoolID, requested.HostID, requested.CredentialRequestID); err != nil {
+			return err
+		}
+		requested.CredentialPresent = true
+	}
+	if requested.Path != "" && (requested.Path == e.stateDir || strings.HasPrefix(e.stateDir, requested.Path+"/") || strings.HasPrefix(requested.Path, e.stateDir+"/")) {
+		return errors.New("storage must be separate from agent state")
+	}
+	conflict := c
+	conflict.Storage = &requested
+	if err := registrationConflict(js, conflict); err != nil {
+		return err
+	}
+	access, err := e.managedStoragePrepare(ctx, requested, 1<<30)
+	if err != nil {
+		return err
+	}
+	// Source aliases can only be proven after Core observes the mounted backing
+	// identity. Keep the attachment provisional until every post-prepare check and
+	// the writable probe succeed; otherwise tear it down before returning.
+	observed := requested
+	observed.Path, observed.Identity = access.Path, access.Observed
+	credentialRoot := filepath.Join(filepath.Dir(e.stateDir), credentialDirectory)
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		if cleanupErr := storageDetachAt(context.Background(), observed, credentialRoot); cleanupErr != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("%w: clean up rejected storage registration: %v", ErrStorageRollbackUncertain, cleanupErr))
+		}
+	}()
+	postPrepare := c
+	postPrepare.Storage = &observed
+	if err := registrationConflict(js, postPrepare); err != nil {
+		return err
+	}
+	if access.Path == e.stateDir || strings.HasPrefix(e.stateDir, access.Path+"/") || strings.HasPrefix(access.Path, e.stateDir+"/") {
+		return errors.New("storage must be separate from agent state")
+	}
+	f, err := os.CreateTemp(access.Path, ".nex-access-")
+	if err != nil {
+		return errors.New("storage is not writable")
+	}
+	name := f.Name()
+	err = f.Sync()
+	closeErr := f.Close()
+	if err == nil {
+		err = closeErr
+	}
+	removeErr := os.Remove(name)
+	if err != nil {
+		return err
+	}
+	if removeErr != nil {
+		return removeErr
+	}
+	applied := requested
+	applied.Path, applied.Generation = access.Path, 1
+	applied.Identity = access.Observed
+	applied.Capabilities = storageCapabilities(applied)
+	applied.Access = protocol.StorageAccess{Status: access.Health, Readable: true, Writable: !access.ReadOnly, TotalBytes: access.Total, AvailableBytes: &access.Available, ObservedAt: time.Now().UTC()}
+	j.AppliedStorage = &applied
+	committed = true
+	return nil
 }
 
 func storageRegistrationPath(s protocol.StorageRegistration) string {
@@ -1305,63 +1398,7 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 	case "storage-credential-retire":
 		return retireStorageCredential(filepath.Dir(e.stateDir), c.CredentialRetire.Receipt, c.CredentialRetire.PoolID, c.CredentialRetire.HostID, storageCredentialAttached(js, c.CredentialRetire.Receipt))
 	case "storage-register":
-		requested := *c.Storage
-		if j.AppliedStorage != nil {
-			requested.ID = j.AppliedStorage.ID
-		}
-		storageCorePaths(&requested)
-		if requested.CredentialReceipt != "" {
-			if err := bindCredentialReceipt(filepath.Dir(e.stateDir), requested.CredentialReceipt, requested.ID, requested.PoolID, requested.HostID, requested.CredentialRequestID); err != nil {
-				return err
-			}
-			requested.CredentialPresent = true
-		}
-		if requested.Path != "" && (requested.Path == e.stateDir || strings.HasPrefix(e.stateDir, requested.Path+"/") || strings.HasPrefix(requested.Path, e.stateDir+"/")) {
-			return errors.New("storage must be separate from agent state")
-		}
-		conflict := c
-		conflict.Storage = &requested
-		if err := registrationConflict(js, conflict); err != nil {
-			return err
-		}
-		access, err := e.managedStoragePrepare(ctx, requested, 1<<30)
-		if err != nil {
-			return err
-		}
-		// Source aliases can only be proven after Core observes the mounted backing
-		// identity. Tear down the just-created Core-owned attachment before rejecting it.
-		observed := requested
-		observed.Path, observed.Identity = access.Path, access.Observed
-		postPrepare := c
-		postPrepare.Storage = &observed
-		if err := registrationConflict(js, postPrepare); err != nil {
-			_ = storageDetachAt(ctx, observed, filepath.Join(filepath.Dir(e.stateDir), credentialDirectory))
-			return err
-		}
-		if access.Path == e.stateDir || strings.HasPrefix(e.stateDir, access.Path+"/") || strings.HasPrefix(access.Path, e.stateDir+"/") {
-			return errors.New("storage must be separate from agent state")
-		}
-		applied := requested
-		applied.Path, applied.Generation = access.Path, 1
-		applied.Identity = access.Observed
-		applied.Capabilities = storageCapabilities(applied)
-		applied.Access = protocol.StorageAccess{Status: access.Health, Readable: true, Writable: !access.ReadOnly, TotalBytes: access.Total, AvailableBytes: &access.Available, ObservedAt: time.Now().UTC()}
-		j.AppliedStorage = &applied
-		f, err := os.CreateTemp(access.Path, ".nex-access-")
-		if err != nil {
-			return errors.New("storage is not writable")
-		}
-		name := f.Name()
-		err = f.Sync()
-		closeErr := f.Close()
-		if err == nil {
-			err = closeErr
-		}
-		removeErr := os.Remove(name)
-		if err != nil {
-			return err
-		}
-		return removeErr
+		return e.registerStorage(ctx, j, js, c)
 	case "storage-update", "storage-recheck", "storage-detach":
 		v := c.StorageLifecycle
 		current, err := managedStorage(js, v.RepositoryID)
@@ -1414,16 +1451,27 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 			} else {
 				next.CredentialReceipt, next.CredentialPresent = current.CredentialReceipt, current.CredentialPresent
 			}
-			access, err := storagePrepareWithPrevious(allowStorageRemount(ctx), next, filepath.Join(filepath.Dir(e.stateDir), credentialDirectory), current)
+			credentialRoot := filepath.Join(filepath.Dir(e.stateDir), credentialDirectory)
+			access, err := storagePrepareWithPrevious(allowStorageRemount(ctx), next, credentialRoot, current)
 			if err != nil {
 				return err
 			}
 			next.Path, next.Identity = access.Path, access.Observed
 			if err = storageVerify(allowStorageRemount(ctx), next, access); err != nil || access.ReadOnly || access.Available < 1<<30 {
-				if err != nil {
-					return err
+				fail := err
+				if fail == nil {
+					fail = errors.New("storage is unavailable, read-only, or lacks reserve capacity")
 				}
-				return errors.New("storage is unavailable, read-only, or lacks reserve capacity")
+				// A source change already replaced the previous attachment. Tear down the
+				// refused new one and mark the outcome uncertain: automatic restore of the
+				// prior source is not proven here.
+				if sourceChanged {
+					if cleanupErr := storageDetachAt(context.Background(), next, credentialRoot); cleanupErr != nil {
+						return errors.Join(fail, fmt.Errorf("%w: clean up rejected storage update: %v", ErrStorageRollbackUncertain, cleanupErr))
+					}
+					return errors.Join(fail, fmt.Errorf("%w: previous storage was replaced and was not restored after rejected update", ErrStorageRollbackUncertain))
+				}
+				return fail
 			}
 			next.Path = access.Path
 			next.Identity = access.Observed

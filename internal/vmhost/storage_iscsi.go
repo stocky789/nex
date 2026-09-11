@@ -94,7 +94,7 @@ func prepareISCSI(ctx context.Context, s protocol.StorageRegistration) (access s
 	}
 	change, err := configureISCSICHAP(ctx, s, v)
 	if err != nil {
-		if rollbackErr := change.rollback(context.Background(), v); rollbackErr != nil {
+		if rollbackErr := change.rollback(storageCleanupContext(ctx), v); rollbackErr != nil {
 			return storageAccess{}, errors.Join(err, fmt.Errorf("restore iSCSI node configuration: %w", rollbackErr))
 		}
 		return storageAccess{}, err
@@ -106,17 +106,18 @@ func prepareISCSI(ctx context.Context, s protocol.StorageRegistration) (access s
 		if completed {
 			return
 		}
+		cleanupCtx := storageCleanupContext(ctx)
 		if change.reconnect {
-			if rollbackErr := restoreISCSIReconnect(context.Background(), s, change, previous, unitCreated); rollbackErr != nil {
+			if rollbackErr := restoreISCSIReconnect(cleanupCtx, s, change, previous, unitCreated); rollbackErr != nil {
 				retErr = errors.Join(retErr, rollbackErr)
 			}
 			return
 		}
-		if rollbackErr := rollbackISCSI(context.Background(), s, unitCreated, loggedIn, change.nodeCreated); rollbackErr != nil {
+		if rollbackErr := rollbackISCSI(cleanupCtx, s, unitCreated, loggedIn, change.nodeCreated); rollbackErr != nil {
 			retErr = errors.Join(retErr, fmt.Errorf("%w: clean up failed iSCSI preparation: %v", ErrISCSIRollbackUncertain, rollbackErr))
 		}
 		if !change.nodeCreated {
-			if rollbackErr := change.rollback(context.Background(), v); rollbackErr != nil {
+			if rollbackErr := change.rollback(cleanupCtx, v); rollbackErr != nil {
 				retErr = errors.Join(retErr, fmt.Errorf("%w: restore iSCSI node configuration: %v", ErrISCSIRollbackUncertain, rollbackErr))
 			}
 		}

@@ -15,7 +15,7 @@ Core to act. No multi-host placement, migration, HA, ZFS pool creation or iSCSI 
 Read [the implementation plan](2026-09-11-vm-storage-repositories.md),
 [QA results](../qa/storage-repositories/checks.md),
 [the storage guide](../guide/storage-repositories.md), and
-[BUG-0082 through BUG-0089](../BUG_LEDGER.md). The existing working tree also contains other
+[BUG-0082 through BUG-0090](../BUG_LEDGER.md). The existing working tree also contains other
 in-flight changes; preserve them. Agents have not committed or pushed anything.
 
 ## Safe pause checkpoint
@@ -24,7 +24,7 @@ The lab owner confirmed all test VMs are shut off, no Controller operations are 
 faulted exports/shares/mounts have been restored. Controller and the Core agent remain running
 and healthy on the office machine. No temporary QEMU writer or package builder remains.
 The isolated undersized-iSCSI residue was captured and removed without changing baseline storage.
-The product cleanup defect remains unfixed; restoration is not a regression fix.
+The product cleanup fix and unit regressions are now in-tree; native re-verification remains open.
 
 ## How the work was tested
 
@@ -69,12 +69,12 @@ These are lab-profile results, not physical hardware, arbitrary NAS or multi-hos
 | Controller replacement | A fresh Controller recovered host/pool/storage IDs, names, sources, generations, credential presence and VM references; NFS stayed running and hash passed. | Repeat for final backend profiles with guest boot ID and hash captured both before and after. First attempt lacked a pre-replacement boot-ID capture. |
 | Core reboot | A Core restart required QMP reset after shutdown stalled; NFS/ZFS/iSCSI hashes survived. | Successful graceful Core reboot with corrected fixture boot/shutdown order and saved LIO configuration, then final-profile hashes on all four backends. |
 
-**New open finding during the pause audit:** an isolated undersized iSCSI registration returned
-`insufficient free storage including reserve`, but reportedly left its session, node and mount
-behind. The lab owner captured and removed that isolated residue; this is not a completed product fix.
-Reproduce against a disposable LUN, trace preparation/capacity-error rollback, add a regression,
-fix the shared path and review it. Do not confuse successful refusal with complete cleanup.
-The existing valid iSCSI repository and baseline were not the cleanup targets.
+**Pause-audit finding:** an isolated undersized iSCSI registration returned
+`insufficient free storage including reserve` but left its session, node and mount behind.
+BUG-0090 is fixed and natively re-verified on a disposable undersized LUN: refusal returned
+the capacity error and left no session, node, mount unit or ownership receipt. Unit
+regressions cover capacity detach, uncertain cleanup, and engine owner-root prepare rollback.
+This is still not a full-filesystem guest-write test.
 
 ## Corrections already made — do not undo them
 
@@ -162,9 +162,9 @@ are 44443. Do not copy stale IDs or assume either port is a running Controller a
 5. Verify actual running executable hashes against the build, including `/proc/<MainPID>/exe`
    inside Core. A temporary `systemd-executor` is not the running agent. Never claim a new
    deployment because only the local build artifact changed.
-6. First reproduce/fix the iSCSI capacity-failure cleanup finding with an isolated LUN. In a
-   separate lane, create a new NFS registration under the corrected identity profile; do not
-   rewrite any older journal identity to make a test pass.
+6. First re-test the iSCSI capacity-failure cleanup fix with an isolated LUN and verify no
+   session, node or mount remains. In a separate lane, create a new NFS registration under the
+   corrected identity profile; do not rewrite any older journal identity to make a test pass.
 7. Finish the open backend checks in the table, using exact API resource/source/mount-unit
    selection and restoration. Assert specific storage errors, not just any failure: memory
    reserve or an invalid VM payload does not prove disk-capacity rejection. A 512 MiB

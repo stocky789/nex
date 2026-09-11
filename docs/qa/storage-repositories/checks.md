@@ -256,8 +256,20 @@ remain unexecuted. The share was restored and no test writer remained.
 An isolated undersized iSCSI registration failed with `insufficient free storage including
 reserve`, but the pause audit found its session, node and mount remained. The lab owner
 recorded the residue and removed only that transient fixture; the existing valid repository
-was preserved. This is an open product cleanup finding, not a completed fix or a successful
-full-filesystem test. Reproduction, a regression and shared rollback correction are required.
+was preserved. The product cleanup fix and unit regressions are now in-tree: preparation
+detaches after readiness or capacity refusal, including uncertain cleanup reporting, and
+failed iSCSI prepare rollback keeps the engine owner-root so ownership receipts are removed.
+Native disposable-lab re-verification on a fresh 200 MiB LUN failed with
+`insufficient free storage including reserve` and left no session, node, mount unit or
+ownership receipt. This still does not establish a successful full-filesystem guest-write test.
+
+## Continuation lab (home machine)
+
+A fresh disposable Debian 13 Core overlay was booted with matching rebuilt Controller/agent
+hashes. After BUG-0090 native verification, corrected-profile repositories registered
+successfully for NFSv4 (nonzero protocol FSID), local OpenZFS dataset, SMB3 and an adequate
+iSCSI LUN. Guest fsync/reboot baselines, remaining fault gates, graceful Core reboot and
+Controller replacement are still open on this deployment.
 
 At pause, all guest VMs were shut off, no Controller operations were pending, and the lab
 Controller and Core agent were healthy. No temporary package builder remained. A real

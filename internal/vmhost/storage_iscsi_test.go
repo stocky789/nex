@@ -613,3 +613,213 @@ func TestStorageDetachAtUsesCustomEngineOwnerRoot(t *testing.T) {
 		t.Fatalf("migrated scoped owner remained after detach: %v", err)
 	}
 }
+
+func TestManagedStoragePrepareRollsBackCapacityRefusal(t *testing.T) {
+	oldRun, oldPrepare, oldReady, oldMount, oldNodeRoot, oldUnits := nativeRun, storagePrepareAtFn, managedStorageReadyFn, storageMountRoot, iscsiNodeRoot, storageUnitRoot
+	t.Cleanup(func() {
+		nativeRun, storagePrepareAtFn, managedStorageReadyFn = oldRun, oldPrepare, oldReady
+		storageMountRoot, iscsiNodeRoot, storageUnitRoot = oldMount, oldNodeRoot, oldUnits
+	})
+	root := t.TempDir()
+	engineRoot := filepath.Join(root, "engine")
+	storageMountRoot = filepath.Join(root, "mounts")
+	iscsiNodeRoot = filepath.Join(root, "nodes")
+	storageUnitRoot = filepath.Join(root, "units")
+	credentialRoot := filepath.Join(engineRoot, credentialDirectory)
+	ownerRoot := filepath.Join(engineRoot, "iscsi-owners")
+	if err := os.MkdirAll(credentialRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	v := &protocol.ISCSIStorageSource{
+		Portal: "storage.example:3260", TargetIQN: "iqn.2026-01.example:undersized",
+		WWID: "3600508b400105e210000900000490099", LUN: 7,
+		FilesystemUUID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		MountPath:      filepath.Join(storageMountRoot, "undersized"), ExclusiveTarget: true,
+	}
+	s := protocol.StorageRegistration{
+		ID: "undersized", Kind: protocol.StorageKindISCSI, Path: v.MountPath,
+		Source: protocol.StorageSource{ISCSI: v},
+		Identity: protocol.StorageIdentity{ISCSI: &protocol.ISCSIStorageIdentity{
+			TargetIQN: v.TargetIQN, LUN: v.LUN, WWID: v.WWID, FilesystemUUID: v.FilesystemUUID,
+		}},
+	}
+	if err := os.MkdirAll(v.MountPath, 0711); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(iscsiNodePath(v)), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(iscsiNodePath(v), []byte("node.startup = automatic\n"+nexISCSINodeMarker), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ownerCtx := context.WithValue(context.Background(), storageOwnerRootKey{}, ownerRoot)
+	if err := os.MkdirAll(filepath.Dir(iscsiOwnerPath(ownerCtx, v)), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(iscsiOwnerPath(ownerCtx, v), []byte(iscsiOwnerRecord(v)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	unitName, unitPath := iscsiUnitPath(s)
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unitPath, []byte(nexMountMarker+"[Mount]\nWhere="+v.MountPath+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	storagePrepareAtFn = func(_ context.Context, got protocol.StorageRegistration, gotRoot string) (storageAccess, error) {
+		if got.ID != s.ID || gotRoot != credentialRoot {
+			t.Fatalf("prepare used unexpected args: %#v %q", got, gotRoot)
+		}
+		return storageAccess{Path: v.MountPath, Observed: s.Identity, Health: "healthy", Available: 1 << 20}, nil
+	}
+	managedStorageReadyFn = func(_ context.Context, got protocol.StorageRegistration, required uint64) (storageAccess, error) {
+		if got.Path != v.MountPath || required != 1<<30 {
+			t.Fatalf("ready used unexpected args: %#v %d", got, required)
+		}
+		return storageAccess{}, errors.New("insufficient free storage including reserve")
+	}
+	var calls [][]string
+	sessionActive := true
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string{name}, args...))
+		switch name {
+		case "findmnt":
+			return []byte(storageMountRoot + " /dev/root\n"), nil
+		case "iscsiadm":
+			if len(args) > 1 && args[1] == "session" {
+				if !sessionActive {
+					return nil, iscsiNoSessionTestError(t)
+				}
+				return []byte("Target: " + v.TargetIQN + "\nCurrent Portal: storage.example:3260,1\n"), nil
+			}
+			if len(args) > 0 && args[len(args)-1] == "--logout" {
+				sessionActive = false
+			}
+			if len(args) > 0 && args[len(args)-1] == "delete" {
+				_ = os.Remove(iscsiNodePath(v))
+			}
+			return nil, nil
+		default:
+			return nil, nil
+		}
+	}
+
+	e := &ManagedEngine{stateDir: filepath.Join(engineRoot, "managed-vms")}
+	_, err := e.managedStoragePrepare(context.Background(), s, 1<<30)
+	if err == nil || !strings.Contains(err.Error(), "insufficient free storage including reserve") {
+		t.Fatalf("managedStoragePrepare() = %v, want capacity refusal", err)
+	}
+	if errors.Is(err, ErrStorageRollbackUncertain) {
+		t.Fatalf("capacity refusal reported uncertain rollback: %v", err)
+	}
+	joined := ""
+	for _, call := range calls {
+		joined += strings.Join(call, " ") + "\n"
+	}
+	for _, want := range []string{
+		"systemctl disable " + unitName,
+		"node.startup -v manual",
+		"--logout",
+		"--op delete",
+		"systemctl daemon-reload",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("capacity refusal omitted cleanup %q:\n%s", want, joined)
+		}
+	}
+	if _, err := os.Stat(unitPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("mount unit remained after capacity refusal: %v", err)
+	}
+	if _, err := os.Stat(iscsiNodePath(v)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("iSCSI node remained after capacity refusal: %v", err)
+	}
+	if _, err := os.Stat(iscsiOwnerPath(ownerCtx, v)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("iSCSI owner remained after capacity refusal: %v", err)
+	}
+}
+
+func TestManagedStoragePrepareReportsUncertainCapacityCleanup(t *testing.T) {
+	oldPrepare, oldReady, oldDetachRun := storagePrepareAtFn, managedStorageReadyFn, nativeRun
+	t.Cleanup(func() {
+		storagePrepareAtFn, managedStorageReadyFn, nativeRun = oldPrepare, oldReady, oldDetachRun
+	})
+	root := t.TempDir()
+	engineRoot := filepath.Join(root, "engine")
+	if err := os.MkdirAll(filepath.Join(engineRoot, credentialDirectory), 0700); err != nil {
+		t.Fatal(err)
+	}
+	v := &protocol.ISCSIStorageSource{
+		Portal: "storage.example:3260", TargetIQN: "iqn.2026-01.example:cleanup-fail",
+		WWID: "3600508b400105e210000900000490088", LUN: 3,
+		FilesystemUUID: "11111111-2222-3333-4444-555555555555",
+		MountPath:      filepath.Join(root, "mount"), ExclusiveTarget: true,
+	}
+	s := protocol.StorageRegistration{
+		ID: "cleanup-fail", Kind: protocol.StorageKindISCSI, Path: v.MountPath,
+		Source:   protocol.StorageSource{ISCSI: v},
+		Identity: protocol.StorageIdentity{ISCSI: &protocol.ISCSIStorageIdentity{TargetIQN: v.TargetIQN, LUN: v.LUN, WWID: v.WWID, FilesystemUUID: v.FilesystemUUID}},
+	}
+	storagePrepareAtFn = func(context.Context, protocol.StorageRegistration, string) (storageAccess, error) {
+		return storageAccess{Path: v.MountPath, Observed: s.Identity}, nil
+	}
+	managedStorageReadyFn = func(context.Context, protocol.StorageRegistration, uint64) (storageAccess, error) {
+		return storageAccess{}, errors.New("insufficient free storage including reserve")
+	}
+	nativeRun = func(context.Context, string, ...string) ([]byte, error) {
+		return nil, errors.New("detach failed")
+	}
+	_, err := (&ManagedEngine{stateDir: filepath.Join(engineRoot, "managed-vms")}).managedStoragePrepare(context.Background(), s, 1<<30)
+	if !errors.Is(err, ErrStorageRollbackUncertain) || !strings.Contains(err.Error(), "insufficient free storage including reserve") {
+		t.Fatalf("managedStoragePrepare() = %v, want joined capacity and uncertain cleanup", err)
+	}
+}
+
+func TestPrepareISCSIRollbackRemovesEngineOwnerReceipt(t *testing.T) {
+	oldRun, oldMount, oldNodeRoot, oldUnits := nativeRun, storageMountRoot, iscsiNodeRoot, storageUnitRoot
+	t.Cleanup(func() {
+		nativeRun, storageMountRoot, iscsiNodeRoot, storageUnitRoot = oldRun, oldMount, oldNodeRoot, oldUnits
+	})
+	root := t.TempDir()
+	storageMountRoot = filepath.Join(root, "mounts")
+	iscsiNodeRoot = filepath.Join(root, "nodes")
+	storageUnitRoot = filepath.Join(root, "units")
+	ownerRoot := filepath.Join(root, "engine", "iscsi-owners")
+	v := &protocol.ISCSIStorageSource{
+		Portal: "storage.example:3260", TargetIQN: "iqn.2026-01.example:owner-rollback",
+		WWID: "3600508b400105e210000900000490077", LUN: 4,
+		FilesystemUUID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		MountPath:      filepath.Join(storageMountRoot, "owner-rollback"), ExclusiveTarget: true,
+	}
+	s := protocol.StorageRegistration{ID: "owner-rollback", Kind: protocol.StorageKindISCSI, Source: protocol.StorageSource{ISCSI: v}}
+	ctx := context.WithValue(context.Background(), storageOwnerRootKey{}, ownerRoot)
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "iscsiadm" && len(args) > 1 && args[1] == "session" {
+			return nil, iscsiNoSessionTestError(t)
+		}
+		if name == "iscsiadm" && len(args) > 7 && args[6] == "--op" && args[7] == "new" {
+			path := iscsiNodePath(v)
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				return nil, err
+			}
+			return nil, os.WriteFile(path, []byte("node.startup = manual\n"+nexISCSINodeMarker), 0600)
+		}
+		if name == "lsblk" {
+			// Present a different LUN WWID so preparation fails after the owned node exists.
+			return []byte(`{"blockdevices":[{"path":"/dev/sdb","type":"disk","wwn":"3600508b400105e210000900000490066","hctl":"7:0:0:4","children":[{"path":"/dev/sdb1","type":"part","uuid":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","fstype":"ext4"}]}]}`), nil
+		}
+		if name == "iscsiadm" && len(args) > 0 && args[len(args)-1] == "delete" {
+			_ = os.Remove(iscsiNodePath(v))
+		}
+		return nil, nil
+	}
+	if _, err := prepareISCSI(ctx, s); err == nil || !strings.Contains(err.Error(), "WWID") {
+		t.Fatalf("prepareISCSI() = %v, want WWID mismatch", err)
+	}
+	if _, err := os.Stat(iscsiNodePath(v)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("node remained after prepare rollback: %v", err)
+	}
+	if _, err := os.Stat(iscsiOwnerPath(ctx, v)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("engine owner receipt remained after prepare rollback: %v", err)
+	}
+}

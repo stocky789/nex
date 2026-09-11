@@ -142,6 +142,23 @@ func storageDetachAt(ctx context.Context, s protocol.StorageRegistration, creden
 	return storageDetach(ctx, s)
 }
 
+// storageCleanupContext keeps Core-private credential and iSCSI owner roots after a
+// cancelled or replaced request context. Failed preparation rollback must still find the
+// receipts it wrote under the engine state directory.
+func storageCleanupContext(ctx context.Context) context.Context {
+	cleanup := context.Background()
+	if root, _ := ctx.Value(storageCredentialRootKey{}).(string); root != "" {
+		cleanup = context.WithValue(cleanup, storageCredentialRootKey{}, root)
+	}
+	if root, _ := ctx.Value(storageOwnerRootKey{}).(string); root != "" {
+		cleanup = context.WithValue(cleanup, storageOwnerRootKey{}, root)
+	}
+	if previous, ok := ctx.Value(storagePreviousKey{}).(protocol.StorageRegistration); ok {
+		cleanup = context.WithValue(cleanup, storagePreviousKey{}, previous)
+	}
+	return cleanup
+}
+
 func prepareLocal(s protocol.StorageRegistration) (storageAccess, error) {
 	if s.Path == "" {
 		return storageAccess{}, errors.New("storage path is required")
