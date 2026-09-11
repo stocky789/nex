@@ -42,7 +42,7 @@ VIEWS = [('General', 'Health checks', 'desktop-shell.png'),
 # A current Nex Core advertises every managed capability; omitting any renders the demo
 # host as outdated ("upgrade Nex Core") and disables the power controls in the capture.
 CAPABILITIES = ['managed-vm-v1', 'vm-update-v1', 'vm-power-v1', 'console-v1',
-                'host-console-v1', 'vm-media-v1']
+                'host-console-v1', 'vm-media-v1', 'storage-repositories-v1']
 STORAGE_NAME, STORAGE_PATH = 'Local NVMe storage', '/var/lib/nex/storage'
 NETWORK_NAME, ISO_NAME = 'Guest network', 'debian-13-netinst.iso'
 DEMO_VMS = [('web-01', 'Public web front end', 2, 4096, 40),
@@ -113,7 +113,9 @@ def capture(lab, args):
     assert_public_text(json.dumps(inventory))
     # The simulated host keeps reporting and answers the Controller's commands, so demo
     # registrations and VM creation reach a real recorded result instead of staying pending.
-    managed, observed_vms, vm_state = {}, [], {'value': 'shut off'}
+    # Create VM only lists storage Core has reported as healthy and VM-disk capable.
+    managed, managed_storage, managed_outcomes = {}, {}, []
+    observed_vms, vm_state = [], {'value': 'shut off'}
     stopped, failures = threading.Event(), []
 
     def report(sequence, results):
@@ -123,7 +125,9 @@ def capture(lab, args):
         payload = {'version': 1, 'sequence': sequence, 'results': results,
                    'capabilities': CAPABILITIES,
                    'inventory': {**inventory, 'observed_at': stamp, 'vms': observed_vms,
-                                 'managed': {'vms': list(managed.values())},
+                                 'managed': {'vms': list(managed.values()),
+                                             'storage': list(managed_storage.values()),
+                                             'outcomes': list(managed_outcomes)},
                                  'checks': [{**check, 'observed_at': stamp, 'last_success': stamp}
                                             for check in inventory['checks']]}}
         request = urllib.request.Request(lab.url + '/api/v1/agent/report',
@@ -143,6 +147,25 @@ def capture(lab, args):
                 now = datetime.now(timezone.utc).isoformat()
                 for command in answer.get('commands') or []:
                     results.append({'operation_id': command['operation_id'], 'status': 'succeeded', 'observed_at': now})
+                    if command.get('storage'):
+                        storage = {**command['storage']}
+                        storage_id = storage.get('id') or ('demo-storage-' + command['operation_id'])
+                        storage.update({
+                            'id': storage_id,
+                            'generation': max(1, int(storage.get('generation') or 1)),
+                            'capabilities': {'vm_disk': True, 'iso': True, 'thin': True},
+                            'access': {'status': 'healthy', 'readable': True, 'writable': True,
+                                       'observed_at': now},
+                        })
+                        for key in ('status', 'error', 'operation_id'):
+                            storage.pop(key, None)
+                        managed_storage[storage_id] = storage
+                        managed_outcomes[:] = [o for o in managed_outcomes
+                                               if o.get('operation_id') != command['operation_id']]
+                        managed_outcomes.append({
+                            'operation_id': command['operation_id'], 'kind': 'storage-register',
+                            'id': storage_id, 'name': storage.get('name', ''), 'status': 'succeeded',
+                        })
                     if command.get('vm'):
                         # The host journals the definition and reports it as the current revision.
                         vm = command['vm']
@@ -226,7 +249,11 @@ def capture(lab, args):
             page.get_by_role('navigation', name='Resource views', exact=True).get_by_role('button', name=tab, exact=True).click()
 
         def option(field, prefix):
-            return next(t for t in field.locator('option').all_text_contents() if t.startswith(prefix))
+            texts = field.locator('option').all_text_contents()
+            for text in texts:
+                if text.startswith(prefix):
+                    return text
+            raise AssertionError('no option starting with %r in %r' % (prefix, texts))
 
         # Demo pool resources created through the real API and confirmed by the simulated host,
         # so the managed-VM views show recorded state instead of an empty pool.
@@ -238,6 +265,10 @@ def capture(lab, args):
         storage = lab.api('/api/v1/storage', {**common, 'request_id': 'gallery-storage',
             'name': STORAGE_NAME, 'path': STORAGE_PATH}, expected=201)
         settled(storage['operation_id'])
+        eventually(lambda: next((s for s in lab.api('/api/v1/storage')
+            if s['id'] == storage['id'] and s.get('access', {}).get('status') == 'healthy'
+            and s.get('access', {}).get('writable') and s.get('capabilities', {}).get('vm_disk')), None),
+            'storage access healthy for Create VM')
         network = lab.api('/api/v1/networks', {**common, 'request_id': 'gallery-network',
             'name': NETWORK_NAME, 'kind': 'network', 'source': 'default'}, expected=201)
         settled(network['operation_id'])

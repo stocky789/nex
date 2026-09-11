@@ -1,0 +1,26 @@
+{
+  "summary": "Make gallery capture simulator report healthy VM-disk storage access so Create VM lists repositories after storage-repositories UI gates, and clear unused website deploy secrets so Release publishes Gitea-only. API impact: none.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/changes/2026-09-11-gallery-storage-access-and-release-deploy.json",
+    "tests/integration/website_controller_captures.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "CI gallery fixture and Actions deploy-secret configuration only; no operator workflow change."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Simulated host inventory for CI captures only; no Controller/Core contract change."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Test fixture and Actions secret configuration only; no Nex Controller or Core state."
+  },
+  "verification": {
+    "method": "Inspected failing phase1 gallery StopIteration on Storage select after storageUsable began requiring access.status=healthy and capabilities.vm_disk. Updated website_controller_captures.py simulated host to project Managed.Storage with healthy writable access and wait for that projection before Create VM. Cleared half-configured NEX_DEPLOY_* Actions secrets so Release skips website publish on a Gitea host without nex-apt-publish.",
+    "evidence": [
+      "tests/integration/website_controller_captures.py"
+    ]
+  }
+}
