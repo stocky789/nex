@@ -53,10 +53,18 @@ RELEASE
         [ -f "$banner" ] && sed -i "s/^Nex Core [^ ]*/Nex Core $version/" "$banner" || true
     done
     # Enable in installer chroots too; native Debian policy controls starting services.
-    # An active libvirtd AppArmor profile must be reloaded with the hook rule.
+    # Write the local include always; reload the live profile only when this mount
+    # namespace can actually load AppArmor policy. Debian Installer's in-target sees
+    # the live kernel's AppArmor-enabled flag under /sys, but apparmor_parser then
+    # fails (no usable securityfs in /proc/mounts) and would abort package configure.
+    apparmor_profile=/etc/apparmor.d/usr.sbin.libvirtd
+    apparmor_live=no
     if [ -z "$root" ] && [ -r /sys/module/apparmor/parameters/enabled ] &&
-       grep -qx 'Y' /sys/module/apparmor/parameters/enabled && [ -f /etc/apparmor.d/usr.sbin.libvirtd ] &&
-       ! command -v apparmor_parser >/dev/null 2>&1; then
+       grep -qx 'Y' /sys/module/apparmor/parameters/enabled && [ -f "$apparmor_profile" ] &&
+       [ -w /sys/kernel/security/apparmor/.load ]; then
+        apparmor_live=yes
+    fi
+    if [ "$apparmor_live" = yes ] && ! command -v apparmor_parser >/dev/null 2>&1; then
         echo "AppArmor is active but apparmor_parser is unavailable; cannot activate Nex storage guard" >&2
         exit 1
     fi
@@ -65,11 +73,8 @@ RELEASE
     if [ -x "$policy_helper" ]; then
         "$policy_helper" "$root" install
     fi
-    # Reparse only on a live host with the kernel AppArmor policy enabled.
-    if [ -z "$root" ] && [ -r /sys/module/apparmor/parameters/enabled ] &&
-       grep -qx 'Y' /sys/module/apparmor/parameters/enabled &&
-       command -v apparmor_parser >/dev/null 2>&1 && [ -f /etc/apparmor.d/usr.sbin.libvirtd ]; then
-        apparmor_parser -r /etc/apparmor.d/usr.sbin.libvirtd
+    if [ "$apparmor_live" = yes ]; then
+        apparmor_parser -r "$apparmor_profile"
     fi
     deb-systemd-helper enable nex-core-local.service
     # libvirt discovers qemu.d hooks only when its daemon starts. Refresh an

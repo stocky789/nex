@@ -25,6 +25,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Fixed simulated storage registrations that never reported healthy access in browser CI.
 - Fixed ISO URL browser mocks missing healthy ISO-ready storage access.
 - Split Controller foundation CI into parallel lanes so Go, UI, website, and browser checks overlap instead of waiting in one long job.
+- Fixed Nex Core package install failing in the installer when AppArmor looked enabled but could not reload policy.
 - Fixed release builds dropping mid-download of the Debian installer ISO.
 - Fixed registration forms following you between pool views. Opening **Register network**,
   **Upload ISO** or **Create VM** and then selecting another view left the form sitting above

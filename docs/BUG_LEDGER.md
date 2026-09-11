@@ -1963,6 +1963,28 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 - Avoid: returning immediately on `EEXIST` during marker create, or treating a zero-length
   provisional marker as a durable identity failure without a short read retry.
 
+## BUG-0092 — nex-core-local postinst failed during ISO install on AppArmor hosts
+
+- Date: 2026-09-11.
+- Symptom: Debian Installer late configure failed with
+  `nex-core-local package post-installation script subprocess returned error exit status 1`.
+  Logs showed `apparmor_parser` warnings (`unable to find a suitable fs in /proc/mounts`)
+  immediately before the dpkg error.
+- Root cause: postinst treated the live installer kernel's AppArmor-enabled flag under
+  `/sys` as proof the target could reload profiles. `apparmor_parser -r` then failed under
+  `set -e` inside `in-target`, aborting package configure before first boot.
+- Fix: write the libvirtd local include always; require a writable
+  `/sys/kernel/security/apparmor/.load` before demanding `apparmor_parser` or reloading.
+  Installer/chroot configures defer reload to first boot on a live host.
+- Regression: `test_apparmor_live_gate_skips_reload_without_writable_load` and updated
+  packaging assertions in `tests/test_storage_packaging.py`. Both GitHub and Gitea phase1
+  workflows run these through Python unittest discovery on pushes and pull requests.
+  Full ISO reinstall on an AppArmor-capable installer host is still required for end-to-end
+  proof after the next Core package rebuild.
+- Avoid: treating `/sys/module/apparmor/parameters/enabled=Y` alone as a usable policy load
+  path inside Debian Installer `in-target`, or making `apparmor_parser` failures fatal when
+  the target cannot load profiles.
+
 ## BUG-0090 — Undersized iSCSI registration left session and mount behind
 
 - Date: 2026-09-11.

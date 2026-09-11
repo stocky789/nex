@@ -97,12 +97,85 @@ class StoragePackagingTests(unittest.TestCase):
         self.assertIn('policy_helper="$root/usr/lib/nex/libvirtd-apparmor-policy"', postinst)
         self.assertIn('systemctl is-active --quiet libvirtd.service', postinst)
         self.assertIn('systemctl try-restart libvirtd.service', postinst)
-        self.assertLess(postinst.index('apparmor_parser -r /etc/apparmor.d/usr.sbin.libvirtd'),
+        self.assertLess(postinst.index('apparmor_parser -r "$apparmor_profile"'),
                         postinst.index('systemctl try-restart libvirtd.service'))
         self.assertIn('libvirtd-apparmor-policy "${DPKG_ROOT:-}" remove', prerm)
-        self.assertIn("apparmor_parser -r /etc/apparmor.d/usr.sbin.libvirtd", prerm)
+        self.assertIn('apparmor_parser -r "$apparmor_profile"', prerm)
         self.assertIn("AppArmor is active but apparmor_parser is unavailable", postinst)
         self.assertIn("AppArmor is active but apparmor_parser is unavailable", prerm)
+        # BUG-0092: installer in-target sees AppArmor enabled without a usable load interface.
+        for script in (postinst, prerm):
+            self.assertIn("[ -w /sys/kernel/security/apparmor/.load ]", script)
+            self.assertLess(script.index("[ -w /sys/kernel/security/apparmor/.load ]"),
+                            script.index("apparmor_parser -r"))
+            self.assertIn('apparmor_live=yes', script)
+            self.assertIn('[ "$apparmor_live" = yes ]', script)
+
+    def test_apparmor_live_gate_skips_reload_without_writable_load(self):
+        """BUG-0092: Debian Installer in-target must not fail package configure on AppArmor."""
+        # Mirrors the postinst/prerm gate with injectable paths so CI can exercise both
+        # branches without a live AppArmor kernel.
+        gate = r'''
+set -eu
+root=
+enabled=$1
+load=$2
+profile=$3
+parser_bin=$4
+apparmor_live=no
+if [ -z "$root" ] && [ -r "$enabled" ] &&
+   grep -qx 'Y' "$enabled" && [ -f "$profile" ] &&
+   [ -w "$load" ]; then
+    apparmor_live=yes
+fi
+if [ "$apparmor_live" = yes ] && ! command -v "$parser_bin" >/dev/null 2>&1; then
+    echo "AppArmor is active but apparmor_parser is unavailable" >&2
+    exit 1
+fi
+if [ "$apparmor_live" = yes ]; then
+    "$parser_bin" -r "$profile"
+fi
+echo "live=$apparmor_live"
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            enabled = root / "enabled"
+            load = root / "load"
+            profile = root / "usr.sbin.libvirtd"
+            parser = root / "apparmor_parser"
+            enabled.write_text("Y\n")
+            profile.write_text("# profile\n")
+            parser.write_text("#!/bin/sh\necho parser-ran >>\"$0.log\"\nexit 0\n")
+            parser.chmod(0o755)
+
+            def run_gate(*paths):
+                return subprocess.run(["sh", "-c", gate, "gate", *paths],
+                                      capture_output=True, text=True)
+
+            # Installer-like: AppArmor looks enabled, profile exists, but .load is missing.
+            missing = run_gate(str(enabled), str(root / "missing-load"), str(profile), str(parser))
+            self.assertEqual(missing.returncode, 0, missing.stderr)
+            self.assertIn("live=no", missing.stdout)
+            self.assertFalse(parser.with_suffix(".log").exists())
+
+            # Installer-like: .load exists but is not writable.
+            load.write_text("")
+            load.chmod(0o444)
+            readonly = run_gate(str(enabled), str(load), str(profile), str(parser))
+            self.assertEqual(readonly.returncode, 0, readonly.stderr)
+            self.assertIn("live=no", readonly.stdout)
+
+            # Live host: writable .load requires parser success.
+            load.chmod(0o644)
+            live = run_gate(str(enabled), str(load), str(profile), str(parser))
+            self.assertEqual(live.returncode, 0, live.stderr)
+            self.assertIn("live=yes", live.stdout)
+            self.assertTrue(parser.with_suffix(".log").exists())
+
+            # Live host without parser must fail closed.
+            missing_parser = run_gate(str(enabled), str(load), str(profile), str(root / "no-parser"))
+            self.assertNotEqual(missing_parser.returncode, 0)
+            self.assertIn("apparmor_parser is unavailable", missing_parser.stderr)
 
     def test_apt_guard_refuses_legacy_archives_only_when_v2_state_requires_it(self):
         guard = ROOT / "packaging/core-local/storage-downgrade-guard.py"

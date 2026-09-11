@@ -1,0 +1,32 @@
+{
+  "summary": "Stop nex-core-local postinst from failing ISO installs when AppArmor looks enabled but the target cannot reload profiles. API impact: none.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-11-installer-apparmor-postinst.json",
+    "packaging/core-local/postinst",
+    "packaging/core-local/prerm",
+    "tests/test_storage_packaging.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Installer packaging fix only; operator install steps are unchanged."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Maintainer scripts only."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Package maintainer scripts; no new Controller or Core durable state."
+  },
+  "verification": {
+    "method": "Matched installer log (apparmor_parser /proc/mounts warning then postinst exit 1) to postinst set -e reload. Gate now requires writable /sys/kernel/security/apparmor/.load. sh -n on postinst/prerm; test_storage_packaging (8 tests) and core-local postinst identity tests passed.",
+    "evidence": [
+      "packaging/core-local/postinst",
+      "packaging/core-local/prerm",
+      "tests/test_storage_packaging.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}
