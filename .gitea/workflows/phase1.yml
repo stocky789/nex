@@ -6,10 +6,68 @@ on:
   pull_request:
   schedule:
     - cron: "30 3 * * 1"
+concurrency:
+  group: phase1-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   code: read
 jobs:
-  phase1:
+  # Parallel lanes. Wall clock ≈ longest lane (~go race or Playwright+browser),
+  # not the sum. A single serial job was ~16 minutes before the late storage UI
+  # failures; smoke now lives in controller-browser and starts without waiting
+  # for go race or website work.
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: https://github.com/actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+      - name: Test Go services and recovery
+        run: go test -race ./...
+      - name: Check Go dependency advisories
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          govulncheck ./...
+
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install dpkg tools and nginx for packaging and hosting checks
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends nginx-core dpkg-dev gnupg
+      - name: Check contracts and contributor tools
+        run: |
+          python3 scripts/generate_api.py --check
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: https://github.com/actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build and check UI
+        run: |
+          npm --prefix web ci
+          npm --prefix web run typecheck
+          npm --prefix web run test
+          npm --prefix web run build
+      - name: Check UI dependency advisories
+        run: npm --prefix web audit --audit-level=low
+
+  controller-browser:
     runs-on: ubuntu-latest
     steps:
       - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -23,36 +81,97 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Install nginx and dpkg tools for hosting and apt checks
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends nginx-core dpkg-dev gnupg
-      - name: Test Go services and recovery
-        run: go test -race ./...
-      # The checks that need no privileges run first. They used to sit behind the
-      # namespace steps below, so a runner that cannot unshare skipped all of them
-      # and the job reported nothing about tests, contracts or the UI.
-      - name: Check contracts and contributor tools
-        run: |
-          python3 scripts/generate_api.py --check
-          python3 -m unittest discover -s tests -p 'test_*.py' -v
-      - name: Build and check UI
+      - name: Build UI assets for browser checks
         run: |
           npm --prefix web ci
-          npm --prefix web run typecheck
-          npm --prefix web run test
           npm --prefix web run build
-      - name: Check current application dependency advisories
+      - name: Prepare browser verification
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
-          govulncheck ./...
-          npm --prefix web audit --audit-level=low
-      # The remaining checks need one of two things a job running inside an
-      # unprivileged runner container cannot provide: CAP_SYS_ADMIN to create network
-      # namespaces, or a workspace path that exists on the Docker host so nested
-      # containers can bind-mount the repository. Probe both once, and gate every
-      # dependent step on the result so a limited runner reports them honestly as
-      # not-run instead of failing the job. These are SKIPPED, NOT PASSING.
+          python3 -m venv .cache/phase1-qa-venv
+          .cache/phase1-qa-venv/bin/pip install playwright==1.62.0 pillow==12.3.0
+          .cache/phase1-qa-venv/bin/python -m playwright install --with-deps chromium
+      # Cheap storage-UI mocks first so this lane fails fast.
+      - name: Verify ISO public URL and local upload browser workflows
+        run: .cache/phase1-qa-venv/bin/python tests/integration/iso_url_browser.py --evidence .cache/iso-url-browser
+      - name: Verify storage repository browser workflows with simulated host
+        run: .cache/phase1-qa-venv/bin/python tests/integration/storage_repositories_browser.py --evidence .cache/storage-browser
+      - name: Capture Controller gallery with neutral demo inventory
+        run: .cache/phase1-qa-venv/bin/python tests/integration/website_controller_captures.py --output .cache/website-controller-captures/images --evidence .cache/website-controller-captures/results.json
+      - name: Verify enrollment, recovery and browser workflows
+        run: .cache/phase1-qa-venv/bin/python tests/integration/phase1.py --browser
+      - name: Verify console controls with simulated host
+        run: .cache/phase1-qa-venv/bin/python tests/integration/console_controls_browser.py --evidence .cache/console-controls-browser
+      - name: Verify managed VM browser workflows with simulated host
+        run: .cache/phase1-qa-venv/bin/python tests/integration/managed_vm_browser.py --simulated --evidence .cache/managed-vm-browser
+      - name: Verify VM editing browser workflow with simulated host
+        run: .cache/phase1-qa-venv/bin/python tests/integration/vm_edit_browser.py --evidence .cache/vm-edit-browser
+      - name: Verify host storage ISO visibility
+        run: .cache/phase1-qa-venv/bin/python tests/integration/host_iso_browser.py --evidence .cache/host-iso-browser
+      - name: Verify searchable site selection
+        run: .cache/phase1-qa-venv/bin/python tests/integration/site_selector_browser.py --evidence .cache/site-selector-browser
+      - name: Verify form select pickers render in the page and stay open
+        run: .cache/phase1-qa-venv/bin/python tests/integration/form_select_picker.py --evidence .cache/form-select-picker
+
+  website:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: https://github.com/actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Install nginx for hardened website checks
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends nginx-core
+      - name: Build and check private website
+        run: |
+          npm --prefix website ci
+          npm --prefix website run check
+          npm --prefix website run build
+      - name: Prepare browser verification
+        run: |
+          python3 -m venv .cache/phase1-qa-venv
+          .cache/phase1-qa-venv/bin/pip install playwright==1.62.0 pillow==12.3.0
+          .cache/phase1-qa-venv/bin/python -m playwright install --with-deps chromium
+      - name: Verify website browser workflows
+        run: |
+          python3 -m http.server 8080 --bind 127.0.0.1 --directory website/build > /tmp/nex-website-preview.log 2>&1 &
+          preview_pid=$!
+          trap 'kill "$preview_pid"' EXIT
+          .cache/phase1-qa-venv/bin/python tests/integration/website_browser.py --url http://127.0.0.1:8080 --evidence .cache/website-qa
+      - name: Verify hardened website browser workflow
+        run: |
+          qa_root="$PWD/.cache/website-nginx"
+          mkdir -p "$qa_root/log"
+          sed -e 's|@NEX_WEBSITE_LISTEN@|127.0.0.1:8081|' -e "s|/srv/nex-website/current|$PWD/website/build|" -e "s|/run/nex-website/nginx.pid|$qa_root/nginx.pid|" -e "s|/run/nex-website|$qa_root|g" -e "s|/var/log/nex-website|$qa_root/log|g" packaging/website/nginx.conf.template > "$qa_root/nginx.conf"
+          nginx -t -c "$qa_root/nginx.conf"
+          nginx -c "$qa_root/nginx.conf" -g 'daemon off;' &
+          nginx_pid=$!
+          trap 'kill "$nginx_pid"' EXIT
+          .cache/phase1-qa-venv/bin/python tests/integration/website_hardening_browser.py --url http://127.0.0.1:8081 --evidence .cache/website-hardening-qa
+
+  host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: https://github.com/actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+      - uses: https://github.com/actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # Needs CAP_SYS_ADMIN for network namespaces, or a workspace path that exists
+      # on the Docker host so nested containers can bind-mount the repository.
+      # Probe once and gate every dependent step so a limited runner reports them
+      # honestly as not-run instead of failing the job. These are SKIPPED, NOT PASSING.
       - name: Check runner capabilities for host-dependent checks
         id: hostcap
         run: |
@@ -85,52 +204,17 @@ jobs:
           go build -o .cache/replacement-bin/nex-core-agent ./cmd/nex-core-agent
           python3 scripts/build-source.py --output .cache/replacement-bin/nex-source.tar.gz
           sudo NEX_BIN="$PWD/.cache/replacement-bin" unshare -nm sh -c 'mount -t sysfs none /sys && ip link set lo up && ip link add nexqa type bridge && ip link set nexqa up && python3 tests/integration/controller_replacement.py --bridge nexqa --storage-root /var/lib/nexqa-replacement --evidence .cache/controller-replacement'
+      - name: Build UI assets for local host browser checks
+        if: steps.hostcap.outputs.available == 'true'
+        run: |
+          npm --prefix web ci
+          npm --prefix web run build
       - name: Prepare browser verification
+        if: steps.hostcap.outputs.available == 'true'
         run: |
           python3 -m venv .cache/phase1-qa-venv
           .cache/phase1-qa-venv/bin/pip install playwright==1.62.0 pillow==12.3.0
           .cache/phase1-qa-venv/bin/python -m playwright install --with-deps chromium
-      - name: Capture Controller gallery with neutral demo inventory
-        run: .cache/phase1-qa-venv/bin/python tests/integration/website_controller_captures.py --output .cache/website-controller-captures/images --evidence .cache/website-controller-captures/results.json
-      - name: Build and check private website
-        run: |
-          npm --prefix website ci
-          npm --prefix website run check
-          npm --prefix website run build
-      - name: Verify website browser workflows
-        run: |
-          python3 -m http.server 8080 --bind 127.0.0.1 --directory website/build > /tmp/nex-website-preview.log 2>&1 &
-          preview_pid=$!
-          trap 'kill "$preview_pid"' EXIT
-          .cache/phase1-qa-venv/bin/python tests/integration/website_browser.py --url http://127.0.0.1:8080 --evidence .cache/website-qa
-      - name: Verify hardened website browser workflow
-        run: |
-          qa_root="$PWD/.cache/website-nginx"
-          mkdir -p "$qa_root/log"
-          sed -e 's|@NEX_WEBSITE_LISTEN@|127.0.0.1:8081|' -e "s|/srv/nex-website/current|$PWD/website/build|" -e "s|/run/nex-website/nginx.pid|$qa_root/nginx.pid|" -e "s|/run/nex-website|$qa_root|g" -e "s|/var/log/nex-website|$qa_root/log|g" packaging/website/nginx.conf.template > "$qa_root/nginx.conf"
-          nginx -t -c "$qa_root/nginx.conf"
-          nginx -c "$qa_root/nginx.conf" -g 'daemon off;' &
-          nginx_pid=$!
-          trap 'kill "$nginx_pid"' EXIT
-          .cache/phase1-qa-venv/bin/python tests/integration/website_hardening_browser.py --url http://127.0.0.1:8081 --evidence .cache/website-hardening-qa
-      - name: Verify enrollment, recovery and browser workflows
-        run: .cache/phase1-qa-venv/bin/python tests/integration/phase1.py --browser
-      - name: Verify console controls with simulated host
-        run: .cache/phase1-qa-venv/bin/python tests/integration/console_controls_browser.py --evidence .cache/console-controls-browser
-      - name: Verify managed VM browser workflows with simulated host
-        run: .cache/phase1-qa-venv/bin/python tests/integration/managed_vm_browser.py --simulated --evidence .cache/managed-vm-browser
-      - name: Verify VM editing browser workflow with simulated host
-        run: .cache/phase1-qa-venv/bin/python tests/integration/vm_edit_browser.py --evidence .cache/vm-edit-browser
-      - name: Verify host storage ISO visibility
-        run: .cache/phase1-qa-venv/bin/python tests/integration/host_iso_browser.py --evidence .cache/host-iso-browser
-      - name: Verify ISO public URL and local upload browser workflows
-        run: .cache/phase1-qa-venv/bin/python tests/integration/iso_url_browser.py --evidence .cache/iso-url-browser
-      - name: Verify storage repository browser workflows with simulated host
-        run: .cache/phase1-qa-venv/bin/python tests/integration/storage_repositories_browser.py --evidence .cache/storage-browser
-      - name: Verify searchable site selection
-        run: .cache/phase1-qa-venv/bin/python tests/integration/site_selector_browser.py --evidence .cache/site-selector-browser
-      - name: Verify form select pickers render in the page and stay open
-        run: .cache/phase1-qa-venv/bin/python tests/integration/form_select_picker.py --evidence .cache/form-select-picker
       - name: Build local host browser service
         run: go build -o dist/nex-core-local ./cmd/nex-core-local
       - name: Verify local host browser authentication and preflight blockers
@@ -142,3 +226,25 @@ jobs:
       - name: Verify Controller replacement end to end with Debian libvirt (storage, network, ISO, VM)
         if: steps.hostcap.outputs.available == 'true'
         run: bash tests/integration/controller_replacement_debian.sh .cache/controller-replacement-debian
+
+  # Keeps a single required check name for branch protection / dashboards.
+  phase1:
+    needs: [go, contracts, web, controller-browser, website, host]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Require every lane
+        run: |
+          set -eu
+          echo "go=${{ needs.go.result }}"
+          echo "contracts=${{ needs.contracts.result }}"
+          echo "web=${{ needs.web.result }}"
+          echo "controller-browser=${{ needs.controller-browser.result }}"
+          echo "website=${{ needs.website.result }}"
+          echo "host=${{ needs.host.result }}"
+          test "${{ needs.go.result }}" = success
+          test "${{ needs.contracts.result }}" = success
+          test "${{ needs.web.result }}" = success
+          test "${{ needs.controller-browser.result }}" = success
+          test "${{ needs.website.result }}" = success
+          test "${{ needs.host.result }}" = success

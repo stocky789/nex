@@ -38,6 +38,29 @@ class BrowserArtifactTests(unittest.TestCase):
                 self.assertGreaterEqual(build, 0, 'local browser default binary must be built')
                 self.assertGreater(browser, build, 'build must run before local browser QA')
 
+    def test_phase1_runs_independent_lanes_in_parallel(self):
+        """Serial phase1 hid storage UI failures behind ~15 minutes of unrelated work."""
+        required = (
+            'go:',
+            'contracts:',
+            'web:',
+            'controller-browser:',
+            'website:',
+            'host:',
+            'phase1:',
+            'iso_url_browser.py',
+            'storage_repositories_browser.py',
+        )
+        for provider in PROVIDERS:
+            with self.subTest(provider=provider):
+                workflow = (ROOT / provider / 'workflows/phase1.yml').read_text()
+                for marker in required:
+                    self.assertIn(marker, workflow)
+                smoke = workflow.index('iso_url_browser.py')
+                gallery = workflow.index('website_controller_captures.py')
+                self.assertLess(smoke, gallery, 'storage UI smoke must run before gallery in the browser lane')
+                self.assertIn('cancel-in-progress: true', workflow)
+
 
 class ReleaseDeployCredentialTests(unittest.TestCase):
     """BUG-0075: a half-configured deploy skipped the website while the run stayed green.

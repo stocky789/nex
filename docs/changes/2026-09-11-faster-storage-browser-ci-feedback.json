@@ -1,0 +1,32 @@
+{
+  "summary": "Split Controller foundation CI into parallel lanes (go, contracts, web, controller-browser, website, host) with cancel-in-progress and storage UI smoke first in the browser lane. API impact: none.",
+  "paths": [
+    ".gitea/workflows/phase1.yml",
+    ".github/workflows/phase1.yml",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-11-faster-storage-browser-ci-feedback.json",
+    "scripts/run-browser-qa.sh",
+    "tests/test_ci_security.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor CI layout and local QA helper only; no operator workflow change."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. CI/test tooling only."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "CI and local scripts only; no Nex Controller or Core state."
+  },
+  "verification": {
+    "method": "Timed a prior serial phase1 failure (~16m): apt 2m, go race 5m, Playwright 4m, then browsers with iso_url failing last. Rewrote both phase1 workflows into independent jobs so those overlap; storage UI smoke is first in controller-browser; concurrency cancels superseded pushes. python3 -m unittest discover -s tests -p test_ci_security.py and scripts/check_docs.py --worktree passed. scripts/run-browser-qa.sh smoke remains the local fast path.",
+    "evidence": [
+      "scripts/run-browser-qa.sh",
+      ".gitea/workflows/phase1.yml",
+      ".github/workflows/phase1.yml",
+      "tests/test_ci_security.py"
+    ]
+  }
+}
