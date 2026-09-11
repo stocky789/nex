@@ -142,7 +142,9 @@ gpg --batch --export "$fingerprint" > "$cache/cd-key.gpg"
 gpgv --keyring "$cache/cd-key.gpg" "$cache/SHA256SUMS.sign" "$cache/SHA256SUMS"
 grep -Fx "$expected  $iso" "$cache/SHA256SUMS"
 if [[ ! -f $cache/$iso ]]; then
-    curl -fL --retry 3 "$base/$iso" -o "$cache/$iso.partial"
+    # Resume across transient TLS/network drops; --retry alone does not cover mid-transfer EOFs.
+    curl -fL --retry 5 --retry-all-errors --retry-delay 2 --continue-at - \
+      "$base/$iso" -o "$cache/$iso.partial"
     mv "$cache/$iso.partial" "$cache/$iso"
 fi
 printf '%s  %s\n' "$expected" "$cache/$iso" | sha256sum --check

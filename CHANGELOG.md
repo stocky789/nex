@@ -19,6 +19,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Bug Fixes
 
 - Fixed leftover iSCSI sessions after a refused undersized storage registration.
+- Fixed release builds dropping mid-download of the Debian installer ISO.
 - Fixed registration forms following you between pool views. Opening **Register network**,
   **Upload ISO** or **Create VM** and then selecting another view left the form sitting above
   the new content until you clicked **Close**. Each form now stays on its own view, and your

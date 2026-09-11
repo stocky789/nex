@@ -1,0 +1,30 @@
+{
+  "summary": "Fix Controller foundation CI failing on WaitGroup.Go under go 1.24 language version, and harden release ISO/cloud-image downloads against mid-transfer TLS drops. API impact: none.",
+  "paths": [
+    ".gitea/workflows/release.yml",
+    ".github/workflows/release.yml",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-11-ci-go124-waitgroup-and-release-retry.json",
+    "installer/build.sh",
+    "internal/vmhost/storage_mounts_test.go"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor CI and installer download retry only; no operator workflow change."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Test and packaging download tooling only; no Controller/Core contract change."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "CI and installer download tooling only; no Nex Controller or Core state."
+  },
+  "verification": {
+    "method": "go test -race ./internal/vmhost -count=1 passed without -vet=off after replacing WaitGroup.Go. Inspected the failing Controller foundation run for the WaitGroup.Go go 1.24 language check in storage_mounts_test.go, and the failing Release run for curl exit 56 mid netinst download. Release curl now uses retry-all-errors, resume and longer retries in installer/build.sh and both release workflows.",
+    "evidence": [
+      "internal/vmhost/storage_mounts_test.go",
+      "installer/build.sh"
+    ]
+  }
+}

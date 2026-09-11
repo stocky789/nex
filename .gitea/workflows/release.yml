@@ -88,7 +88,7 @@ jobs:
           # installer/build.sh verifies this file against its pinned SHA-256 before use.
           mkdir -p .cache/appliance
           image=debian-13-genericcloud-amd64-20260831-2587.qcow2
-          curl -fsSL --retry 3 \
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --continue-at - \
             "https://cloud.debian.org/images/cloud/trixie/20260831-2587/$image" \
             -o ".cache/appliance/$image.partial"
           mv ".cache/appliance/$image.partial" ".cache/appliance/$image"

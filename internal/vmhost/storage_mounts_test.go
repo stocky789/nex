@@ -227,7 +227,13 @@ func TestSMBMarkerRejectsUnsafeFilesAndConcurrentCreate(t *testing.T) {
 	errs := make(chan error, 2)
 	var wg sync.WaitGroup
 	for range 2 {
-		wg.Go(func() { marker, err := smbMarker(path); markers <- marker; errs <- err })
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			marker, err := smbMarker(path)
+			markers <- marker
+			errs <- err
+		}()
 	}
 	wg.Wait()
 	close(markers)
