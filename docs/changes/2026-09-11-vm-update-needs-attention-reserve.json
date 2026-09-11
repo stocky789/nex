@@ -29,6 +29,6 @@
       "internal/vmhost/managed_test.go",
       "docs/BUG_LEDGER.md"
     ],
-    "limits": "Fix is in source; au-matthome still needs an updated Nex Core package deployed before the live debian VM edit retry succeeds."
+    "limits": "Fix is in source; lab-host still needs an updated Nex Core package deployed before the live debian VM edit retry succeeds."
   }
 }

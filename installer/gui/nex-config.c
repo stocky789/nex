@@ -42,7 +42,7 @@ static void validate(GKeyFile *config, gboolean password_required)
     char *haystack = g_strdup_printf("\n%s\n", zones);
     char *normalized_hostname = nex_hostname_normalize(hostname);
     if (!normalized_hostname)
-        fail("Use an ASCII host name or FQDN, e.g. nexcore.matthome.");
+        fail("Use an ASCII host name or FQDN, e.g. nexcore.example.test.");
     g_free(normalized_hostname);
     if (!strstr(haystack, needle) || strchr(zone, '\n') || !zone[0])
         fail("Select a valid timezone from the supplied list.");

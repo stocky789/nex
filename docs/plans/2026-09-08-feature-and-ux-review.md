@@ -131,7 +131,7 @@ prototyping and actual browser QA before it is treated as available.
 
 ## Proposed Nex Controller UX
 
-**Superseding layout decision, 2026-09-09:** Matt requested a Controller GUI
+**Superseding layout decision, 2026-09-09:** project owner requested a Controller GUI
 overhaul to a dense Windows desktop application shell. The
 [desktop layout slice](2026-09-09-controller-desktop-layout.md) now owns the shell:
 compact Windows-like menu/toolbar, left inventory tree, selected-resource header
@@ -208,7 +208,7 @@ new local API and reused/extended Controller/Core contracts are planned in Phase
 
 ### Managed container services: seamless and colorful
 
-Matt's agreed extension is Docker Swarm inside Nex-managed worker VMs, with the complete operator workflow in Nex Controller. Do not use LXC or install application Docker workloads directly on Nex Core. This is a later milestone after the VM foundation; Ceph is not a prerequisite. The [container implementation phase](2026-09-08-nex-platform.md#10-managed-container-services-docker-swarm) owns architecture, dependencies, and safety gates; these are Nex design requirements, not claims about functionality that already exists.
+project owner's agreed extension is Docker Swarm inside Nex-managed worker VMs, with the complete operator workflow in Nex Controller. Do not use LXC or install application Docker workloads directly on Nex Core. This is a later milestone after the VM foundation; Ceph is not a prerequisite. The [container implementation phase](2026-09-08-nex-platform.md#10-managed-container-services-docker-swarm) owns architecture, dependencies, and safety gates; these are Nex design requirements, not claims about functionality that already exists.
 
 - **Enable:** pool → Container Services → participating physical hosts, worker capacity, and supported pool storage → placement/prerequisite checks → review → tracked provisioning. Nex provisions and maintains worker VMs, configures Swarm, and distributes managers across physical failure domains; show roles and placement without requiring routine SSH or Docker commands.
 - **Deploy:** pool Applications → image/application name → ports, networks, replicas, resources, secrets, and persistent volumes → validation → review → tracked deployment. Pool Applications exposes services, their container instances, volumes, networks, and secrets with clear relationships and permissions. Never reveal secret values in routine details, logs, or task output.

@@ -95,7 +95,7 @@ before installer control. Two offline [target guard checks](../../../tests/test_
 passed locally and independently; both existing Phase 1 CI workflows discover
 this test file on pushes and pull requests. Hosted CI was not run here.
 
-The fresh lab remains running with loopback-only access for Matt's inspection.
+The fresh lab remains running with loopback-only access for project owner's inspection.
 Its private `ACCESS.md` beside the new disk records URLs, credential-file locations
 and the validated graceful-poweroff command. No password is in this report.
 

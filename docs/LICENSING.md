@@ -1,6 +1,6 @@
 # Nex licensing
 
-Decision: Matt selected AGPL on 2026-09-08. The project applies **AGPL-3.0-only**
+Decision: project owner selected AGPL on 2026-09-08. The project applies **AGPL-3.0-only**
 (GNU Affero General Public License version 3 only) to original Nex source code,
 build scripts, and configuration. A file carrying another license keeps that
 license. The complete, unmodified [license text](../LICENSE) was retrieved from
@@ -9,7 +9,7 @@ license. The complete, unmodified [license text](../LICENSE) was retrieved from
 supports comments. This decision does not relicense third-party material.
 
 The Nex name, logo, and standalone artwork are outside this code-license grant.
-Matt has approved their use in the Nex project and its installer; a broader
+project owner has approved their use in the Nex project and its installer; a broader
 artwork redistribution license and trademark policy have not been selected.
 Do not invent such permission or impose additional restrictions on AGPL-covered
 code. Resolve the separate asset terms before distributing a branded release.

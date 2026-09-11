@@ -6,13 +6,14 @@ Status: APT is live at `https://nexvirtualization.com/apt/`
 The next release must publish a version newer than `0.1.5~alpha1`; domain default; private HTTP
 repo URLs are remapped to that default. Controller appliances ship `apply-update`
 + path unit so Updates Check/Update work after deploy. Signing key under
-`/etc/nex-apt/gnupg`; `matt` can republish with passwordless `sudo nex-apt-publish`.
+`/etc/nex-apt/gnupg`; the configured publishing account can republish with passwordless
+`sudo nex-apt-publish`.
 Disposable lab verified Check/Apply for both packages against the public repo.
 Host backend remains `/srv/nex-apt` on the website VM.
 
 ## Decision
 
-Matt authorized a Nex APT repository on the website host and in-GUI update
+project owner authorized a Nex APT repository on the website host and in-GUI update
 checks/apply for Nex Core (host-local UI) and Nex Controller, so development
 builds can be upgraded without full reinstall.
 
@@ -43,12 +44,14 @@ acceptance (drain, compatibility windows, rollback proof).
 
 ## Scope change 2026-09-10: apt-native updates and the distribution boundary
 
-Matt asked for updates to run through `apt`/`dist-upgrade` rather than a bespoke
+project owner asked for updates to run through `apt`/`dist-upgrade` rather than a bespoke
 downloader, and for Nex Core to be treated as a distribution rather than a set of
 packages installable on any Debian system.
 
-Both update paths now run `apt-get update` followed by
-`apt-get install --only-upgrade <package>` against the signed Nex archive. The
+Both update paths now run `apt-get update` against the signed Nex archive. Core then runs
+plain `apt-get install nex-core-local`, allowing an appliance with only its initial binary to
+receive its first package; Controller's privileged helper runs
+`apt-get install --only-upgrade nex-controller`. The
 previous path fetched `{repo}/updates.json`, verified a SHA-256 taken from that same
 index, and ran `dpkg -i` — which cannot satisfy dependencies, so any release adding one
 would have failed mid-install and left the package unconfigured. The signed archive and

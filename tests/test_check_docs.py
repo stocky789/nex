@@ -29,10 +29,11 @@ class DocumentationGateTests(unittest.TestCase):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text)
 
-    def record(self, paths, name='change', guide=None, api=None, state=None):
+    def record(self, paths, name='change', guide=None, api=None, state=None, roadmap=None):
         data = {'summary': 'Test change', 'paths': paths,
                 'guide': guide or {'impact': 'none', 'reason': 'Internal change', 'pages': []},
                 'api': api or {'impact': 'none', 'reason': 'No API behavior changes', 'pages': []},
+                'roadmap': roadmap or {'impact': 'none', 'reason': 'Ships no milestone change', 'pages': []},
                 'state': state or {'owner': 'none', 'reason': 'Stores nothing durable'},
                 'verification': {'method': 'Run focused local check', 'evidence': ['check.txt']}}
         file = f'docs/changes/{name}.json'
@@ -144,6 +145,68 @@ class DocumentationGateTests(unittest.TestCase):
             docs.check(self.root, {'app.py', record}, added={record})
         # Edited later, page untouched: previously failed, must now pass.
         docs.check(self.root, {'app.py', record}, added=set())
+
+    def test_new_record_must_assess_the_published_roadmap(self):
+        """A completed feature that never reaches the website leaves it claiming something untrue.
+
+        The gate cannot judge whether "none" was honest - no more than it can for guide or
+        API impact - but it can refuse a record that never considered the question.
+        """
+        record = self.record(['app.py'])
+        data = json.loads((self.root / record).read_text())
+        del data['roadmap']
+        self.write(record, json.dumps(data))
+        with self.assertRaisesRegex(ValueError, 'roadmap.impact must be updated or none'):
+            docs.check(self.root, {'app.py', record}, added={record})
+
+    def test_roadmap_updated_requires_the_board_to_change_in_range(self):
+        page = 'website/src/routes/roadmap/+page.svelte'
+        self.write(page, '<!-- board -->\n')
+        roadmap = {'impact': 'updated', 'reason': 'Milestone reached', 'pages': [page]}
+        record = self.record(['app.py', page], roadmap=roadmap)
+        docs.check(self.root, {'app.py', page, record}, added={record})
+        # Claiming the board moved while leaving it untouched is the failure worth catching.
+        with self.assertRaisesRegex(ValueError, 'roadmap updated requires pages changed'):
+            docs.check(self.root, {'app.py', record}, added={record})
+
+    def test_roadmap_pages_must_point_at_the_board(self):
+        roadmap = {'impact': 'updated', 'reason': 'Milestone reached', 'pages': ['docs/guide/install.md']}
+        record = self.record(['app.py', 'docs/guide/install.md'], roadmap=roadmap)
+        with self.assertRaisesRegex(ValueError, 'roadmap.pages outside reference area'):
+            docs.check(self.root, {'app.py', 'docs/guide/install.md', record}, added={record})
+
+    def test_records_predating_the_roadmap_assessment_stay_valid(self):
+        """Retrofitting a hundred merged records would mean inventing assessments for past work.
+
+        The date already in every record's name is the boundary, so the requirement starts
+        cleanly without a migration commit that rewrites other people's unlanded records.
+        """
+        old = self.record(['app.py'], name='2026-09-11-earlier-change')
+        data = json.loads((self.root / old).read_text())
+        del data['roadmap']
+        self.write(old, json.dumps(data))
+        docs.check(self.root, {'app.py', old}, added={old})
+        # --all validates the whole tree; it must not demand the field retroactively either.
+        docs.check(self.root, None, added=set())
+
+    def test_records_from_the_cutoff_onward_must_assess_the_roadmap(self):
+        new = self.record(['app.py'], name='2026-09-12-later-change')
+        data = json.loads((self.root / new).read_text())
+        del data['roadmap']
+        self.write(new, json.dumps(data))
+        with self.assertRaisesRegex(ValueError, 'roadmap.impact must be updated or none'):
+            docs.check(self.root, {'app.py', new}, added={new})
+        with self.assertRaisesRegex(ValueError, 'roadmap.impact must be updated or none'):
+            docs.check(self.root, None, added=set())
+
+    def test_an_undated_record_name_cannot_skip_the_roadmap_question(self):
+        """Otherwise dropping the date from a filename would quietly opt out of the gate."""
+        undated = self.record(['app.py'], name='change')
+        data = json.loads((self.root / undated).read_text())
+        del data['roadmap']
+        self.write(undated, json.dumps(data))
+        with self.assertRaisesRegex(ValueError, 'roadmap.impact must be updated or none'):
+            docs.check(self.root, {'app.py', undated}, added={undated})
 
     def test_unknown_added_set_keeps_the_strict_check(self):
         guide = {'impact': 'updated', 'reason': 'New workflow', 'pages': ['docs/guide/install.md']}

@@ -1,6 +1,6 @@
 {
-  "lab": "nex-appliance-lab.2851um6a",
-  "qemu_pid": 730388,
+  "lab": "nex-appliance-lab.<redacted>",
+  "qemu_pid": 10005,
   "qemu_running": false,
   "copied_disk_preserved": true
 }

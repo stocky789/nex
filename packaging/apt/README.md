@@ -10,12 +10,12 @@ and the Pangolin route for nexvirtualization.com.
 ## One-time bootstrap (website host, as root)
 
 ```sh
-sudo packaging/apt/bootstrap.sh
+sudo NEX_PUBLISH_USER=publisher packaging/apt/bootstrap.sh
 ```
 
 Creates `/srv/nex-apt`, signing key under `/etc/nex-apt/gnupg`, installs
 `/usr/local/sbin/nex-apt-publish`, merges the nginx `/apt/` location, and allows
-`matt` to run the publisher via sudoers.
+the account in `NEX_PUBLISH_USER` to run the publisher via sudoers.
 
 ## Publish packages
 

@@ -1,7 +1,7 @@
 # Nex brand identity
 
 Date: 2026-09-08  
-Status: Original blue/platinum Relay revision 2 identity approved by Matt on 2026-09-08. Additional reference colors extend the palette; they do not replace the primary identity.
+Status: Original blue/platinum Relay revision 2 identity approved by project owner on 2026-09-08. Additional reference colors extend the palette; they do not replace the primary identity.
 
 ## Brief and product identity
 
@@ -9,7 +9,7 @@ Nex is the parent brand. **Nex Core** is the Debian-based virtualization host, u
 
 The project is in development. The [platform plan](../plans/2026-09-08-nex-platform.md) starts at Phase 0; the [interface review](../plans/2026-09-08-feature-and-ux-review.md) defines future operator workflows. Brand approval changes neither acceptance gates nor product scope.
 
-Matt clarified that the original blue, white, and grey identity stays primary. Colors from the later references are additions to the palette, not instructions to recolor the logo or replace the light brand board. Reference imagery supplies color inspiration only; do not copy competitor logos, typography, layouts, or wording.
+project owner clarified that the original blue, white, and grey identity stays primary. Colors from the later references are additions to the palette, not instructions to recolor the logo or replace the light brand board. Reference imagery supplies color inspiration only; do not copy competitor logos, typography, layouts, or wording.
 
 ## Approved logo treatment
 

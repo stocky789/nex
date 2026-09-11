@@ -1,0 +1,19 @@
+{
+  "url": "http://127.0.0.1:8080",
+  "html_sha256": "90794f4974b79c1455eed2f9126e1920e20a7e6bac81cf2c96dcf7a53c6edf56",
+  "results": [
+    "1440px: logo backdrop, no overflow, anchors, skip link, keyboard FAQ, reduced motion",
+    "1440px: roadmap navigation, status legend, milestone built/outstanding lists, skip link, no overflow",
+    "1440px: gallery navigation, images, alt text, keyboard full-size/skip and Home return",
+    "768px: logo backdrop, no overflow, anchors, skip link, keyboard FAQ, reduced motion",
+    "768px: roadmap navigation, status legend, milestone built/outstanding lists, skip link, no overflow",
+    "768px: gallery navigation, images, alt text, keyboard full-size/skip and Home return",
+    "360px: logo backdrop, no overflow, anchors, skip link, keyboard FAQ, reduced motion",
+    "360px: roadmap navigation, status legend, milestone built/outstanding lists, skip link, no overflow",
+    "360px: gallery navigation, images, alt text, keyboard full-size/skip and Home return",
+    "JavaScript disabled: content, release status and FAQ available",
+    "JavaScript disabled: roadmap milestones and their built/outstanding lists available",
+    "JavaScript disabled: gallery navigation and screenshots available"
+  ],
+  "browser_errors": []
+}

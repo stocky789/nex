@@ -10,12 +10,12 @@ items 3, 4, 6 and 7, and the Phase 2 acceptance gate.
 
 ## Scope and decisions
 
-Matt redirected the remaining Phase 2 work: build the **complete VM creation system before
+project owner redirected the remaining Phase 2 work: build the **complete VM creation system before
 stopped-VM editing**, so that edit is written once against the final VM model instead of being
 built against the single-disk, single-NIC shape the
 [first managed VM slice](2026-09-09-first-managed-vm.md) delivered and then reworked.
 
-The field set was reviewed against the creation form Matt supplied and the fields a VM
+The field set was reviewed against the creation form project owner supplied and the fields a VM
 specification actually needs. Research is inspiration, not authorization to expand the
 milestone; each item below is either in this slice or listed under follow-ups with the reason.
 
@@ -50,7 +50,7 @@ milestone; each item below is either in this slice or listed under follow-ups wi
   journal normalisation. Existing lab VMs and managed journal entries are recreated.
   The Controller appliance is unaffected: it is built from `DeploySpec` through
   `makeDomain` (`internal/vmhost/engine.go`), a separate path from `VMCreateSpec`.
-  Decision: Matt, 2026-09-10.
+  Decision: project owner, 2026-09-10.
 - **CPU model defaults to `host-passthrough`**, unchanged from today, with `host-model` selectable.
   Core reports the named models available from its own libvirt/QEMU in inventory; Controller
   displays that host-specific list and Core rechecks a named selection before defining the VM.
@@ -65,7 +65,7 @@ milestone; each item below is either in this slice or listed under follow-ups wi
 
 ## Memory model
 
-Two modes, matching the two behaviours Matt specified.
+Two modes, matching the two behaviours project owner specified.
 
 | Mode | Operator meaning | libvirt |
 |---|---|---|
@@ -192,7 +192,7 @@ uncommitted working tree. Unticked boxes were **not run**; none of them may be c
       (runs 3798, 3801, 3804). It drives the six steps and fails at the disk-name default check
       (BUG-0047 in `docs/BUG_LEDGER.md`); the fix is in the working tree and the walkthrough is
       verified only once that job is green. No local Playwright captures exist.
-- [ ] **Phase 2 acceptance gate**, folded into this slice by Matt's decision on 2026-09-10:
+- [ ] **Phase 2 acceptance gate**, folded into this slice by project owner's decision on 2026-09-10:
       create a VM through Nex Controller, install a real guest from an uploaded ISO using the
       browser console, reboot it, and verify written data survives guest and host reboot; stop the
       Controller and confirm the VM keeps running, then confirm reconnect refreshes inventory and

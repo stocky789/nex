@@ -11,7 +11,7 @@ Parent: [platform plan](2026-09-08-nex-platform.md) Phase 2 items 5 and 7; exten
 
 ## Scope and decisions
 
-Matt asked for every console feature that is practical to implement, bidirectional clipboard
+project owner asked for every console feature that is practical to implement, bidirectional clipboard
 included, and expected that guest tools would be needed so VMs can talk to Core/Controller.
 
 Research into what the noVNC 1.7.0 API and QEMU/libvirt VNC support make possible, alongside

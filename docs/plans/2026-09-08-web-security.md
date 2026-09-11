@@ -5,7 +5,7 @@ Status: Scoped hardening accepted with independent review and local verification
 
 ## Scope and standard
 
-Matt requested modern security practices for both web platforms. Audit the implemented
+project owner requested modern security practices for both web platforms. Audit the implemented
 Controller and host-local APIs, browser applications, agent trust, appliance and delivery
 boundaries, fix source-backed weaknesses, and retain regression/advisory checks.
 Unrelated Core installer work remains outside this slice.

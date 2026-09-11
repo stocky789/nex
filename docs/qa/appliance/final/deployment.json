@@ -1,7 +1,7 @@
 {
   "operation": {
-    "id": "adc3feb8-3b99-4ec6-922c-95e5bba04d68",
-    "vm_id": "8d5298c9-f86c-449a-96b2-b10ce84fa231",
+    "id": "private-id-048",
+    "vm_id": "private-id-033",
     "kind": "deploy",
     "status": "ready",
     "stage": "ready",

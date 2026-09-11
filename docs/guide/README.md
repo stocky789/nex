@@ -42,7 +42,8 @@ The separate appliance slice adds local deployment and restricted VM power recov
 The managed-VM creation slice adds pool-owned local storage, VLAN or existing guest networks,
 ISO upload and creation of a stopped VM with multiple disks and network interfaces, either
 memory mode, an explicit boot order and optional autostart, with separate verification evidence.
-Editing and deleting a VM, managed snapshots/backups/restores,
+Editing a VM is available and has [its own page](edit-virtual-machine.md).
+Deleting a VM, managed snapshots/backups/restores,
 migrations, HA, and Docker Container Services remain **planned and unavailable**.
 Their intended behavior belongs in the
 [roadmap](../plans/2026-09-08-nex-platform.md).

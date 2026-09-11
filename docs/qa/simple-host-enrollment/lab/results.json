@@ -19,8 +19,8 @@
     "browser-re-enroll-success.png",
     "browser-host-fresh.png"
   ],
-  "host_id": "bcff7c9e31e517b102edf81850d6fdd9e730fc10883dcf2a639ed88d4704efc1",
-  "pool_id": "209406250ad3f85435f846b003f0716098a3fa58d6ae61aee88e02881394a0d0",
+  "host_id": "private-id-053",
+  "pool_id": "private-id-006",
   "environment": "Actual fresh ISO-installed nested KVM lab with the Controller appliance inside it; loopback forwards; no API mocking",
   "api_impact": "new contract exercised: probeHost, addSiteHost, localEnroll",
   "guide_impact": "updated: verifies the Add host by address workflow documented in manage-controller.md"

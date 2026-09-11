@@ -2,7 +2,7 @@
 
 ## Status
 
-Available. Every push to `main` on `git.stockhome.com.au` builds the ISO and both Debian
+Available. Every push to `main` on the configured Git forge builds the ISO and both Debian
 packages at the newest `CHANGELOG.md` version and publishes them as the repository release
 for tag `vX.Y.Z[-preN]`, replacing that version's previous release. One version identifies a
 release: the changelog heading, the tag and the Debian package version are the same number.
@@ -13,7 +13,7 @@ APT archive and the ISO to the download tree. [Return to the guide](README.md).
 
 ## Prerequisites
 
-- Maintainer access to the Nex repository on `git.stockhome.com.au`. The runner needs Docker;
+- Maintainer access to the Nex repository on the configured Git forge. The runner needs Docker;
   it may execute jobs inside a container, since the build locates the workspace on the Docker
   host itself.
 - `CHANGELOG.md` has a `## [X.Y.Z-preN]` section for the version being released and it is the
@@ -23,24 +23,24 @@ APT archive and the ISO to the download tree. [Return to the guide](README.md).
   Controller appliance manifest, the same key used for local builds. Without it each run signs
   with a throwaway key and warns; the release still installs, but its Controller appliance is
   trusted only by the Core package built in that same run.
-- Optional website publishing. Bootstrap the website host once:
+- Website publishing requires a configured publishing account. Bootstrap the website host once:
 
   ```sh
-  sudo bash packaging/apt/bootstrap.sh
+  sudo NEX_PUBLISH_USER=<publishing-user> packaging/apt/bootstrap.sh
   ```
 
   This creates the signed APT archive, the `/srv/nex-downloads` tree owned by the publishing
-  user, and the two nginx includes. Re-running it is safe. Then set three secrets; without them
-  the run says so and publishes to Gitea only.
+  user, and the two nginx includes. `NEX_PUBLISH_USER` is required. Re-running it is safe. Then
+  set the deployment secrets; without them the run says so and publishes to Gitea only.
 
   | Secret | Value |
   | --- | --- |
   | `NEX_DEPLOY_HOST` | website host address |
+  | `NEX_DEPLOY_USER` | publishing account created by `NEX_PUBLISH_USER` |
   | `NEX_DEPLOY_KEY` | private SSH key for the publishing user on that host |
   | `NEX_DEPLOY_KNOWN_HOSTS` | that host's public key, so the runner pins its identity |
 
-  Optional: `NEX_DEPLOY_USER` (default `matt`) and `NEX_PUBLIC_URL`
-  (default `https://nexvirtualization.com`).
+  `NEX_PUBLIC_URL` is optional and defaults to `https://nexvirtualization.com`.
 
 ## Steps
 
@@ -120,7 +120,7 @@ through the wrapper read a file from a temporary input directory and wrote a fil
 Raw-body asset uploads named `.iso` and `.deb` were accepted by the live Gitea instance,
 including a 150 MB file, and the probe draft release was deleted afterwards.
 
-The first end-to-end run (Gitea run 3818, 2026-09-10) built and published `v0.1.5-alpha1` in
+The first end-to-end run (Gitea run <redacted>, 2026-09-10) built and published `v0.1.5-alpha1` in
 21 minutes on the container runner: a 1.7 GB ISO with its checksum sidecar, a 707 MB
 `nex-core-local` package and a 131 MB `nex-controller` package, signed with the operator key
 from the secret, and the tag's creation triggered no other workflow. Installing from that

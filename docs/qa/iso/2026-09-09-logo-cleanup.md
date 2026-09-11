@@ -4,7 +4,7 @@ Date: 2026-09-09. Development checkout based on `1fb97824a9acdcfc25e071eb48c18e9
 
 ## Problem and change
 
-Matt confirmed the installer works, but reported a distorted logo with a rippled
+project owner confirmed the installer works, but reported a distorted logo with a rippled
 background. Both GTK consumers cropped the pale, textured design-reference board
 and painted it over the flat installer canvas. The original native capture
 reproduces that rectangle; this is separate from installer functionality.
@@ -91,7 +91,7 @@ passed. The retained modified source archive contains exact bytes of the selecte
 asset and both GTK consumers.
 
 No full ISO was rebuilt, no real disk or installed host was changed, and no fresh
-installation, physical hardware, UEFI or 1024×768 walkthrough was repeated. Matt's
+installation, physical hardware, UEFI or 1024×768 walkthrough was repeated. project owner's
 working-install confirmation is user evidence, not an agent-run installation test.
 The corrected sources take effect in the next normal ISO build.
 

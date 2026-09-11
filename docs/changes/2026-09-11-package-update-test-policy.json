@@ -1,0 +1,31 @@
+{
+  "summary": "Align the Core package-update policy test with the supported first-install apt path.",
+  "paths": [
+    "tests/test_distribution_packaging.py",
+    "docs/BUG_LEDGER.md",
+    "docs/guide/software-updates.md",
+    "docs/plans/2026-09-09-package-updates.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Clarifies the distinct Core first-install and Controller upgrade-only update commands.",
+    "pages": [
+      "docs/guide/software-updates.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No API behavior changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Test and documentation changes persist no product state."
+  },
+  "verification": {
+    "method": "python3 -m unittest tests.test_distribution_packaging.AptUpdatePathTests -v",
+    "evidence": [
+      "tests/test_distribution_packaging.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

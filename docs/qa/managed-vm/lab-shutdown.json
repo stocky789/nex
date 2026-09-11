@@ -1,5 +1,5 @@
 {
-  "lab": "nex-managed-vm-lab.sp09c20p",
+  "lab": "nex-managed-vm-lab.<redacted>",
   "method": "systemctl poweroff through pinned SSH into copied disposable host; exact QEMU PID/host.raw command identity verified first; native guest shutdown did not finish in 45 seconds, so quit only this verified disposable QEMU through its private QMP socket",
   "qemu_stopped": true,
   "controllers_stopped": [

@@ -5,7 +5,7 @@ Status: Bounded creation workflow implemented and verified in a disposable neste
 
 ## Scope and decisions
 
-Matt authorized the complete second item of the project progression: register
+project owner authorized the complete second item of the project progression: register
 host-local storage and an existing guest network, upload an ISO, and create a
 general VM with selected CPU, memory, disk, network and firmware. This is a bounded
 part of [Phase 2](2026-09-08-nex-platform.md#2-one-host-vm-management), not completion
@@ -13,7 +13,7 @@ of the entire phase. Central power controls, browser consoles, stopped-VM editin
 and deletion remain the next slice. Creation leaves a persistent VM stopped;
 the UI must state that result explicitly.
 
-Matt also confirmed that the installer installs correctly and looks good, with a
+project owner also confirmed that the installer installs correctly and looks good, with a
 remaining distorted/rippled logo. Record this as operator feedback, without
 inventing the installation environment, artifact digest or a fresh agent-run
 walkthrough. A separate worker owns the logo correction. Website, repositories
@@ -95,7 +95,7 @@ See the QA report for actual checks and scope. No hosted CI execution is claimed
 
 ## Host storage ISO visibility
 
-Matt requested that each host's Storage view show its dispatched ISO images.
+project owner requested that each host's Storage view show its dispatched ISO images.
 Display that host's pool-scoped media records with destination storage, size and
 transfer result. A dispatched transfer is not yet available; distinguish successful
 imports from pending, failed or uncertain outcomes. Qualify availability when host

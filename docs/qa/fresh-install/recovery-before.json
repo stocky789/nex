@@ -1,10 +1,10 @@
 {
-  "vm_id": "3035054a-87b0-4adb-a40d-512ce050032b",
-  "controller_vm_id": "72a34e46-5483-4239-b552-c18ddfa5e2d1",
-  "disk": "/var/lib/libvirt/images/nex-vms/3035054a-87b0-4adb-a40d-512ce050032b/disk.qcow2",
+  "vm_id": "private-id-008",
+  "controller_vm_id": "private-id-024",
+  "disk": "/var/lib/libvirt/images/nex-vms/private-id-008/disk.qcow2",
   "disk_virtual_size": 4294967296,
   "domain_sha256": "bae8099f096bf0417ff2eaa32fa3abac84758282f770635640edab17124a0ae3",
-  "boot_id": "67eaaebb-f6de-46a8-a47b-6d886d729516",
-  "host_id": "5fed69ca1dd993962d9264af45a20882ad9333733cb94d9f166850013c172c07",
-  "certificate_sha256": "3fc585e2be366a3861df71658d8d1a22cd0a1440637277d2150931c708bab63e"
+  "boot_id": "private-id-020",
+  "host_id": "private-id-018",
+  "certificate_sha256": "private-certificate-1"
 }

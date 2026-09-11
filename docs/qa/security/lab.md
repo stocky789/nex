@@ -32,7 +32,7 @@ The [package checks](package.md) record the Go 1.27.1 build and exact-binary ver
 
 ```sh
 .cache/phase1-qa-venv/bin/python tests/integration/appliance-lab.py \
-  --lab-dir .cache/nex-appliance-lab.2851um6a \
+  --lab-dir .cache/nex-appliance-lab.<redacted> \
   --evidence docs/qa/security/lab --deploy --packaged --security
 ```
 
@@ -44,7 +44,7 @@ initialization and actual Controller login.
 - Authentication, anonymous inventory rejection, CSRF enforcement, invalid deployment
   input and modified signed-manifest rejection passed before VM creation.
 - The browser's reviewed deployment progressed through 0, 10, 92, 98 and verified 100.
-  Exactly one VM UUID `91291c3e-b2c9-454a-8f77-4eaeb8bf392e`, one Site, one Pool, one
+  Exactly one VM UUID `private-id-037`, one Site, one Pool, one
   enrolled host and one adopted Controller VM were observed.
 - Both services set `__Host-` cookies with Secure, HttpOnly, SameSite=Strict and root
   path. Browser headers included no-store, nosniff, no-referrer, frame denial and CSP

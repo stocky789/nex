@@ -1,6 +1,6 @@
 {
   "bios": {
-    "uuid": "f5f4a1e0-ae7f-4076-a990-6eec667bcfcb",
+    "uuid": "private-id-069",
     "cpus": 2,
     "memory_mib": 1024,
     "disk_gib": 2,
@@ -14,7 +14,7 @@
     "disk_backing_file": null
   },
   "uefi": {
-    "uuid": "8e0e6ad9-26d2-4c34-ad79-c6bb5f239b9a",
+    "uuid": "private-id-034",
     "cpus": 2,
     "memory_mib": 1024,
     "disk_gib": 2,

@@ -1,5 +1,5 @@
 Traceback (most recent call last):
-  File "/home/matt/Projects/Nex/tests/integration/wizard-review.py", line 145, in <module>
+  File "/workspace/Nex/tests/integration/wizard-review.py", line 145, in <module>
     assert welcome.getpixel(point) == welcome.getpixel((5, 5)), 'Logo background must blend into the native header without texture'
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: Logo background must blend into the native header without texture

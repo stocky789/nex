@@ -121,7 +121,7 @@
   },
   "state": {
     "owner": "core",
-    "reason": "Pool identity is host-owned (decision: Matt, 2026-09-10): the host generates its own ID and the pool master generates the pool ID and holds the pool name; the Controller pools/hosts rows are a mirror. A separate code slice implements that generation and documents the enrollment contract in docs/API.md; until it lands the rows are re-populated at enrollment/adoption from the host identity in /var/lib/nex-core-agent/state.json.",
+    "reason": "Pool identity is host-owned (decision: project owner, 2026-09-10): the host generates its own ID and the pool master generates the pool ID and holds the pool name; the Controller pools/hosts rows are a mirror. A separate code slice implements that generation and documents the enrollment contract in docs/API.md; until it lands the rows are re-populated at enrollment/adoption from the host identity in /var/lib/nex-core-agent/state.json.",
     "record": "Host ID in /var/lib/nex-core-agent/state.json and, per the 2026-09-10 decision, pool ID and pool name held by the pool master; adopted unchanged by any Controller at enrollment (POST /api/v1/agent/enroll) and appliance adoption."
   },
   "verification": {

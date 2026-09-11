@@ -17,7 +17,7 @@ static void invalid(GKeyFile *c, const char *group, const char *key, const char 
 }
 static void hostname_cases(void)
 {
-    const char *valid[] = { "nexcore.matthome", "7nex-core.matthome", "NexCore.MattHome",
+    const char *valid[] = { "nexcore.example.test", "7nex-core.example.test", "NexCore.Example.Test",
         "7", "123.example", "host.123", "xn--bcher-kva.example", "a", "a-b", NULL };
     const char *invalid_names[] = { "", ".", "..", ".nex", "nex..home", "nex.home..",
         "-nex", "nex-", "nex.-home", "nex.home-", "nex_home", "nex home",

@@ -47,7 +47,7 @@ API impact: **new contract** for both; guide impact: **updated**
 Command (the retained appliance lab is copied; only the copy is operated):
 
 ```sh
-GO="$PWD/.cache/toolchains/go/bin/go" .cache/phase1-qa-venv/bin/python tests/integration/console_lab.py --copy-from .cache/nex-appliance-lab.2851um6a
+GO="$PWD/.cache/toolchains/go/bin/go" .cache/phase1-qa-venv/bin/python tests/integration/console_lab.py --copy-from .cache/nex-appliance-lab.<redacted>
 ```
 
 [results.json](results.json) records the final run: a private Debian-13-based Nex Core

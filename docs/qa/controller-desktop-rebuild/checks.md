@@ -5,7 +5,7 @@ Status: Rebuild, native guest boot, package smoke and independent artifact verif
 
 ## Scope
 
-Matt requested rebuilding the Nex Core ISO after the Controller desktop-layout
+project owner requested rebuilding the Nex Core ISO after the Controller desktop-layout
 change. Rebuild the Controller appliance, package it with the host-local service,
 then select that exact package for the ISO. The installer workflow and existing
 API contracts are unchanged. Unrelated website work is excluded from this slice.
@@ -57,7 +57,7 @@ The actual disposable native guest check passed with the finished image:
 
 ```sh
 python3 tests/integration/appliance-dhcp-boot.py \
-  --image dist/appliance-desktop1/controller.qcow2 \
+  --image dist/appliance-desktop-test/controller.qcow2 \
   --evidence docs/qa/controller-desktop-rebuild/guest-boot \
   --docker /tmp/nex-rootauth-docker
 ```

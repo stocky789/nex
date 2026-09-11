@@ -5,7 +5,7 @@ Status: Controller frontend slice implemented and verified locally with independ
 
 ## Authorized change
 
-Matt redirected the next work from installer walkthroughs and Phase 2 expansion to
+project owner redirected the next work from installer walkthroughs and Phase 2 expansion to
 overhauling the Nex Controller web GUI. The requested visual target is a Windows
 desktop management application: a compact menu row and icon toolbar, a left
 resource tree, a grey selected-resource header above horizontal detail tabs, and
@@ -95,7 +95,7 @@ real hardware or hosted CI gate is closed by these UI checks.
 
 ## ISO delivery rebuild — 2026-09-09
 
-Matt requested rebuilding the ISO to include this Controller layout. Rebuild a
+project owner requested rebuilding the ISO to include this Controller layout. Rebuild a
 matching signed appliance and local-host package before assembling the ISO; keep
 existing development trust and source snapshots. API impact: **none** for artifact
 assembly, which delivers the existing contracts. Guide impact: **updated** for
@@ -105,14 +105,14 @@ upgrade of already deployed Controller VMs or acceptance of full ISO installatio
 
 ## Site selection at scale — 2026-09-09
 
-Matt requested a searchable site selector directly below **Resources**, replacing
+project owner requested a searchable site selector directly below **Resources**, replacing
 the all-sites tree that becomes unwieldy at 100–500 sites. Show only the selected
 site's **Pools → Hosts → VMs** hierarchy. Retain accessible keyboard navigation,
 separate resource search within the selected site, deep links that select the
 correct site, and clear empty/no-match states. Site creation and global task
 history remain reachable. Use existing controls and dependencies.
 
-After viewing the local update, Matt refined the design: show one closed site
+After viewing the local update, project owner refined the design: show one closed site
 dropdown, with its search field inside the opened menu rather than a second box
 above it. Keep a bounded scrolling result list and keyboard/focus/escape behavior;
 reverify and update the selected local Controller with the final interaction.
@@ -137,7 +137,7 @@ binary and is not a rebuilt installation/release image.
 
 ## Fixed command toolbar — 2026-09-10
 
-Matt asked for the menu/toolbar band to work like a desktop management console's:
+project owner asked for the menu/toolbar band to work like a desktop management console's:
 a fixed toolbar whose buttons stay in place and grey out when they do not apply,
 with VM power control directly in the bar. Delivered layout, left to right:
 **Back**/**Forward** (browser history), **Create site**/**Add host**/**New VM**,

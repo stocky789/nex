@@ -13,12 +13,17 @@ NGINX_DOWNLOADS_INC=/etc/nex-website/nginx-downloads.inc
 # The release workflow publishes ISOs as this user over SSH. It owns the download
 # tree outright so ISO publishing needs no sudo at all; only nex-apt-publish does,
 # and that keeps the archive signing key out of reach of the runner.
-PUBLISH_USER=${NEX_PUBLISH_USER:-matt}
+PUBLISH_USER=${NEX_PUBLISH_USER:-}
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 
 if [[ $(id -u) -ne 0 ]]; then
   echo "bootstrap: run as root" >&2
+  exit 1
+fi
+
+if [[ ! $PUBLISH_USER =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+  echo "bootstrap: set NEX_PUBLISH_USER to the local publishing account" >&2
   exit 1
 fi
 
@@ -96,9 +101,9 @@ else
 fi
 
 SUDOERS=/etc/sudoers.d/nex-apt-publish
-cat >"$SUDOERS" <<'EOF'
+cat >"$SUDOERS" <<EOF
 # SPDX-License-Identifier: AGPL-3.0-only
-matt ALL=(root) NOPASSWD: /usr/local/sbin/nex-apt-publish
+$PUBLISH_USER ALL=(root) NOPASSWD: /usr/local/sbin/nex-apt-publish
 EOF
 chmod 0440 "$SUDOERS"
 if command -v visudo >/dev/null; then

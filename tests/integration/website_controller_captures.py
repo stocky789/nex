@@ -2,10 +2,16 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Capture the real Controller with disposable, explicitly simulated public-demo data.
 
+Captures the four host views against a clean fixture, then registers demo storage, a
+guest network and an ISO, creates VMs through the real API and captures the pool VM
+list, VM details and the completed Create VM review.
+
 Requires built web/dist, Go, openssl and Python Playwright/Chromium as in phase1 CI.
 Default output is disposable CI evidence. To replace website images, pass
 --output website/static/gallery --evidence docs/qa/website-controller-captures/results.json.
-No native agent probes, live infrastructure, screenshot editing or browser mocks.
+No native agent probes, live infrastructure, screenshot editing or browser mocks. The
+host side is a protocol-level fixture: these captures evidence Controller UI rendering,
+never libvirt, storage or guest behaviour.
 """
 import argparse
 from datetime import datetime, timezone
@@ -20,6 +26,8 @@ import socket
 import ssl
 import sys
 import tempfile
+import threading
+import urllib.parse
 import urllib.request
 
 from phase1 import Lab, ROOT, eventually, run
@@ -29,10 +37,21 @@ VIEWS = [('General', 'Health checks', 'desktop-shell.png'),
          ('Networking', 'Network interfaces', 'networking-desktop.png'),
          ('Storage', 'Disks', 'storage-desktop.png'),
          ('Activity', 'Activity and health history', 'activity-desktop.png')]
+# Demo pool resources behind the managed-VM views. Names and paths stay neutral so
+# assert_public_text keeps passing; the ISO is a 64 KiB fixture with a valid descriptor.
+# A current Nex Core advertises every managed capability; omitting any renders the demo
+# host as outdated ("upgrade Nex Core") and disables the power controls in the capture.
+CAPABILITIES = ['managed-vm-v1', 'vm-update-v1', 'vm-power-v1', 'console-v1',
+                'host-console-v1', 'vm-media-v1']
+STORAGE_NAME, STORAGE_PATH = 'Local NVMe storage', '/var/lib/nex/storage'
+NETWORK_NAME, ISO_NAME = 'Guest network', 'debian-13-netinst.iso'
+DEMO_VMS = [('web-01', 'Public web front end', 2, 4096, 40),
+            ('app-01', 'Internal application server', 4, 8192, 80),
+            ('db-01', 'Database server', 4, 16384, 200)]
 
 
 def assert_public_text(text):
-    forbidden = {'matt', 'matt-arch', '/home/', 'BEGIN PRIVATE KEY',
+    forbidden = {'local-workstation', '/home/', 'BEGIN PRIVATE KEY',
                  'BEGIN CERTIFICATE', 'single-use enrollment token'}
     local_hostname = socket.gethostname().lower()
     if local_hostname != HOSTNAME:
@@ -92,11 +111,52 @@ def capture(lab, args):
                    for name in ['inventory', 'libvirt']],
     }
     assert_public_text(json.dumps(inventory))
-    request = urllib.request.Request(lab.url + '/api/v1/agent/report',
-        data=json.dumps({'version': 1, 'sequence': 1, 'inventory': inventory, 'results': []}).encode(),
-        headers={'Content-Type': 'application/json'})
-    with urllib.request.urlopen(request, context=tls, timeout=5) as response:
-        assert response.status == 200
+    # The simulated host keeps reporting and answers the Controller's commands, so demo
+    # registrations and VM creation reach a real recorded result instead of staying pending.
+    managed, observed_vms, vm_state = {}, [], {'value': 'shut off'}
+    stopped, failures = threading.Event(), []
+
+    def report(sequence, results):
+        # Each report carries a current observation: the Controller keeps the newest
+        # inventory, so a frozen observed_at would discard every update after the first.
+        stamp = datetime.now(timezone.utc).isoformat()
+        payload = {'version': 1, 'sequence': sequence, 'results': results,
+                   'capabilities': CAPABILITIES,
+                   'inventory': {**inventory, 'observed_at': stamp, 'vms': observed_vms,
+                                 'managed': {'vms': list(managed.values())},
+                                 'checks': [{**check, 'observed_at': stamp, 'last_success': stamp}
+                                            for check in inventory['checks']]}}
+        request = urllib.request.Request(lab.url + '/api/v1/agent/report',
+            data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'})
+        with urllib.request.urlopen(request, context=tls, timeout=5) as response:
+            assert response.status == 200
+            return json.load(response)
+
+    def reporter():
+        sequence, results = 2, []
+        while not stopped.wait(.2):
+            try:
+                for vm in observed_vms:
+                    vm['state'] = vm_state['value']
+                answer = report(sequence, results)
+                sequence, results = sequence + 1, []
+                now = datetime.now(timezone.utc).isoformat()
+                for command in answer.get('commands') or []:
+                    results.append({'operation_id': command['operation_id'], 'status': 'succeeded', 'observed_at': now})
+                    if command.get('vm'):
+                        # The host journals the definition and reports it as the current revision.
+                        vm = command['vm']
+                        managed[vm['id']] = vm
+                        if any(v['id'] == vm['id'] for v in observed_vms):
+                            next(v for v in observed_vms if v['id'] == vm['id'])['name'] = vm['name']
+                        else:
+                            observed_vms.append({'id': vm['id'], 'name': vm['name'], 'state': vm_state['value']})
+            except Exception as exc:
+                failures.append(str(exc))
+                return
+
+    report(1, [])
+    threading.Thread(target=reporter, daemon=True).start()
     hosts = lab.api('/api/v1/hosts')
     assert len(hosts) == 1 and hosts[0]['hostname'] == HOSTNAME and hosts[0]['connection'] == 'fresh'
     observed = hosts[0]['inventory']
@@ -104,7 +164,7 @@ def capture(lab, args):
     assert_public_text(json.dumps(hosts))
     lab.passed('real Controller, neutral site, CSR enrollment creating the automatic pool with the host as master; authenticated mTLS simulated inventory')
     # Regression: the guard rejects the original workstation-label leak.
-    for private in ['matt-arch', 'Matt', 'single-use enrollment token']:
+    for private in ['local-workstation', 'single-use enrollment token']:
         try:
             assert_public_text(private)
         except AssertionError:
@@ -149,13 +209,123 @@ def capture(lab, args):
             path = args.output / filename
             page.screenshot(path=str(path))
             hashes[filename] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+        def shot(filename):
+            page.wait_for_load_state('networkidle')
+            assert_public_text(page.locator('body').inner_text())
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            path = args.output / filename
+            page.screenshot(path=str(path))
+            hashes[filename] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+        def view(tab):
+            # A hash change alone leaves the loaded client state in place; reload so the
+            # view renders resources registered after sign-in.
+            page.goto(lab.url + '/#/pools/' + pools[0]['id'])
+            page.reload()
+            page.get_by_role('navigation', name='Resource views', exact=True).get_by_role('button', name=tab, exact=True).click()
+
+        def option(field, prefix):
+            return next(t for t in field.locator('option').all_text_contents() if t.startswith(prefix))
+
+        # Demo pool resources created through the real API and confirmed by the simulated host,
+        # so the managed-VM views show recorded state instead of an empty pool.
+        common = {'pool_id': pools[0]['id'], 'host_id': identity['host_id']}
+
+        def settled(operation_id):
+            return eventually(lambda: next((o for o in lab.api('/api/v1/operations')
+                if o['id'] == operation_id and o['status'] == 'succeeded'), None), 'operation ' + operation_id)
+        storage = lab.api('/api/v1/storage', {**common, 'request_id': 'gallery-storage',
+            'name': STORAGE_NAME, 'path': STORAGE_PATH}, expected=201)
+        settled(storage['operation_id'])
+        network = lab.api('/api/v1/networks', {**common, 'request_id': 'gallery-network',
+            'name': NETWORK_NAME, 'kind': 'network', 'source': 'default'}, expected=201)
+        settled(network['operation_id'])
+        iso = lab.path / ISO_NAME
+        image = bytearray(65536)
+        image[32768:32775] = b'\x01CD001\x01'
+        iso.write_bytes(bytes(image))
+        query = urllib.parse.urlencode({'storage_id': storage['id'], 'name': ISO_NAME, 'request_id': 'gallery-media'})
+        upload = urllib.request.Request(lab.url + '/api/v1/media?' + query, data=iso.read_bytes(),
+            headers={'Content-Type': 'application/octet-stream', 'X-CSRF-Token': lab.csrf, 'Origin': lab.url})
+        with lab.http.open(upload, timeout=60) as response:
+            media = json.load(response)
+        settled(media['operation_id'])
+        for name, description, cpus, memory_mib, disk_gib in DEMO_VMS:
+            created = lab.api('/api/v1/vms', {**common, 'request_id': 'gallery-' + name, 'name': name,
+                'description': description, 'guest_os': 'linux', 'media_id': media['id'],
+                'cpu': {'count': cpus, 'sockets': 1, 'cores': cpus, 'threads': 1, 'model': 'host-passthrough'},
+                'memory': {'mode': 'dedicated', 'size_mib': memory_mib},
+                'disks': [{'storage_id': storage['id'], 'name': 'system', 'size_gib': disk_gib,
+                           'bus': 'virtio', 'thin': True, 'boot_order': 2}],
+                'nics': [{'network_id': network['id'], 'model': 'virtio', 'mac': ''}],
+                'boot': {'firmware': 'uefi', 'machine': '', 'media_boot_order': 1},
+                'start_after_create': False, 'autostart': False}, expected=202)
+            settled(created['operation']['id'])
+        vm_state['value'] = 'running'
+        seen = {}
+
+        def running():
+            seen['vms'] = lab.api('/api/v1/vms')
+            return len(seen['vms']) == len(DEMO_VMS) and all(v.get('state') == 'running' for v in seen['vms'])
+        try:
+            eventually(running, 'demo VMs observed running')
+        except AssertionError:
+            raise AssertionError('demo VMs not observed running: ' + json.dumps(seen.get('vms'), indent=2)[:3000])
+        assert_public_text(json.dumps(lab.api('/api/v1/vms')))
+        lab.passed('three demo VMs created through the real API on registered storage, network and uploaded media; the simulated host confirmed every operation and reports them running')
+
+        view('Virtual machines')
+        # The resource tree links each VM too, so scope the list assertions to the panel table.
+        table = page.locator('section.panel').filter(
+            has=page.get_by_role('heading', name='Virtual machines', exact=True)).locator('table')
+        for name, *_ in DEMO_VMS:
+            expect(table.get_by_role('link', name=name, exact=True)).to_be_visible()
+        shot('vms-desktop.png')
+        table.get_by_role('link', name=DEMO_VMS[0][0], exact=True).click()
+        expect(page.get_by_role('heading', name='VM details', exact=True)).to_be_visible()
+        expect(page.locator('.details')).to_contain_text('running')
+        shot('vm-general-desktop.png')
+
+        view('Virtual machines')
+        page.get_by_role('button', name='Create VM', exact=True).click()
+        page.get_by_label('VM name', exact=True).fill('build-01')
+        page.get_by_label('Description').fill('Continuous integration builder')
+        page.get_by_label('Guest operating system').select_option('linux')
+        page.get_by_label('Placement host').select_option(identity['host_id'])
+        page.get_by_role('button', name='Next', exact=True).click()
+        page.get_by_label('Virtual CPUs', exact=True).fill('4')
+        page.get_by_label('Sockets', exact=True).fill('1')
+        page.get_by_label('Cores per socket', exact=True).fill('4')
+        page.get_by_label('Threads per core', exact=True).fill('1')
+        page.get_by_label('Memory (MiB)', exact=True).fill('8192')
+        page.get_by_role('button', name='Next', exact=True).click()
+        disk = page.get_by_role('group', name='Disk 1', exact=True)
+        disk.get_by_label('Storage').select_option(label=option(disk.get_by_label('Storage'), STORAGE_NAME))
+        disk.get_by_label('Disk name', exact=True).fill('system')
+        disk.get_by_label('Size (GiB)', exact=True).fill('60')
+        page.get_by_role('button', name='Next', exact=True).click()
+        nic = page.get_by_role('group', name='Network interface 1', exact=True).get_by_role('combobox', name='Network')
+        nic.select_option(label=option(nic, NETWORK_NAME))
+        page.get_by_role('button', name='Next', exact=True).click()
+        page.get_by_label('Firmware').select_option('uefi')
+        page.get_by_label('Install ISO').select_option(label=ISO_NAME)
+        page.get_by_role('button', name='Next', exact=True).click()
+        expect(page.get_by_role('heading', name='Create VM · 6 of 6:', exact=False)).to_be_visible()
+        # Collapse the task dock so the whole review, including Lifecycle, fits the viewport.
+        page.locator('details.activity-dock > summary').click()
+        expect(page.locator('details.activity-dock')).not_to_have_attribute('open', '')
+        shot('create-vm-desktop.png')
+        lab.passed('pool VM list, VM details and the completed six-step Create VM review captured from the real browser UI')
+        stopped.set()
+        assert not failures, failures
         # Exercise the original identity leak through real API/rendering after all safe captures.
         # This disposable negative fixture is never written to a screenshot.
-        lab.api('/api/v1/sites', {'name': 'matt-arch'}, expected=201)
+        lab.api('/api/v1/sites', {'name': 'local-workstation'}, expected=201)
         page.reload()
         # Sites are listed by the site picker rather than as tree links.
         page.get_by_role('button', name=re.compile(r'^Site: ')).click()
-        expect(page.get_by_role('option', name='matt-arch', exact=True)).to_be_visible()
+        expect(page.get_by_role('option', name='local-workstation', exact=True)).to_be_visible()
         try:
             assert_public_text(page.locator('body').inner_text())
         except AssertionError:

@@ -5,9 +5,9 @@ Status: Bounded appliance development slice accepted in disposable nested KVM, i
 
 ## Authorized scope
 
-Matt requested a lightweight web UI on each Nex Core host, basic local VM controls,
+project owner requested a lightweight web UI on each Nex Core host, basic local VM controls,
 and a Deploy Controller action that automatically provisions a Debian virtual
-appliance and reports progress. Controller has no installation ISO. Matt authorized
+appliance and reports progress. Controller has no installation ISO. project owner authorized
 parallel implementation and delegated the appliance mechanism and resource defaults.
 
 This prioritizes a bounded appliance bootstrap slice from Phase 3, including its
@@ -104,7 +104,7 @@ into the offline install repository and enables the service on first boot.
 
 ## Host-local root login — 2026-09-08
 
-Matt requested one host credential: the local web UI authenticates `root` against native
+project owner requested one host credential: the local web UI authenticates `root` against native
 PAM using the password set by the installer. Remove generated web credentials; password
 changes apply to new logins, while established sessions retain their existing expiry.
 Locked/expired accounts and unavailable authentication fail closed. Controller appliance
@@ -115,7 +115,7 @@ Validation and delivery limits are recorded in [root authentication evidence](..
 
 ## Installer management bridge — 2026-09-08
 
-Matt requested that choosing the GUI management NIC produce a deployment-ready network.
+project owner requested that choosing the GUI management NIC produce a deployment-ready network.
 Create one native ifupdown `br0`, with the selected MAC-bound NIC or VLAN as its port;
 assign management addressing to br0. Preserve secondary NIC policy and offline mode.
 Apply only to staged fresh-install configuration; do not migrate live hosts remotely.
@@ -126,7 +126,7 @@ and host IP placement. Native validation: [bridge QA](../qa/iso/2026-09-08-manag
 
 ## Deployment usability — 2026-09-08
 
-Matt requested easier Controller deployment: DHCP as an option, “Network settings”
+project owner requested easier Controller deployment: DHCP as an option, “Network settings”
 label, removal of the sixteen-character password minimum, removal of typed host-name
 confirmation for local VM power actions, and removal of the routine Observed timestamp badge.
 New UI drafts default to DHCP and reveal static address/router/DNS only when selected.

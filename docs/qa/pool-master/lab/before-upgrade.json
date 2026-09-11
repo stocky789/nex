@@ -1,14 +1,14 @@
 {
  "sites": [
   {
-   "id": "8eec05e1c44c63d92849b7d84647f999d734159dc494a5821c8ddc342db7907b",
+   "id": "private-id-035",
    "name": "Fresh install site"
   }
  ],
  "pools": [
   {
-   "id": "f83ac8fdb9226f1acd6437b43dcce8e5c2d8ce3c9d51f4dfa00e4a05a09b5fd5",
-   "site_id": "8eec05e1c44c63d92849b7d84647f999d734159dc494a5821c8ddc342db7907b",
+   "id": "private-id-070",
+   "site_id": "private-id-035",
    "name": "Fresh install pool"
   }
  ],
@@ -17,8 +17,8 @@
    "capabilities": [
     "managed-vm-v1"
    ],
-   "id": "5fed69ca1dd993962d9264af45a20882ad9333733cb94d9f166850013c172c07",
-   "pool_id": "f83ac8fdb9226f1acd6437b43dcce8e5c2d8ce3c9d51f4dfa00e4a05a09b5fd5",
+   "id": "private-id-018",
+   "pool_id": "private-id-070",
    "hostname": "nex-fresh-lab",
    "revoked": false,
    "connection": "fresh",
@@ -27,9 +27,9 @@
  ],
  "vms": [
   {
-   "id": "72a34e46-5483-4239-b552-c18ddfa5e2d1",
-   "pool_id": "f83ac8fdb9226f1acd6437b43dcce8e5c2d8ce3c9d51f4dfa00e4a05a09b5fd5",
-   "host_id": "5fed69ca1dd993962d9264af45a20882ad9333733cb94d9f166850013c172c07",
+   "id": "private-id-024",
+   "pool_id": "private-id-070",
+   "host_id": "private-id-018",
    "name": "nex-controller",
    "role": "controller",
    "protected": true,
@@ -37,75 +37,75 @@
    "freshness": "fresh"
   },
   {
-   "id": "3035054a-87b0-4adb-a40d-512ce050032b",
-   "pool_id": "f83ac8fdb9226f1acd6437b43dcce8e5c2d8ce3c9d51f4dfa00e4a05a09b5fd5",
-   "host_id": "5fed69ca1dd993962d9264af45a20882ad9333733cb94d9f166850013c172c07",
+   "id": "private-id-008",
+   "pool_id": "private-id-070",
+   "host_id": "private-id-018",
    "name": "fresh-install-guest",
    "role": "guest",
    "protected": false,
    "state": "shut off",
    "freshness": "fresh",
    "spec": {
-    "id": "3035054a-87b0-4adb-a40d-512ce050032b",
-    "pool_id": "f83ac8fdb9226f1acd6437b43dcce8e5c2d8ce3c9d51f4dfa00e4a05a09b5fd5",
-    "host_id": "5fed69ca1dd993962d9264af45a20882ad9333733cb94d9f166850013c172c07",
+    "id": "private-id-008",
+    "pool_id": "private-id-070",
+    "host_id": "private-id-018",
     "name": "fresh-install-guest",
-    "storage_id": "1d6e373f757ff569ecd37344c3dc7e4a73000ceeef0ca260c983049ec4bd2ff9",
-    "network_id": "5ebcfb5b22c63a86450398c916952c8bc0f1108fc3bfe009f2dc5334ae9c0155",
-    "media_id": "0c349d65717ca146b8970fc5bee6b1b418c53ccee90c5d8a53da3c16b798a199",
+    "storage_id": "private-id-004",
+    "network_id": "private-id-016",
+    "media_id": "private-id-002",
     "cpus": 2,
     "memory_mib": 1024,
     "disk_gib": 4,
     "firmware": "uefi"
    },
-   "operation_id": "d4c8e263dc72fce93e17bbbe568a98340684df2fcac0f375f1403ce599ec9cc2",
+   "operation_id": "private-id-056",
    "status": "succeeded"
   }
  ],
  "storage": [
   {
-   "id": "1d6e373f757ff569ecd37344c3dc7e4a73000ceeef0ca260c983049ec4bd2ff9",
-   "pool_id": "f83ac8fdb9226f1acd6437b43dcce8e5c2d8ce3c9d51f4dfa00e4a05a09b5fd5",
-   "host_id": "5fed69ca1dd993962d9264af45a20882ad9333733cb94d9f166850013c172c07",
+   "id": "private-id-004",
+   "pool_id": "private-id-070",
+   "host_id": "private-id-018",
    "name": "Fresh local storage",
    "path": "/var/lib/libvirt/images",
-   "operation_id": "4355c562bee5066cba19027de9271aa0ac90ea8c3caacd1549d73f18bb369254",
+   "operation_id": "private-id-011",
    "status": "succeeded"
   }
  ],
  "networks": [
   {
-   "id": "5ebcfb5b22c63a86450398c916952c8bc0f1108fc3bfe009f2dc5334ae9c0155",
-   "pool_id": "f83ac8fdb9226f1acd6437b43dcce8e5c2d8ce3c9d51f4dfa00e4a05a09b5fd5",
-   "host_id": "5fed69ca1dd993962d9264af45a20882ad9333733cb94d9f166850013c172c07",
+   "id": "private-id-016",
+   "pool_id": "private-id-070",
+   "host_id": "private-id-018",
    "name": "Fresh bridge",
    "kind": "bridge",
    "source": "br0",
-   "operation_id": "9e905e28eb419de685a6cd4e3e794d8b02a603f5c0206106096f500d82f20a70",
+   "operation_id": "private-id-043",
    "status": "succeeded"
   }
  ],
  "media": [
   {
-   "id": "0c349d65717ca146b8970fc5bee6b1b418c53ccee90c5d8a53da3c16b798a199",
-   "pool_id": "f83ac8fdb9226f1acd6437b43dcce8e5c2d8ce3c9d51f4dfa00e4a05a09b5fd5",
-   "host_id": "5fed69ca1dd993962d9264af45a20882ad9333733cb94d9f166850013c172c07",
-   "storage_id": "1d6e373f757ff569ecd37344c3dc7e4a73000ceeef0ca260c983049ec4bd2ff9",
+   "id": "private-id-002",
+   "pool_id": "private-id-070",
+   "host_id": "private-id-018",
+   "storage_id": "private-id-004",
    "name": "debian-13.6.0-amd64-netinst.iso",
    "size_bytes": 791674880,
    "sha256": "65273beed27b2df543b68b65630ba525cfbad8df2b12035732b2dff87d6664e7",
-   "operation_id": "6642803521fb419c36d4a54766e31db115201c98a7e2c72a777ba939c6848ee8",
+   "operation_id": "private-id-019",
    "status": "succeeded"
   },
   {
-   "id": "e2c797a03d4fcbabeab2ffbaa98db890a2d2de9ef4322a0765c5c2d59f6af127",
-   "pool_id": "f83ac8fdb9226f1acd6437b43dcce8e5c2d8ce3c9d51f4dfa00e4a05a09b5fd5",
-   "host_id": "5fed69ca1dd993962d9264af45a20882ad9333733cb94d9f166850013c172c07",
-   "storage_id": "1d6e373f757ff569ecd37344c3dc7e4a73000ceeef0ca260c983049ec4bd2ff9",
+   "id": "private-id-061",
+   "pool_id": "private-id-070",
+   "host_id": "private-id-018",
+   "storage_id": "private-id-004",
    "name": "nex-core-0.1.0-alpha1-amd64.iso",
    "size_bytes": 1630076928,
    "sha256": "9800dc2e67c6d3bd06dce84dd88a3917eac34b053dc5dcb5b1b23d4acfa3f214",
-   "operation_id": "96772ca5ddbd4423f362659be5eb3b424a7786cbd55e5d3d7839e654ad3b0977",
+   "operation_id": "private-id-039",
    "status": "succeeded"
   }
  ],

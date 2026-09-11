@@ -121,7 +121,9 @@ h3 {
 .site-header nav {
   display: flex;
   align-items: center;
-  gap: 36px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 14px 36px;
   font-size: 12px;
   font-weight: 500;
 }
@@ -822,7 +824,7 @@ details[open] summary span {
     gap: 12px;
     font-size: 11px;
     flex-basis: 100%;
-    justify-content: space-between;
+    justify-content: flex-start;
   }
   .nav-release {
     padding: 8px 9px;

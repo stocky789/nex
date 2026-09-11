@@ -1,7 +1,7 @@
 {
   "completed": true,
-  "lab": "/home/matt/Projects/Nex/.claude/worktrees/vm-edit/.cache/nex-managed-vm-lab.1op1kyzr",
-  "source": "/home/matt/Projects/Nex/.cache/nex-appliance-lab.2851um6a",
+  "lab": "/workspace/Nex/.claude/worktrees/vm-edit/.cache/nex-managed-vm-lab.<redacted>",
+  "source": "/workspace/Nex/.cache/nex-appliance-lab.<redacted>",
   "passed": [
     "Agent built from this tree reports vm-update-v1",
     "Created with an ISO in the SATA CD drive and spare pcie-root-port controllers; libvirt accepted the definition",
@@ -16,19 +16,19 @@
       "name": "edit-qa-8g692ql0",
       "root_ports": 9,
       "cdrom": true,
-      "blklist": " Target   Source\n------------------------------------------------------------------------------------------------------------------------------------------\n vda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-0.qcow2\n sda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-media/dc6ef2cfc75afc17cd5947cd199ed1ff6eab19521f200ef092ab4fa7fe82b4f0.iso\n\n",
+      "blklist": " Target   Source\n------------------------------------------------------------------------------------------------------------------------------------------\n vda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/private-id-005/disk-0.qcow2\n sda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-media/dc6ef2cfc75afc17cd5947cd199ed1ff6eab19521f200ef092ab4fa7fe82b4f0.iso\n\n",
       "dir": "total 196\n-rw------- 1 root root 196640 Sep 10 11:41 disk-0.qcow2\n"
     },
     "2-edit-stopped": {
-      "dominfo": "Id:             -\nName:           edit-qa-8g692ql0-ed\nUUID:           204c63dd-0dd2-49b7-afd4-d91d1e3188ca\nOS Type:        hvm\nState:          shut off\nCPU(s):         2\nMax memory:     1048576 KiB\nUsed memory:    1048576 KiB\nPersistent:     yes\nAutostart:      enable\nAutostart Once: disable\nManaged save:   no\nSecurity model: apparmor\nSecurity DOI:   0\n\n",
+      "dominfo": "Id:             -\nName:           edit-qa-8g692ql0-ed\nUUID:           private-id-005\nOS Type:        hvm\nState:          shut off\nCPU(s):         2\nMax memory:     1048576 KiB\nUsed memory:    1048576 KiB\nPersistent:     yes\nAutostart:      enable\nAutostart Once: disable\nManaged save:   no\nSecurity model: apparmor\nSecurity DOI:   0\n\n",
       "dir": "total 392\n-rw------- 1 root root 196640 Sep 10 11:41 disk-0.qcow2\n-rw------- 1 root root 196624 Sep 10 11:41 disk-1.qcow2\n",
       "iflist": " Interface   Type      Source    Model    MAC\n-------------------------------------------------------------\n -           network   default   virtio   52:54:00:c8:49:00\n -           network   default   virtio   52:54:00:c8:49:01\n\n",
-      "blklist": " Target   Source\n------------------------------------------------------------------------------------------------------------------------------------------\n vda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-0.qcow2\n vdb      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-1.qcow2\n sda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-media/dc6ef2cfc75afc17cd5947cd199ed1ff6eab19521f200ef092ab4fa7fe82b4f0.iso\n\n"
+      "blklist": " Target   Source\n------------------------------------------------------------------------------------------------------------------------------------------\n vda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/private-id-005/disk-0.qcow2\n vdb      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/private-id-005/disk-1.qcow2\n sda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-media/dc6ef2cfc75afc17cd5947cd199ed1ff6eab19521f200ef092ab4fa7fe82b4f0.iso\n\n"
     },
     "3-edit-running": {
       "op": {
-        "id": "fa7d43eb38fec8b60c79fe5e0d7bc7540226243c0e635d926d4a9e92256ee205",
-        "host_id": "846677f7c06d3b41b6c437859f44ad4408dedd1831294ce5d3ed572da53db333",
+        "id": "private-id-072",
+        "host_id": "private-id-032",
         "kind": "vm-update",
         "request_id": "edit-2",
         "status": "succeeded",
@@ -36,7 +36,7 @@
         "updated_at": "2026-09-10T11:41:38.117251422Z",
         "actor": "admin"
       },
-      "live_blklist": " Target   Source\n---------------------------------------------------------------------------------------------------------------------\n vda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-0.qcow2\n vdb      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-1.qcow2\n vdc      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-2.qcow2\n sda      -\n\n",
+      "live_blklist": " Target   Source\n---------------------------------------------------------------------------------------------------------------------\n vda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/private-id-005/disk-0.qcow2\n vdb      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/private-id-005/disk-1.qcow2\n vdc      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/private-id-005/disk-2.qcow2\n sda      -\n\n",
       "live_iflist": " Interface   Type      Source    Model    MAC\n-------------------------------------------------------------\n vnet1       network   default   virtio   52:54:00:c8:49:00\n vnet2       network   default   virtio   52:54:00:c8:49:01\n vnet3       network   default   virtio   52:54:00:c8:49:02\n\n",
       "media_ejected": true
     },
@@ -47,8 +47,8 @@
     },
     "5-remove-running": {
       "op": {
-        "id": "3ba630d228dec15d14745fe03ba9853c3c3f7dd00abe0218933638198d368cf5",
-        "host_id": "846677f7c06d3b41b6c437859f44ad4408dedd1831294ce5d3ed572da53db333",
+        "id": "private-id-009",
+        "host_id": "private-id-032",
         "kind": "vm-update",
         "request_id": "edit-4",
         "status": "succeeded",
@@ -56,19 +56,19 @@
         "updated_at": "2026-09-10T11:41:49.2684501Z",
         "actor": "admin"
       },
-      "live_blklist": " Target   Source\n---------------------------------------------------------------------------------------------------------------------\n vda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-0.qcow2\n vdb      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-1.qcow2\n vdc      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-2.qcow2\n sda      -\n\n",
+      "live_blklist": " Target   Source\n---------------------------------------------------------------------------------------------------------------------\n vda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/private-id-005/disk-0.qcow2\n vdb      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/private-id-005/disk-1.qcow2\n vdc      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/private-id-005/disk-2.qcow2\n sda      -\n\n",
       "live_iflist": " Interface   Type      Source    Model    MAC\n-------------------------------------------------------------\n vnet1       network   default   virtio   52:54:00:c8:49:00\n vnet2       network   default   virtio   52:54:00:c8:49:01\n vnet3       network   default   virtio   52:54:00:c8:49:02\n\n",
       "retained": "total 600\n-rw------- 1 libvirt-qemu libvirt-qemu 196640 Sep 10 11:41 disk-0.qcow2\n-rw------- 1 libvirt-qemu libvirt-qemu 196624 Sep 10 11:41 disk-1.qcow2\n-rw------- 1 libvirt-qemu libvirt-qemu 196624 Sep 10 11:41 disk-2.qcow2\n",
       "released_by_guest": false,
-      "persisted_blklist": " Target   Source\n---------------------------------------------------------------------------------------------------------------------\n vda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-0.qcow2\n vdb      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-1.qcow2\n sda      -\n\n",
+      "persisted_blklist": " Target   Source\n---------------------------------------------------------------------------------------------------------------------\n vda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/private-id-005/disk-0.qcow2\n vdb      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/private-id-005/disk-1.qcow2\n sda      -\n\n",
       "persisted_iflist": " Interface   Type      Source    Model    MAC\n-------------------------------------------------------------\n -           network   default   virtio   52:54:00:c8:49:00\n -           network   default   virtio   52:54:00:c8:49:01\n\n"
     },
     "6-remove-stopped": {
       "retained": [
-        "/var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-1.qcow2"
+        "/var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/private-id-005/disk-1.qcow2"
       ],
       "dir": "total 588\n-rw------- 1 root root 196640 Sep 10 11:41 disk-0.qcow2\n-rw------- 1 root root 196624 Sep 10 11:41 disk-1.qcow2\n-rw------- 1 root root 196624 Sep 10 11:41 disk-2.qcow2\n",
-      "blklist": " Target   Source\n---------------------------------------------------------------------------------------------------------------------\n vda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/204c63dd-0dd2-49b7-afd4-d91d1e3188ca/disk-0.qcow2\n sda      -\n\n",
+      "blklist": " Target   Source\n---------------------------------------------------------------------------------------------------------------------\n vda      /var/lib/libvirt/images/nex-vm-edit-qa-8g692ql0/nex-vms/private-id-005/disk-0.qcow2\n sda      -\n\n",
       "stage": "defined"
     }
   },
@@ -84,7 +84,7 @@
     "agent": "720af37f4d0b1cad8ed4fa57b2e0df4607955d9264559d1bee349bca449691e4",
     "debian-13.6.0-amd64-netinst.iso": "65273beed27b2df543b68b65630ba525cfbad8df2b12035732b2dff87d6664e7"
   },
-  "vm_id": "204c63dd-0dd2-49b7-afd4-d91d1e3188ca",
-  "host_id": "846677f7c06d3b41b6c437859f44ad4408dedd1831294ce5d3ed572da53db333",
-  "pool_id": "4e2e9a57947c4705e662e760713312e389523778a774d19dafd5a08d1e1d6f0a"
+  "vm_id": "private-id-005",
+  "host_id": "private-id-032",
+  "pool_id": "private-id-014"
 }

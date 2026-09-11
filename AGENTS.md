@@ -24,8 +24,8 @@ implementation work keeps quietly breaking. It is not negotiable by convenience.
   design; do not add a recovery path, export, or migration to compensate.
 - **The only Controller-owned data** is Controller-scoped: sites, administrator accounts and roles,
   audit history, enrollment tokens, the Controller CA, and backup/restore jobs, which are backed
-  up and restored separately. That list is closed. Adding to it is a product decision for Matt,
-  not an implementation choice. Decision: Matt, 2026-09-10 — backup and restore orchestration is
+  up and restored separately. That list is closed. Adding to it is a product decision for project owner,
+  not an implementation choice. Decision: project owner, 2026-09-10 — backup and restore orchestration is
   the one explicit exception to the no-jobs rule below: Nex Controller schedules and drives backup
   and restore jobs and keeps their run history and catalog; backup repository registrations stay
   pool-scoped on the master.
@@ -43,7 +43,7 @@ A change breaks the invariant if it:
 - keeps operator-visible data about pool resources (tags, notes, custom names, layouts of pool
   objects) with no host-side record, on the grounds that it is "not real state".
 
-If a requirement genuinely does not fit the invariant, stop and resolve it with Matt. Do not invent
+If a requirement genuinely does not fit the invariant, stop and resolve it with project owner. Do not invent
 an exception, and do not leave the loophole for a later phase to clean up. Every change declares
 where its durable state lives in its `docs/changes/*.json` record (`state.owner`), and both the API
 impact check and phase acceptance gates verify it.
@@ -56,7 +56,7 @@ impact check and phase acceptance gates verify it.
 - Inspect the actual code and working-tree changes before editing. Planned files and checks are not
   evidence of implementation. Create additional documentation only when it has something useful to record.
 - Keep every project plan under `docs/plans/`. Record scope changes and decisions in the relevant plan.
-  Resolve material product changes with Matt; use judgment for routine implementation choices.
+  Resolve material product changes with project owner; use judgment for routine implementation choices.
 
 ## Communication
 
@@ -75,7 +75,7 @@ when blocked; do not repeatedly ask permission for already authorized work.
 - The primary owns intent, decomposition, coordination, user decisions, acceptance, and synthesis.
   It may implement work itself and remains responsible for the final result.
 - Agents must never create commits, amend commits, push, tag, rebase, merge, or otherwise change Git
-  history. Matt alone handles all Git commits and remote operations; agents leave completed changes
+  history. project owner alone handles all Git commits and remote operations; agents leave completed changes
   unstaged unless explicitly told otherwise.
 - Use subagents proactively for independent, bounded work, especially research, exploration, review,
   and test triage. Use useful concurrency; do not delegate trivial commands to inflate agent count.
@@ -107,7 +107,7 @@ when blocked; do not repeatedly ask permission for already authorized work.
   and policies persist on the pool master's Nex Core and are re-adopted, with their identities and
   names, when a host (re-)enrolls with a new or rebuilt Controller. The web UI and API act on hosts,
   not on a private Controller model. Agents/libvirt report observed state; show stale/unknown state
-  honestly and reconcile ambiguous outcomes before retrying. Decision: Matt, 2026-09-09.
+  honestly and reconcile ambiguous outcomes before retrying. Decision: project owner, 2026-09-09.
 - Running VMs and local recovery access must survive a controller outage. Never interpret an unreachable
   host as proof its VMs stopped. Never permit duplicate writable execution after a timeout or partition.
 - Snapshots, independent backups, verified restoration, and compatible shared-storage live migration
@@ -123,6 +123,28 @@ when blocked; do not repeatedly ask permission for already authorized work.
 - Container Services use Docker Swarm in Nex-managed node VMs, with the full lifecycle in Nex Controller;
   not LXC or Docker directly on Nex Core. Keep this after the VM foundation and preserve the agreed
   colorful application/service icons. Follow Phase 10 for storage ownership, recovery, and quorum rules.
+
+## Public repository privacy
+
+- Treat every tracked file as public, including documentation, plans, change records, QA
+  evidence, logs, screenshots, fixtures, configuration, and contributor instructions.
+- Never include personal names, usernames, personal email addresses, home/workstation paths,
+  private hostnames/domains/IP addresses, account identifiers, real environment/resource IDs,
+  credentials, or other confidential information. Refer to people by role (for example,
+  “project owner” or “operator”), not by name, including when recording user decisions.
+- Use clearly fictional examples and reserved example domains/addresses. Supply deployment
+  accounts, endpoints, and credentials through configuration or CI secrets; never hard-code
+  an individual's account or private environment as a default.
+- Sanitize evidence before adding it. Preserve relationships with consistent anonymous aliases,
+  label sanitized historical evidence, and never imply redacted output is an untouched capture
+  or a newly executed check. Inspect images visually and review attached artifact metadata too.
+- Preserve legally required third-party attribution, public dependency identifiers, and approved
+  organizational signing identities. These are not permission to add private project identities.
+- Run `python3 -m unittest discover -s tests -p 'test_repository_privacy.py'` after changes.
+  Its known-pattern checks supplement manual review; a pass does not prove arbitrary data is safe.
+- Removing current-file content does not remove published Git history, releases, or cached copies.
+  Report those separately and follow the Git-history ownership rule; never claim they were cleaned
+  without actual evidence.
 
 ## Licensing and redistribution
 

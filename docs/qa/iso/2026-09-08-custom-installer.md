@@ -7,7 +7,7 @@ SHA256: `3f4f7aabb2ef37cf4cb6d8b20da7c87d259be985c99818b253e0f956fa93e921`
 
 ## Correction and scope
 
-The earlier GUI option exposed Debian's stock interface and did not meet Matt's request.
+The earlier GUI option exposed Debian's stock interface and did not meet project owner's request.
 This build replaces its graphical shell with original Nex code: header, section rail,
 page heading/purpose, question pane, action area and safety footer. Debian's cdebconf
 question widgets and installer engine remain in use; this is a custom presentation,

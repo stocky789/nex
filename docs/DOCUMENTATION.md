@@ -71,6 +71,11 @@ Example for an internal tooling change (replace paths and evidence with the real
     "reason": "The installer has no Nex Controller/Core API.",
     "pages": []
   },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone changed status, so the published board still describes the project accurately.",
+    "pages": []
+  },
   "state": {
     "owner": "none",
     "reason": "Validation runs at build time and persists nothing."
@@ -87,6 +92,25 @@ diff. `guide.pages` names guide Markdown; `api.pages` names `docs/API.md` or fil
 The API field concerns documentation impact; retain the more specific runtime API impact classification
 from [AGENTS.md](../AGENTS.md#required-api-impact-check) in the summary/plan. An existing contract
 whose behavior changes can still require updated documentation. Explain any `none` honestly.
+
+`roadmap.impact` says whether the change moves the published
+[roadmap board](../website/src/routes/roadmap/+page.svelte), which is how the project tells
+readers what is built. Set it to `updated` and name the page whenever a milestone's status or its
+built/outstanding items change — a feature finished, an acceptance check finally run, an item
+added or dropped. Set it to `none` with a reason when the board still describes the project
+accurately, which is the ordinary case for bug fixes, refactors and documentation work.
+
+A feature is not complete while the site still says it is unbuilt, and a milestone must not be
+marked built until its acceptance checks have actually run: the board distinguishes *built* from
+*in testing* precisely so that unrun checks stay visible. The checker enforces that the question
+was answered and that an `updated` claim really changed the page; only review can judge whether a
+`none` was honest.
+
+Records written before this assessment existed are not retrofitted. The date in the record's
+filename is the boundary: the field is required from `2026-09-12` onward
+(`ROADMAP_REQUIRED_FROM` in the checker), so earlier records stay valid and no migration commit
+rewrites work that was already in flight. A record whose filename carries no date must answer
+regardless, so that dropping the date cannot quietly opt out of the gate.
 
 `state.owner` says where the change's durable state lives, because Nex Controller is replaceable
 and must be able to be thrown away and rebuilt from the hosts. Declare one of:
@@ -160,8 +184,9 @@ every intermediate commit, nor do they run on unpushed local commits.
 The gate requires changed paths to be covered by an added/modified assessment, validates reasons
 and evidence references, requires a declared `state.owner` on every record with a named record
 where one is owed (a `controller` owner must name a closed-list exception),
-requires applicable guide/API pages to change, and checks guide structure,
-local links, and navigation. External URLs are not fetched; reference-style Markdown links are outside
+requires applicable guide/API pages to change, requires records dated from the roadmap cutoff onward
+to declare `roadmap.impact` and to actually move the roadmap board when they claim `updated`,
+and checks guide structure, local links, and navigation. External URLs are not fetched; reference-style Markdown links are outside
 the supported guide format. It deliberately does not infer whether arbitrary code changes need an
 API or judge prose correctness. Reviewers must challenge an incorrect `none`. API schema/operation
 coverage checks accompany the implemented Phase 1 API; use the [development checks](development.md)

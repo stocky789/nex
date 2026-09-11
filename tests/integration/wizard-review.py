@@ -144,7 +144,7 @@ with (output / 'qemu.log').open('w') as log:
         for point in ((20, 20), (100, 20), (210, 20)):
             assert welcome.getpixel(point) == welcome.getpixel((5, 5)), 'Logo background must blend into the native header without texture'
         click(width - 60, footer)
-        field('h', 'nexcore.matthome')
+        field('h', 'nexcore.example.test')
         field('r', 'disposabletest')
         field('p', 'disposabletest')
         # Both timezone controls are native, noneditable dropdowns. Select using
@@ -219,7 +219,7 @@ with (output / 'qemu.log').open('w') as log:
         click(width - 60, footer)
         invalid_host = capture('invalid-network-hostname')
         assert red_pixels(invalid_host, (145, 70, width - 18, height - 40)) > 100, 'Invalid network hostname must block navigation'
-        field('h', '7nex-core.matthome.')
+        field('h', '7nex-core.example.test.')
         click(193, footer)
         returned = capture('host-after-network-edit')
         assert dark_pixels(returned, password_bounds) > dark_pixels(visible, password_bounds) * 1.2, 'Password disclosure persisted after returning to Host'

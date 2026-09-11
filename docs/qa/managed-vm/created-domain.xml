@@ -1,6 +1,6 @@
 <domain type='kvm'>
   <name>managed-vm-qa-ypotasv6</name>
-  <uuid>f5f4a1e0-ae7f-4076-a990-6eec667bcfcb</uuid>
+  <uuid>private-id-069</uuid>
   <memory unit='KiB'>1048576</memory>
   <currentMemory unit='KiB'>1048576</currentMemory>
   <vcpu placement='static'>2</vcpu>
@@ -22,7 +22,7 @@
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2'/>
-      <source file='/var/lib/libvirt/images/nex-managed-qa-ypotasv6/nex-vms/f5f4a1e0-ae7f-4076-a990-6eec667bcfcb/disk.qcow2'/>
+      <source file='/var/lib/libvirt/images/nex-managed-qa-ypotasv6/nex-vms/private-id-069/disk.qcow2'/>
       <target dev='vda' bus='virtio'/>
       <address type='pci' domain='0x0000' bus='0x04' slot='0x00' function='0x0'/>
     </disk>
@@ -99,4 +99,3 @@
     </memballoon>
   </devices>
 </domain>
-

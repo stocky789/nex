@@ -1,5 +1,5 @@
 {
-  "image": "/home/matt/Projects/Nex/dist/appliance-desktop1/controller.qcow2",
+  "image": "/workspace/Nex/dist/appliance-desktop-test/controller.qcow2",
   "sha256": "3336c230bf9cb53f71dee2726e3a2b021dcc2151c1c8a24131ee98a7e4c9b58a",
   "method": "Disposable KVM overlay, 4 GiB/2 CPUs, QEMU user DHCP, no localcore enrollment",
   "results": [

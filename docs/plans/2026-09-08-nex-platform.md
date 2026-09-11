@@ -5,7 +5,7 @@ Status: Standalone installer alpha and Phase 1 Controller/agent development foun
 
 Project planning files live in `docs/plans/`.
 
-**Core project priority, 2026-09-09:** Matt confirmed successful installation and
+**Core project priority, 2026-09-09:** project owner confirmed successful installation and
 authorized [the first managed VM creation slice](2026-09-09-first-managed-vm.md):
 host-local storage, existing guest-network registration, ISO upload and VM creation
 through Controller. A separate worker corrects the installer's distorted logo.
@@ -14,7 +14,7 @@ Website and release/download work retain their separate owners. API impact:
 guide impact: **updated** with actual implementation and walkthrough evidence.
 The complete Phase 2 lifecycle/console acceptance gate remains separate.
 
-**Controller layout direction, 2026-09-09:** Matt redirected the next work to a
+**Controller layout direction, 2026-09-09:** project owner redirected the next work to a
 Windows desktop application overhaul of the Controller web GUI: compact menu/toolbar,
 left inventory tree, selected-resource header and tabs, dense properties/tables,
 and bottom activity/status. This supersedes the earlier browser-shell choice;
@@ -27,11 +27,11 @@ host-action, operation and audit APIs and existing Core commands/results.
 **Guide impact: updated** — align navigation instructions with the delivered UI
 and record actual browser walkthrough evidence before accepting the redesign.
 
-**Pool model correction, 2026-09-09:** Matt decided that Nex pools follow the established
+**Pool model correction, 2026-09-09:** project owner decided that Nex pools follow the established
 master-and-members model. Administrators never create pools; every enrolling Nex Core
 host becomes the **pool master** of its own automatically created pool, named after
 its hostname. Other hosts in a pool are **member hosts**.
-Decision (Matt, 2026-09-10): pool and host IDs and the pool name are generated and kept by
+Decision (project owner, 2026-09-10): pool and host IDs and the pool name are generated and kept by
 Nex Core — the host generates its own ID, the pool master generates the pool ID and holds the
 pool name — and any Controller adopts them unchanged; the Controller never creates or derives
 pool identity. A separate code slice implements this and documents the enrollment contract in
@@ -44,7 +44,7 @@ bootstrap/adoption and the pool listing change; manual pool creation is removed.
 **Guide impact: updated** — Controller, appliance and VM-creation pages describe
 the automatic pool and pool master.
 
-**VM creation before editing, 2026-09-10:** Matt directed that the **complete VM creation system**
+**VM creation before editing, 2026-09-10:** project owner directed that the **complete VM creation system**
 is built before stopped-VM editing, so edit is written once against the final VM model instead of
 against the single-disk, single-NIC shape and then reworked. The slice adds description and guest-OS
 hint, CPU topology and model, a two-mode memory model (dedicated reservation or a maximum ceiling
@@ -52,7 +52,7 @@ that reserves nothing), multiple disks, multiple networks with automatic or manu
 start-after-creation and autostart. Templates, clones, cloud-init, bulk creation, CPU weight/cap,
 affinity and ACLs stay deferred with their existing reasons. Because Nex is unreleased, the VM
 specification is replaced outright: no legacy fields, no capability gate, no journal migration.
-Matt also decided the **Phase 2 acceptance gate is folded into this slice** rather than run
+project owner also decided the **Phase 2 acceptance gate is folded into this slice** rather than run
 separately, so the new creation path is proven by a real ISO guest installation, console use,
 reboot, persisted data and a Controller outage. See [the plan](2026-09-10-vm-creation-system.md).
 **API impact: changed contract** — the VM creation request, `vm-create` command payload, VM list and
@@ -77,15 +77,15 @@ Each milestone must work end to end before the next one expands the scope. The f
 
 **Initial ISO slice, authorized 2026-09-08:** build and verify the first branded Nex Core ISO before starting the controller. Combine the host foundation in Phase 0 with the standalone installer portion of Phase 3; controller enrollment and Nex agent packaging remain deferred until those components exist. This changes delivery order, not the later acceptance requirements. The first controller demo uses existing host networking and local storage; a network editor, templates, advanced backup formats, HA, and Ceph do not block it. Security checks and data-loss prevention remain part of the feature they protect.
 
-**Subsequent development decisions, 2026-09-08:** Matt authorized Phase 1 alongside
+**Subsequent development decisions, 2026-09-08:** project owner authorized Phase 1 alongside
 installer work; see its [implemented scope and development acceptance](2026-09-08-controller-foundation.md).
-Matt then agreed to a host-local web UI on every Nex Core host,
+project owner then agreed to a host-local web UI on every Nex Core host,
 with Controller appliance deployment and local recovery. Deliver this in
 [Phase 3 after Phase 2 VM operations](#host-local-ui-and-controller-appliance-bootstrap),
 before Phase 4 multi-host expansion. It is planned work, not an expansion of the
 active standalone installer changes or a claim that local web control exists today.
 
-**Appliance implementation priority, 2026-09-08:** Matt subsequently requested
+**Appliance implementation priority, 2026-09-08:** project owner subsequently requested
 building that host-local UI and a seamless Debian Controller virtual appliance now,
 with parallel workers. The [appliance implementation slice](2026-09-08-controller-appliance.md)
 brings forward its required local VM foundation and bootstrap from Phase 3;
@@ -94,7 +94,7 @@ Controller is a prepared cloud image with per-instance initialization, not an IS
 API impact: **new contract** for local deployment/control and central bootstrap/adoption;
 guide impact: **updated** with implementation and actual verification evidence.
 
-Matt selected AGPL for original Nex code on 2026-09-08; apply AGPL-3.0-only to Nex code/build scripts while preserving upstream component licenses and handling artwork separately. See `LICENSE` and `docs/LICENSING.md` for the implementation of that decision.
+project owner selected AGPL for original Nex code on 2026-09-08; apply AGPL-3.0-only to Nex code/build scripts while preserving upstream component licenses and handling artwork separately. See `LICENSE` and `docs/LICENSING.md` for the implementation of that decision.
 
 **Repository decision, 2026-09-08:** a full Debian mirror is unnecessary for the first release. Bundle installation dependencies on the ISO and use Debian's signed repositories for upstream updates. Add a small signed Nex APT repository when Nex packages and updates exist; operating our own distribution does not require mirroring Debian. Exact source retention for redistribution is a separate release requirement below.
 
@@ -102,7 +102,7 @@ Matt selected AGPL for original Nex code on 2026-09-08; apply AGPL-3.0-only to N
 
 **Installer account decision, 2026-09-08:** ask only for a root password and its confirmation; skip ordinary user creation using Debian Installer’s native account policy. An installer hook rejects blank root passwords instead of Debian’s ordinary-user fallback; mismatched confirmation retains Debian’s retry. Keep system/service accounts and local root recovery access; root SSH remains disabled. **API impact: none** — boot menu → preseed → Debian account setup affects local OS credentials only; there is no Controller operation, Core agent command/result, or client-facing API in this flow. See the [root-only installer verification](../qa/iso/2026-09-08-root-account.md) for the exact rebuilt image, password-dialog checks, and installation results.
 
-**Installer interface correction, 2026-09-08:** Matt clarified that the GUI must be a
+**Installer interface correction, 2026-09-08:** project owner clarified that the GUI must be a
 custom Nex interface, not Debian's stock GUI. Retain the pre-install GUI/minimal choice,
 but replace the graphical presentation with an original Nex shell: brand header,
 section navigation, task heading, purpose text, question pane and action/footer layout.
@@ -126,7 +126,7 @@ No new logo design or dependency is needed; production vector masters remain out
 **Guide impact: none** — installation choices, controls and recovery steps are unchanged.
 See [logo verification](../qa/iso/2026-09-08-installer-logo.md).
 
-**Installer workflow correction, 2026-09-08:** Matt rejected the earlier custom shell as
+**Installer workflow correction, 2026-09-08:** project owner rejected the earlier custom shell as
 still following Debian's question-by-question workflow. Replace the primary GUI flow with
 original Nex GTK pages for welcome, host identity/access, detected NICs, explicit disk choice,
 and a single review with an explicit erase checkbox naming the selected target. The earlier shell/logo QA remains valid
@@ -155,18 +155,18 @@ pages, NIC/VLAN constraints, disk confirmation and local recovery. Acceptance re
 to actual evidence in [Nex wizard QA](../qa/iso/2026-09-08-nex-wizard.md), including independent
 review; earlier installer checks cannot establish the new workflow's completion.
 
-**Installer usability correction, 2026-09-08:** Matt reported unused screen space and
+**Installer usability correction, 2026-09-08:** project owner reported unused screen space and
 hard-to-use timezone selection, and requested practical quality-of-life improvements.
-Matt subsequently authorized a full modern, flat, professional visual overhaul. Replace
+project owner subsequently authorized a full modern, flat, professional visual overhaul. Replace
 the old horizontal step strip with a compact vertical step list, a white form panel on a
 neutral background, and persistent Back/primary-action navigation. Keep completed and active
 steps distinct using text and symbols as well as color. Match the existing backend progress
 shell's typography and palette while preserving its native error/recovery behavior.
 Make the native wizard occupy the available X screen without relying on a window manager,
-including resolution changes. Following Matt’s correction, use selection-only area/timezone dropdowns with UTC as
+including resolution changes. Following project owner’s correction, use selection-only area/timezone dropdowns with UTC as
 the default; remove the unwanted keyboard-test field and timezone text entry. Show
 descriptive keyboard names and offer a password visibility toggle
-that resets when leaving the host page. Matt also requested hostname editing on Network:
+that resets when leaving the host page. project owner also requested hostname editing on Network:
 share the Host entry's value rather than introduce a second setting, retain the same
 validation, and show the current name in review. Add contextual field help while retaining explicit
 disk selection, checkbox erasure confirmation, credential validation and the existing network
@@ -203,9 +203,9 @@ The [feature and UX review](2026-09-08-feature-and-ux-review.md) records the est
 
 Nex Core is our own **Debian-derived distribution**, not an installed system presented as stock Debian. It owns its release identity/version, installer, selected packages, defaults, branding, and release process. The installed `/etc/os-release` must identify Nex Core (`ID=nex-core`, `ID_LIKE=debian`), and that identity must survive base-package updates. Installer media, installed boot menu, and console identify Nex Core; Debian ancestry, `/etc/debian_version`, upstream notices, and the standard signed kernel remain intact. A custom kernel fork is not required for distribution ownership. Nex-specific packages/repositories follow their implementation milestones; do not imply they already exist.
 
-Decision (Matt, 2026-09-09): Nex Core has exactly one version, the `nex-core-local` package version. Its postinst writes `/etc/os-release` (`PRETTY_NAME="Nex Core <version>"`) and refreshes the console banners on every install and update; installation media are named after the package they install; the UI shows that version and no separate agent version.
+Decision (project owner, 2026-09-09): Nex Core has exactly one version, the `nex-core-local` package version. Its postinst writes `/etc/os-release` (`PRETTY_NAME="Nex Core <version>"`) and refreshes the console banners on every install and update; installation media are named after the package they install; the UI shows that version and no separate agent version.
 
-Both products share the Nex identity, with Core and Controller as product descriptors. Matt approved the graphite wordmark, continuous x, n icon, and platinum-led palette on 2026-09-08. Matt clarified that the original blue/white/grey treatment remains primary; the later reference colors extend the supporting palette without recoloring the logo or replacing the light presentation. The [brand guide](../brand/README.md) and selected board are the canonical identity reference; production vector assets remain to be prepared. Branding work does not change the implementation phases or imply released functionality.
+Both products share the Nex identity, with Core and Controller as product descriptors. project owner approved the graphite wordmark, continuous x, n icon, and platinum-led palette on 2026-09-08. project owner clarified that the original blue/white/grey treatment remains primary; the later reference colors extend the supporting palette without recoloring the logo or replacing the light presentation. The [brand guide](../brand/README.md) and selected board are the canonical identity reference; production vector assets remain to be prepared. Branding work does not change the implementation phases or imply released functionality.
 
 The management hierarchy is **Sites → Pools (one master host + members) → Hosts → VMs**. A pool is created automatically when its first host enrolls; that host is the pool master. Storage sits at the pool level. Snapshots, backups, restoration, and live migration with compatible shared storage are required features. Start shared storage with NFS; implement Ceph later.
 
@@ -278,7 +278,7 @@ SQLite is a deliberate single-controller starting point; do not place its databa
 
 The Go libvirt bindings use CGo and the installed native library. Build and package against the supported Debian environment; this agent is not a completely static binary. [Official bindings](https://libvirt.org/go/libvirt.html)
 
-Nex Controller is a replaceable management front end; the pool master's Nex Core is the durable source of truth for everything scoped to its pool (see [Replaceable Controller](#replaceable-controller--2026-09-09)). Controller holds user intent and authorization, and persists each accepted pool-scoped change on the master so a new Controller re-adopts it. The Controller `operations` table is a mirror of host-reported journal results, not Controller-owned state: the host journal is the record, and a fresh Controller rebuilds the history, including failed and needs-attention outcomes, on adoption (decision: Matt, 2026-09-10). Libvirt and agents report actual VM/runtime/storage state. Record drift and reconcile deliberately; neither stale controller records nor unsolicited host reports should silently authorize destructive changes.
+Nex Controller is a replaceable management front end; the pool master's Nex Core is the durable source of truth for everything scoped to its pool (see [Replaceable Controller](#replaceable-controller--2026-09-09)). Controller holds user intent and authorization, and persists each accepted pool-scoped change on the master so a new Controller re-adopts it. The Controller `operations` table is a mirror of host-reported journal results, not Controller-owned state: the host journal is the record, and a fresh Controller rebuilds the history, including failed and needs-attention outcomes, on adoption (decision: project owner, 2026-09-10). Libvirt and agents report actual VM/runtime/storage state. Record drift and reconcile deliberately; neither stale controller records nor unsolicited host reports should silently authorize destructive changes.
 
 Agents initiate outbound authenticated HTTPS connections to the controller for inventory, commands, and console forwarding. VM disks, migrations, and backup data travel directly between authorized hosts/storage endpoints rather than through the controller database or API.
 
@@ -580,7 +580,7 @@ Snapshots are rollback points on the underlying storage and do not protect again
 10. Back up and restore the controller database, configuration, and identity/key material using a consistent database backup mechanism. Restore only one authoritative controller and reconcile agents before accepting mutations.
 11. Show last successful backup, last verification, retention preview, repository space, and failed/missed jobs. Add an explicit test-restore workflow; scheduled isolated boot verification can follow manual restore proof. Completed-backup records are not a claim of tamper-proof/WORM storage.
 
-**Decision (Matt, 2026-09-10):** backup and restore orchestration is the explicit exception to the rule that Nex Controller never drives jobs: the Controller runs the scheduler, drives backup and restore jobs, and keeps their run history and the catalog. Backup repository registrations stay pool-scoped on the pool master and re-adopt like other pool settings. Schedules, jobs, run history and the catalog are Controller-scoped: a replacement Controller recovers them only from the Controller backup/restore in step 10 (the catalog can also be rebuilt from repository manifests, step 9); without that backup they are lost, while the repository registrations and every backup already written are not.
+**Decision (project owner, 2026-09-10):** backup and restore orchestration is the explicit exception to the rule that Nex Controller never drives jobs: the Controller runs the scheduler, drives backup and restore jobs, and keeps their run history and the catalog. Backup repository registrations stay pool-scoped on the pool master and re-adopt like other pool settings. Schedules, jobs, run history and the catalog are Controller-scoped: a replacement Controller recovers them only from the Controller backup/restore in step 10 (the catalog can also be rebuilt from repository manifests, step 9); without that backup they are lost, while the repository registrations and every backup already written are not.
 
 **UX acceptance:** provide a short preset-based policy workflow with explicit VM scope, independent repository, schedule/time zone, retention, and downtime/consistency review. Quick application of a reviewed policy reuses the same validated scheduler; display next run and failed/missed jobs without implying a successful job proves recovery.
 
@@ -856,7 +856,7 @@ Implementation should proceed phase by phase, with each gate demonstrated before
 
 ### Replaceable Controller — 2026-09-09
 
-Matt identified a gap in the development model: the Controller web UI/API must be a front end
+project owner identified a gap in the development model: the Controller web UI/API must be a front end
 onto the pool master's state, so a failed Controller can be replaced by installing a new one and
 connecting each pool master to it, with every setting coming across. Decisions:
 
@@ -866,7 +866,7 @@ connecting each pool master to it, with every setting coming across. Decisions:
   and name. This applies to pool membership, networks, storage registrations, media, VM
   definitions and identity, later snapshot policies, and backup repository registrations; backup
   schedules, jobs, run history and the catalog are the agreed Controller-scoped exception
-  (decision: Matt, 2026-09-10, Phase 6). Running workloads and local
+  (decision: project owner, 2026-09-10, Phase 6). Running workloads and local
   recovery never depend on the Controller (unchanged).
 - **Replacement procedure target:** install a new Controller, connect each pool master (token or
   address plus root password), wait for adoption. No re-entry of pool settings. Controller-scoped
@@ -982,7 +982,7 @@ command/result or client-facing API changes. Guide impact: updated.
 
 ## Installer DHCP feedback — 2026-09-09
 
-Matt requested immediate DHCP feedback for the selected installer NIC/VLAN: searching,
+project owner requested immediate DHCP feedback for the selected installer NIC/VLAN: searching,
 server-returned IPv4 or retryable failure. Use the existing BusyBox DHCP client with a
 custom display-only hook; no route, address or DNS configuration effects. Cancel previews
 on selection/mode/VLAN/page changes and remove only owned temporary VLAN links.

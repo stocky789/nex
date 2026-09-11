@@ -17,8 +17,10 @@ pulls a new dependency — the case apt-based updates exist to handle.
   by `/usr/share/keyrings/nex-archive-keyring.gpg`), rewritten from `repo_url` whenever
   you check or apply, so changing the URL takes effect without reinstalling.
 - The in-product **Check**/**Update** flow *is* `apt`: it runs `apt-get update` and
-  `apt-get install --only-upgrade`, so dependencies resolve and package signatures are
-  verified. Running `apt` yourself does the same thing.
+  installs the selected package, so dependencies resolve and package signatures are verified.
+  Core uses plain `apt-get install nex-core-local` so a binary-only appliance can receive its
+  first package; Controller uses `apt-get install --only-upgrade nex-controller` through its
+  privileged helper. Running the matching command yourself does the same thing.
 - Packaged `nex-controller` or `nex-core-local` installs for apply to succeed.
 
 ## Steps

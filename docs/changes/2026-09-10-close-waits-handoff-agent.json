@@ -23,7 +23,7 @@
     "reason": "Test and process lifetime fix; durable enrollment state on disk is unchanged."
   },
   "verification": {
-    "method": "go test -race -count=10 ./internal/localcore -run TestEnrollmentWithReplacementControllerSucceeds and go test -race -count=1 ./internal/localcore both pass. Root cause read from Gitea job 4366 TempDir cleanup failure after enrollment assertions succeeded.",
+    "method": "go test -race -count=10 ./internal/localcore -run TestEnrollmentWithReplacementControllerSucceeds and go test -race -count=1 ./internal/localcore both pass. Root cause read from Gitea job <redacted> TempDir cleanup failure after enrollment assertions succeeded.",
     "evidence": [
       "internal/localcore/enroll_test.go",
       "docs/BUG_LEDGER.md"

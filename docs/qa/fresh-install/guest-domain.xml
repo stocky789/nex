@@ -1,6 +1,6 @@
 <domain type='kvm'>
   <name>fresh-install-guest</name>
-  <uuid>3035054a-87b0-4adb-a40d-512ce050032b</uuid>
+  <uuid>private-id-008</uuid>
   <memory unit='KiB'>1048576</memory>
   <currentMemory unit='KiB'>1048576</currentMemory>
   <vcpu placement='static'>2</vcpu>
@@ -29,13 +29,13 @@
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2'/>
-      <source file='/var/lib/libvirt/images/nex-vms/3035054a-87b0-4adb-a40d-512ce050032b/disk.qcow2'/>
+      <source file='/var/lib/libvirt/images/nex-vms/private-id-008/disk.qcow2'/>
       <target dev='vda' bus='virtio'/>
       <address type='pci' domain='0x0000' bus='0x04' slot='0x00' function='0x0'/>
     </disk>
     <disk type='file' device='cdrom'>
       <driver name='qemu' type='raw'/>
-      <source file='/var/lib/libvirt/images/nex-media/0c349d65717ca146b8970fc5bee6b1b418c53ccee90c5d8a53da3c16b798a199.iso'/>
+      <source file='/var/lib/libvirt/images/nex-media/private-id-002.iso'/>
       <target dev='sda' bus='sata'/>
       <readonly/>
       <address type='drive' controller='0' bus='0' target='0' unit='0'/>
@@ -106,4 +106,3 @@
     </memballoon>
   </devices>
 </domain>
-

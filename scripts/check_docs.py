@@ -107,6 +107,30 @@ def path_list(root, values, label, exists=False):
     return set(values)
 
 
+# Where each assessment is allowed to point. The roadmap area is the published milestone
+# board: the website is how the project states what is built, so a completed feature that
+# never reaches it leaves the site claiming something untrue. Declaring the impact is what
+# the gate can enforce; whether "none" was honest is a reviewer's judgement, exactly as it
+# is for guide and API impact.
+AREAS = {
+    'guide': lambda p: p.startswith('docs/guide/') and p.endswith('.md'),
+    'api': lambda p: p == 'docs/API.md' or p.startswith('docs/api/'),
+    'roadmap': lambda p: p.startswith('website/src/routes/roadmap/'),
+}
+
+# Records written before the roadmap assessment existed are not retrofitted. Inventing
+# assessments for a hundred merged changes - and for the batch still pending in the tree -
+# would be guesswork dressed as review. The date every record already carries in its name is
+# the boundary, so the requirement starts cleanly and needs no migration commit. A record
+# whose name does not carry a date must answer, otherwise skipping the date would skip the gate.
+ROADMAP_REQUIRED_FROM = '2026-09-12'
+DATED_RECORD = re.compile(r'docs/changes/(\d{4}-\d{2}-\d{2})-.+\.json')
+
+
+def roadmap_required(relative):
+    dated = DATED_RECORD.fullmatch(relative)
+    return dated is None or dated.group(1) >= ROADMAP_REQUIRED_FROM
+
 # The closed list of Controller-owned data (AGENTS.md, architecture invariant). A controller
 # owner must name one of these in its record; anything else is a design defect, not a record.
 CONTROLLER_EXCEPTIONS = ('sites', 'administrator accounts and roles', 'audit history', 'enrollment tokens',
@@ -148,15 +172,18 @@ def check_record(root, file, changed=None, new=True):
     covered = path_list(root, data.get('paths'), 'paths')
     if not covered:
         raise ValueError(f'{file}: paths cannot be empty')
-    for kind in ('guide', 'api'):
+    for kind in ('guide', 'api', 'roadmap'):
         decision = data.get(kind)
+        if kind == 'roadmap' and decision is None and not roadmap_required(
+                file.relative_to(root).as_posix()):
+            continue
         if not isinstance(decision, dict) or decision.get('impact') not in ('updated', 'none'):
             raise ValueError(f'{file}: {kind}.impact must be updated or none')
         nonempty(decision.get('reason'), f'{kind}.reason')
         # An absent pages key reads as "no pages", which is what impact none means.
         # Requiring the empty list added nothing but a confusing "list required" error.
         pages = path_list(root, decision.get('pages') or [], f'{kind}.pages', exists=changed is not None)
-        allowed = lambda p: (p.startswith('docs/guide/') and p.endswith('.md')) if kind == 'guide' else (p == 'docs/API.md' or p.startswith('docs/api/'))
+        allowed = AREAS[kind]
         if any(not allowed(p) for p in pages):
             raise ValueError(f'{file}: {kind}.pages outside reference area')
         if decision['impact'] == 'updated':

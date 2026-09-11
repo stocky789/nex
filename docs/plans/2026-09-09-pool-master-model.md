@@ -5,7 +5,7 @@ Status: Implemented and verified on 2026-09-09 (simulated browser suites plus a 
 
 ## Decision
 
-Matt decided that Nex pools follow the established master-and-members model:
+project owner decided that Nex pools follow the established master-and-members model:
 
 - Administrators never create pools. There is no **Create pool** action and no manual
   pool-creation API.
@@ -18,7 +18,7 @@ Matt decided that Nex pools follow the established master-and-members model:
 
 ## What changed
 
-Decision (Matt, 2026-09-10): pool and host IDs and the pool name are generated and kept by Nex
+Decision (project owner, 2026-09-10): pool and host IDs and the pool name are generated and kept by Nex
 Core — the host generates its own ID, the pool master generates the pool ID and holds the pool
 name — and a Controller adopts them unchanged. The Controller rows below are a mirror of what the
 host reports, not the origin of pool identity; a separate code slice implements this and documents

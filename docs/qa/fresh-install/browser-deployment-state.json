@@ -20,8 +20,8 @@
     "storage_dir": "/var/lib/libvirt/images"
   },
   "operation": {
-    "id": "d004ad61-a810-4deb-871c-faf53a38903a",
-    "vm_id": "72a34e46-5483-4239-b552-c18ddfa5e2d1",
+    "id": "private-id-054",
+    "vm_id": "private-id-024",
     "kind": "deploy",
     "status": "ready",
     "stage": "ready",

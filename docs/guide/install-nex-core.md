@@ -67,7 +67,7 @@ signed Nex APT archive; see [software updates](software-updates.md).
    field tooltips provide additional input guidance.
 4. On **Connect your host**, you can also edit **Hostname**. It is the same value as on
    the Host page; edits in either place appear in the other and in the final review. Use
-   a short name such as `nexcore` or a qualified name such as `nexcore.matthome`.
+   a short name such as `nexcore` or a qualified name such as `nexcore.example.invalid`.
    Each dot-separated label allows 1–63 ASCII letters, digits or internal hyphens;
    the complete name allows 253 characters, plus an optional final dot. Uppercase is
    accepted; the final dot is removed when saving. Internationalized names use their
@@ -136,7 +136,7 @@ signed Nex APT archive; see [software updates](software-updates.md).
 
 The installed boot menu identifies **Nex Core GNU/Linux** and the host identifies as
 `Nex Core <version>` in `/etc/os-release` and the console banner, matching the ISO version. Management networking follows your installer choices. For a qualified hostname such as
-`nexcore.matthome`, the installed short hostname is `nexcore`; local hostname resolution
+`nexcore.example.invalid`, the installed short hostname is `nexcore`; local hostname resolution
 retains the full name and short alias. This does not create a DNS record on your router
 or DNS server; configure that separately if other machines should resolve the name. Selecting a management NIC in the GUI creates its bridge on first boot.
 Offline mode creates no management bridge; the minimal text installer retains its native

@@ -167,9 +167,10 @@ jobs:
         env:
           NEX_DEPLOY_HOST: ${{ secrets.NEX_DEPLOY_HOST }}
           NEX_DEPLOY_KEY: ${{ secrets.NEX_DEPLOY_KEY }}
+          NEX_DEPLOY_USER: ${{ secrets.NEX_DEPLOY_USER }}
         run: |
           set -eu
-          if [ -n "${NEX_DEPLOY_HOST:-}" ] && [ -n "${NEX_DEPLOY_KEY:-}" ]; then
+          if [ -n "${NEX_DEPLOY_HOST:-}" ] && [ -n "${NEX_DEPLOY_KEY:-}" ] && [ -n "${NEX_DEPLOY_USER:-}" ]; then
             echo 'enabled=true' >> "$GITHUB_OUTPUT"
           else
             echo 'enabled=false' >> "$GITHUB_OUTPUT"
@@ -182,7 +183,7 @@ jobs:
           NEX_DEPLOY_HOST: ${{ secrets.NEX_DEPLOY_HOST }}
           NEX_DEPLOY_KEY: ${{ secrets.NEX_DEPLOY_KEY }}
           NEX_DEPLOY_KNOWN_HOSTS: ${{ secrets.NEX_DEPLOY_KNOWN_HOSTS }}
-          NEX_DEPLOY_USER: ${{ secrets.NEX_DEPLOY_USER || 'matt' }}
+          NEX_DEPLOY_USER: ${{ secrets.NEX_DEPLOY_USER }}
         run: |
           set -euo pipefail
           if [ -z "${NEX_DEPLOY_KNOWN_HOSTS:-}" ]; then

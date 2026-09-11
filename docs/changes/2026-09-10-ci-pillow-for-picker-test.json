@@ -1,5 +1,5 @@
 {
-  "summary": "CI: install Pillow in the phase1 browser venv so tests/integration/form_select_picker.py (which counts picker pixels with PIL) can run; the first push carrying that test failed on Gitea run 3825 with ModuleNotFoundError: No module named 'PIL'.",
+  "summary": "CI: install Pillow in the phase1 browser venv so tests/integration/form_select_picker.py (which counts picker pixels with PIL) can run; the first push carrying that test failed on Gitea run <redacted> with ModuleNotFoundError: No module named 'PIL'.",
   "paths": [
     ".github/workflows/phase1.yml",
     ".gitea/workflows/phase1.yml"
@@ -17,7 +17,7 @@
     "reason": "CI configuration in Git; no runtime state."
   },
   "verification": {
-    "method": "Gitea Actions run 3825 (be595da) failed at 'Verify form select pickers render in the page and stay open' with ModuleNotFoundError: No module named 'PIL'; the pip line now installs pillow==12.3.0 (the version in the local .cache/phase1-qa-venv where the test passes). Re-run on the fixing push is the evidence.",
+    "method": "Gitea Actions runs <redacted> (be595da) failed at 'Verify form select pickers render in the page and stay open' with ModuleNotFoundError: No module named 'PIL'; the pip line now installs pillow==12.3.0 (the version in the local .cache/phase1-qa-venv where the test passes). Re-run on the fixing push is the evidence.",
     "evidence": [
       ".gitea/workflows/phase1.yml",
       ".github/workflows/phase1.yml"

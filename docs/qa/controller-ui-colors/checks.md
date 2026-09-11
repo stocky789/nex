@@ -5,7 +5,7 @@ Status: Build, typecheck and real browser captures passed. No layout, sizing or 
 
 ## Scope
 
-Matt asked for more vibrant colors and nicer icons in the Nex Controller UI without
+project owner asked for more vibrant colors and nicer icons in the Nex Controller UI without
 touching the layout. The change replaces the muted single-color line icons with
 two-tone filled SVG icons, uses the brand blue "n" mark for the workspace/home
 entries, gives the title bar the brand navy, and brightens the status, badge,

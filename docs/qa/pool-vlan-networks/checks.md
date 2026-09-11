@@ -81,7 +81,7 @@ Controller. No real two-Controller replacement has been walked through.
 ### Controller replacement with real processes
 
 `tests/integration/controller_replacement.py` ran inside `unshare -Urnm` with sysfs remounted and a
-namespace-private bridge `nexqa` (evidence: [controller-replacement.json](controller-replacement.json)).
+namespace-private bridge `nex-test` (evidence: [controller-replacement.json](controller-replacement.json)).
 Real `nex-controller` and `nex-core-agent` binaries built from this tree: Controller A enrolled the
 agent; the agent applied a pool network (existing bridge, read-only check); Controller A's process
 was stopped and its data directory deleted; Controller B started empty on a new port with a new

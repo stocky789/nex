@@ -1,19 +1,19 @@
 # Pool VLAN networks and guest tools direction
 
 Status: implemented for one-host pools on 2026-09-09; guest tools are assessed here, and
-slice 1 (observe) is implemented in [console features](2026-09-09-console-features.md). Owner: Matt. Parent: [platform plan](2026-09-08-nex-platform.md), Phase 2 item 2
+slice 1 (observe) is implemented in [console features](2026-09-09-console-features.md). Owner: project owner. Parent: [platform plan](2026-09-08-nex-platform.md), Phase 2 item 2
 and Phase 4 item 4.
 
 ## Problem
 
 Registering a guest network meant typing an existing bridge or libvirt network name per host.
-Matt found that too complex: operators think in "VLAN 100 on the trunk port", not in bridge
+project owner found that too complex: operators think in "VLAN 100 on the trunk port", not in bridge
 names, and VM creation should pick a network by name.
 
 ## Decision
 
 A pool network is **name + uplink NIC name + VLAN ID** (0 = untagged), on the model where every
-host's Ethernet ports carry the same names (Matt, 2026-09-09). Nex Core
+host's Ethernet ports carry the same names (project owner, 2026-09-09). Nex Core
 already names NICs `nex0`, `nex1`, … by MAC binding, so the uplink name identifies the same
 physical network on every host. Core materializes the network as one Linux bridge per
 (uplink, VLAN), named `<uplink>v<VLAN>` (for example `nex1v100`) over the 802.1Q
@@ -36,9 +36,9 @@ kind has deletion yet); the bridge stays until an operator removes its interface
 Bridge VLAN filtering on `br0` was rejected for now: it would require enabling filtering on
 the management bridge and per-tap `bridge vlan` hooks that libvirt does not manage.
 
-## Default network and Controller recovery (Matt, 2026-09-09)
+## Default network and Controller recovery (project owner, 2026-09-09)
 
-Matt asked why no untagged (VLAN 0) network exists by default, why one VLAN shows two host
+project owner asked why no untagged (VLAN 0) network exists by default, why one VLAN shows two host
 interfaces, and whether everything comes back from the pool master if Controller dies.
 
 - Every host bridge on a physical NIC or bond gets an automatic pool network

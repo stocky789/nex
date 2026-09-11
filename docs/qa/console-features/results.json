@@ -1,6 +1,6 @@
 {
   "completed": true,
-  "lab": "/home/matt/Projects/Nex/.cache/nex-managed-vm-lab.ogryasza",
+  "lab": "/workspace/Nex/.cache/nex-managed-vm-lab.<redacted>",
   "passed": [
     "Enrolled native agent reports a healthy guest observation check alongside libvirt",
     "Created guest definition carries the guest agent channel, qemu-vdagent clipboard channel, USB tablet and VirtIO display",
@@ -103,7 +103,7 @@
     "app.js": "f479218dd2acaa21a4a0b8621727b6bdb2489ed1b40efb5af9cbc3913d3caefc",
     "nex-guest-tools-qa.qcow2": "1c3c07d6a8e746c34cea4b3a4e962407c036e8011087d7f680e17ee100e09eae"
   },
-  "vm_id": "70a3de70-cd13-4dfb-a431-a8b10ce1c9ee",
-  "host_id": "f30d062f04a16cd2e77543e1e11a276855846e10f2c0478aaaae73eee41362bb",
-  "pool_id": "ee8bb075265afcd596cb0195aa202b4f66018207a0eb93afff0f134d1457ffb7"
+  "vm_id": "private-id-022",
+  "host_id": "private-id-067",
+  "pool_id": "private-id-064"
 }

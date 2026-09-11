@@ -6,7 +6,7 @@ Central power controls followed in [VM power](2026-09-09-vm-power.md), so the "s
 
 ## Scope and decisions
 
-Matt asked for console access to VMs in both Nex Controller and the local Nex Core page.
+project owner asked for console access to VMs in both Nex Controller and the local Nex Core page.
 This delivers the Phase 2 console item from the [platform plan](2026-09-08-nex-platform.md#2-one-host-vm-management):
 authenticated browser console sessions with short-lived authorization, raw VNC never
 exposed on the network. Central power controls, stopped-VM editing and deletion remain

@@ -690,7 +690,7 @@ version and capabilities are unchanged.
   self-register defaults, so a new Controller managing it would show no **ISO** storage or
   untagged network until the host is upgraded; and it does not honour `start_after_create`
   itself, so a VM created with that flag through such a host stays stopped. Both are accepted
-  (decision: Matt, 2026-09-10); upgrade the host. An older Controller against a new Core keeps
+  (decision: project owner, 2026-09-10); upgrade the host. An older Controller against a new Core keeps
   issuing its own defaults, which the host refuses as already registered.
 
 API impact: **changed contract**. The VM creation request, the `vm-create` command payload and

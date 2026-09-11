@@ -145,7 +145,7 @@ def acceptance(config, password, iso, evidence, mode):
         page.get_by_label('Password', exact=True).fill(password)
         page.keyboard.press('Enter')
         expect(page.get_by_role('heading', name='Your workspace', exact=True)).to_be_visible()
-        assert 'matt-arch' not in page.get_by_role('navigation', name='Infrastructure', exact=True).inner_text()
+        assert 'local-workstation' not in page.get_by_role('navigation', name='Infrastructure', exact=True).inner_text()
         passed('Loading and rejected login captured; keyboard sign-in succeeds; enrolled fixture labels are neutral')
         pool('General')
         master = page.locator('.metric').filter(has_text='Pool master')

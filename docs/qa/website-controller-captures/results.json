@@ -1,30 +1,35 @@
 {
-  "date_utc": "2026-09-09T06:05:25.356003+00:00",
+  "date_utc": "2026-09-11T02:09:17.375002+00:00",
   "results": [
     "real Controller, neutral site, CSR enrollment creating the automatic pool with the host as master; authenticated mTLS simulated inventory",
+    "three demo VMs created through the real API on registered storage, network and uploaded media; the simulated host confirmed every operation and reports them running",
+    "pool VM list, VM details and the completed six-step Create VM review captured from the real browser UI",
     "privacy guard rejected the original workstation label rendered by the real Controller",
     "four real browser resource views, neutral rendered identity, no credential fields or browser errors"
   ],
   "simulation": "All host inventory is an explicit demo fixture; actual Controller, TLS enrollment, mTLS report and browser UI. No native probes, live host changes, DOM replacements or image editing.",
   "viewport": "1440x1000",
   "browser": "Chromium 151.0.7922.34",
-  "controller_sha256": "5d4be8b50be146adaec92034dab00dbeefa5e3e87b7c80d5acc1e3c1a62cbc1b",
+  "controller_sha256": "c3d5f25d3cfe04d125909dc02125b43b777e293f8620e47d1304cfd09c7120cc",
   "web_dist_sha256": {
-    "app.css": "5bbbc2d12898e61eae442d91061ffc64bc8ab1cc3bec7d49cc495c4438037bb8",
-    "app.js": "34a11b2ba9369c6d23b13cafa92eef4147d48c97a96e5e41e7c0f6c9e0ecbcdd",
+    "app.css": "6b58425f339ea66175c215235328051ffba628808ac1d12e70311af70fb698cf",
+    "app.js": "a9a9f37031e5d191890f02dbd882c00787f6428d524db9bb0d793d58843403be",
     "app.js.LEGAL.txt": "7dff61d0cd5b7cff2403db6cf5c586b1218c9e663784caeda7fd06916c997d46",
     "index.html": "fe3a212c4edad4414940432247e7937194d8ebba960f8ef1525bcfd5e3e6a2a7",
-    "local.css": "dc94aeab25b9791f09782e32a5272e8a025d062ccaa0a9d29416c89660677b8e",
+    "local.css": "83f894617b9c3c77549d1de6f74ee55ac976a8d92e6bfcbab29f0264f821eaf6",
     "local.html": "328ec1c90075ef067253ecf34b1993cbd05a23c4d64ee502feec55c9438b2b42",
-    "local.js": "80b0109d078469b030a4a7c5dc448b0418ba4e73a5585a32a0504fd02cfa78ab",
+    "local.js": "0ba645788346183e8207f363772d3f251e248bde6efffaaf1387392546fc2581",
     "local.js.LEGAL.txt": "7dff61d0cd5b7cff2403db6cf5c586b1218c9e663784caeda7fd06916c997d46",
     "nex-brand.png": "c96550ec6ef71bdca8caec7874573e4cc9e24c5d03909a0785a60dd21ba1b003",
-    "third-party-notices.txt": "2a1d6e0408d0208c317a8986586e7b8e95443ab4f3dffae866b79f13c8cd1c8a"
+    "third-party-notices.txt": "b91c000492ed53dcf64eb05565f421200b56b5e6a4be34028ed3caeda9a9b1e2"
   },
   "images_sha256": {
-    "desktop-shell.png": "8b972680aff0bc5cbfa9bfd8fd7f9d9ccdb452dd6d02434e8bad02c265f03fce",
-    "networking-desktop.png": "88f3260bee067de3c05e4160b71593206f07693e0c1eaa9f6eeb506d768d6c42",
-    "storage-desktop.png": "063daa496c4b6d6a8ef9b52839bbed71952f0139ff09f09b40ae4221a43742d3",
-    "activity-desktop.png": "f74b9b51ff2f43faf4499eeb2c112fe81c953eac907b2eeabe079cf918999fd6"
+    "desktop-shell.png": "60c8c186477a93e5ae8a617ca2616a4ad4134d68141e0f07230bd77b26c3be2d",
+    "networking-desktop.png": "40d85c0305bc0ed74f489638f77fa4ade6e0b22d9ec8f4d9bfb398b1a37abac9",
+    "storage-desktop.png": "ab87d6cafe9587954f1fc8f10d71f28e1b75e0f89dd06ebc7ce4f600fbc2bf41",
+    "activity-desktop.png": "a2f54e4fd60473ef5ebf2b5b9613853cfef9ca7ba574ce1edbde9637ebe39c59",
+    "vms-desktop.png": "dbb1892f34d9bb632a8e32032d2037d2b03f55ed991d3a3056c92c1cfc77b5ce",
+    "vm-general-desktop.png": "205305919b9d97569f2b5f75d220cac0fb10e04daff1f57ca5edd83a8d6ae090",
+    "create-vm-desktop.png": "e9a5d53d8103f38fef45177dd32dece4a92a54dc4bbc9091e5a4f3a90f01e972"
   }
 }

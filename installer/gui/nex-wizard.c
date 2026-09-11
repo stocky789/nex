@@ -407,7 +407,7 @@ static gboolean collect(void)
     save_nic();
     if (!keyboard_ready) { message("Select a working keyboard layout before continuing."); return FALSE; }
     gchar *normalized_hostname = nex_hostname_normalize(value(host));
-    if (!normalized_hostname) { message("Use an ASCII host name or FQDN, e.g. nexcore.matthome."); gtk_widget_grab_focus(page == 2 ? network_hostname : host); return FALSE; }
+    if (!normalized_hostname) { message("Use an ASCII host name or FQDN, e.g. nexcore.example.test."); gtk_widget_grab_focus(page == 2 ? network_hostname : host); return FALSE; }
     gtk_entry_set_text(GTK_ENTRY(host), normalized_hostname); g_free(normalized_hostname);
     {
         gchar *zone = gtk_combo_box_get_active_text(GTK_COMBO_BOX(zone_entry));

@@ -63,7 +63,7 @@ static void fail(''' + validator + r'''
 int main(int argc, char **argv) {
     assert(argc==3); scenario=argv[1];
     GKeyFile *config=g_key_file_new();
-    g_key_file_set_string(config,"Host","hostname","nexcore.matthome");
+    g_key_file_set_string(config,"Host","hostname","nexcore.example.test");
     g_key_file_set_string(config,"Host","timezone","UTC");
     g_key_file_set_string(config,"Host","keymap","us");
     g_key_file_set_string(config,"Host","password","disposable-secret");

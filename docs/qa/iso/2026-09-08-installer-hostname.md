@@ -4,7 +4,7 @@ Nex Core 0.1.0-alpha1, 2026-09-08.
 
 ## Standards decision
 
-`nexcore.matthome` is valid ASCII hostname syntax. The previous GUI and backend both
+`nexcore.example.invalid` is valid ASCII hostname syntax. The previous GUI and backend both
 restricted input to one label, rejecting it.
 
 - [RFC 1123 §2.1](https://www.rfc-editor.org/rfc/rfc1123.html#section-2.1) permits digit-leading labels; accept short and qualified ASCII names with letters, digits and internal hyphens.
@@ -31,9 +31,9 @@ Matching checksum, complete-initrd checks, and retained wizard/config source com
 - Existing keyboard, QoL, protected handoff and installer-mode checks passed.
 - Native `wizard-review.py` passed using the final ISO kernel/initrd with the test-only
   preparation marker, QEMU/KVM, 4 GiB RAM, no NICs, 800×600 and a disposable 24 GiB raw
-  disk. Host accepts `nexcore.matthome`; Network rejects underscore input and then accepts
-  `7nex-core.matthome.`. Returning to Host retains the edited value, including its final dot; continuing
-  validates and removes that dot, so Review shows `7nex-core.matthome`. Password reset and wrong-disk confirmation checks still pass; the
+  disk. Host accepts `nexcore.example.invalid`; Network rejects underscore input and then accepts
+  `7nex-core.example.invalid.`. Returning to Host retains the edited value, including its final dot; continuing
+  validates and removes that dot, so Review shows `7nex-core.example.invalid`. Password reset and wrong-disk confirmation checks still pass; the
   disk's first 1 MiB remains untouched. The test VM was stopped.
 - Documentation structure and whitespace checks passed. Both GitHub and Gitea installer
   workflows invoke the shared boundary, backend and native regressions on push/PR.

@@ -8,7 +8,7 @@ running
 replacement_vm_autostart:
 Id:             1
 Name:           nex-controller-recovery
-UUID:           7ccb7371-f9d8-4f14-904a-80cf71dcd3bf
+UUID:           private-id-027
 OS Type:        hvm
 State:          running
 CPU(s):         2
@@ -21,7 +21,7 @@ Autostart Once: disable
 Managed save:   no
 Security model: apparmor
 Security DOI:   0
-Security label: libvirt-7ccb7371-f9d8-4f14-904a-80cf71dcd3bf (enforcing)
+Security label: libvirt-private-id-027 (enforcing)
 
 
 nex_core_local:
@@ -33,7 +33,7 @@ active
 original_vm_state_and_autostart:
 Id:             -
 Name:           nex-controller
-UUID:           8d5298c9-f86c-449a-96b2-b10ce84fa231
+UUID:           private-id-033
 OS Type:        hvm
 State:          shut off
 CPU(s):         2
@@ -45,4 +45,3 @@ Autostart Once: disable
 Managed save:   no
 Security model: apparmor
 Security DOI:   0
-

@@ -30,7 +30,7 @@ possible here.
 
 ## Executed root checks
 
-Every command below was actually run from `/home/matt/Projects/Nex` (or `web/`) against the final
+Every command below was actually run from `/workspace/Nex` (or `web/`) against the final
 working tree; results are the real output.
 
 | Command | Result |

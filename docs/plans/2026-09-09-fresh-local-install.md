@@ -5,7 +5,7 @@ Status: Fresh installation and runtime checks passed with independent review.
 
 ## Scope
 
-Matt requested a local installation and test of the latest Core and Controller.
+project owner requested a local installation and test of the latest Core and Controller.
 Build matching current-source artifacts, install the branded ISO onto a new
 disposable regular-file disk under KVM, and deploy the bundled Controller through
 Core's local interface. Use isolated QEMU networking and loopback access; do not

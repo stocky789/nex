@@ -1,0 +1,44 @@
+{
+  "summary": "Recapture the website gallery from a locally deployed Controller and extend it with the managed virtual-machine views (pool VM list, VM details, Create VM review) so the gallery shows the VM work added since 9 September. API impact: existing contract; the capture harness exercises the shipped session, enrollment, mTLS reporting, storage/network/media registration and VM creation contracts without changing them.",
+  "paths": [
+    "docs/guide/website-preview.md",
+    "docs/qa/website-controller-captures/results.json",
+    "docs/qa/website-gallery-vms/checks.md",
+    "docs/qa/website-gallery-vms/gallery-1440.png",
+    "docs/qa/website-gallery-vms/website-browser-results.json",
+    "tests/integration/website_controller_captures.py",
+    "website/src/routes/gallery/+page.svelte",
+    "website/static/gallery/activity-desktop.png",
+    "website/static/gallery/create-vm-desktop.png",
+    "website/static/gallery/desktop-shell.png",
+    "website/static/gallery/networking-desktop.png",
+    "website/static/gallery/storage-desktop.png",
+    "website/static/gallery/vm-general-desktop.png",
+    "website/static/gallery/vms-desktop.png"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The gallery a reader reaches from the website now contains three additional virtual-machine views, so the documented walkthrough names what is shown.",
+    "pages": [
+      "docs/guide/website-preview.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Screenshot capture and static website content only. The harness calls the existing session, site, enrollment-token, agent enroll/report, storage, network, media and VM creation contracts as an ordinary client; no contract, authorization, validation or error behavior changes, so no reference update is required.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Website images, website source and disposable capture tooling only. The demo Controller state lives in a temporary directory that is deleted when the harness exits; no Nex Controller or Nex Core durable state is added or changed."
+  },
+  "verification": {
+    "method": "Rebuilt web/dist with npm run typecheck clean. Ran tests/integration/website_controller_captures.py against a real Controller binary with a simulated enrolled host: all five checks passed, including the privacy guard rejecting the original workstation label. All seven captures inspected individually. Built the website (svelte-check 0 errors, 0 warnings), served the build on a local listener and ran tests/integration/website_browser.py: all twelve groups passed at 1440px, 768px and 360px and with JavaScript disabled; the rendered gallery page was inspected. Host inventory and VMs are a declared simulation, so this is evidence of Controller UI rendering, not of libvirt or guest behavior. Not published: no deployed-site evidence is claimed.",
+    "evidence": [
+      "docs/qa/website-controller-captures/results.json",
+      "docs/qa/website-gallery-vms/checks.md",
+      "docs/qa/website-gallery-vms/gallery-1440.png",
+      "docs/qa/website-gallery-vms/website-browser-results.json"
+    ]
+  }
+}

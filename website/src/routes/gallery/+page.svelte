@@ -10,6 +10,24 @@
       alt: "Nex Controller General tab with the site tree showing the host as pool master of its automatic pool, host hardware details, health checks and recent tasks."
     },
     {
+      file: "vms-desktop.png",
+      title: "Virtual machines in the pool",
+      description: "Every VM in the pool with its assigned host, observed state and creation task.",
+      alt: "Nex Controller pool Virtual machines tab listing three fictional demo VMs — app-01, db-01 and web-01 — each assigned to the demo host, observed running with fresh state and a succeeded creation task."
+    },
+    {
+      file: "vm-general-desktop.png",
+      title: "A virtual machine in detail",
+      description: "Configuration, observed state and the task that created it, with power controls in the toolbar.",
+      alt: "Nex Controller VM details for the fictional web-01 guest showing observed running state, CPU topology, memory, disk, network adapter, install ISO, firmware and its succeeded creation task, with toolbar power controls enabled."
+    },
+    {
+      file: "create-vm-desktop.png",
+      title: "Create a VM, reviewed first",
+      description: "A six-step wizard that summarises the whole guest before anything is created.",
+      alt: "Nex Controller Create VM wizard on step 6 of 6, Review, summarising the fictional build-01 guest's name, CPU, memory, disk, network, firmware, install ISO and boot order above the lifecycle options and the Create stopped VM button."
+    },
+    {
       file: "networking-desktop.png",
       title: "Host networking",
       description: "The Networking tab shows observed interfaces, addresses and connection state.",
@@ -32,7 +50,7 @@
 
 <svelte:head>
   <title>Gallery — Nex Controller</title>
-  <meta name="description" content="Explore the Nex Controller interface: hosts, networking, storage and activity, shown with fictional demo data." />
+  <meta name="description" content="Explore the Nex Controller interface: hosts, virtual machines, networking, storage and activity, shown with fictional demo data." />
 </svelte:head>
 
 <a class="skip" href="#main">Skip to content</a>
@@ -51,6 +69,7 @@
     <a href="/#platform">Platform</a>
     <a href="/#approach">Approach</a>
     <a href="/#questions">Questions</a>
+    <a href="/roadmap/">Roadmap</a>
     <a href="/gallery/" aria-current="page">Gallery</a>
     <a class="nav-release" href="/#releases">Releases <span aria-hidden="true">↗</span></a>
   </nav>
@@ -60,8 +79,8 @@
   <section class="gallery-intro" aria-labelledby="gallery-title">
     <p class="eyebrow"><span class="small-line"></span> Inside Nex Controller</p>
     <h1 id="gallery-title">Nex Controller.<br /><span>A closer look.</span></h1>
-    <p class="gallery-description">Hosts, networking, storage and activity in one workspace.</p>
-    <p class="gallery-note">Development screenshots with fictional demo data. Captured 9 September 2026.</p>
+    <p class="gallery-description">Hosts, virtual machines, networking, storage and activity in one workspace.</p>
+    <p class="gallery-note">Development screenshots with fictional demo data. Captured 11 September 2026 from a real Controller build; the host inventory and its virtual machines are a simulated demo fixture, not a running production system.</p>
   </section>
 
   <section class="gallery-grid" aria-label="Controller screenshots">

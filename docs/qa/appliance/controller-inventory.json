@@ -1,21 +1,21 @@
 {
   "sites": [
     {
-      "id": "b49e6e5db72388771c594b8c0f012ec1c89f16eb2eed881c612d89e3a307ac99",
+      "id": "private-id-050",
       "name": "Main site"
     }
   ],
   "pools": [
     {
-      "id": "daf10f70ed98b6d150fe32b1ae74e5877b519af2bd03a16620cc1575cce70148",
-      "site_id": "b49e6e5db72388771c594b8c0f012ec1c89f16eb2eed881c612d89e3a307ac99",
+      "id": "private-id-058",
+      "site_id": "private-id-050",
       "name": "Default pool"
     }
   ],
   "hosts": [
     {
-      "id": "a412179a841f223e194ea6b7318bcd0224b348ae9903dfaf63ef888722fe84fb",
-      "pool_id": "daf10f70ed98b6d150fe32b1ae74e5877b519af2bd03a16620cc1575cce70148",
+      "id": "private-id-044",
+      "pool_id": "private-id-058",
       "hostname": "nex-lab",
       "revoked": false,
       "connection": "fresh",
@@ -117,7 +117,7 @@
         ],
         "vms": [
           {
-            "id": "a77227bc-0f96-485e-9880-da9261ecb4f7",
+            "id": "private-id-045",
             "name": "nex-controller",
             "state": "running"
           }
@@ -164,9 +164,9 @@
   ],
   "vms": [
     {
-      "id": "a77227bc-0f96-485e-9880-da9261ecb4f7",
-      "pool_id": "daf10f70ed98b6d150fe32b1ae74e5877b519af2bd03a16620cc1575cce70148",
-      "host_id": "a412179a841f223e194ea6b7318bcd0224b348ae9903dfaf63ef888722fe84fb",
+      "id": "private-id-045",
+      "pool_id": "private-id-058",
+      "host_id": "private-id-044",
       "name": "nex-controller",
       "role": "controller",
       "protected": true,

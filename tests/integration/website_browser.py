@@ -43,7 +43,15 @@ def main():
             assert 'noindex' in page.locator('meta[name="robots"]').get_attribute('content')
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             assert page.locator('.wordmark').count() == 2
-            for logo in page.locator('.wordmark').all():
+            # The logo pixel assertion reads the capture back through a data: URI, which a
+            # deployment serving img-src 'self' correctly refuses. Where that applies, the
+            # same guarantee comes from the served bytes matching the locally checked build,
+            # so record that the assertion was skipped rather than reporting a pass it did
+            # not make. Never relax the deployed CSP to make this check run.
+            img_src = [part for part in response.headers.get('content-security-policy', '').split(';')
+                       if part.strip().startswith('img-src')]
+            logo_pixels_checkable = not img_src or 'data:' in img_src[0]
+            for logo in page.locator('.wordmark').all() if logo_pixels_checkable else []:
                 png = base64.b64encode(logo.screenshot()).decode()
                 assert page.evaluate('''async png => {
                     const image = new Image();
@@ -78,7 +86,9 @@ def main():
                 assert page.evaluate('location.hash') == f'#{target}'
                 page.goto(f'{args.url}/#{target}')
                 assert page.locator(f'#{target}').is_visible()
-            assert 'Not available yet' in page.locator('#releases').inner_text()
+            releases = page.locator('#releases').inner_text()
+            assert 'In development' in releases, releases
+            assert 'not a supported production release' in releases, releases
             assert page.locator('a[download], a[href$=".iso"], a[href$=".deb"], a[href$=".qcow2"]').count() == 0
             summary = page.locator('details summary').first
             summary.focus()
@@ -90,7 +100,35 @@ def main():
             page.goto(args.url)
             page.locator('.site-header').screenshot(path=str(args.evidence / f'header-{width}.png'))
             page.screenshot(path=str(args.evidence / f'page-{width}.png'), full_page=True)
-            results.append(f'{width}px: logo backdrop, no overflow, anchors, skip link, keyboard FAQ, reduced motion')
+            logo_result = 'logo backdrop' if logo_pixels_checkable else \
+                'logo backdrop SKIPPED (CSP img-src blocks data:; covered by build-hash match)'
+            results.append(f'{width}px: {logo_result}, no overflow, anchors, skip link, keyboard FAQ, reduced motion')
+            page.get_by_role('navigation').get_by_role('link', name='Roadmap', exact=True).click()
+            # count() does not retry, so wait for the full parse: the heading exists long
+            # before the milestone list further down the document.
+            page.wait_for_load_state('load')
+            assert page.url.endswith('/roadmap/')
+            assert page.locator('h1').count() == 1
+            assert 'homelab' not in page.content().lower()
+            page.keyboard.press('Tab')
+            assert page.locator(':focus').inner_text().lower().startswith('skip')
+            page.keyboard.press('Enter')
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            assert page.locator('.legend dt').count() == 3
+            milestones = page.locator('.timeline > li')
+            assert milestones.count() >= 7
+            for milestone in milestones.all():
+                assert milestone.locator('h2').count() == 1
+                assert milestone.locator('.status').count() == 1
+                assert milestone.locator('.list li').count() > 0
+            # The roadmap must keep saying what is unfinished, not only what shipped.
+            assert page.locator('.done-list li').count() > 0
+            assert page.locator('.open-list li').count() > 0
+            assert page.locator('a[download], a[href$=".iso"], a[href$=".deb"], a[href$=".qcow2"]').count() == 0
+            page.evaluate('document.activeElement.blur(); window.scrollTo(0, 0)')
+            page.screenshot(path=str(args.evidence / f'roadmap-{width}.png'), full_page=True)
+            results.append(f'{width}px: roadmap navigation, status legend, milestone built/outstanding lists, skip link, no overflow')
+            page.get_by_role('navigation').get_by_role('link', name='Home', exact=True).click()
             page.get_by_role('navigation').get_by_role('link', name='Gallery', exact=True).click()
             assert page.url.endswith('/gallery/')
             assert page.locator('h1').count() == 1
@@ -128,6 +166,14 @@ def main():
         assert page.locator('details').first.get_attribute('open') is not None
         assert page.locator('#releases').is_visible()
         results.append('JavaScript disabled: content, release status and FAQ available')
+        page.get_by_role('navigation').get_by_role('link', name='Roadmap', exact=True).click()
+        page.wait_for_load_state('load')
+        assert page.url.endswith('/roadmap/')
+        assert page.locator('.timeline > li').count() >= 7
+        assert page.locator('.done-list li').count() > 0
+        assert page.locator('.open-list li').count() > 0
+        results.append('JavaScript disabled: roadmap milestones and their built/outstanding lists available')
+        page.get_by_role('navigation').get_by_role('link', name='Home', exact=True).click()
         page.get_by_role('navigation').get_by_role('link', name='Gallery', exact=True).click()
         assert page.url.endswith('/gallery/')
         assert page.locator('main figure img').count() >= 4

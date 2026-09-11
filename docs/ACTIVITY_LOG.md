@@ -4,8 +4,8 @@
 
 ### Current state
 
-Matt requested that installation ask only for a root password and confirmation,
-without creating an ordinary user. That implementation is complete. At Matt's
+project owner requested that installation ask only for a root password and confirmation,
+without creating an ordinary user. That implementation is complete. At project owner's
 request, **all repository changes**, including concurrent documentation work,
 were committed and pushed to `origin/main` as
 `009a3dd4e7aca93e81418b5a9287184697d34861`.
@@ -76,7 +76,7 @@ Test-only credentials are confined to the test harness/artifacts, not the shippi
 1. Check the latest Git state before editing; this handoff follows the implementation
    commit above. The completed root-only change does not need to be reimplemented.
 2. Verify hosted CI on Gitea for the pushed commits. The unauthenticated request to
-   `/api/v1/repos/stocky789/Nex/actions/runs?limit=5` returned HTTP 404. That does not
+   `/api/v1/repos/example-org/Nex/actions/runs?limit=5` returned HTTP 404. That does not
    establish whether Actions is disabled, inaccessible, unsupported at that route, or
    awaiting a runner. **No hosted CI success or branch-protection enforcement was verified.**
 3. If a single uninterrupted smoke run is needed, use the command in the QA report with

@@ -19,7 +19,7 @@
     "reason": "Test expectation only; no durable pool or Controller state."
   },
   "verification": {
-    "method": "Compared run 3798 job 4363 failure text against web/src/managed.tsx and updated the assertion to the live alert substring. Runner host 192.168.98.101 was inspected: gitea-runner container healthy, Docker up; failure was not a runner fault.",
+    "method": "Compared run 3798 job <redacted> failure text against web/src/managed.tsx and updated the assertion to the live alert substring. Runner host 192.168.98.101 was inspected: gitea-runner container healthy, Docker up; failure was not a runner fault.",
     "evidence": [
       "tests/integration/managed_vm_browser.py",
       "web/src/managed.tsx"

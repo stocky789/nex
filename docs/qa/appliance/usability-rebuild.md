@@ -21,7 +21,7 @@ source allowlist; its regression passed2/2. Package compilation/typecheck/build 
 
 ```sh
 python3 tests/integration/appliance-dhcp-boot.py \
-  --image dist/appliance-usability1/controller.qcow2 \
+  --image dist/appliance-usability-test/controller.qcow2 \
   --evidence docs/qa/appliance/usability-dhcp-boot \
   --docker /tmp/nex-rootauth-docker
 ```

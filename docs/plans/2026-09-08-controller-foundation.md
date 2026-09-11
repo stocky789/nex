@@ -6,7 +6,7 @@ working-tree documentation check remains blocked by concurrent installer evidenc
 
 ## Authorized scope
 
-Matt authorized completing Phase 1 with GPT-6 Astra agents at medium effort while
+project owner authorized completing Phase 1 with GPT-6 Astra agents at medium effort while
 another agent finishes the installer. This permits concurrent Controller/agent
 development, superseding the installer-first sequencing for this slice. The
 [platform plan](2026-09-08-nex-platform.md#1-controller-foundation-and-host-enrollment)

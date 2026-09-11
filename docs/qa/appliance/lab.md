@@ -53,7 +53,7 @@ Ran the installed Playwright Chromium browser using:
 
 ```sh
 .cache/phase1-qa-venv/bin/python tests/integration/appliance-lab.py \
-  --lab-dir .cache/nex-appliance-lab._9bdsmj4 --evidence docs/qa/appliance
+  --lab-dir .cache/nex-appliance-lab.<redacted> --evidence docs/qa/appliance
 ```
 
 The real application rejected incorrect credentials; keyboard submission signed in
@@ -159,7 +159,7 @@ then used the shipped `core-local-setup configure` command with management addre
 The actual browser selected storage/bridge and supplied static address, DNS, resources
 and a private administrator password, reviewed the request and pressed Create VM &
 install Controller. Deployment progressed automatically through 0%, 10%, 92%, 98% and
-100% to `ready`. It created one VM UUID, `8d5298c9-f86c-449a-96b2-b10ce84fa231`.
+100% to `ready`. It created one VM UUID, `private-id-033`.
 [Original clean progress observations](final/clean-first-deployment.json) are retained
 separately from reruns that observed the already-ready operation.
 
@@ -167,7 +167,7 @@ Executed:
 
 ```sh
 .cache/phase1-qa-venv/bin/python tests/integration/appliance-lab.py \
-  --lab-dir .cache/nex-appliance-lab.c1ko2lyy \
+  --lab-dir .cache/nex-appliance-lab.<redacted> \
   --evidence docs/qa/appliance/final --deploy --packaged
 ```
 
@@ -208,22 +208,22 @@ The secret archive remains only in the private ignored lab directory, never in t
 ## Separate-host recovery with the shipped package
 
 A fourth, separately copied disposable host received the same package 6.1 and signed
-image 6. The original Controller UUID `8d5298c9-f86c-449a-96b2-b10ce84fa231`
+image 6. The original Controller UUID `private-id-033`
 remained shut off with autostart disabled throughout recovery. The original host stayed
 on solely to prove its already enrolled agent could reconnect. No original VM or
 ownership journal was fabricated or relocated.
 
 With local management stopped, the shipped `core-local-setup prepare-recovery` command with
 `--request-file /root/replacement.json` created replacement UUID
-`7ccb7371-f9d8-4f14-904a-80cf71dcd3bf` and returned
+`private-id-027` and returned
 [`recovery_prepared`](final/recovery-prepared.json). This path initialized an empty
 Controller without creating another site, pool or host enrollment. The off-host archive
 was copied onto that selected replacement host, then the shipped helper ran:
 
 ```sh
 /usr/lib/nex/host-recovery restore \
-  --vm 7ccb7371-f9d8-4f14-904a-80cf71dcd3bf \
-  --original-vm 8d5298c9-f86c-449a-96b2-b10ce84fa231 \
+  --vm private-id-027 \
+  --original-vm private-id-033 \
   --original-external --original-stopped-and-excluded \
   --replace-empty-controller --archive /root/controller-final.tar.gz \
   --state-dir /var/lib/nex/core-local/vmhost \

@@ -40,7 +40,7 @@ guest-tools image is baked once on the workstation from the generic cloud image)
 
 ```sh
 GO="$PWD/.cache/toolchains/go/bin/go" .cache/phase1-qa-venv/bin/python \
-  tests/integration/console_features_lab.py --copy-from .cache/nex-appliance-lab.2851um6a
+  tests/integration/console_features_lab.py --copy-from .cache/nex-appliance-lab.<redacted>
 ```
 
 Environment: a private Debian-13-based Nex Core 0.1.0-alpha1 host with nested KVM, libvirt

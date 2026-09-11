@@ -5,7 +5,7 @@ checks passed. External isolation and full-host recovery limits remain below.
 
 ## Scope
 
-Matt authorized replacing the Python preview server, adding security headers and
+project owner authorized replacing the Python preview server, adding security headers and
 listing restrictions, and implementing logs, health monitoring and release rollback.
 He explicitly excluded firewall, SSH and non-allowed-IP testing. Pangolin continues
 to terminate HTTPS for the domain and forward to the website's existing port 8080.

@@ -290,7 +290,7 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 ## BUG-0018 — Installer rejected valid qualified hostnames
 
 - Date: 2026-09-08.
-- Symptom: `nexcore.matthome` was rejected on Host and Network.
+- Symptom: `nexcore.example.test` was rejected on Host and Network.
 - Root cause: GUI and backend separately enforced a single-label 63-character rule; generated configuration also assumed a short name.
 - Fix: Shared standards-based ASCII hostname validation and root-dot handling; split Debian short hostname/domain and retain full/short hosts aliases.
 - Regression evidence: User screenshot and prior validation reproduced rejection. `installer-network.c`, `installer-hostname.py` and native `wizard-review.py` cover syntax boundaries, generated configuration and qualified-name UI flow, invoked in both GitHub and Gitea installer workflows. Actual results and standards are in [hostname QA](qa/iso/2026-09-08-installer-hostname.md).
@@ -331,7 +331,7 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 - Fix: Shared validation requires at least sixteen Unicode code points and no more than 1024 UTF-8 bytes for newly provisioned passwords; align guest validation and browser feedback while preserving existing password hashes.
 - Regression evidence: `TestPasswordMinimumCountsCharacters` failed before the fix and passes with the full vmhost race suite. Actual browser checks reject eight supplementary characters and oversized UTF-8 input, and accept sixteen characters. Both CI providers execute the Go regression on push/PR and weekly; guest validation is covered by Python discovery.
 - Avoid: Treating byte counts or JavaScript UTF-16 code-unit length as a Unicode character count.
-- Policy supersession (2026-09-08): Matt explicitly removed the sixteen-character minimum.
+- Policy supersession (2026-09-08): the project owner explicitly removed the sixteen-character minimum.
   Current bootstrap accepts nonempty UTF-8 passwords within the transport bound; historical
   minimum-length evidence above describes the former policy. Shared validation still
   prevents inconsistent byte/encoding handling. See [deployment usability QA](qa/appliance/deployment-usability.md).
@@ -455,7 +455,7 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
   views. No native probes, personal data, DOM substitutions or image editing are used.
 - Regression evidence: `tests/integration/website_controller_captures.py` checks
   returned inventory and rendered identity before saving each image, rejects the
-  original personal host label/name in negative guard checks, and asserts credentials
+  synthetic private host label/name in negative guard checks, and asserts credentials
   are absent. Both GitHub and Gitea phase1 workflows run it on pushes and PRs.
   Original failure was identified by visual inspection, not OCR; see the
   [fresh-capture evidence](qa/website-controller-captures/results.json) and
@@ -755,7 +755,7 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 - Fix: reordered `phase1` so every unprivileged check runs before the namespace steps, and gated
   those two steps on a detected capability that emits a loud `::warning::` naming the missing
   coverage when it is absent. `.gitea/workflows/installer.yml` was then scoped to what this runner
-  can actually do (Matt's decision, 2026-09-10): `installer/check.sh` and the seven installer
+  can actually do (the project owner's decision, 2026-09-10): `installer/check.sh` and the seven installer
   regressions now run directly in the job container, which only ever needed a toolchain, plus a
   `docker build` that still catches a broken Dockerfile. **Four checks were deleted, not fixed** —
   native bridge verification, DHCP preview, ISO build with initramfs completeness, and the wizard
@@ -772,15 +772,15 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
   the next pushed run.
 - Third pass: with the ordering fixed, phase1 reached 20 of 24 steps and failed at *Verify local
   host browser authentication and preflight blockers* with
-  `cc1: fatal error: /workspace/stocky789/Nex/packaging/core-local/nex-root-auth.c: No such file`.
+  `cc1: fatal error: /workspace/Nex/packaging/core-local/nex-root-auth.c: No such file`.
   That file exists and is tracked; `localcore_browser.py` runs `docker run -v {ROOT}:{ROOT}:ro`,
   so the same container-only workspace path mounted empty. The two libvirt steps after it need
   KVM and a running libvirtd, equally unavailable. Rather than discover these one run at a time,
   the two separate probes were replaced by a single `hostcap` step that tests **both** namespace
   creation and a Docker bind mount, and all five host-dependent steps are gated on it. Every
-  remaining step passed unaided in run 3789, so the job should now complete with those five
+  remaining step passed unaided in run <redacted>, so the job should now complete with those five
   reported as skipped.
-- Second cause, found after two failed attempts to fix the first: **Gitea on git.stockhome.com.au
+- Second cause, found after two failed attempts to fix the first: **the configured Gitea instance
   executes `.github/workflows/`, not `.gitea/workflows/`.** Two pushes that scoped
   `.gitea/workflows/installer.yml` changed nothing, because the job kept running the `.github`
   copy; the executed step names matched that file exactly, in order. `.gitea/workflows/release.yml`
@@ -847,7 +847,7 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 - Date: 2026-09-10.
 - Symptom: Gitea `phase1` failed `TestEnrollmentWithReplacementControllerSucceeds` with
   `TempDir RemoveAll cleanup: unlinkat …/agent: directory not empty` even though the enrollment
-  assertions had already passed (run 3801 job 4366).
+  assertions had already passed (run <redacted> job <redacted>).
 - Root cause: `Service.Close` cancelled the service context and waited on `s.wg`, but the embedded
   handoff agent goroutine is not on that WaitGroup. The agent could still be writing `state.json`
   when `testing.T.TempDir` deleted the tree, so RemoveAll failed on the busy agent directory.
@@ -866,7 +866,7 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 - Date: 2026-09-10.
 - Symptom: Gitea `phase1` failed `managed_vm_browser.py` with
   `AssertionError: disk name 'system' does not derive from VM name 'browser-vm-…'`
-  (run 3804 job 4369) after the disk-name default feature landed.
+  (run <redacted> job <redacted>) after the disk-name default feature landed.
 - Root cause: `VMWizard` built `started` disks with `autoDiskName`, then discarded them
   whenever `blank.disks` was present — which it always is after `{...blank, ...restored}`.
   Fresh wizards therefore kept the template name `system`, so renaming the VM never
@@ -1159,7 +1159,7 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
   (`internal/controller/managed.go` adoption drops any spec failing `ValidateVMSpec`),
   `ValidateVMSpec` now requires boot order values to be unique, positive and at least one, but
   no longer contiguous — libvirt orders devices by bootindex and tolerates gaps. **Decision for
-  Matt to confirm:** relaxing the contiguity rule. Nothing promises 1..N numbering to
+  the project owner to confirm:** relaxing the contiguity rule. Nothing promises 1..N numbering to
   operators: `web/src/vm-create.tsx` renumbers its own list to 1..N before submitting, the VM
   details page prints each device's own number, and `docs/guide/create-virtual-machine.md` says
   only "an explicit boot order". The alternative (rewriting the domain's bootindex values in the
@@ -1422,7 +1422,7 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 - Date: 2026-09-11
 - Symptom: after a VM edit ended *needs_attention* with *VM CPU or machine changed*, every
   later edit failed with *resource ID already reserved by another operation*
-  (`b896d350…` on au-matthome). The host still reported the previous succeeded revision, so
+  (private operation and host identifiers omitted). The host still reported the previous succeeded revision, so
   the Controller kept sending the same next revision.
 - Root cause: (1) `validateManagedDefinition` required an exact CPU `check` match, but libvirt
   injects `check='none' migratable='on'` on host-passthrough when the domain omitted `check`,
@@ -1447,7 +1447,7 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 - Date: 2026-09-11
 - Symptom: release job failed building `nex-core-local` with
   `install: cannot stat 'packaging/core-local/qemu-vnc-lossy': No such file or directory`
-  (Gitea run 3862 job 4427).
+  (a private CI run (identifiers omitted)).
 - Root cause: same class as BUG-0045. `qemu-vnc-lossy` is extensionless, so the
   `packaging/core-local` TREES suffix allowlist never copied it, and it was not listed in
   `scripts/build-source.py` FILES. The package builder installs from the extracted source
@@ -1487,3 +1487,102 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 - Avoid: replacing a hypervisor executable for a display preference, treating chmod as
   proof of security-policy compatibility, or telling an operator to deploy another VM
   before the retained operation, definition and disk ownership have been reconciled.
+
+## BUG-0070 — Package-update policy test retained the removed upgrade-only assertion
+
+- Date: 2026-09-11
+- Symptom: Private CI Phase 1 runs (identifiers omitted) failed in `Check contracts and contributor tools`
+  after the intended first-install update change.
+- Root cause: `test_core_updater_uses_apt_and_not_dpkg_install` still required
+  `--only-upgrade`, even though `ApplyLocal` correctly uses plain `apt install` so an
+  appliance with only its initial binary can receive its first Debian package.
+- Fix: assert the plain apt install and reject the obsolete upgrade-only form.
+- Regression evidence: `python3 -m unittest tests.test_distribution_packaging.AptUpdatePathTests -v`.
+  The test runs in both `.github/workflows/phase1.yml` and `.gitea/workflows/phase1.yml`
+  through `python3 -m unittest discover -s tests -p 'test_*.py' -v`.
+- Avoid: retaining a source-text assertion after intentionally changing the packaged update path.
+
+## BUG-0071 — Website browser check asserted release copy the site no longer had
+
+- Date: 2026-09-11
+- Symptom: `tests/integration/website_browser.py` failed at `assert 'Not available yet' in
+  page.locator('#releases').inner_text()` against the site at `HEAD`, so the website job in both
+  Phase 1 workflows could not pass. Reproduced locally before any roadmap change by serving the
+  build from `HEAD` and running the check.
+- Root cause: the Development status section was rewritten to offer approved testers a development
+  download ("In development", "not a supported production release"), and the assertion pinned to
+  the retired "Not available yet" wording instead of the property it was protecting — that the site
+  never presents Nex as publicly released or links installable media.
+- Fix: assert the current status wording and the "not a supported production release" disclaimer,
+  keeping the existing assertion that no download link points at an `.iso`, `.deb` or `.qcow2`.
+- Regression evidence: the check failed at `HEAD` with the old assertion and passes with the new
+  one; all 12 scenario groups pass, including the JavaScript-disabled run. It runs in both
+  `.github/workflows/phase1.yml` and `.gitea/workflows/phase1.yml` on pushes and pull requests.
+  See the [website roadmap QA](qa/website-roadmap/checks.md).
+- Avoid: asserting exact marketing copy when the check exists to protect a claim boundary. Pin the
+  property (no public-release promise, no media links), not the sentence.
+
+## BUG-0072 — Site header navigation could not wrap, so a sixth item overflowed at 360px
+
+- Date: 2026-09-11
+- Symptom: adding the Roadmap link made the home page scroll horizontally at a 360px viewport;
+  `document.documentElement.scrollWidth` was 411 against an `innerWidth` of 360, with the
+  overflowing elements identified as `nav` and `.nav-release`.
+- Root cause: `.site-header nav` in `website/src/app.css` set `display: flex` with no
+  `flex-wrap`, and its narrow-viewport rule set `flex-basis: 100%` with
+  `justify-content: space-between`, so the row could only grow past the viewport. The Gallery page
+  had been compensating locally with its own `flex-wrap: wrap`, which hid the shared defect.
+- Fix: allow wrapping in the shared rule with a row gap, and start the wrapped narrow-viewport rows
+  from the left instead of justifying a partly filled row.
+- Regression evidence: the existing per-width
+  `assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')` in
+  `tests/integration/website_browser.py` failed at 360px before the fix and passes after it, and
+  now also runs against the roadmap page. Both Phase 1 workflows run it. Inspected 360px and 768px
+  header captures confirm the wrap is deliberate rather than clipped.
+- Avoid: fixing a shared layout defect in one page's scoped styles, which leaves every other page
+  carrying it until something new exposes it.
+
+## BUG-0073 — Website browser check crashed against the hardened deployment's image policy
+
+- Date: 2026-09-11
+- Symptom: running `tests/integration/website_browser.py` against the deployed private backend
+  aborted at the logo backdrop assertion with
+  `Page.evaluate: EncodingError: The source image cannot be decoded`, so the deployed site could
+  not be verified at all. It passes against a locally served build.
+- Root cause: the check screenshots each `.wordmark`, re-loads that capture inside the page through
+  a `data:image/png;base64,` URI and samples its corner pixels. The deployed nginx sends
+  `img-src 'self'`, which correctly refuses `data:` images; the load failure surfaces as a decode
+  error. Confirmed directly: the same one-pixel `data:` image decodes on a locally served build and
+  is blocked on the deployed backend, with the browser console reporting the CSP refusal.
+- Fix: read the response's `content-security-policy`, run the pixel assertion only where `img-src`
+  permits `data:`, and otherwise record `logo backdrop SKIPPED (CSP img-src blocks data:; covered by
+  build-hash match)` in the results rather than reporting a pass that never happened. The policy was
+  not weakened. Behind a CSP the same guarantee comes from every served file hashing equal to the
+  locally checked build.
+- Regression evidence: against the deployed backend the check aborted before the fix and afterwards
+  passed all 12 groups with the skip recorded; against a locally served build it still reports
+  `logo backdrop` and the pixel assertion still runs. Both Phase 1 workflows serve the build with
+  `python3 -m http.server` on `127.0.0.1`, so CI keeps the full assertion.
+- Avoid: relaxing a deployment's security headers so a test can run, or letting a check that could
+  not execute report the same result as one that passed.
+
+## BUG-0073 — Private identities appeared in public repository content
+
+- Date: 2026-09-11
+- Symptom: documentation, QA evidence, installer examples, and publishing defaults exposed
+  personal names, private infrastructure details, and observed environment identifiers.
+- Root cause: historical notes and lab output were retained without anonymization; the
+  existing privacy check covered website inputs only. APT bootstrap also hard-coded the
+  sudoers account instead of using its configured publishing account.
+- Fix: sanitize current files, use role labels and consistent anonymous evidence aliases,
+  require configured publishing accounts, and add the public-repository rule to AGENTS.md.
+- Regression evidence: `python3 -m unittest tests.test_repository_privacy
+  tests.test_apt_bootstrap_privacy tests.test_apt_publish tests.test_website_public_files
+  tests.test_ci_security tests.test_api_contract tests.test_build_source -v` — 36 passed.
+  The privacy check rejects original paths and observed QA IDs. The two temporary/stubbed bootstrap checks
+  detect the prior missing/invalid-account behavior and pass with the fix. Both Phase 1
+  workflows discover these tests on pushes and pull requests; hosted CI was not run.
+  Full local discovery ran 135 tests with one setup error because nginx is unavailable.
+  Details and limitations: [privacy cleanup](qa/2026-09-11-public-repository-privacy.md).
+- Avoid: embedding private identities in regression fixtures, treating website-only scans
+  as repository coverage, or claiming current-file cleanup removes published Git history.

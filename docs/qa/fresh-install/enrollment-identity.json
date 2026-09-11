@@ -1,9 +1,9 @@
 {
-  "host_id": "5fed69ca1dd993962d9264af45a20882ad9333733cb94d9f166850013c172c07",
+  "host_id": "private-id-018",
   "controller": "https://10.0.2.20:8443",
   "controller_server_name": null,
-  "certificate_sha256": "3fc585e2be366a3861df71658d8d1a22cd0a1440637277d2150931c708bab63e",
+  "certificate_sha256": "private-certificate-1",
   "trust_sha256": "82dac12d934e179123d7e515e21ea26b77a400ad63c9a75b10988eb37021ab1c",
   "embedded_agent_service": "{ path=/usr/lib/nex/core-local-setup ; argv[]=/usr/lib/nex/core-local-setup run ; ignore_errors=no ; start_time=[Wed 2026-09-09 02:34:11 UTC] ; stop_time=[n/a] ; pid=877 ; code=(null) ; status=0/0 }",
-  "controller_vm_id": "72a34e46-5483-4239-b552-c18ddfa5e2d1"
+  "controller_vm_id": "private-id-024"
 }

@@ -13,7 +13,7 @@ Sep 08 09:08:16 nex-lab dnsmasq[948]: read /var/lib/libvirt/dnsmasq/default.addn
 Sep 08 09:08:16 nex-lab dnsmasq-dhcp[948]: read /var/lib/libvirt/dnsmasq/default.hostsfile
 Sep 08 09:11:52 nex-lab libvirtd[793]: libvirt version: 11.3.0, package: 11.3.0-3+deb13u2 (Debian)
 Sep 08 09:11:52 nex-lab libvirtd[793]: hostname: nex-lab
-Sep 08 09:11:52 nex-lab libvirtd[793]: Cannot access storage file '/var/lib/nex/appliances/81d015b6-fa29-48ea-89b8-7ca02960c8ca/controller.qcow2' (as uid:64055, gid:64055): Permission denied
+Sep 08 09:11:52 nex-lab libvirtd[793]: Cannot access storage file '/var/lib/nex/appliances/private-id-029/controller.qcow2' (as uid:64055, gid:64055): Permission denied
 2026-09-08 09:11:52.483+0000: shutting down, reason=failed
     <controller type='virtio-serial' index='0'>
       <address type='pci' domain='0x0000' bus='0x03' slot='0x00' function='0x0'/>
@@ -44,4 +44,3 @@ Sep 08 09:11:52 nex-lab libvirtd[793]: Cannot access storage file '/var/lib/nex/
     </memballoon>
   </devices>
 </domain>
-

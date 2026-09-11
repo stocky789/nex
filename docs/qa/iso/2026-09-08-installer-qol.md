@@ -4,7 +4,7 @@ Date: 2026-09-08. Nex Core 0.1.0-alpha1.
 
 ## Scope and artifact
 
-Matt requested a complete modern, flat, professional installer overhaul, fullscreen
+project owner requested a complete modern, flat, professional installer overhaul, fullscreen
 sizing, easier timezone selection, practical input improvements, and hostname editing
 on Network as well as Host. This slice delivers a vertical step list, white form panel,
 fixed navigation area, native scrollable content, matching installation-engine typography,

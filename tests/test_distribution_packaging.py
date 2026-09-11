@@ -86,7 +86,8 @@ class AptUpdatePathTests(unittest.TestCase):
 
     def test_core_updater_uses_apt_and_not_dpkg_install(self):
         source = (ROOT / "internal/nexupdate/nexupdate.go").read_text()
-        self.assertIn('"install", "-y", "--only-upgrade"', source)
+        self.assertIn('"install", "-y", packageName', source)
+        self.assertNotIn('"install", "-y", "--only-upgrade"', source)
         self.assertNotIn('"dpkg", "-i"', source)
         # The archive index is what apt authenticates; no second index is fetched.
         self.assertNotIn("updates.json", source)

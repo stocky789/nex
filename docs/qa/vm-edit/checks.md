@@ -51,7 +51,7 @@ Limits: Simulated host only: no libvirt redefine, hot-plug, media change or disk
 
 ## Real-host walkthrough
 
-`tests/integration/vm_edit_lab.py --copy-from .cache/nex-appliance-lab.2851um6a --iso
+`tests/integration/vm_edit_lab.py --copy-from .cache/nex-appliance-lab.<redacted> --iso
 .cache/nex-iso/debian-13.6.0-amd64-netinst.iso` (run with `.cache/phase1-qa-venv/bin/python` and
 `GO=.cache/toolchains/go/bin/go` from the pre-port tree; log in `.cache/vm-edit-lab.log`, results in
 [`lab-results.json`](lab-results.json)). It copies the retained disposable lab (Nex Core 0.1.0-alpha1

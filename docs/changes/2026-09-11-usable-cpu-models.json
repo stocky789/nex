@@ -30,7 +30,7 @@
     "record": "The selected model remains in the managed journal and returns through Inventory.managed.vms for re-adoption. Inventory.cpu_models is discovered from the assigned host's domain capabilities and is never Controller-owned state."
   },
   "verification": {
-    "method": "Focused Go tests for usableCPUModels parsing, named-model XML check=partial, and availableCPUModel domain-capabilities query. Live host earlier confirmed qemu64/Nehalem fail check=full and succeed check=partial; domcapabilities usable filter drops ~107 unusable models on au-matthome.",
+    "method": "Focused Go tests for usableCPUModels parsing, named-model XML check=partial, and availableCPUModel domain-capabilities query. Live host earlier confirmed qemu64/Nehalem fail check=full and succeed check=partial; domcapabilities usable filter drops ~107 unusable models on lab-host.",
     "evidence": ["internal/vmhost/cpumodels_test.go", "internal/vmhost/managed_test.go"]
   }
 }

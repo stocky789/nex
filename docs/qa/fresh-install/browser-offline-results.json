@@ -21,14 +21,14 @@
   },
   "vms": [
     {
-      "id": "72a34e46-5483-4239-b552-c18ddfa5e2d1",
+      "id": "private-id-024",
       "name": "nex-controller",
       "state": "running",
       "managed": true,
       "power_allowed": true
     },
     {
-      "id": "3035054a-87b0-4adb-a40d-512ce050032b",
+      "id": "private-id-008",
       "name": "fresh-install-guest",
       "state": "running",
       "managed": false,

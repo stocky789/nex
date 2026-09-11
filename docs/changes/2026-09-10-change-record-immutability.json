@@ -22,7 +22,7 @@
     "reason": "Documentation, plans or contributor policy only; nothing is persisted."
   },
   "verification": {
-    "method": "Root cause read from CI job 4355: 'docs/changes/2026-09-10-ci-runner-capability.json: guide updated requires pages changed in this range' for push 9611fc7..3f9fbf2, which edited that record but not docs/guide/publish-a-release.md. The same rule produced the failure in run 3784's predecessor, and was previously worked around by editing the guide again, which re-armed it. This push deliberately does not touch that record, so it is not re-validated. The next push's documentation gate was simulated locally by replaying check_docs' own coverage computation over the working tree: MISSING is empty, and every changed path is covered. python3 -m unittest discover -s tests -p 'test_check_docs.py' passes. NOT verified: no run has executed since these edits.",
+    "method": "Root cause read from CI job <redacted>: 'docs/changes/2026-09-10-ci-runner-capability.json: guide updated requires pages changed in this range' for push 9611fc7..3f9fbf2, which edited that record but not docs/guide/publish-a-release.md. The same rule produced the failure in run 3784's predecessor, and was previously worked around by editing the guide again, which re-armed it. This push deliberately does not touch that record, so it is not re-validated. The next push's documentation gate was simulated locally by replaying check_docs' own coverage computation over the working tree: MISSING is empty, and every changed path is covered. python3 -m unittest discover -s tests -p 'test_check_docs.py' passes. NOT verified: no run has executed since these edits.",
     "evidence": [
       "docs/DOCUMENTATION.md",
       "docs/guide/publish-a-release.md"

@@ -1,25 +1,25 @@
 [
   {
-    "lab": "nex-appliance-lab._9bdsmj4",
-    "qemu_pid": 420747,
+    "lab": "nex-appliance-lab.<redacted>",
+    "qemu_pid": 10001,
     "qemu_running": false,
     "disk_preserved": true
   },
   {
-    "lab": "nex-appliance-lab.yf38fvwe",
-    "qemu_pid": 585701,
+    "lab": "nex-appliance-lab.<redacted>",
+    "qemu_pid": 10002,
     "qemu_running": false,
     "disk_preserved": true
   },
   {
-    "lab": "nex-appliance-lab.c1ko2lyy",
-    "qemu_pid": 595945,
+    "lab": "nex-appliance-lab.<redacted>",
+    "qemu_pid": 10003,
     "qemu_running": false,
     "disk_preserved": true
   },
   {
-    "lab": "nex-appliance-lab.0fgxooxm",
-    "qemu_pid": 609074,
+    "lab": "nex-appliance-lab.<redacted>",
+    "qemu_pid": 10004,
     "qemu_running": false,
     "disk_preserved": true
   }

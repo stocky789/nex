@@ -21,7 +21,7 @@
     "reason": "Client-side wizard defaults only; durable VM disk names still come from the submitted specification on the pool master."
   },
   "verification": {
-    "method": "Root cause read from job 4369 AssertionError on disk name 'system'. npm run typecheck passes. managed_vm_browser.py already asserts derived and suffixed defaults and is the regression detector in phase1; Playwright was not re-executed locally.",
+    "method": "Root cause read from job <redacted> AssertionError on disk name 'system'. npm run typecheck passes. managed_vm_browser.py already asserts derived and suffixed defaults and is the regression detector in phase1; Playwright was not re-executed locally.",
     "evidence": [
       "web/src/vm-create.tsx",
       "tests/integration/managed_vm_browser.py",

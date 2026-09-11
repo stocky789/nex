@@ -5,7 +5,7 @@
     "media": 1,
     "vms": 2
   },
-  "replayed_vm_id": "3035054a-87b0-4adb-a40d-512ce050032b",
+  "replayed_vm_id": "private-id-008",
   "stage": "negative",
   "checks": [
     "Native packaged API rejects anonymous access401, missing CSRF403, invalid create/ISO400 and nonexistent network409; invalid media publishes nothing; exact create replay preserves UUID and changed replay409"

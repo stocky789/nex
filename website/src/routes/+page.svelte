@@ -24,7 +24,8 @@
   >
   <nav aria-label="Main navigation">
     <a href="#platform">Platform</a><a href="#approach">Approach</a
-    ><a href="#questions">Questions</a><a href="/gallery/">Gallery</a
+    ><a href="#questions">Questions</a><a href="/roadmap/">Roadmap</a
+    ><a href="/gallery/">Gallery</a
     ><a class="nav-release" href="#releases"
       >Releases <span aria-hidden="true">↗</span></a
     >

@@ -59,10 +59,10 @@
     "Second enrolled mTLS identity reports copied native inventory with capability omitted, then advertised, for version/cross-host authorization checks; it executes no commands."
   ],
   "inputs_changed_during_run": [],
-  "vm_id": "f5f4a1e0-ae7f-4076-a990-6eec667bcfcb",
-  "uefi_vm_id": "8e0e6ad9-26d2-4c34-ad79-c6bb5f239b9a",
-  "pool_id": "83c0641a7bd5dfe37fde9d5ea4ffdc76242f375ab08fa424e5d655f0a41cdc86",
-  "host_id": "4584354348db5ce7e62211b691551100dc3e9275d5b62e38661bf5c99465f47e",
+  "vm_id": "private-id-069",
+  "uefi_vm_id": "private-id-034",
+  "pool_id": "private-id-030",
+  "host_id": "private-id-012",
   "artifacts": {
     "controller": "e22b3e886307830fc96d76dedf8e3e0fe01096b67e13e7845040dbd0bc86cce6",
     "agent": "872bf826fdd9f2fd0e6ab33677fb016822247a0f5ce5b7ffb72082477dc451fd",

@@ -57,10 +57,10 @@ static void check(const char *input,const char *shortname,const char *domain,con
 }
 int main(void) {
     files=g_hash_table_new_full(g_str_hash,g_str_equal,g_free,g_free);
-    check("nexcore.matthome","nexcore","matthome","nexcore.matthome");
+    check("nexcore.example.test","nexcore","example.test","nexcore.example.test");
     check("7nex-core.lab.example","7nex-core","lab.example","7nex-core.lab.example");
     check("nexcore","nexcore","","nexcore");
-    check("NexCore.MattHome.","NexCore","MattHome","NexCore.MattHome");
+    check("NexCore.Example.Test.","NexCore","Example.Test","NexCore.Example.Test");
     g_hash_table_destroy(files);return 0;
 }
 '''

@@ -28,7 +28,7 @@ compatibility. Guide impact: **updated** in the
   The final browser results below record the exact tested UI bundle digest.
 - `python3 scripts/generate_api.py --check` passed central/local references;
   the API owner separately passed all 18 contract checks after the schema changes.
-- `GO=/home/matt/Projects/Nex/.cache/toolchains/go/bin/go .cache/phase1-qa-venv/bin/python
+- `GO=/workspace/Nex/.cache/toolchains/go/bin/go .cache/phase1-qa-venv/bin/python
   tests/integration/phase1.py --browser` passed all 16 existing process/browser
   result groups, including enrollment, independent probe failure/stall, restart,
   stale status, credentials, authorization, mobile navigation and revocation.
@@ -47,8 +47,8 @@ Executed lab preparation and final provisioning commands (the retained source
 lab was copied; only the newly created destination was operated):
 
 ```sh
-python3 tests/integration/managed_vm_lab.py --copy-from .cache/nex-appliance-lab.2851um6a
-GO="$PWD/.cache/toolchains/go/bin/go" python3 tests/integration/managed_vm.py --lab-dir .cache/nex-managed-vm-lab.sp09c20p --iso .cache/nex-iso/debian-13.6.0-amd64-netinst.iso --evidence docs/qa/managed-vm --keep-running
+python3 tests/integration/managed_vm_lab.py --copy-from .cache/nex-appliance-lab.<redacted>
+GO="$PWD/.cache/toolchains/go/bin/go" python3 tests/integration/managed_vm.py --lab-dir .cache/nex-managed-vm-lab.<redacted> --iso .cache/nex-iso/debian-13.6.0-amd64-netinst.iso --evidence docs/qa/managed-vm --keep-running
 ```
 
 The [native results](results.json) record real Controller → enrolled agent → libvirt
