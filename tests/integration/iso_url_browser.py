@@ -20,7 +20,12 @@ def main():
     server = ThreadingHTTPServer(('127.0.0.1', 0), partial(SimpleHTTPRequestHandler, directory=str(ROOT / 'web/dist')))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     host = {'id': 'host-demo', 'pool_id': 'pool-demo', 'hostname': 'demo-host', 'connection': 'fresh', 'revoked': False, 'capabilities': ['managed-vm-v1', 'iso-download-v1'], 'inventory': None}
-    storage = {'id': 'storage-demo', 'pool_id': 'pool-demo', 'host_id': host['id'], 'name': 'Guest media', 'path': '/srv/guest-media', 'status': 'succeeded', 'operation_id': ''}
+    storage = {
+        'id': 'storage-demo', 'pool_id': 'pool-demo', 'host_id': host['id'], 'name': 'Guest media',
+        'path': '/srv/guest-media', 'status': 'succeeded', 'operation_id': '',
+        'capabilities': {'vm_disk': True, 'iso': True, 'thin': True},
+        'access': {'status': 'healthy', 'readable': True, 'writable': True, 'observed_at': '2026-09-11T00:00:00Z'},
+    }
     data = {'session': {'username': 'operator', 'csrf_token': 'mock-session'}, 'sites': [{'id': 'site-demo', 'name': 'Demo site'}], 'pools': [{'id': 'pool-demo', 'site_id': 'site-demo', 'name': 'Demo pool', 'master_host_id': host['id']}], 'hosts': [host], 'storage': [storage], 'vms': [], 'networks': [], 'media': [], 'operations': [], 'audit': []}
     submissions, errors, checks = [], [], []
     mode = {'failure': True, 'hold': False}

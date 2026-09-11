@@ -1,0 +1,26 @@
+{
+  "summary": "Give the ISO URL browser mock healthy ISO-ready storage access so Destination storage options appear after the storage-repositories UI gate. API impact: none.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/changes/2026-09-11-iso-url-browser-storage-access.json",
+    "tests/integration/iso_url_browser.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "CI browser mock fixture only; no operator workflow change."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Mocked API fixture for UI acceptance only."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Test fixture only; no Nex Controller or Core state."
+  },
+  "verification": {
+    "method": "Inspected phase1 job 4470: managed_vm_browser passed; iso_url_browser timed out selecting Destination storage because the mock storage lacked access.status=healthy and capabilities.iso. Added those fields to the fixture.",
+    "evidence": [
+      "tests/integration/iso_url_browser.py"
+    ]
+  }
+}
