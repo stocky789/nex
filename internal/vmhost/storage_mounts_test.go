@@ -223,10 +223,11 @@ func TestSMBMarkerRejectsUnsafeFilesAndConcurrentCreate(t *testing.T) {
 		})
 	}
 	path := t.TempDir()
-	markers := make(chan string, 2)
-	errs := make(chan error, 2)
+	const workers = 8
+	markers := make(chan string, workers)
+	errs := make(chan error, workers)
 	var wg sync.WaitGroup
-	for range 2 {
+	for range workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -247,8 +248,13 @@ func TestSMBMarkerRejectsUnsafeFilesAndConcurrentCreate(t *testing.T) {
 	for marker := range markers {
 		got = append(got, marker)
 	}
-	if len(got) != 2 || got[0] != got[1] {
-		t.Fatalf("concurrent markers = %q", got)
+	if len(got) != workers {
+		t.Fatalf("concurrent markers count = %d, want %d (%q)", len(got), workers, got)
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i] != got[0] {
+			t.Fatalf("concurrent markers = %q", got)
+		}
 	}
 }
 

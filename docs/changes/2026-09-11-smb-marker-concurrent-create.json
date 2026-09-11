@@ -1,0 +1,31 @@
+{
+  "summary": "Fix concurrent SMB marker create races that failed Controller foundation CI, and document the half-configured release deploy-secret failure. API impact: none.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-11-smb-marker-concurrent-create.json",
+    "internal/vmhost/storage_mounts_test.go",
+    "internal/vmhost/storage_smb_identity.go"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Internal SMB marker race handling and CI regression coverage only; no operator workflow change."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Host-local SMB marker durability only; no Controller/Core contract change."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "SMB repository markers remain durable Core-observed share identity.",
+    "record": "Share-root .nex-storage-marker on the SMB repository path; recovered through Core storage inventory/adoption when a Controller re-enrolls the pool master."
+  },
+  "verification": {
+    "method": "go test -race ./internal/vmhost -run TestSMBMarker -count=200 passed after retrying incomplete marker reads on lost O_EXCL create races. Confirmed prior Controller foundation failure was TestSMBMarkerRejectsUnsafeFilesAndConcurrentCreate. Release failure is Actions secrets: only NEX_DEPLOY_USER set, HOST/KEY/KNOWN_HOSTS empty — workflow correctly refuses half-configured website publish.",
+    "evidence": [
+      "internal/vmhost/storage_smb_identity.go",
+      "internal/vmhost/storage_mounts_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

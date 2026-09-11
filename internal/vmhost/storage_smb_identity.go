@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"syscall"
+	"time"
 )
 
 const smbMarkerName = ".nex-storage-marker"
@@ -34,72 +35,121 @@ func smbMarker(path string) (string, error) { return smbMarkerAt(path, true) }
 
 // smbMarkerAt reads an existing marker without mutation unless creation is explicitly
 // authorized for a new repository registration.
+//
+// Concurrent creators race on O_EXCL for the final name. The loser retries a short read loop
+// so it observes the winner's fully written marker instead of an empty provisional file or a
+// bare "unavailable" from the lost create.
 func smbMarkerAt(path string, allowCreate bool) (string, error) {
 	marker := filepath.Join(path, smbMarkerName)
-	f, err := os.OpenFile(marker, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
-	created := false
-	if errors.Is(err, os.ErrNotExist) && allowCreate {
-		f, err = os.OpenFile(marker, os.O_RDWR|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0600)
-		created = err == nil
-	}
-	if err != nil {
-		return "", errors.New("SMB repository marker is unavailable")
-	}
-	defer func() { _ = f.Close() }()
-	reopen := false
-	if created {
-		var random [16]byte
-		if _, err = rand.Read(random[:]); err == nil {
-			_, err = f.WriteString(hex.EncodeToString(random[:]))
-		}
-		if err == nil {
-			err = f.Sync()
-		}
-		if err == nil {
-			// SMB must support syncing the marker and its containing directory. Unsupported
-			// directory-sync errors are tolerated only where CIFS does not implement it; the
-			// exact marker is reopened below and any later absence fails closed.
-			err = syncSMBMarkerDir(path)
-			if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.EOPNOTSUPP) {
-				err = nil
-				reopen = true
+	const attempts = 64
+	for i := 0; i < attempts; i++ {
+		id, state, err := inspectSMBMarker(marker)
+		switch state {
+		case smbMarkerOK:
+			return id, nil
+		case smbMarkerUnsafe:
+			return "", err
+		case smbMarkerIncomplete:
+			if !allowCreate {
+				return "", errors.New("SMB repository marker is unavailable")
+			}
+		case smbMarkerAbsent:
+			if !allowCreate {
+				return "", errors.New("SMB repository marker is unavailable")
+			}
+			if err := createSMBMarker(path, marker); err != nil {
+				if !errors.Is(err, os.ErrExist) {
+					return "", err
+				}
+				// Lost the create race; read the winner below.
+			} else {
+				continue
 			}
 		}
-		if err != nil {
-			return "", errors.New("SMB repository marker cannot be persisted")
+		if i+1 < attempts {
+			time.Sleep(time.Millisecond)
 		}
 	}
-	if reopen {
-		if err = f.Close(); err != nil {
-			return "", errors.New("SMB repository marker is unavailable")
-		}
-		f, err = os.OpenFile(marker, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
-		if err != nil {
-			return "", errors.New("SMB repository marker is unavailable")
-		}
+	return "", errors.New("SMB repository marker is unavailable")
+}
+
+type smbMarkerState int
+
+const (
+	smbMarkerOK smbMarkerState = iota
+	smbMarkerAbsent
+	smbMarkerIncomplete
+	smbMarkerUnsafe
+)
+
+func inspectSMBMarker(marker string) (string, smbMarkerState, error) {
+	f, err := os.OpenFile(marker, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", smbMarkerAbsent, err
 	}
-	if _, err = f.Seek(0, io.SeekStart); err != nil {
-		return "", errors.New("SMB repository marker is unavailable")
+	if err != nil {
+		return "", smbMarkerUnsafe, errors.New("SMB repository marker is unavailable")
 	}
+	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return "", errors.New("SMB repository marker is invalid")
+		return "", smbMarkerUnsafe, errors.New("SMB repository marker is invalid")
 	}
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || st.Nlink != 1 {
-		return "", errors.New("SMB repository marker is not exclusively linked")
+		return "", smbMarkerUnsafe, errors.New("SMB repository marker is not exclusively linked")
+	}
+	// Empty or short files are the create/write window of another registration attempt.
+	if info.Size() < 32 {
+		return "", smbMarkerIncomplete, errors.New("SMB repository marker is unavailable")
+	}
+	if _, err = f.Seek(0, io.SeekStart); err != nil {
+		return "", smbMarkerUnsafe, errors.New("SMB repository marker is unavailable")
 	}
 	data, err := io.ReadAll(io.LimitReader(f, 33))
 	if err != nil || !smbMarkerID.Match(data) {
-		return "", errors.New("SMB repository marker is invalid")
+		return "", smbMarkerUnsafe, errors.New("SMB repository marker is invalid")
 	}
 	entry, err := lstatSMBMarker(marker)
 	if err != nil {
-		return "", errors.New("SMB repository marker changed during inspection")
+		return "", smbMarkerUnsafe, errors.New("SMB repository marker changed during inspection")
 	}
 	entrySt, entryOK := entry.Sys().(*syscall.Stat_t)
 	if entry.Mode()&os.ModeSymlink != 0 || !entry.Mode().IsRegular() || !entryOK || entrySt.Dev != st.Dev || entrySt.Ino != st.Ino || entrySt.Nlink != st.Nlink {
-		return "", errors.New("SMB repository marker changed during inspection")
+		return "", smbMarkerUnsafe, errors.New("SMB repository marker changed during inspection")
 	}
-	return string(data), nil
+	return string(data), smbMarkerOK, nil
+}
+
+func createSMBMarker(path, marker string) error {
+	f, err := os.OpenFile(marker, os.O_RDWR|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0600)
+	if err != nil {
+		return err
+	}
+	var random [16]byte
+	var writeErr error
+	if _, writeErr = rand.Read(random[:]); writeErr == nil {
+		_, writeErr = f.WriteString(hex.EncodeToString(random[:]))
+	}
+	if writeErr == nil {
+		writeErr = f.Sync()
+	}
+	if writeErr == nil {
+		// SMB must support syncing the marker and its containing directory. Unsupported
+		// directory-sync errors are tolerated only where CIFS does not implement it; the
+		// exact marker is re-inspected by the caller and any later absence fails closed.
+		writeErr = syncSMBMarkerDir(path)
+		if errors.Is(writeErr, syscall.EINVAL) || errors.Is(writeErr, syscall.EOPNOTSUPP) {
+			writeErr = nil
+		}
+	}
+	closeErr := f.Close()
+	if writeErr != nil || closeErr != nil {
+		_ = os.Remove(marker)
+		if writeErr != nil {
+			return errors.New("SMB repository marker cannot be persisted")
+		}
+		return errors.New("SMB repository marker is unavailable")
+	}
+	return nil
 }

@@ -1947,6 +1947,22 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
   another export, comparing unnamespaced filesystem IDs across servers, or silently replacing
   a stored identity after a mismatch.
 
+## BUG-0091 — Concurrent SMB marker create failed closed on the loser
+
+- Date: 2026-09-11.
+- Symptom: `TestSMBMarkerRejectsUnsafeFilesAndConcurrentCreate` failed under
+  `go test -race ./...` with `SMB repository marker is unavailable` or `invalid`.
+- Root cause: `smbMarkerAt` treated a lost `O_EXCL` create as a hard failure, and a reader
+  that opened the winner's file before the 32-byte id was written observed an incomplete
+  marker as permanently invalid.
+- Fix: retry short incomplete reads after a lost create race, and remove a marker file that
+  fails to persist so the next attempt can claim it.
+- Regression: `TestSMBMarkerRejectsUnsafeFilesAndConcurrentCreate` (8 concurrent creators)
+  passed `go test -race ./internal/vmhost -run TestSMBMarker -count=200`. Both GitHub and
+  Gitea phase1 workflows run this through `go test -race ./...` on pushes and pull requests.
+- Avoid: returning immediately on `EEXIST` during marker create, or treating a zero-length
+  provisional marker as a durable identity failure without a short read retry.
+
 ## BUG-0090 — Undersized iSCSI registration left session and mount behind
 
 - Date: 2026-09-11.
