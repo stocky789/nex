@@ -22,6 +22,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Fixed concurrent SMB storage marker creation failing under race detection.
 - Fixed Controller gallery captures failing when Create VM had no healthy storage option.
 - Fixed managed VM browser checks still looking for the old Register local storage control.
+- Fixed simulated storage registrations that never reported healthy access in browser CI.
 - Fixed release builds dropping mid-download of the Debian installer ISO.
 - Fixed registration forms following you between pool views. Opening **Register network**,
   **Upload ISO** or **Create VM** and then selecting another view left the form sitting above

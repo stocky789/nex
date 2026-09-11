@@ -91,14 +91,19 @@ def simulated(lab):
                     results.append({'operation_id': command['operation_id'], 'status': 'succeeded', 'observed_at': now})
                     if command.get('storage'):
                         storage = {**command['storage']}
-                        storage_id = storage.get('id') or ('demo-storage-' + command['operation_id'])
+                        # Controller allocates pending-storage-* until Core journals a durable ID.
+                        # IDs must stay within protocol.identifierValid (64 chars).
+                        storage_id = storage.get('id') or ''
+                        if not storage_id or storage_id.startswith('pending-storage-'):
+                            storage_id = 'st' + command['operation_id'][:62]
                         storage.update({
                             'id': storage_id,
+                            'operation_id': command['operation_id'],
                             'generation': max(1, int(storage.get('generation') or 1)),
                             'capabilities': {'vm_disk': True, 'iso': True, 'thin': True},
                             'access': {'status': 'healthy', 'readable': True, 'writable': True, 'observed_at': now},
                         })
-                        for key in ('status', 'error', 'operation_id'):
+                        for key in ('status', 'error'):
                             storage.pop(key, None)
                         managed_storage[storage_id] = storage
                         managed_outcomes[:] = [o for o in managed_outcomes if o.get('operation_id') != command['operation_id']]

@@ -1,0 +1,28 @@
+{
+  "summary": "Fix simulated Core storage IDs used in browser CI so they stay within the 64-character identifier limit and Controller can mirror healthy access. API impact: none.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/changes/2026-09-11-simulated-storage-id-limit.json",
+    "tests/integration/managed_vm_browser.py",
+    "tests/integration/website_controller_captures.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "CI simulated-host fixtures only; no operator workflow change."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Test fixture IDs only; no Controller/Core contract change."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Test fixtures only; no Nex Controller or Core state."
+  },
+  "verification": {
+    "method": "Inspected phase1 job 4466: storage row stayed succeeded/Not readable after Register storage because demo-storage-<64-hex> exceeded identifierValid and adoptManaged skipped the healthy access mirror. Shortened simulated IDs to st+62 hex and keep operation_id for pending-row matching.",
+    "evidence": [
+      "tests/integration/managed_vm_browser.py",
+      "tests/integration/website_controller_captures.py"
+    ]
+  }
+}
