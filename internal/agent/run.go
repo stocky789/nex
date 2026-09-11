@@ -14,11 +14,40 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
 
 type persistenceError struct{ error }
+
+var transientStorageDiscoveries = struct {
+	sync.Mutex
+	byStore map[*Store][]protocol.StorageDiscoveryResult
+}{byStore: map[*Store][]protocol.StorageDiscoveryResult{}}
+
+const transientStorageDiscoveryLimit = 128
+
+func drainStorageDiscoveries(s *Store) []protocol.StorageDiscoveryResult {
+	transientStorageDiscoveries.Lock()
+	defer transientStorageDiscoveries.Unlock()
+	out := transientStorageDiscoveries.byStore[s]
+	delete(transientStorageDiscoveries.byStore, s)
+	return out
+}
+func appendStorageDiscoveries(s *Store, results []protocol.StorageDiscoveryResult) {
+	transientStorageDiscoveries.Lock()
+	defer transientStorageDiscoveries.Unlock()
+	current := transientStorageDiscoveries.byStore[s]
+	room := transientStorageDiscoveryLimit - len(current)
+	if room > 0 {
+		if len(results) > room {
+			results = results[:room]
+		}
+		transientStorageDiscoveries.byStore[s] = append(current, results...)
+	}
+}
 
 type RunConfig struct{ Heartbeat, ProbeInterval, ProbeTimeout time.Duration }
 
@@ -118,13 +147,22 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	appliedCtx, cancelApplied := context.WithTimeout(ctx, cfg.ProbeTimeout)
 	managed, checks := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(appliedCtx)
 	cancelApplied()
+	managed.Storage = PoolStorageMemberAccess(s, managed.Storage)
+	if check := PoolStorageReconcileCheck(s); check != nil {
+		checks = append(checks, *check)
+	}
+	// Membership is a master-owned Core record (with the member's authenticated copy).
+	// Reporting it is the sole Controller adoption path; no Controller cache derives it.
+	if membership, err := Membership(s); err == nil {
+		managed.Membership = &membership
+	}
 	if storage != nil {
 		managed.Storage = storage.Overlay(managed.Storage)
 	}
 	credentialsReadable := true
 	if _, err := vmhost.StorageCredentialReceipts(s.dir); err != nil {
 		credentialsReadable = false
-		checks = append(checks, protocol.Check{Name: "storage-credentials", Status: "failed", Error: resultError(err.Error()), ObservedAt: time.Now().UTC()})
+		checks = append(checks, protocol.Check{Name: "storage-credentials", Status: "failed", Error: "storage credential state is unavailable", ObservedAt: time.Now().UTC()})
 	}
 	managed.Appliances = vmhost.Deployments(ApplianceJournalDir)
 	managed.Outcomes = commandOutcomes(s.State.Journal, managed.Outcomes)
@@ -148,9 +186,10 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		inv = &legacy
 	}
 	if s.State.StorageProtocolReady {
-		capabilities = append(capabilities, "storage-repositories-v1")
+		capabilities = append(capabilities, "storage-repositories-v1", protocol.StorageDiscoveryCapability)
 	}
-	req := protocol.ReportRequest{Capabilities: capabilities, Version: version, Sequence: s.State.Sequence, Inventory: inv, Results: []protocol.Result{}}
+	discoveries := drainStorageDiscoveries(s)
+	req := protocol.ReportRequest{Capabilities: capabilities, Version: version, Sequence: s.State.Sequence, Inventory: inv, Results: []protocol.Result{}, StorageDiscoveries: discoveries}
 	for id, e := range s.State.Journal {
 		if e.Status != "pending" && !e.Acknowledged {
 			req.Results = append(req.Results, protocol.Result{OperationID: id, Status: e.Status, Error: resultError(e.Error), ObservedAt: e.ObservedAt})
@@ -191,6 +230,21 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	if err = applyResponse(s, response); err != nil {
 		return persistenceError{fmt.Errorf("persist commands: %w", err)}
 	}
+	if len(response.StorageDiscoveries) > 0 {
+		go func(requests []protocol.StorageDiscoveryRequest) {
+			results := make([]protocol.StorageDiscoveryResult, 0, len(requests))
+			for _, request := range requests {
+				if !storageDiscoveryScopeMatches(s.State, request) {
+					continue
+				}
+				work, cancel := context.WithTimeout(ctx, 8*time.Second)
+				results = append(results, vmhost.DiscoverStorage(work, request))
+				cancel()
+			}
+			appendStorageDiscoveries(s, results)
+		}(append([]protocol.StorageDiscoveryRequest(nil), response.StorageDiscoveries...))
+	}
+
 	for _, console := range response.Consoles {
 		go func(req protocol.ConsoleRequest) {
 			if err := serveConsole(ctx, s.State, req); err != nil {
@@ -206,6 +260,10 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		m.Tick(ctx)
 	}
 	return nil
+}
+
+func storageDiscoveryScopeMatches(state State, request protocol.StorageDiscoveryRequest) bool {
+	return request.HostID == state.HostID && request.PoolID == state.PoolID
 }
 
 func legacyStorageSafe(state State, managed *protocol.ManagedState, credentialsReadable bool) bool {
@@ -249,8 +307,15 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	if err := s.Save(); err != nil {
 		return err
 	}
+	// This is the only automatic stale-reservation cleanup. It runs before the
+	// worker can reserve an operation, so it cannot erase the reserve→journal
+	// admission window. Periodic reconciliation deliberately never performs it.
+	if membership, membershipErr := Membership(s); membershipErr == nil && membership.MasterHostID != s.State.HostID {
+		ReleaseUnusedPoolStorageReservations(ctx, s)
+	}
 	m := NewMonitor(cfg.ProbeTimeout, NativeProbes(version.Version))
 	storage := vmhost.NewStorageMonitor(cfg.ProbeTimeout)
+	var poolReconcileRunning atomic.Bool
 	probeCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go m.WatchLibvirt(probeCtx)
@@ -260,6 +325,15 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		tickStorage := func() {
 			managed, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(probeCtx)
 			storage.Tick(probeCtx, managed.Storage)
+			if !poolReconcileRunning.CompareAndSwap(false, true) {
+				return
+			}
+			go func() {
+				defer poolReconcileRunning.Store(false)
+				work, done := context.WithTimeout(probeCtx, cfg.ProbeTimeout)
+				defer done()
+				_ = ReconcilePoolStorageFromMaster(work, s)
+			}()
 		}
 		m.Tick(probeCtx)
 		tickStorage()

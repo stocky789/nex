@@ -9,6 +9,9 @@
 <li><a href="#localSession">GET /api/local/v1/session</a></li>
 <li><a href="#localLogout">DELETE /api/local/v1/session</a></li>
 <li><a href="#localHost">GET /api/local/v1/host</a></li>
+<li><a href="#joinPool">POST /api/local/v1/pool/join</a></li>
+<li><a href="#createPoolJoinCSR">POST /api/local/v1/pool/join-csr</a></li>
+<li><a href="#createPoolJoinOffer">POST /api/local/v1/pool/join-offer</a></li>
 <li><a href="#localVMs">GET /api/local/v1/vms</a></li>
 <li><a href="#localPower">POST /api/local/v1/vms/{id}/actions</a></li>
 <li><a href="#localDeploy">POST /api/local/v1/deployments</a></li>
@@ -314,6 +317,170 @@
           }
         }
       }
+    }
+  }
+}</pre></details></section>
+<section id="joinPool"><h2>POST <code>/api/local/v1/pool/join</code></h2>
+<p>Join this enrolled Core to a pool</p><p>Authenticated local root session, same HTTPS Origin and X-CSRF-Token required. This Core must already be enrolled. It validates the bare HTTPS master_url, pinned pool_ca_pem and opaque one-use offer, pauses its outbound agent, performs the Core-to-Core TLS 1.3 CSR exchange, then resumes reporting with the master-owned membership. The Controller may display/pass the offer but does not participate in peer authentication or keep membership intent. The local request body and offer are not echoed. A peer refusal, used/expired offer, identity mismatch or Core already belonging to another pool is 409 and leaves local membership unchanged; retry requires a new offer. There is no cancellation after peer acceptance: reconcile membership inventory before retrying an interrupted browser reply.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;joinPool&quot;,
+  &quot;summary&quot;: &quot;Join this enrolled Core to a pool&quot;,
+  &quot;description&quot;: &quot;Authenticated local root session, same HTTPS Origin and X-CSRF-Token required. This Core must already be enrolled. It validates the bare HTTPS master_url, pinned pool_ca_pem and opaque one-use offer, pauses its outbound agent, performs the Core-to-Core TLS 1.3 CSR exchange, then resumes reporting with the master-owned membership. The Controller may display/pass the offer but does not participate in peer authentication or keep membership intent. The local request body and offer are not echoed. A peer refusal, used/expired offer, identity mismatch or Core already belonging to another pool is 409 and leaves local membership unchanged; retry requires a new offer. There is no cancellation after peer acceptance: reconcile membership inventory before retrying an interrupted browser reply.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolJoinRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Joined identity&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolJoinResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid JSON, master URL, pool CA or offer.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Local root session required.&quot;
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Core is not enrolled or the peer exchange was refused.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="createPoolJoinCSR"><h2>POST <code>/api/local/v1/pool/join-csr</code></h2>
+<p>Create a member pool-join CSR</p><p>Authenticated enrolled local Core session and same Origin/CSRF boundary. Creates the private key in Core state and returns only host_id and CSR PEM. 409 if Core is not enrolled or CSR state cannot be prepared.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;createPoolJoinCSR&quot;,
+  &quot;summary&quot;: &quot;Create a member pool-join CSR&quot;,
+  &quot;description&quot;: &quot;Authenticated enrolled local Core session and same Origin/CSRF boundary. Creates the private key in Core state and returns only host_id and CSR PEM. 409 if Core is not enrolled or CSR state cannot be prepared.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Member CSR&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolJoinCSRResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Local root session required.&quot;
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Core is not enrolled or cannot prepare the join CSR.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="createPoolJoinOffer"><h2>POST <code>/api/local/v1/pool/join-offer</code></h2>
+<p>Create a bound pool-join offer</p><p>Authenticated selected-master local Core session and same Origin/CSRF boundary. Validates the member host/CSR and master HTTPS origin, then returns a 15-minute one-use offer bound to that CSR plus the pool CA. The Controller may relay this response but cannot redeem it. 409 if the Core is not a usable master or peer state cannot be persisted.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;createPoolJoinOffer&quot;,
+  &quot;summary&quot;: &quot;Create a bound pool-join offer&quot;,
+  &quot;description&quot;: &quot;Authenticated selected-master local Core session and same Origin/CSRF boundary. Validates the member host/CSR and master HTTPS origin, then returns a 15-minute one-use offer bound to that CSR plus the pool CA. The Controller may relay this response but cannot redeem it. 409 if the Core is not a usable master or peer state cannot be persisted.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolJoinOfferRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Pinned CA and one-use offer&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolJoinOfferResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed JSON or invalid member/CSR/master origin.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Local root session required.&quot;
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Master Core peer state is unavailable or rejects the request.&quot;
     }
   }
 }</pre></details></section>
@@ -1943,6 +2110,101 @@
     &quot;controller_url&quot;,
     &quot;ca_pem&quot;,
     &quot;token&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="PoolJoinRequest"><summary>PoolJoinRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;master_url&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Bare HTTPS pool-master origin.&quot;
+    },
+    &quot;pool_ca_pem&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true,
+      &quot;description&quot;: &quot;Pinned pool CA PEM from the one-use offer.&quot;
+    },
+    &quot;offer&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true,
+      &quot;description&quot;: &quot;Opaque one-use pool join offer.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;master_url&quot;,
+    &quot;pool_ca_pem&quot;,
+    &quot;offer&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="PoolJoinResponse"><summary>PoolJoinResponse</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;pool_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="PoolJoinCSRResponse"><summary>PoolJoinCSRResponse</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;csr_pem&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;csr_pem&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="PoolJoinOfferRequest"><summary>PoolJoinOfferRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;member_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;member_csr_pem&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;master_url&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;member_host_id&quot;,
+    &quot;member_csr_pem&quot;,
+    &quot;master_url&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="PoolJoinOfferResponse"><summary>PoolJoinOfferResponse</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;pool_ca_pem&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true
+    },
+    &quot;offer&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true
+    }
+  },
+  &quot;required&quot;: [
+    &quot;pool_ca_pem&quot;,
+    &quot;offer&quot;
   ],
   &quot;additionalProperties&quot;: false
 }</pre></details>

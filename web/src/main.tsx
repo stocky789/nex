@@ -92,12 +92,39 @@ function checkHealth(check: Check) {
     ? check.status
     : check.freshness || "unknown";
 }
+type HealthIssue = { name: string; status: string; reason: string };
+type HealthSummary = { status: string; issues: HealthIssue[] };
+const healthSeverity: Record<string, number> = {
+  healthy: 0,
+  unsupported: 1,
+  degraded: 2,
+  unknown: 3,
+  stale: 4,
+  failed: 5,
+};
+function hostHealth(host: Host): HealthSummary {
+  if (host.revoked) return { status: "revoked", issues: [{ name: "Management access", status: "revoked", reason: "Access revoked; this host is not reporting." }] };
+  const checks = host.inventory?.checks || [];
+  const issues = checks.filter((check) => checkHealth(check) !== "healthy").map((check) => ({
+    name: check.name,
+    status: checkHealth(check),
+    reason: check.error || "No reason reported by Nex Core.",
+  }));
+  if (host.connection !== "fresh") {
+    issues.unshift({
+      name: "Management connection",
+      status: host.connection === "stale" ? "stale" : "unknown",
+      reason: host.connection === "stale" ? "The host is not reporting fresh data; current workload execution is unknown." : "The host has not reported a current management connection.",
+    });
+  }
+  if (!checks.length && host.connection === "fresh") {
+    return { status: "unknown", issues: [{ name: "Health checks", status: "unknown", reason: "No health checks have been observed." }] };
+  }
+  if (!issues.length) return { status: "healthy", issues };
+  return { status: issues.reduce((worst, issue) => healthSeverity[issue.status] > healthSeverity[worst] ? issue.status : worst, issues[0].status), issues };
+}
 function observedHealth(host: Host) {
-  return !host.inventory?.checks?.length
-    ? "unknown"
-    : host.inventory.checks.some((c) => checkHealth(c) !== "healthy")
-      ? "degraded"
-      : "healthy";
+  return hostHealth(host).status;
 }
 const empty: Data = {
   sites: [],
@@ -118,6 +145,19 @@ function Brand() {
 }
 function Badge({ value }: { value: string }) {
   return <span className={`badge ${value}`}>{value.replaceAll("-", " ")}</span>;
+}
+function HostHealthSummary({ host }: { host: Host }) {
+  const summary = hostHealth(host);
+  return <div className="health-summary">
+    <Badge value={summary.status} />
+    {summary.status !== "healthy" && <>
+      <p>{summary.issues.length > 1 ? `${summary.issues.length} checks need attention.` : "1 check needs attention."}</p>
+      <ul>
+        {summary.issues.map((issue) => <li key={issue.name}><strong>{issue.name}</strong>: {issue.reason}</li>)}
+      </ul>
+      <a href={`#/hosts/${host.id}`}>View host health</a>
+    </>}
+  </div>;
 }
 type Upload = {
   name: string;
@@ -315,6 +355,7 @@ function App() {
     body?: unknown,
     progress?: (loaded: number, total: number) => void,
     register?: (xhr: XMLHttpRequest) => void,
+    signal?: AbortSignal,
   ): Promise<T> {
     const requestGeneration = generation.current;
     const response = body instanceof Blob ? await new Promise<Response>((resolve, reject) => {
@@ -338,6 +379,7 @@ function App() {
           : {}),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
     });
     if (response.status === 401 && requestGeneration === generation.current) {
       generation.current++;
@@ -1172,7 +1214,7 @@ function App() {
             />
           ) : (
             <>
-              {pool && !host && !vm && <ManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} poolName={pool.name} tab={tab} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={setTab} unavailable={Boolean(error)} uploading={upload?.state === "uploading"} startIsoUpload={startIsoUpload} createVM={createVM} onCreateVMShown={() => setCreateVM(false)} />}
+              {pool && !host && !vm && <ManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} poolName={pool.name} masterHostID={pool.master_host_id} tab={tab} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={setTab} unavailable={Boolean(error)} uploading={upload?.state === "uploading"} startIsoUpload={startIsoUpload} createVM={createVM} onCreateVMShown={() => setCreateVM(false)} />}
               {vm && tab === "General" && <VMDetails vm={vm} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} api={api} reload={reload} busy={busy} unavailable={Boolean(error)} onNotice={setNotice} />}
               {vm && tab === "Console" && <Console key={vm.id} name={vm.name} guest={vm.guest} popout={`#/console/${vm.id}`} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={() => openConsole(vm.id)} media={vmMediaControls(vm)} />}
               {host && !vm && tab === "Console" && <Console key={host.id} name={host.hostname || host.id} popout={`#/host-console/${host.id}`} disabled={hostConsoleBlocker(host)} open={() => openHostConsole(host.id)} />}
@@ -1261,6 +1303,22 @@ function App() {
                   )}
                 </section>
               )}
+              {pool && !host && tab === "General" && (
+                <section className="panel pool-health-summary">
+                  <div className="section-heading">
+                    <h2>Pool health</h2>
+                    <span className="muted">Current host observations</span>
+                  </div>
+                  {scopedHosts.length ? (
+                    <div className="pool-health-list">
+                      {scopedHosts.map((member) => <div key={member.id} className="pool-health-member">
+                        <a className="strong" href={`#/hosts/${member.id}`}>{member.hostname}</a>
+                        <HostHealthSummary host={member} />
+                      </div>)}
+                    </div>
+                  ) : <p className="empty">No hosts have been observed in this pool.</p>}
+                </section>
+              )}
               {host ? (
                 <>
                   {tab !== "Console" && <HostDetails host={host} master={pool?.master_host_id === host.id} tab={tab} />}
@@ -1310,7 +1368,7 @@ function App() {
                                 <Badge value={h.connection} />
                               </td>
                               <td>
-                                <Badge value={observedHealth(h)} />
+                                <HostHealthSummary host={h} />
                               </td>
                               <td>
                                 {h.inventory

@@ -262,6 +262,12 @@ func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch f
 		if old.Command.Kind == "vm-update" && (old.Result.Status == "failed" || old.Result.Status == "needs_attention") {
 			continue
 		}
+		// A failed remote storage preparation has no applied projection; a later Core
+		// reconciliation may retry the identical repository after its server recovers.
+		// needs_attention remains reserved because native rollback is ambiguous.
+		if c.Kind == "storage-register" && old.Command.Kind == "storage-register" && old.Result.Status == "failed" && old.Command.Storage != nil && c.Storage != nil && old.Command.Storage.ID == c.Storage.ID && old.Command.Storage.Generation == c.Storage.Generation {
+			continue
+		}
 		if managedResourceID(old.Command) == managedResourceID(c) {
 			j.Result.Error = "resource ID already reserved by another operation"
 			return j.Result, e.save(j)
@@ -530,6 +536,25 @@ var (
 	managedStorageReadyFn = managedStorageReady
 )
 
+type expectedStorageIdentityContextKey struct{}
+type poolStorageExpectation struct {
+	identity   protocol.StorageIdentity
+	generation uint64
+}
+
+// WithExpectedStorageIdentity carries a trusted peer master's observation into the
+// private storage transaction. It is not a Controller command field: public commands
+// remain unable to supply Core-observed mount identities.
+func WithExpectedStorageIdentity(ctx context.Context, identity protocol.StorageIdentity) context.Context {
+	return WithPoolStorageExpectation(ctx, identity, 0)
+}
+
+// WithPoolStorageExpectation additionally carries a trusted master generation for a
+// first member import. Public storage-register commands still start at generation one.
+func WithPoolStorageExpectation(ctx context.Context, identity protocol.StorageIdentity, generation uint64) context.Context {
+	return context.WithValue(ctx, expectedStorageIdentityContextKey{}, poolStorageExpectation{identity: identity, generation: generation})
+}
+
 // managedStoragePrepare is reserved for registration and configuration changes. Ordinary
 // lifecycle reads must inspect an existing mount/session and never replay login or mount work.
 // Native preparation is provisional until readiness and capacity succeed; otherwise Core
@@ -542,6 +567,12 @@ func (e *ManagedEngine) managedStoragePrepare(ctx context.Context, s protocol.St
 	}
 	verified := s
 	verified.Path, verified.Identity = prepared.Path, prepared.Observed
+	if expectation, ok := ctx.Value(expectedStorageIdentityContextKey{}).(poolStorageExpectation); ok && !StorageIdentityMatchesExpected(expectation.identity, prepared.Observed) {
+		if cleanupErr := storageDetachAt(context.Background(), verified, credentialRoot); cleanupErr != nil {
+			return storageAccess{}, errors.Join(errors.New("prepared repository identity does not match master observation"), fmt.Errorf("%w: clean up rejected storage preparation: %v", ErrStorageRollbackUncertain, cleanupErr))
+		}
+		return storageAccess{}, errors.New("prepared repository identity does not match master observation")
+	}
 	access, err := managedStorageReadyFn(ctx, verified, required)
 	if err == nil {
 		return access, nil
@@ -550,6 +581,13 @@ func (e *ManagedEngine) managedStoragePrepare(ctx context.Context, s protocol.St
 		return storageAccess{}, errors.Join(err, fmt.Errorf("%w: clean up rejected storage preparation: %v", ErrStorageRollbackUncertain, cleanupErr))
 	}
 	return storageAccess{}, err
+}
+
+// StorageIdentityMatchesExpected compares Core observations using the durable backing
+// identity. In particular, a marker-backed SMB share deliberately ignores CIFS's
+// reconnect-varying filesystem diagnostic while requiring its stable marker.
+func StorageIdentityMatchesExpected(expected, actual protocol.StorageIdentity) bool {
+	return storageSameBacking(expected, actual)
 }
 
 // registerStorage keeps a successful native prepare provisional until post-prepare
@@ -619,7 +657,12 @@ func (e *ManagedEngine) registerStorage(ctx context.Context, j *managedJournal, 
 		return removeErr
 	}
 	applied := requested
-	applied.Path, applied.Generation = access.Path, 1
+	applied.Path = access.Path
+	if expectation, ok := ctx.Value(expectedStorageIdentityContextKey{}).(poolStorageExpectation); ok && expectation.generation != 0 {
+		applied.Generation = expectation.generation
+	} else {
+		applied.Generation = 1
+	}
 	applied.Identity = access.Observed
 	applied.Capabilities = storageCapabilities(applied)
 	applied.Access = protocol.StorageAccess{Status: access.Health, Readable: true, Writable: !access.ReadOnly, TotalBytes: access.Total, AvailableBytes: &access.Available, ObservedAt: time.Now().UTC()}
@@ -1316,14 +1359,14 @@ func managedDirectory(path string) (os.FileInfo, bool, error) {
 // mounts are different: the verified mount leaf may be owned/mapped by the file server for
 // libvirt-qemu, so only its trusted local parent and every no-symlink component are required.
 func managedRepositorySubdir(ctx context.Context, js []managedJournal, id, path string) error {
-	s, access, err := managedStorageByID(ctx, js, id, 0)
+	s, _, err := managedStorageByID(ctx, js, id, 0)
 	if err != nil {
 		return err
 	}
 	if s.StorageKind() == protocol.StorageKindLocal {
 		return managedSubdir(path)
 	}
-	root := access.Path
+	root := remoteMountPath(s)
 	if !strings.HasPrefix(path, root+"/") || filepath.Clean(path) != path {
 		return errors.New("managed storage directory escapes its repository mount")
 	}

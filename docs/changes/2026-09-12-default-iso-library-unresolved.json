@@ -1,0 +1,28 @@
+{
+  "summary": "Record unresolved issues: BUG-0093 default ISO registration fails under agent confinement; BUG-0094 remote repositories are limited to one host; BUG-0095 storage setup lacks Core-led discovery and guided selection; BUG-0096 health summaries omit the Core-reported cause; BUG-0097 UEFI launch can crash a nested Core lab host.",
+  "paths": [
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This records unresolved defects and does not change a documented operator workflow."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core or client-facing contract changes; this documentation records failures and planned gaps in existing behavior."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The defect does not change published milestone scope or completion status."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "This documentation-only record creates no durable product state."
+  },
+  "verification": {
+    "method": "Read-only code, history and documentation trace. BUG-0093 follows the agent service confinement and QEMU access probe; BUG-0094/0095 follow the current single-host storage contract; BUG-0096 follows the existing health payload and summary rendering; BUG-0097 follows the UEFI capability/XML path and records that a separate nested-KVM lab succeeded while the reported XCP-ng failure remains unverified. No host behavior was changed or claimed verified.",
+    "evidence": [
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

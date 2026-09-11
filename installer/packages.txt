@@ -8,7 +8,9 @@ openssh-server
 nftables
 chrony
 nfs-common
+libnfs-utils
 cifs-utils
+smbclient
 open-iscsi
 sudo
 ca-certificates

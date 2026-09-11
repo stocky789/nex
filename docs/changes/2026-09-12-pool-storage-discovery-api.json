@@ -1,0 +1,39 @@
+{
+  "summary": "Document the BUG-0094 Core pool-membership/repository reconciliation contract and BUG-0095 transient Core storage discovery contract. API impact: changed Core protocol and new local/client routes; Controller remains a transient relay and inventory projection only.",
+  "paths": [
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/guide/README.md",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/storage-repositories.md",
+    "internal/agent/managed_test.go",
+    "docs/changes/2026-09-12-pool-storage-discovery-api.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Adds the local authenticated pool-join procedure and explains master-owned NFS/SMB member access, while retaining local/single-writer OpenZFS and iSCSI limits.",
+    "pages": ["docs/guide/README.md", "docs/guide/join-a-pool.md", "docs/guide/storage-repositories.md"]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Documents authenticated local pool joining, Core-to-Core membership/repository reconciliation, capability-gated discovery, report request/response messages, validation, failure and cancellation boundaries.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/index.html", "docs/api/local-openapi.json", "docs/api/local.html"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The API reference does not change published roadmap status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Pool membership, master-owned repository configuration and per-member observations are Core state; discovery is transient and creates no durable state.",
+    "record": "The pool master retains pool-peer membership/offer/replay state and pool-storage desired records, member access observations, reservations and mutation markers under its agent state; a member retains its pending rehome, peer identity, member-scoped SMB receipt when applicable, and normal managed-storage journal entry. A replacement Controller adopts membership, repository and access observations from authenticated Core inventory. Discovery requests, results and relay credentials are deleted after the bounded exchange and are not durable."
+  },
+  "verification": {
+    "method": "OpenAPI JSON parsed and generated HTML reference was rebuilt. python3 -m unittest tests.test_api_contract passed 21 checks; generated-reference current and diff checks passed. Disposable lab acceptance is recorded separately by the owning lab workflow; no lab success is claimed in this API-reference record.",
+    "evidence": ["docs/API.md", "docs/api/openapi.json", "docs/api/local-openapi.json"]
+  }
+}

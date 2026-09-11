@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -138,6 +140,51 @@ func TestManagedWorkerRejectsDifferentHostWithoutEffects(t *testing.T) {
 	// The worker registers the host's own defaults; the refused command left no journal entry.
 	if _, err := os.Stat(filepath.Join(dir, "managed-vms", "wrong-host.json")); !os.IsNotExist(err) {
 		t.Fatal("wrong-host command created engine state")
+	}
+}
+
+func TestMemberSuccessfulEjectAndDiskRemovalReleaseUnusedReservations(t *testing.T) {
+	membership := protocol.PoolMembership{MasterHostID: "master-1"}
+	for _, command := range []protocol.Command{
+		{Kind: "vm-media", VMMedia: &protocol.VMMediaRequest{VMID: "vm-1", HostID: "member-1", Action: "eject"}},
+		{Kind: "vm-update", VM: &protocol.VMCreateSpec{ID: "vm-1", HostID: "member-1"}},
+	} {
+		if !shouldReleaseUnusedReservation(membership, nil, "member-1", true, nil, "succeeded") {
+			t.Fatalf("successful %s did not trigger stale-reservation cleanup", command.Kind)
+		}
+	}
+	if shouldReleaseUnusedReservation(membership, nil, "member-1", false, nil, "succeeded") || shouldReleaseUnusedReservation(membership, nil, "member-1", true, errors.New("failed"), "failed") {
+		t.Fatal("undurable operation triggered cleanup")
+	}
+}
+
+func TestTransientStorageDiscoveryResultsDoNotLoseConcurrentCompletions(t *testing.T) {
+	s := &Store{}
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			appendStorageDiscoveries(s, []protocol.StorageDiscoveryResult{{RequestID: fmt.Sprintf("discover-%d", i)}})
+		}(i)
+	}
+	wg.Wait()
+	got := drainStorageDiscoveries(s)
+	if len(got) != 2 {
+		t.Fatalf("discovery results = %+v", got)
+	}
+	if more := drainStorageDiscoveries(s); len(more) != 0 {
+		t.Fatalf("drain retained results: %+v", more)
+	}
+}
+
+func TestStorageDiscoveryRequiresThisCoreHostAndPool(t *testing.T) {
+	state := State{HostID: "host-1", PoolID: "pool-1"}
+	if !storageDiscoveryScopeMatches(state, protocol.StorageDiscoveryRequest{HostID: "host-1", PoolID: "pool-1"}) {
+		t.Fatal("matching discovery request rejected")
+	}
+	if storageDiscoveryScopeMatches(state, protocol.StorageDiscoveryRequest{HostID: "host-2", PoolID: "pool-1"}) || storageDiscoveryScopeMatches(state, protocol.StorageDiscoveryRequest{HostID: "host-1", PoolID: "pool-2"}) {
+		t.Fatal("cross-Core discovery request accepted")
 	}
 }
 

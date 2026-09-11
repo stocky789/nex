@@ -3,10 +3,12 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"nex.local/nex/internal/agent"
 	"nex.local/nex/internal/vmhost"
 	"os"
@@ -31,6 +33,7 @@ func run() error {
 	dir := f.String("state-dir", "/var/lib/nex-core-agent", "private local identity and journal directory")
 	var controller, caFile, tokenFile, replace *string
 	var heartbeat, interval, timeout *time.Duration
+	var peerListen *string
 	switch mode {
 	case "enroll":
 		controller = f.String("controller", "", "verified HTTPS controller origin")
@@ -41,6 +44,7 @@ func run() error {
 		heartbeat = f.Duration("heartbeat", 10*time.Second, "report interval")
 		interval = f.Duration("probe-interval", 10*time.Second, "probe interval")
 		timeout = f.Duration("probe-timeout", 3*time.Second, "independent probe deadline")
+		peerListen = f.String("pool-peer-listen", ":9444", "Core-to-Core pool peer HTTPS listen address")
 		f.StringVar(&agent.ApplianceJournalDir, "appliance-journal-dir", agent.ApplianceJournalDir, "local appliance engine deploy journal, reported as this host's Controller appliances")
 	case "rotate", "status", "storage-guard":
 	default:
@@ -101,6 +105,17 @@ func run() error {
 		}
 		fmt.Printf("Host: %s\nController: %s\nCertificate expiry: %s\nReport sequence: %d\nJournal entries: %d\n", s.State.HostID, s.State.Controller, expiry.UTC().Format(time.RFC3339), s.State.Sequence, len(s.State.Journal))
 	case "run":
+		peer := &http.Server{Addr: *peerListen, Handler: agent.PoolPeerHandler(s), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13, GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) { return agent.PoolPeerTLSConfig(s) }}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
+		go func() {
+			if err := peer.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+				log.Printf("pool peer listener: %v", err)
+			}
+		}()
+		defer func() {
+			shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = peer.Shutdown(shutdown)
+		}()
 		return agent.Run(ctx, s, agent.RunConfig{Heartbeat: *heartbeat, ProbeInterval: *interval, ProbeTimeout: *timeout})
 	}
 	return nil

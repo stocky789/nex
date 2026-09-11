@@ -2,6 +2,7 @@
 package protocol
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 )
 
 const StorageRepositoryCapability = "storage-repositories-v1"
+const StorageDiscoveryCapability = "storage-discovery-v1"
 
 const (
 	StorageKindLocal = "local"
@@ -22,8 +24,9 @@ const (
 )
 
 type NFSStorageSource struct {
-	Server string `json:"server"`
-	Export string `json:"export"`
+	Server    string `json:"server"`
+	Export    string `json:"export"`
+	Directory string `json:"directory,omitempty"`
 }
 type ZFSStorageSource struct {
 	Pool      string `json:"pool"`
@@ -33,6 +36,8 @@ type ZFSStorageSource struct {
 type SMBStorageSource struct {
 	Server string `json:"server"`
 	Share  string `json:"share"`
+	// Directory is a validated existing subdirectory beneath Share, never an SMB path.
+	Directory string `json:"directory,omitempty"`
 }
 type ISCSIStorageSource struct {
 	Portal         string `json:"portal"`
@@ -91,6 +96,9 @@ type StorageIdentity struct {
 	SMB   *SMBStorageIdentity   `json:"smb,omitempty"`
 	ISCSI *ISCSIStorageIdentity `json:"iscsi,omitempty"`
 }
+
+// String is a stable, secret-free identity comparison value for Core-to-Core access reports.
+func (s StorageIdentity) String() string { b, _ := json.Marshal(s); return string(b) }
 
 type StorageCapabilities struct {
 	VMDisk          bool     `json:"vm_disk"`
@@ -167,6 +175,38 @@ type StorageCredentialRetireRequest struct {
 	HostID  string `json:"host_id"`
 }
 
+// StorageDiscoveryRequest is a short-lived Core observation request.  It is never a
+// repository command: neither the Controller nor Core journals it, and credentials (if
+// supplied for SMB/CHAP discovery) exist only for this one authenticated exchange.
+type StorageDiscoveryRequest struct {
+	RequestID   string              `json:"request_id"`
+	PoolID      string              `json:"pool_id"`
+	HostID      string              `json:"host_id"`
+	Kind        string              `json:"kind"`
+	Server      string              `json:"server,omitempty"`
+	Path        string              `json:"path,omitempty"`
+	Credentials *StorageCredentials `json:"credentials,omitempty"`
+}
+
+type StorageDiscoveryCandidate struct {
+	Kind      string        `json:"kind"`
+	Source    StorageSource `json:"source"`
+	Path      string        `json:"path,omitempty"`
+	Browsable bool          `json:"browsable"`
+}
+
+// StorageDiscoveryResult deliberately returns only operator-safe source metadata and
+// directory names. Credentials, mount options, device paths and command output stay Core-local.
+type StorageDiscoveryResult struct {
+	RequestID  string                      `json:"request_id"`
+	PoolID     string                      `json:"pool_id"`
+	HostID     string                      `json:"host_id"`
+	Status     string                      `json:"status"`
+	Candidates []StorageDiscoveryCandidate `json:"candidates,omitempty"`
+	Error      string                      `json:"error,omitempty"`
+	ObservedAt time.Time                   `json:"observed_at"`
+}
+
 var storageName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,253}$`)
 var zfsName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]*(/[A-Za-z0-9][A-Za-z0-9_.:-]*)*$`)
 var storageUUID = regexp.MustCompile(`^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$`)
@@ -184,6 +224,12 @@ func storageManagedMountPath(raw string) bool {
 }
 func storageServer(raw string) bool {
 	return raw != "" && len(raw) <= 253 && !strings.ContainsAny(raw, "/\\\x00 \t\r\n;'\"`$&|<>()")
+}
+func storageSubdirectory(raw string) bool {
+	if raw == "" {
+		return true
+	}
+	return !filepath.IsAbs(raw) && filepath.Clean(raw) == raw && raw != "." && raw != ".." && !strings.HasPrefix(raw, "../") && !strings.ContainsAny(raw, "\\\x00\r\n") && !strings.ContainsFunc(raw, unicode.IsSpace)
 }
 
 // ValidateStorageRegistration validates client-supplied intent as well as Core replay input.
@@ -225,7 +271,7 @@ func validateStorageRegistration(s StorageRegistration, allowEmptyID, allowResol
 			return errors.New("local storage needs one safe absolute path")
 		}
 	case StorageKindNFS:
-		if s.Source.NFS == nil || !storageServer(s.Source.NFS.Server) || !storagePath(s.Source.NFS.Export) || (s.Path != "" && (!allowResolvedPath || !storagePath(s.Path))) {
+		if s.Source.NFS == nil || !storageServer(s.Source.NFS.Server) || !storagePath(s.Source.NFS.Export) || !storageSubdirectory(s.Source.NFS.Directory) || (s.Path != "" && (!allowResolvedPath || !storagePath(s.Path))) {
 			return errors.New("NFS storage needs a server and safe absolute export")
 		}
 	case StorageKindZFS:
@@ -235,7 +281,7 @@ func validateStorageRegistration(s StorageRegistration, allowEmptyID, allowResol
 		}
 	case StorageKindSMB:
 		v := s.Source.SMB
-		if v == nil || !storageServer(v.Server) || !storageName.MatchString(v.Share) || (s.Path != "" && (!allowResolvedPath || !storagePath(s.Path))) {
+		if v == nil || !storageServer(v.Server) || !storageName.MatchString(v.Share) || !storageSubdirectory(v.Directory) || (s.Path != "" && (!allowResolvedPath || !storagePath(s.Path))) {
 			return errors.New("SMB storage needs a server and share")
 		}
 	case StorageKindISCSI:
@@ -333,6 +379,31 @@ func ValidateStorageLifecycle(v StorageLifecycleRequest) error {
 func ValidateStorageCredentialRetire(v StorageCredentialRetireRequest) error {
 	if !storageOpaqueID.MatchString(v.Receipt) || !storageOpaqueID.MatchString(v.PoolID) || !storageOpaqueID.MatchString(v.HostID) {
 		return errors.New("credential retirement needs valid receipt, pool and host IDs")
+	}
+	return nil
+}
+
+func ValidateStorageDiscovery(v StorageDiscoveryRequest) error {
+	if !storageOpaqueID.MatchString(v.RequestID) || !storageOpaqueID.MatchString(v.PoolID) || !storageOpaqueID.MatchString(v.HostID) {
+		return errors.New("storage discovery needs valid request, pool and host IDs")
+	}
+	if v.Kind != StorageKindLocal && v.Kind != StorageKindNFS && v.Kind != StorageKindZFS && v.Kind != StorageKindSMB && v.Kind != StorageKindISCSI {
+		return errors.New("storage discovery kind must be local, nfs, zfs, smb or iscsi")
+	}
+	if v.Server != "" && !storageServer(v.Server) {
+		return errors.New("storage discovery server is invalid")
+	}
+	if v.Path != "" && !storagePath(v.Path) {
+		return errors.New("storage discovery path is invalid")
+	}
+	if v.Credentials != nil && (len(v.Credentials.Secret) > 4096 || len(v.Credentials.Username) > 253 || strings.ContainsAny(v.Credentials.Username+v.Credentials.Secret, "\x00\r\n")) {
+		return errors.New("storage discovery credentials are invalid")
+	}
+	if v.Kind == StorageKindSMB && v.Server == "" {
+		return errors.New("SMB discovery needs a server")
+	}
+	if v.Kind == StorageKindISCSI && v.Server == "" {
+		return errors.New("iSCSI discovery needs a portal")
 	}
 	return nil
 }

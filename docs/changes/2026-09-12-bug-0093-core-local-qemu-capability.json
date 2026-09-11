@@ -1,0 +1,34 @@
+{
+  "summary": "BUG-0093: retain CAP_SETUID in the installed nex-core-local service so its embedded Core agent can run the existing libvirt-qemu ISO-storage access probe. API impact: none; Core continues to self-register and report the existing storage-register record through Inventory.managed.",
+  "paths": [
+    "packaging/core-local/nex-core-local.service",
+    "tests/test_core_local_package.py",
+    "docs/qa/bug-0093/packaged-service.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The documented automatic ISO storage registration workflow is unchanged; this restores its packaged execution.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core or client-facing API operation, schema, authorization rule, or observed result changes; the existing managed inventory adoption path is reused.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This restores an existing implementation path and does not change a published milestone status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The systemd capability declaration adds no durable state. Default ISO storage remains in the existing Core managed journal."
+  },
+  "verification": {
+    "method": "Regression first: the new Core package test failed before the declaration was added. On a disposable Debian 13 guest, the exact nex-core-local sandbox directives made runuser -u libvirt-qemu fail without CAP_SETUID and succeed with only AmbientCapabilities=CAP_SETUID added. A staged current Core service then started its embedded agent after ordinary enrollment, wrote the succeeded default ISO journal record, and a fresh Controller adopted it through Inventory.managed without manual storage registration; documented in QA. python3 -m unittest tests/test_core_local_package.py tests/test_agent_service.py tests/test_storage_packaging.py passed (24 tests).",
+    "evidence": [
+      "tests/test_core_local_package.py",
+      "docs/qa/bug-0093/packaged-service.md"
+    ]
+  }
+}

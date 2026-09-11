@@ -192,9 +192,20 @@ func (c *Controller) enroll(w http.ResponseWriter, r *http.Request) {
 			fail(w, 409, "host identity already enrolled; revoke it and use a token targeting that host")
 			return
 		}
-		if tx.QueryRow("SELECT count(*) FROM pools WHERE id=?", pool).Scan(&n) != nil || n != 0 {
-			fail(w, 409, "pool identity already held by another master host")
+		if tx.QueryRow("SELECT count(*) FROM pools WHERE id=?", pool).Scan(&n) != nil {
+			fail(w, 500, "pool lookup failed")
 			return
+		}
+		if n != 0 {
+			if !c.coreReportedPoolMember(tx, site, pool, host) {
+				fail(w, 409, "pool identity is held; the pool master has not reported this ready member")
+				return
+			}
+			if tx.QueryRow("SELECT name FROM pools WHERE id=?", pool).Scan(&poolName) != nil || (v.PoolName != "" && v.PoolName != poolName) {
+				fail(w, 409, "presented pool name does not match the Core-reported pool")
+				return
+			}
+			fresh = false // The master Core already owns this pool's durable identity.
 		}
 	} else {
 		var revoked bool
@@ -241,6 +252,123 @@ func (c *Controller) enroll(w http.ResponseWriter, r *http.Request) {
 	delete(c.seen, host)
 	c.mu.Unlock()
 	write(w, 200, out)
+}
+
+// coreReportedPoolMember allows a new Controller to adopt a peer only after its
+// already-enrolled master has reported the Core-owned membership record.  The database
+// copy is a disposable inventory projection, never an authority to add or retain members.
+func (c *Controller) coreReportedPoolMember(tx *sql.Tx, site, pool, host string) bool {
+	var raw, master string
+	if tx.QueryRow("SELECT p.master_host_id,h.inventory FROM pools p JOIN hosts h ON h.id=p.master_host_id WHERE p.id=? AND p.site_id=? AND h.revoked=0", pool, site).Scan(&master, &raw) != nil {
+		return false
+	}
+	var inventory protocol.Inventory
+	if json.Unmarshal([]byte(raw), &inventory) != nil || inventory.Managed == nil || inventory.Managed.Membership == nil {
+		return false
+	}
+	membership := inventory.Managed.Membership
+	if membership.Valid() != nil || membership.PoolID != pool || membership.MasterHostID != master {
+		return false
+	}
+	for _, member := range membership.Members {
+		if member.HostID == host && member.Status == "ready" {
+			return true
+		}
+	}
+	return false
+}
+
+// adoptReportedPoolAssignment moves an already-enrolled peer's disposable Controller
+// projection only after the destination master has reported it as a ready Core member.
+// Joining never deletes the peer's existing journal mirrors; its next report reprojects
+// them under the Core-owned pool identity.
+func (c *Controller) adoptReportedPoolAssignment(tx *sql.Tx, host string, inventory *protocol.Inventory) (string, error) {
+	if inventory == nil || inventory.Managed == nil || inventory.Managed.Membership == nil {
+		return "", nil
+	}
+	membership := inventory.Managed.Membership
+	if membership.Valid() != nil || membership.MasterHostID == host {
+		return "", nil
+	}
+	ready := false
+	for _, member := range membership.Members {
+		ready = ready || member.HostID == host && member.Status == "ready"
+	}
+	if !ready {
+		return "", nil
+	}
+	var site, current string
+	if err := tx.QueryRow("SELECT p.site_id,h.pool_id FROM hosts h JOIN pools p ON p.id=h.pool_id WHERE h.id=?", host).Scan(&site, &current); err != nil {
+		return "", err
+	}
+	if current != membership.PoolID && c.coreReportedPoolMember(tx, site, membership.PoolID, host) {
+		_, err := tx.Exec("UPDATE hosts SET pool_id=? WHERE id=?", membership.PoolID, host)
+		return current, err
+	}
+	return "", nil
+}
+
+// cleanupJoinedAutoPool removes only an already-empty former automatically-created pool after
+// this host's Core membership is known. Actual Core inventory adoption, not this cleanup,
+// rehomes resource projections and preserves command/payload/audit history.
+func (c *Controller) cleanupJoinedAutoPool(tx *sql.Tx, host, former string, inventory *protocol.Inventory) error {
+	if inventory == nil || inventory.Managed == nil || inventory.Managed.Membership == nil {
+		return nil
+	}
+	membership := inventory.Managed.Membership
+	if membership.Valid() != nil || membership.MasterHostID == host {
+		return nil
+	}
+	var site string
+	if err := tx.QueryRow("SELECT p.site_id FROM hosts h JOIN pools p ON p.id=h.pool_id WHERE h.id=?", host).Scan(&site); err != nil || !c.coreReportedPoolMember(tx, site, membership.PoolID, host) {
+		return err
+	}
+	var candidates []string
+	if former != "" {
+		candidates = []string{former}
+	} else {
+		// A host already moved by an older Controller has no remembered source pool.
+		// Only its one empty, same-site, hostname-named auto-pool is safe to prune;
+		// ambiguity leaves projections visible rather than deleting an unrelated pool.
+		var hostname string
+		if err := tx.QueryRow("SELECT hostname FROM hosts WHERE id=?", host).Scan(&hostname); err != nil {
+			return err
+		}
+		rows, err := tx.Query("SELECT id FROM pools WHERE master_host_id=? AND site_id=? AND name=? AND id<>?", host, site, hostname, membership.PoolID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err = rows.Scan(&id); err != nil {
+				return err
+			}
+			candidates = append(candidates, id)
+		}
+		if err = rows.Err(); err != nil {
+			return err
+		}
+		if len(candidates) != 1 {
+			return nil
+		}
+	}
+	for _, id := range candidates {
+		var hosts, resources, appliances int
+		if err := tx.QueryRow("SELECT count(*) FROM hosts WHERE pool_id=?", id).Scan(&hosts); err != nil || hosts != 0 {
+			return err
+		}
+		if err := tx.QueryRow("SELECT count(*) FROM managed_resources WHERE pool_id=?", id).Scan(&resources); err != nil || resources != 0 {
+			return err
+		}
+		if err := tx.QueryRow("SELECT count(*) FROM appliances WHERE pool_id=?", id).Scan(&appliances); err != nil || appliances != 0 {
+			return err
+		}
+		if _, err := tx.Exec("DELETE FROM pools WHERE id=? AND master_host_id=?", id, host); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // identityValid accepts a host-generated lowercase UUID or a Controller-minted 64-hex ID
@@ -356,6 +484,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	}
 	var previous sql.NullString
 	var merged *protocol.Inventory
+	var formerPool string
 	previousSamples := map[string]time.Time{}
 	var seq uint64
 	var revoked bool
@@ -364,6 +493,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		return
 	}
 	out := protocol.ReportResponse{Commands: []protocol.Command{}, AcknowledgedResults: []string{}}
+	c.completeStorageDiscoveries(host, v.StorageDiscoveries)
 	// A v2 Core asks for this acknowledgement before it advertises the repository
 	// capability. v1 peers receive their original response shape unchanged.
 	if v.Version == protocol.Version {
@@ -371,6 +501,9 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		if slices.Contains(v.Capabilities, protocol.StorageRepositoryCapability) {
 			out.CredentialOffers = c.credentials.offers(host)
 		}
+	}
+	if v.Version == protocol.Version && slices.Contains(v.Capabilities, protocol.StorageDiscoveryCapability) {
+		out.StorageDiscoveries = c.takeStorageDiscoveries(host)
 	}
 	for _, res := range v.Results {
 		var status string
@@ -407,6 +540,10 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 			return
 		}
 		if v.Inventory != nil {
+			if formerPool, err = c.adoptReportedPoolAssignment(tx, host, v.Inventory); err != nil {
+				fail(w, 500, "pool membership adoption failed")
+				return
+			}
 			if v.Inventory.Managed != nil {
 				c.credentials.observeReceipts(host, v.Inventory.Managed.CredentialReceipts)
 			}
@@ -428,10 +565,20 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 			}
 			if hasManagedCapability(v.Capabilities) {
 				err = c.adoptManaged(tx, host, merged)
+				if err == nil {
+					err = c.cleanupJoinedAutoPool(tx, host, formerPool, merged)
+				}
 			}
 			// The managed journal is mirrored into managed_resources, not stored as inventory.
 			stored := *merged
-			stored.Managed = nil
+			// Membership is retained only as the master's latest Core report so a
+			// replacement Controller can enroll a proven peer. Other managed state is
+			// projected into managed_resources and must not be duplicated in inventory.
+			if merged.Managed != nil && merged.Managed.Membership != nil {
+				stored.Managed = &protocol.ManagedState{Membership: merged.Managed.Membership}
+			} else {
+				stored.Managed = nil
+			}
 			b, _ := json.Marshal(stored)
 			if err == nil {
 				_, err = tx.Exec("UPDATE hosts SET inventory=?,last_seen=?,sequence=? WHERE id=?", string(b), stamp(), v.Sequence, host)

@@ -1,0 +1,34 @@
+{
+  "summary": "Document the Phase 4 requirement that a pool master reconciles applicable pool-wide network and storage configuration to joining members through Core-to-Core operations. API impact: new/changed Core-to-Core contract when Phase 4 is implemented; this planning change alters no runtime API.",
+  "paths": [
+    "docs/plans/2026-09-08-nex-platform.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Member join is not implemented, so no operator workflow exists to document.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The plan records a future Core-to-Core contract; no implemented API reference changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase 4 remains planned and the published roadmap already lists multi-host pools as outstanding.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The future member-join configuration and per-member reconciliation outcomes are pool-scoped state owned by Nex Core, not Controller.",
+    "record": "Planned durable pool-membership and configuration-generation records on the pool master, with Core-to-Core member results reported through inventory so a fresh Controller re-adopts the same pool configuration and per-member status."
+  },
+  "verification": {
+    "method": "Reviewed the Phase 4 roadmap against the VLAN and storage plans; ran the documentation gate and repository privacy check.",
+    "evidence": [
+      "docs/plans/2026-09-08-nex-platform.md",
+      "docs/plans/2026-09-09-pool-vlan-networks.md",
+      "docs/plans/2026-09-11-vm-storage-repositories.md"
+    ]
+  }
+}

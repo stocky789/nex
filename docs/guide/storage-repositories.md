@@ -2,16 +2,19 @@
 
 ## Status
 
-This development workflow registers an existing storage source on one Nex Core host for VM
+This development workflow registers an existing storage source on a Nex Core host for VM
 disks and ISO images. Supported repository types are **Local directory**, **NFSv4 export**,
 **OpenZFS dataset**, **SMB3 share** and **iSCSI LUN**. Nex Core owns the registration,
 connection details and credentials; Controller shows the state reported by Core. A rebuilt
 Controller is designed to recover the same repositories when the host reconnects; native
 replacement testing for these backends is still in progress.
 
-Each repository is assigned to one Core host. It is not shared storage placement: multi-host
-writers, live migration, snapshots and backups are unavailable. Use an explicitly selected
-disposable lab host. This page documents the development build; see
+Local directories, OpenZFS datasets and iSCSI LUNs are assigned to one Core host. NFSv4 and SMB3
+repositories can be reconciled from a pool master to joined members only after every member
+reports fresh identity, writable/QEMU access and shared-lock verification. This is not live
+migration, HA, snapshots or backups. Join the member first using [Join an enrolled Nex Core to a
+pool](join-a-pool.md). Use an explicitly selected disposable lab host. This page documents the
+development build; see
 [storage repository checks](../qa/storage-repositories/checks.md) for the executed checks and
 their limits.
 
@@ -31,10 +34,14 @@ their limits.
   contain symlinks; its ancestors must be root-owned, not group/other writable, and allow
   QEMU traversal. Registration neither creates the directory nor formats a disk.
 - **NFSv4 export:** an existing NFSv4 server and absolute export path. Configure the export
-  for the selected Core and QEMU access. Nex mounts it as a hard NFSv4 mount and does not make
-  it usable by another Core. Nex verifies the mounted server and its reported filesystem
-  identity. A changed server address or filesystem blocks use; this profile does not promise
-  transparent server failover.
+  for every intended member Core and QEMU access. Nex mounts it as a hard NFSv4 mount; a joined
+  member becomes eligible only after its own identity, access and lock checks succeed. Nex
+  verifies the mounted server and its reported filesystem identity. A changed server address or
+  filesystem blocks use; this profile does not promise
+  transparent server failover. The supported profile requires both the Core root mount/check
+  identity and the QEMU service account to write. A root-squash NFS export is usable only when its
+  anonymous root mapping is explicitly the exported QEMU UID/GID (as in the disposable fixture),
+  not as a promise that arbitrary NAS ownership/ACL policies work.
 - **OpenZFS dataset:** optional ZFS support requires the matching Debian OpenZFS userspace
   tools and kernel module already installed and working on Core. Supply an existing imported,
   mounted filesystem dataset, its pool and its reported mount point. Encrypted datasets must
@@ -42,7 +49,7 @@ their limits.
   mounts or unmounts the dataset, or changes pool or dataset properties. The reported mount
   point must be a clean absolute path without whitespace, control characters, `%` or `\`.
 - **SMB3 share:** an existing SMB 3.1.1 server/share with encryption support, and an account and
-  password with access for the selected Core and QEMU. Nex uses the supported encrypted,
+  password with access for every intended member Core and QEMU. Nex uses the supported encrypted,
   strict-cache profile; SMB1 and relaxed cache/locking modes are not supported. New SMB
   registration also needs permission to create and retain one hidden identity file at the share
   root.
@@ -61,15 +68,23 @@ their limits.
 2. Select **Register storage**. In **Register VM storage**, enter a **Name**, select the
    **Host**, then choose **Repository type**. The available types are **Local directory**,
    **NFSv4 export**, **OpenZFS dataset**, **SMB3 share** and **iSCSI LUN**.
-3. Enter the existing source details for the selected type:
+3. Select **Discover safe existing sources** after choosing a reachable Core. Core performs a
+   short-lived, read-only check and lists compatible local paths, NFS exports/directories, SMB
+   shares/directories, imported ZFS datasets or iSCSI targets. Select an item, then select it
+   again after choosing an NFS export or SMB share to browse an existing subdirectory. **Close**
+   cancels the request. Discovery never mounts, creates, formats or changes a source. If it is
+   unavailable, stale or cannot authenticate, enter the source manually.
+4. Enter or confirm the existing source details for the selected type:
 
    - **Local directory:** enter its **Existing directory**.
-   - **NFSv4 export:** enter **NFS server** and the absolute **Export path**.
+   - **NFSv4 export:** enter **NFS server**, the absolute **Export path**, and an optional
+     existing directory within that export.
    - **OpenZFS dataset:** enter **Imported pool**, **Existing dataset** and its original
      **Reported mount point**. Nex verifies that existing mount, then creates its own managed
      bind alias under the Core storage root; VM disk paths use the alias. Do not enter that
      Core-managed alias in the form.
-   - **SMB3 share:** enter **SMB server**, **Share**, **Account** and **Password**. Core creates
+   - **SMB3 share:** enter **SMB server**, **Share**, an optional existing directory, **Account**
+     and **Password**. Core creates
      `.nex-storage-marker` at the share root if it is absent; otherwise it verifies and reuses
      the existing valid marker. Keep that file and its contents unchanged: do not rename, delete
      or replace it.
@@ -79,7 +94,7 @@ their limits.
      chooses its managed mount point after it allocates the repository identity; do not supply
      a mount path.
 
-4. Select **Register and check access**. Registration is queued until Core has connected or
+5. Select **Register and check access**. Registration is queued until Core has connected or
    inspected the source, confirmed its identity and tested access for Core and QEMU. For SMB
    and iSCSI, credentials are handed to the selected Core and are not shown in the repository
    table or Task history. Wait for the row to report `healthy`, **Readable**, **Writable** and
@@ -115,13 +130,35 @@ their limits.
   LUN, mount or unmount the original ZFS dataset, or change ZFS properties. Detaching an SMB
   repository also leaves `.nex-storage-marker` on the share.
 
+### Use NFS or SMB on a joined member
+
+Register the NFS or SMB repository on the **pool master**, not separately under another name on
+each member. The member's Core pulls the master's desired record and reports its own result. In
+**Pool storage repositories**, wait for that member's access to show a current generation plus
+**Readable**, **Writable**, **QEMU writable** and **Locking**. Only then can a VM placed on that
+member select the repository. A failed, stale or missing access report is intentionally not a
+placement override: correct the member's export/share, identity, QEMU permissions, capacity or
+locking support and wait for Core reconciliation/recheck. Do not rerun registration on the member.
+The NFS/SMB source and optional selected relative directory stay master-owned; the member receives
+only that accepted record, and SMB credentials move directly between authenticated Cores into a
+member-scoped Core receipt.
+
+Also check the member's **pool-storage-reconciliation** health check. It is **unknown** before its
+first reconciliation or when its observation is stale, **failed** after a Core reconciliation
+failure, and **passed** only after a fresh success. Unknown or stale is not storage readiness.
+
+OpenZFS and iSCSI do not follow this path: they remain local/single-writer. Never attach the same
+iSCSI filesystem to another Core as a workaround.
+
 ## Expected result
 
 **Pool storage repositories** shows each reported repository's backend/source, **Accessible
-host**, Core access state, capacity and check time. A healthy repository can store VM disks and
-ISO images on its assigned host. Core checks its identity and access again before disk, media and
-guest starts, so a disconnected share, changed mount, read-only filesystem or failed permission
-check blocks new writes and guest starts using that repository.
+host**, Core access state, capacity and check time. For master-owned NFS/SMB storage it also shows
+each member's observed access; a member is usable only after the fresh generation/identity,
+readable, writable, QEMU-writable and locking checks all succeed. A healthy repository can store
+VM disks and ISO images on its eligible host. Core checks its identity and access again before
+disk, media and guest starts, so a disconnected share, changed mount, read-only filesystem or
+failed permission/lock check blocks new writes and guest starts using that repository.
 
 Core preserves the repository identity and configuration on the host. Controller loss does not
 stop resident VMs or authorize another host to write the storage. After a Controller replacement,
@@ -173,6 +210,11 @@ new dependent action. A terminal failed task is not automatically retried.
 - **Detach is refused:** remove or complete the listed VM/media dependency first. If an operation
   is uncertain, wait for Core to reconcile it; do not retry by registering the same source under
   another name.
+- **A master NFS/SMB update, credential rotation or detach is refused for a member workload:** a
+  member's Core reservation is still protecting a Nex-managed VM disk or ISO reference. Finish or
+  remove that dependency and wait for the member's healthy serialized Core journal to release the
+  reservation. Do not force a source change, detach the share on the member, or assume a generic
+  native disk is fenced by this workflow.
 - **Credential rotation or retirement is refused:** for rotation, shut off every VM using the
   repository and reconcile pending disk or media operations. For retirement, refresh **Unused
   storage credentials** and retry only if Core still lists the receipt; a changed attachment is
@@ -189,5 +231,14 @@ See [storage repository checks](../qa/storage-repositories/checks.md) for each e
 and its limits, including NFS outage recovery and the first Controller replacement. Final
 graceful Core reboot, the final Controller replacement and remaining backend fault checks
 are still in progress; these results do not establish other server or hardware profiles.
+
+The disposable two-Core NFS/SMB walkthrough passed master registration from browser-selected
+directories, member mount/identity/QEMU/lock access, member VM disks, in-use detach refusal,
+peer-outage recovery, permission failure/recovery, offline generation catch-up, unused detach and
+fresh-Controller adoption without repository or credential re-entry. See the exact scenarios in
+[bug-ledger lab evidence](../qa/2026-09-12-bug-ledger.md#bug-0094-primary-native-pool-walkthrough).
+The separate iSCSI fixture refused an unauthorized second initiator; shared writable iSCSI remains
+unsupported. These results do not prove migration, HA, fencing, physical-hardware support or UEFI
+behavior.
 
 [Back to the user guide](README.md)

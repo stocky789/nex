@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -13,6 +14,44 @@ import (
 
 	"nex.local/nex/internal/protocol"
 )
+
+// The Core service runs with UMask=0077. Exercise that process-wide setting in
+// a child so parallel package tests cannot observe it.
+func TestStorageMountRootRepairsPrivateUmask(t *testing.T) {
+	const helper = "NEX_STORAGE_MOUNT_ROOT_UMASK_HELPER"
+	if os.Getenv(helper) == "1" {
+		_ = syscall.Umask(0077)
+		storageMountRoot = filepath.Join(os.Getenv("NEX_STORAGE_MOUNT_ROOT_PARENT"), "mounts")
+		if err := ensureStorageMountRoot(); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	root := t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestStorageMountRootRepairsPrivateUmask$")
+	cmd.Env = append(os.Environ(), helper+"=1", "NEX_STORAGE_MOUNT_ROOT_PARENT="+root)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("private-umask helper: %v\n%s", err, out)
+	}
+	path := filepath.Join(root, "mounts")
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0711 {
+		t.Fatalf("mount root = %v, %v", info, err)
+	}
+	if err := os.Chmod(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	old := storageMountRoot
+	storageMountRoot = path
+	t.Cleanup(func() { storageMountRoot = old })
+	if err := ensureStorageMountRoot(); err != nil {
+		t.Fatalf("repair existing Core root: %v", err)
+	}
+	info, err = os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0711 {
+		t.Fatalf("repaired mount root = %v, %v", info, err)
+	}
+}
 
 func TestNFSKernelFilesystemIdentity(t *testing.T) {
 	const volumes = `NV SERVER PORT DEV FSID FSC
@@ -33,6 +72,35 @@ v4 7f000002 801 0:65 9:2 no
 	other, err := nfsFilesystemIDForDevice(volumes, "0:65")
 	if err != nil || other == got {
 		t.Fatalf("second NFS backing identity = %q, %v", other, err)
+	}
+}
+
+func TestNFSIdentityIncludesSelectedDirectory(t *testing.T) {
+	v := &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/exports/vms", Directory: "team"}
+	got, err := nfsIdentity(protocol.StorageRegistration{}, v, v.Server+":"+v.Export, storageAccess{}, "nfs4:7f000001:801:1:2")
+	if err != nil || !strings.Contains(got.Identity, ":directory=team:") {
+		t.Fatalf("NFS directory identity = %+v, %v", got, err)
+	}
+}
+
+func TestRemoteSelectedDirectoryDoesNotRequireLocalRootOwnership(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0770); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "discovered"), 0777); err != nil {
+		t.Fatal(err)
+	}
+	base := storageAccess{Path: root, Identity: "nfs:root", FilesystemID: "fsid", Health: "healthy"}
+	got, err := remoteSubpathAccess(root, "discovered", base)
+	if err != nil || got.Path != filepath.Join(root, "discovered") || got.Identity != base.Identity {
+		t.Fatalf("selected remote directory = %+v, %v", got, err)
+	}
+	if err := os.Symlink("/", filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remoteSubpathAccess(root, "link", base); err == nil {
+		t.Fatal("remote symlink accepted")
 	}
 }
 
@@ -462,6 +530,9 @@ func TestRemoteMountRejectsReplacementAndAdminUnit(t *testing.T) {
 		t.Fatalf("replaced mount accepted: %v", err)
 	}
 	_, unitPath := remoteUnitPath(s)
+	if _, err := os.Stat(unitPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed validation left a new mount unit behind: %v", err)
+	}
 	if err := os.WriteFile(unitPath, []byte("[Mount]\nWhat=admin:/vms\n"), 0600); err != nil {
 		t.Fatal(err)
 	}

@@ -66,6 +66,7 @@ type ManagedState struct {
 	// replaced Controller records so host truth is not lost with the old database.
 	Outcomes           []ManagedOutcome           `json:"outcomes,omitempty"`
 	CredentialReceipts []StorageCredentialReceipt `json:"credential_receipts,omitempty"`
+	Membership         *PoolMembership            `json:"membership,omitempty"`
 }
 
 // Ports lists the physical NICs or bonds enslaved to this bridge.
@@ -145,6 +146,7 @@ type Command struct {
 	VMMedia          *VMMediaRequest                 `json:"vm_media,omitempty"`
 	StorageLifecycle *StorageLifecycleRequest        `json:"storage_lifecycle,omitempty"`
 	CredentialRetire *StorageCredentialRetireRequest `json:"credential_retire,omitempty"`
+	Pool             *PoolCommand                    `json:"pool,omitempty"`
 	OperationID      string                          `json:"operation_id"`
 	Kind             string                          `json:"kind"`
 }
@@ -155,11 +157,12 @@ type Result struct {
 	ObservedAt  time.Time `json:"observed_at"`
 }
 type ReportRequest struct {
-	Capabilities []string   `json:"capabilities,omitempty"`
-	Version      int        `json:"version"`
-	Sequence     uint64     `json:"sequence"`
-	Inventory    *Inventory `json:"inventory,omitempty"`
-	Results      []Result   `json:"results"`
+	Capabilities       []string                 `json:"capabilities,omitempty"`
+	Version            int                      `json:"version"`
+	Sequence           uint64                   `json:"sequence"`
+	Inventory          *Inventory               `json:"inventory,omitempty"`
+	Results            []Result                 `json:"results"`
+	StorageDiscoveries []StorageDiscoveryResult `json:"storage_discoveries,omitempty"`
 }
 type ReportResponse struct {
 	Commands            []Command                 `json:"commands"`
@@ -167,6 +170,7 @@ type ReportResponse struct {
 	Consoles            []ConsoleRequest          `json:"consoles,omitempty"`
 	CredentialOffers    []StorageCredentialOffer  `json:"credential_offers,omitempty"`
 	StorageRepositories *StorageRepositorySupport `json:"storage_repositories,omitempty"`
+	StorageDiscoveries  []StorageDiscoveryRequest `json:"storage_discoveries,omitempty"`
 }
 
 // StorageRepositorySupport is the Controller-first v2 upgrade acknowledgement. A Core must

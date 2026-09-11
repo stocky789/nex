@@ -77,6 +77,38 @@ func TestCredentialRetirementQueuesOnlyCoreCleanup(t *testing.T) {
 	a.call("POST", "/api/v1/storage/credentials/receipt-2/retire", body, nil, http.StatusConflict)
 }
 
+func TestStorageDiscoveryResultMustMatchOriginalHostAndPool(t *testing.T) {
+	c := &Controller{}
+	b := c.discoveryBroker()
+	request := protocol.StorageDiscoveryRequest{RequestID: "discover-1", PoolID: "pool-1", HostID: "host-1", Kind: protocol.StorageKindLocal, Credentials: &protocol.StorageCredentials{Username: "operator", Secret: "not-retained"}}
+	ch := make(chan protocol.StorageDiscoveryResult, 1)
+	b.pending[request.RequestID] = storageDiscoveryPending{request: request, result: ch}
+	if got := c.takeStorageDiscoveries("host-1"); len(got) != 1 || got[0].RequestID != request.RequestID {
+		t.Fatalf("request was not scoped for its host: %+v", got)
+	} else if got[0].Credentials == nil {
+		t.Fatal("outbound discovery lost credential handoff")
+	}
+	if retained := b.pending[request.RequestID].request.Credentials; retained != nil {
+		t.Fatalf("controller retained discovery credentials after dispatch: %+v", retained)
+	}
+	c.completeStorageDiscoveries("host-2", []protocol.StorageDiscoveryResult{{RequestID: request.RequestID, PoolID: request.PoolID, HostID: "host-2"}})
+	c.completeStorageDiscoveries("host-1", []protocol.StorageDiscoveryResult{{RequestID: request.RequestID, PoolID: "other-pool", HostID: "host-1"}})
+	select {
+	case <-ch:
+		t.Fatal("cross-scope result accepted")
+	default:
+	}
+	c.completeStorageDiscoveries("host-1", []protocol.StorageDiscoveryResult{{RequestID: request.RequestID, PoolID: request.PoolID, HostID: "host-1", Status: "succeeded"}})
+	select {
+	case got := <-ch:
+		if got.Status != "succeeded" {
+			t.Fatalf("valid result lost: %+v", got)
+		}
+	default:
+		t.Fatal("valid scoped result was not delivered")
+	}
+}
+
 func TestFreshControllerAdoptsCoreResolvedRemoteStorage(t *testing.T) {
 	a := newClient(t)
 	host := a.enroll(a.token(a.site(), ""), csr(t))

@@ -16,15 +16,46 @@ import (
 	"sync"
 	"syscall"
 
+	"nex.local/nex/internal/agent"
 	"nex.local/nex/internal/vmhost"
 	"nex.local/nex/internal/websecurity"
 )
 
 type Config struct {
-	DataDir, AgentStateDir, UIPath, DocsPath, SourcePath string
-	Authenticate                                         func(context.Context, string) error
-	Engine                                               vmhost.Config
+	DataDir, AgentStateDir, UIPath, DocsPath, SourcePath, PoolPeerListen string
+	Authenticate                                                         func(context.Context, string) error
+	Engine                                                               vmhost.Config
 }
+
+// PoolPeerHandler serves the isolated Core-to-Core join endpoint; it never accepts an
+// operator session or Controller command as membership authority.
+func (s *Service) PoolPeerHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handoffAgents.Lock()
+		a, err := getHandoffAgent(s.cfg.AgentStateDir)
+		handoffAgents.Unlock()
+		if err != nil {
+			http.Error(w, "pool peer unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if r.URL.Path == "/api/v1/pool/storage" || strings.HasPrefix(r.URL.Path, "/api/v1/pool/storage/") {
+			agent.PoolStorageHandler(a.store).ServeHTTP(w, r)
+			return
+		}
+		agent.PoolPeerHandler(a.store).ServeHTTP(w, r)
+	})
+}
+
+func (s *Service) PoolPeerTLSConfig() (*tls.Config, error) {
+	handoffAgents.Lock()
+	a, err := getHandoffAgent(s.cfg.AgentStateDir)
+	handoffAgents.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return agent.PoolPeerTLSConfig(a.store)
+}
+
 type Service struct {
 	cfg        Config
 	engine     *vmhost.Engine
@@ -134,6 +165,9 @@ func (s *Service) Handler() http.Handler {
 	m.HandleFunc("DELETE /api/local/v1/session", s.auth(s.logout))
 	m.HandleFunc("GET /api/local/v1/host", s.auth(s.host))
 	m.HandleFunc("POST /api/local/v1/enrollment", s.auth(s.enrollment))
+	m.HandleFunc("POST /api/local/v1/pool/join", s.auth(s.joinPool))
+	m.HandleFunc("POST /api/local/v1/pool/join-csr", s.auth(s.poolJoinCSR))
+	m.HandleFunc("POST /api/local/v1/pool/join-offer", s.auth(s.poolJoinOffer))
 	m.HandleFunc("GET /api/local/v1/vms", s.auth(s.vms))
 	m.HandleFunc("POST /api/local/v1/vms/{id}/actions", s.auth(s.power))
 	m.HandleFunc("GET /api/local/v1/vms/{id}/console", s.auth(s.console))

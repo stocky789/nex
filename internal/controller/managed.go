@@ -387,6 +387,12 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		return resolved(kind, id)
 	}
 	for _, s := range m.Storage {
+		// A remote repository's configuration belongs to its master. Members may report
+		// their own access while reconnecting, but that observation must never replace
+		// the master's mirrored record or manufacture a second repository row.
+		if m.Membership != nil && m.Membership.Valid() == nil && m.Membership.PoolID == pool && m.Membership.MasterHostID != host && (s.Kind == protocol.StorageKindNFS || s.Kind == protocol.StorageKindSMB) {
+			continue
+		}
 		if s.OperationID == "" {
 			s.OperationID = storageOperation[s.ID]
 		}
@@ -445,6 +451,11 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 			if err != nil {
 				return err
 			}
+			// The Core report is the evidence that this existing journal entry now
+			// belongs to the joined pool. Preserve its original command/request/audit.
+			if _, err = tx.Exec("UPDATE managed_resources SET pool_id=?,host_id=? WHERE id=? AND kind='network-register'", pool, host, n.ID); err != nil {
+				return err
+			}
 			continue
 		}
 		reason := ""
@@ -481,7 +492,7 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		reason := ""
 		if !nameValid(md.Name) || filepath.Base(md.Name) != md.Name || !strings.HasSuffix(strings.ToLower(md.Name), ".iso") || md.SizeBytes < 32774 || !sha256Hex(md.SHA256) {
 			reason = "invalid ISO name, size or SHA-256"
-		} else if _, e := readyResource(tx, md.StorageID, "storage-register", pool, host); e != nil {
+		} else if _, e := c.readyStorageForHost(tx, md.StorageID, pool, host); e != nil {
 			reason = "storage " + clip(md.StorageID, 64) + " is not adopted on this host"
 		} else if ok, err := free(md.ID, "id:"+md.ID); err != nil {
 			return err
@@ -523,7 +534,7 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 			reason = "VM definition is missing from libvirt on the host"
 		}
 		for _, d := range s.Disks {
-			if _, e := readyResource(tx, d.StorageID, "storage-register", pool, host); e != nil && reason == "" {
+			if _, e := c.readyStorageForHost(tx, d.StorageID, pool, host); e != nil && reason == "" {
 				reason = "storage " + clip(d.StorageID, 64) + " is not adopted on this host"
 			}
 		}
@@ -765,6 +776,30 @@ func readyResource(tx *sql.Tx, id, kind, pool, host string) (protocol.Command, e
 	return cmd, err
 }
 
+// readyStorageForHost accepts a pool remote repository on a member only when the
+// master has just reported that member's matching, QEMU-safe access.  The row remains
+// a disposable mirror of the master's record; this is not a Controller placement grant.
+func (c *Controller) readyStorageForHost(tx *sql.Tx, id, pool, host string) (protocol.Command, error) {
+	if cmd, err := readyResource(tx, id, "storage-register", pool, host); err == nil {
+		return cmd, nil
+	}
+	var raw, status string
+	var cmd protocol.Command
+	if err := tx.QueryRow("SELECT r.command,o.status FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.id=? AND r.kind='storage-register' AND r.pool_id=?", id, pool).Scan(&raw, &status); err != nil || status != "succeeded" || json.Unmarshal([]byte(raw), &cmd) != nil || cmd.Storage == nil {
+		return cmd, fmt.Errorf("selected resource must be verified on the selected host and pool")
+	}
+	s := cmd.Storage
+	if s.HostID == host || (s.Kind != protocol.StorageKindNFS && s.Kind != protocol.StorageKindSMB) {
+		return cmd, fmt.Errorf("selected resource must be verified on the selected host and pool")
+	}
+	for _, access := range s.MemberAccess {
+		if access.RepositoryID == s.ID && access.HostID == host && access.Generation == s.Generation && access.Identity != "" && access.Readable && access.Writable && access.QEMUWritable && access.Locking && access.Error == "" && !access.ObservedAt.IsZero() && time.Since(access.ObservedAt) <= c.cfg.StaleAfter {
+			return cmd, nil
+		}
+	}
+	return cmd, fmt.Errorf("selected resource must be verified on the selected host and pool")
+}
+
 type createVMRequest struct {
 	RequestID string `json:"request_id"`
 	protocol.VMCreateSpec
@@ -806,7 +841,13 @@ func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf
 	}
 	// Every reference must name a registration this host has verified in this pool.
 	resolve := func(id, kind, what string) (protocol.Command, bool) {
-		cmd, e := readyResource(tx, id, kind, v.PoolID, v.HostID)
+		var cmd protocol.Command
+		var e error
+		if kind == "storage-register" {
+			cmd, e = c.readyStorageForHost(tx, id, v.PoolID, v.HostID)
+		} else {
+			cmd, e = readyResource(tx, id, kind, v.PoolID, v.HostID)
+		}
 		if e != nil {
 			fail(w, 404, what+" is not registered and verified on the selected host and pool")
 		}
@@ -1022,7 +1063,13 @@ func (c *Controller) updateVM(w http.ResponseWriter, r *http.Request, user, csrf
 		}
 	}
 	resolve := func(id, kind, what string) (protocol.Command, bool) {
-		cmd, e := readyResource(tx, id, kind, cur.PoolID, cur.HostID)
+		var cmd protocol.Command
+		var e error
+		if kind == "storage-register" {
+			cmd, e = c.readyStorageForHost(tx, id, cur.PoolID, cur.HostID)
+		} else {
+			cmd, e = readyResource(tx, id, kind, cur.PoolID, cur.HostID)
+		}
 		if e != nil {
 			fail(w, 404, what+" is not registered and verified on the VM's host and pool")
 		}

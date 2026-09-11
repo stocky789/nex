@@ -6,8 +6,10 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"nex.local/nex/internal/protocol"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -132,5 +134,81 @@ func TestHostOwnedIdentity(t *testing.T) {
 	}
 	if p := b.pools(); len(p) != 1 || p[0].ID != poolID || p[0].Name != "Rack 1" || p[0].MasterHostID != hostID {
 		t.Fatalf("replacement Controller pool: %+v", p)
+	}
+}
+
+func TestFreshControllerAdoptsOnlyCoreReportedPoolMembers(t *testing.T) {
+	const masterID = "6f1c2a3e-9b7d-4c5e-8a1b-0d2e3f4a5b6c"
+	const poolID = "0a9b8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d"
+	const memberID = "1f1c2a3e-9b7d-4c5e-8a1b-0d2e3f4a5b6c"
+	a := newClient(t)
+	site := a.site()
+	master := a.enrollWith(protocol.EnrollRequest{Token: a.token(site, ""), CSRPEM: csr(t), HostID: masterID, PoolID: poolID, PoolName: "Core pool"}, http.StatusOK)
+	cert := certificate(t, master.CertificatePEM)
+	membership := protocol.PoolMembership{PoolID: poolID, MasterHostID: masterID, Generation: 1, Members: []protocol.PoolMember{
+		{HostID: masterID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
+		{HostID: memberID, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"},
+	}}
+	a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{Membership: &membership}}})
+	member := a.enrollWith(protocol.EnrollRequest{Token: a.token(site, ""), CSRPEM: csr(t), HostID: memberID, PoolID: poolID, PoolName: "Core pool"}, http.StatusOK)
+	if member.PoolID != poolID || member.HostID != memberID || len(a.pools()) != 1 {
+		t.Fatalf("Core-reported member was not adopted: %+v", member)
+	}
+	// A caller cannot add itself merely by knowing a pool ID, including after another
+	// member enrolled; only the master Core's record is admission authority.
+	a.enrollWith(protocol.EnrollRequest{Token: a.token(site, ""), CSRPEM: csr(t), HostID: "2f1c2a3e-9b7d-4c5e-8a1b-0d2e3f4a5b6c", PoolID: poolID, PoolName: "Core pool"}, http.StatusConflict)
+}
+
+func TestCoreReportedJoinMovesExistingPeerIntoMasterPool(t *testing.T) {
+	a := newClient(t)
+	site := a.site()
+	master := a.enroll(a.token(site, ""), csr(t))
+	member := a.enroll(a.token(site, ""), csr(t))
+	pool := a.poolOf(master.HostID)
+	if pool == a.poolOf(member.HostID) {
+		t.Fatal("test peers unexpectedly share an initial pool")
+	}
+	memberCert := certificate(t, member.CertificatePEM)
+	// This is the former standalone host's actual Core projection. It must remain
+	// under that pool until a later joined-host report confirms the same resource.
+	a.report(memberCert, protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Managed: hostDefaults(member.HostID)}})
+	former := a.poolOf(member.HostID)
+	const unrelated = "retained-empty-pool"
+	if _, err := a.c.db.Exec("INSERT INTO pools(id,site_id,name,master_host_id) VALUES(?,?,?,?)", unrelated, site, "Other", member.HostID); err != nil {
+		t.Fatal(err)
+	}
+	var before string
+	if err := a.c.db.QueryRow("SELECT command FROM managed_resources WHERE id='host-iso'").Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	membership := protocol.PoolMembership{PoolID: pool, MasterHostID: master.HostID, Generation: 1, Members: []protocol.PoolMember{
+		{HostID: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
+		{HostID: member.HostID, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"},
+	}}
+	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{Membership: &membership}}})
+	// Membership changes the host projection, but an absent resource report must not
+	// manufacture a destination assignment or rewrite the original command.
+	a.report(memberCert, protocol.ReportRequest{Version: protocol.Version, Sequence: 2, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{Membership: &membership}}})
+	var heldPool, heldCommand string
+	if err := a.c.db.QueryRow("SELECT pool_id,command FROM managed_resources WHERE id='host-iso'").Scan(&heldPool, &heldCommand); err != nil || heldPool != former || heldCommand != before {
+		t.Fatalf("unreported resource was rehomed: pool=%q err=%v", heldPool, err)
+	}
+	// A full Core report re-adopts the resource under the joined pool, allowing only
+	// then the empty former auto-pool to disappear.
+	joined := hostDefaults(member.HostID)
+	joined.Membership = &membership
+	a.report(memberCert, protocol.ReportRequest{Version: protocol.Version, Sequence: 3, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Managed: joined}})
+	for _, host := range a.hosts() {
+		if host.ID == member.HostID && host.PoolID != pool {
+			t.Fatalf("member stayed in obsolete Controller pool: %+v", host)
+		}
+	}
+	if pools := a.pools(); len(pools) != 2 || !slices.ContainsFunc(pools, func(p protocol.Pool) bool { return p.ID == pool }) || !slices.ContainsFunc(pools, func(p protocol.Pool) bool { return p.ID == unrelated }) || slices.ContainsFunc(pools, func(p protocol.Pool) bool { return p.ID == former }) {
+		t.Fatalf("cleanup removed the wrong pool or retained its source: %+v", pools)
+	}
+	var got []protocol.StorageRegistration
+	read(t, a.call("GET", "/api/v1/storage", nil, nil, http.StatusOK), &got)
+	if len(got) != 1 || got[0].PoolID != pool || got[0].HostID != member.HostID {
+		t.Fatalf("actual Core resource was not adopted: %+v", got)
 	}
 }

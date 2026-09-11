@@ -17,6 +17,8 @@ ExecStopPost=/usr/lib/nex/core-local-setup offline
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=yes
+# The embedded agent verifies ISO storage as libvirt-qemu with runuser.
+AmbientCapabilities=CAP_SETUID
 ProtectHome=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes

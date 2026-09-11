@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"log"
@@ -36,6 +37,7 @@ func main() {
 	flag.StringVar(&cfg.DataDir, "data-dir", "/var/lib/nex/core-local", "private local service state")
 	flag.StringVar(&cfg.AgentStateDir, "agent-state-dir", "/var/lib/nex-core-agent", "private agent identity; stop standalone agent service")
 	flag.StringVar(&listen, "listen", ":9443", "HTTPS listen address")
+	flag.StringVar(&cfg.PoolPeerListen, "pool-peer-listen", ":9444", "Core-to-Core pool peer HTTPS listen address")
 	flag.StringVar(&cert, "tls-cert", "", "TLS certificate file")
 	flag.StringVar(&key, "tls-key", "", "TLS key file")
 	flag.StringVar(&cfg.DocsPath, "docs-dir", "docs/api", "generated API reference directory")
@@ -81,6 +83,7 @@ func main() {
 		log.Fatal("cannot resume agent identity: ", err)
 	}
 	server := &http.Server{Addr: listen, Handler: s.Handler(), TLSConfig: s.TLSConfig(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
+	peerServer := &http.Server{Addr: cfg.PoolPeerListen, Handler: s.PoolPeerHandler(), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13, GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) { return s.PoolPeerTLSConfig() }}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go func() {
@@ -88,6 +91,12 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)
+		_ = peerServer.Shutdown(ctx)
+	}()
+	go func() {
+		if err := peerServer.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+			log.Printf("Nex Core pool peer: %v", err)
+		}
 	}()
 	log.Printf("Nex Core local UI listening on %s", listen)
 	if err = server.ListenAndServeTLS(cert, key); err != nil && err != http.ErrServerClosed {

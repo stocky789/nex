@@ -11,7 +11,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CLIENTS = {"nfs-common", "cifs-utils", "open-iscsi"}
+CLIENTS = {"nfs-common", "libnfs-utils", "cifs-utils", "smbclient", "open-iscsi"}
 
 
 class StoragePackagingTests(unittest.TestCase):
@@ -20,6 +20,10 @@ class StoragePackagingTests(unittest.TestCase):
         package = (ROOT / "packaging/core-local/build-inside.sh").read_text()
         self.assertTrue(CLIENTS <= installer)
         self.assertTrue(all(client in package for client in CLIENTS))
+
+    def test_storage_lab_installs_discovery_clients(self):
+        lab = (ROOT / "tests/integration/bug_ledger_lab.py").read_text()
+        self.assertTrue(all(client in lab for client in CLIENTS))
 
     def test_zfs_stays_an_optional_host_capability(self):
         package = (ROOT / "packaging/core-local/build-inside.sh").read_text()

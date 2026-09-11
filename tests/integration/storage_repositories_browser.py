@@ -28,7 +28,7 @@ def main():
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     host = {"id": "core-qa", "pool_id": "pool-qa", "hostname": "core-qa", "connection": "fresh", "revoked": False,
-            "capabilities": ["managed-vm-v1", "storage-repositories-v1"], "inventory": {"cpu_count": 4, "memory_bytes": 8 * 1024 ** 3}}
+            "capabilities": ["managed-vm-v1", "storage-repositories-v1", "storage-discovery-v1"], "inventory": {"cpu_count": 4, "memory_bytes": 8 * 1024 ** 3}}
     healthy = {"id": "core-assigned-repository", "pool_id": "pool-qa", "host_id": "core-qa", "name": "VM share", "kind": "smb",
                "source": {"smb": {"server": "files.example.test", "share": "vms"}}, "identity": "files.example.test/vms",
                "generation": 1, "status": "succeeded", "operation_id": "storage-register-core", "credential_present": True,
@@ -43,7 +43,7 @@ def main():
             "storage": [], "vms": [], "networks": [], "media": [], "operations": [], "audit": []}
     receipts = [{"receipt": "core-unused-receipt", "host_id": "core-qa", "status": "ready", "created_at": "2026-09-11T00:00:00Z", "retire_eligible": True}]
     submissions, errors, checks = [], [], []
-    mode = {"fail_recheck": True, "unauthorized": False, "fail_retire": True}
+    mode = {"fail_recheck": True, "unauthorized": False, "fail_retire": True, "fail_discovery": False}
 
     def api(route):
         request = route.request
@@ -59,7 +59,12 @@ def main():
             return
         body = request.post_data_json
         submissions.append((path, body))
-        if path == "storage/credentials":
+        if path == "storage/discover":
+            if mode["fail_discovery"]:
+                route.fulfill(status=504, json={"error": "Core discovery became stale"})
+            else:
+                route.fulfill(json={"request_id": body["request_id"], "pool_id": "pool-qa", "host_id": "core-qa", "status": "succeeded", "candidates": [{"kind": "nfs", "source": {"nfs": {"server": "nfs.example.test", "export": "/exports/vms"}}, "path": "/exports/vms", "browsable": True}]})
+        elif path == "storage/credentials":
             # A credential endpoint returns only Core's opaque receipt.  The test also verifies
             # that no later durable request repeats the secret.
             route.fulfill(status=201, json={"receipt": "core-only-receipt"})
@@ -128,6 +133,15 @@ def main():
             assert not submissions, submissions
             form.get_by_label("NFS server").fill("nfs.example.test")
             form.get_by_label("Export path").fill("/exports/vms")
+            form.get_by_role("button", name="Discover safe existing sources", exact=True).click()
+            expect(form.get_by_role("button", name="Use /exports/vms", exact=True)).to_be_visible()
+            form.get_by_role("button", name="Use /exports/vms", exact=True).click()
+            expect(form.get_by_label("Export path")).to_have_value("/exports/vms")
+            mode["fail_discovery"] = True
+            form.get_by_role("button", name="Discover safe existing sources", exact=True).click()
+            expect(page.get_by_role("alert")).to_contain_text("Core discovery became stale")
+            mode["fail_discovery"] = False
+            checks.append("Core-guided source discovery selects a sanitized source and keeps stale discovery failures actionable")
             # All backend field sets exist and use native constraints before a request leaves the browser.
             for kind, labels in [("zfs", ("Imported pool", "Existing dataset", "Reported mount point")),
                                  ("smb", ("SMB server", "Share", "Account", "Password")),

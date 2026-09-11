@@ -302,6 +302,13 @@ class CoreLocalPackageTests(unittest.TestCase):
         service = (ROOT / 'packaging/core-local/nex-core-local.service').read_text()
         self.assertIn('UMask=0077', service)
 
+    def test_embedded_agent_keeps_the_qemu_probe_identity_capability(self):
+        """BUG-0093: the embedded agent uses runuser during ISO storage registration."""
+        service = (ROOT / 'packaging/core-local/nex-core-local.service').read_text()
+        self.assertIn('AmbientCapabilities=CAP_SETUID', service)
+        self.assertIn('NoNewPrivileges=yes', service)
+        self.assertIn('RestrictSUIDSGID=yes', service)
+
 
 if __name__ == '__main__':
     unittest.main()

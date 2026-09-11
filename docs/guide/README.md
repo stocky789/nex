@@ -17,18 +17,20 @@ build**. Both are for local lab evaluation; the installer does not yet deliver a
    (authorized maintainers; nginx releases, monitoring and rollback).
 8. [Register VM storage repositories](storage-repositories.md)
    (local directories, NFSv4, existing OpenZFS datasets, SMB3 and iSCSI LUNs).
-9. [Register resources and create a virtual machine](create-virtual-machine.md)
-10. [Edit a virtual machine](edit-virtual-machine.md)
+9. [Join an enrolled Nex Core to a pool](join-a-pool.md)
+   (development local-API workflow; shared NFS/SMB member access only).
+10. [Register resources and create a virtual machine](create-virtual-machine.md)
+11. [Edit a virtual machine](edit-virtual-machine.md)
    (change a VM in place on its General tab; live changes where the guest can take them).
-11. [Control VM power](vm-power.md)
-12. [Open a VM or host console](vm-console.md)
+12. [Control VM power](vm-power.md)
+13. [Open a VM or host console](vm-console.md)
    (toolbar with send keys, display scaling and resize, clipboard, typing, screenshots,
    CD/DVD insert/eject on VMs, and a Console tab on hosts).
-13. [Install guest tools and read guest information](guest-tools.md)
+14. [Install guest tools and read guest information](guest-tools.md)
    (QEMU guest agent and spice-vdagent; OS, hostname, addresses and clipboard readiness).
-14. [Check and apply software updates](software-updates.md)
+15. [Check and apply software updates](software-updates.md)
    (Controller and host-local package updates from a configured repo).
-15. [Publish a Nex Core release](publish-a-release.md)
+16. [Publish a Nex Core release](publish-a-release.md)
    (authorized maintainers; tag-driven ISO and package build, and website publication).
 
 Each procedure states its prerequisites, expected outcome, troubleshooting, and verification

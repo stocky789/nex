@@ -277,6 +277,7 @@ func (c *Controller) Handler() http.Handler {
 	m.HandleFunc("GET /api/v1/vms", c.admin(c.appliances))
 	m.HandleFunc("GET /api/v1/storage", c.admin(c.storage))
 	m.HandleFunc("POST /api/v1/storage", c.admin(c.storage))
+	m.HandleFunc("POST /api/v1/storage/discover", c.admin(c.discoverStorage))
 	m.HandleFunc("POST /api/v1/storage/{id}/update", c.admin(c.updateStorage))
 	m.HandleFunc("POST /api/v1/storage/{id}/recheck", c.admin(c.recheckStorage))
 	m.HandleFunc("POST /api/v1/storage/{id}/detach", c.admin(c.detachStorage))

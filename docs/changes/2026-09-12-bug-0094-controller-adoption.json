@@ -1,0 +1,34 @@
+{
+  "summary": "BUG-0094: adopt Core-master pool membership and repository observations in the disposable Controller projection, and limit member VM placement to fresh Core-reported NFS/SMB access. API impact: changed Core inventory contract; Controller neither owns membership or repository state nor reconciles members.",
+  "paths": [
+    "internal/controller/identity.go",
+    "internal/controller/identity_test.go",
+    "internal/controller/managed.go",
+    "internal/controller/pool_adoption_test.go",
+    "web/src/managed.tsx"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The pool-join and storage guides describe Core-master membership and the observed-access conditions for member placement.",
+    "pages": ["docs/guide/join-a-pool.md", "docs/guide/storage-repositories.md"]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Managed inventory now carries Core-owned membership and per-member repository access observations used for Controller adoption and placement preflight.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/local-openapi.json"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This bug-fix slice does not change the published Phase 4 scope or acceptance status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Membership, master repository configuration and member access observations are Core state. Controller stores only a replaceable report projection.",
+    "record": "The pool master's pool-peer membership and pool-storage records are reported through managed inventory; a replacement Controller re-adopts the same pool, repository identities and member observations from the master report."
+  },
+  "verification": {
+    "method": "Ran focused Controller adoption/placement regressions and the UI build. Native multi-host reconciliation and disposable-lab acceptance remain pending the Core owner and are not claimed here.",
+    "evidence": ["internal/controller/identity_test.go", "internal/controller/pool_adoption_test.go", "web/package.json"]
+  }
+}

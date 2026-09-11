@@ -1,0 +1,31 @@
+{
+  "summary": "BUG-0096: show Core health reasons and affected checks in host/pool summaries and restrict probe errors to public causes. API impact: existing contract; inventory Check.Error remains the source.",
+  "paths": [
+    "web/src/main.tsx", "web/src/style.css", "tests/integration/phase1_browser.py",
+    "internal/agent/probes.go", "internal/agent/probes_test.go", "internal/agent/run.go",
+    "docs/guide/manage-controller.md", "docs/qa/2026-09-12-bug-ledger.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The guide describes immediate health reasons and navigation to the detailed host view.",
+    "pages": ["docs/guide/manage-controller.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Existing check status, freshness and public error fields are rendered; no endpoint or message shape changes in this health slice.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This fixes existing health presentation without completing a phase or changing the published milestone scope.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Health reasons are current Core observations; the change adds no persistent state or Controller health cache."
+  },
+  "verification": {
+    "method": "Full process/browser suite passed; primary independently stopped and restored libvirt on a disposable Core and verified native reasons and navigation in Chromium. UI typecheck/build and focused agent checks passed; independent read-only review accepted the health slice.",
+    "evidence": ["docs/qa/2026-09-12-bug-ledger.md", "tests/integration/phase1_browser.py", "internal/agent/probes_test.go"]
+  }
+}

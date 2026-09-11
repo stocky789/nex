@@ -36,8 +36,9 @@ Nex Core — the host generates its own ID, the pool master generates the pool I
 pool name — and any Controller adopts them unchanged; the Controller never creates or derives
 pool identity. A separate code slice implements this and documents the enrollment contract in
 [docs/API.md](../API.md).
-Enrollment tokens bind to a site, not a pool. Joining a member to an existing pool,
-changing the master and ejecting a member remain Phase 4 work and are not available.
+Enrollment tokens bind to a site, not a pool. The BUG-0094 priority below brings forward
+the member-join prerequisite for storage reconciliation; changing the master and
+ejecting a member remain unavailable Phase 4 work.
 See the [pool master model decision](2026-09-09-pool-master-model.md).
 **API impact: changed contract** — enrollment tokens, agent enrollment, appliance
 bootstrap/adoption and the pool listing change; manual pool creation is removed.
@@ -72,6 +73,17 @@ provisioning. Disk formatting, storage-server administration, migration and HA r
 protocol negotiation and inventory/adoption are implemented on both sides.
 **Guide impact: updated** — storage registration and VM creation document the development workflow.
 All durable repository state lives on the Core master's journal and private credential store.
+
+**Unresolved bug priority, 2026-09-12:** project owner authorized completion and primary-agent
+local walkthroughs for BUG-0093 through BUG-0096, explicitly excluding BUG-0097 nested UEFI.
+The [acceptance plan](2026-09-12-unresolved-bug-ledger.md) brings forward only the Core-owned
+membership, peer trust and safe NFS/SMB reconciliation needed for BUG-0094. Local ZFS and
+ordinary-filesystem iSCSI remain single-host; master transfer, ejection, migration and HA are
+not included. This scope decision does not mark Phase 4 or backend acceptance complete.
+**API impact: changed/new contracts** — authenticated peer join, member storage reconciliation
+and transient host discovery; existing inventory carries automatic ISO registration and health
+reasons. **Guide impact: updated** — delivered workflows and executed evidence are recorded in
+the storage, pool-join and Controller guides; outstanding checks stay explicitly open.
 
 ## Build order: basics first
 
@@ -556,7 +568,7 @@ All these gates remain outstanding until implemented and executed.
 
 ### 4. Multi-host pools and shared storage
 
-1. Enroll a second host; join it to an existing pool as a member host under that pool's master (“Add host to pool”), provide master change and member eject with safety checks, and provide pool-wide inventory and explicit placement. Until this phase every enrolled host remains the master of its own pool.
+1. Enroll a second host; join it to an existing pool as a member host under that pool's master (“Add host to pool”), provide master change and member eject with safety checks, and provide pool-wide inventory and explicit placement. A join is a Core-to-Core convergence operation: the master retains the durable pool membership and every pool-wide configuration record, sends each applicable generation to the member, and retains that member's result. At minimum reconcile logical networks (including VLAN/uplink mappings), pool storage registrations and the member's real access state; materialize only configuration applicable to that member, never another host's local storage or runtime state. The Controller asks the master and displays durable per-member pending, succeeded, failed or needs-attention results; it neither stores a second desired-state copy nor runs the reconciliation. On member reconnect, reboot or interrupted join, the master resumes reconciliation from its durable record before reporting the member ready for placement on an affected resource. Require authenticated Core-to-Core calls, capability and identity checks, generation/idempotency rules, narrow member credential delivery, and safe retry/outage behavior. Until this phase every enrolled host remains the master of its own pool.
 2. Add existing NFS storage through the pool UI. Validate access, write permissions, identity, capacity, and mount health per host before marking it usable.
 3. Distinguish local/shared storage visibly. Track disk attachment and exclusive VM execution; never launch a second writer because a host stopped reporting.
 4. Add logical LAN bridges/VLAN mappings with host compatibility checks. Do not assume bridge names mean equivalent connectivity. Remote host network edits require staged apply, explicit confirmation, and timed recovery if management connectivity is lost.
@@ -564,7 +576,7 @@ All these gates remain outstanding until implemented and executed.
 
 **UX acceptance:** guide “Add host to pool” (joining an existing pool as a member under its master) through identity/capability checks; explain storage location, per-host access, capacity, and failure consequences. Pair network relationships with accessible details and a preview of affected VMs/management access; verify staged apply and timed recovery before offering remote edits. A visual view does not require a freeform network canvas.
 
-**Gate:** VMs can be placed on either compatible host, inaccessible storage prevents placement, shared free space is reported once, and a disconnected host does not trigger duplicate VM startup.
+**Gate:** join a disposable member to a configured pool and prove that the master reconciles every applicable logical network/VLAN and pool storage registration to it, recording per-member success and actionable failure without Controller-held desired state. Exercise incompatible or missing uplinks, unavailable/unwritable storage, interrupted Core-to-Core delivery, member reboot/reconnect and Controller replacement; retry must converge without duplicate bridges, mounts, credentials, registrations or writers. VMs can be placed on either compatible host, inaccessible storage prevents placement, shared free space is reported once, and a disconnected host does not trigger duplicate VM startup.
 
 ### 5. Snapshots and rollback
 

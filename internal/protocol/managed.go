@@ -54,6 +54,9 @@ type StorageRegistration struct {
 	CredentialPresent   bool                `json:"credential_present,omitempty"`
 	Capabilities        StorageCapabilities `json:"capabilities,omitempty"`
 	Access              StorageAccess       `json:"access,omitempty"`
+	// MemberAccess is master-reported, per-host observed access for a pool remote
+	// repository. It remains empty for host-local repositories and iSCSI single-writer use.
+	MemberAccess []PoolStorageAccess `json:"member_access,omitempty"`
 }
 type NetworkRegistration struct {
 	ID          string `json:"id"`

@@ -9,7 +9,7 @@ const src = readFileSync(new URL("./storage.tsx", import.meta.url), "utf8");
 const { code } = transformSync(src, { loader: "tsx", format: "esm" });
 const dir = mkdtempSync(join(tmpdir(), "storage-check-"));
 const file = join(dir, "storage.mjs");
-const stubbed = code.replace('from "react"', 'from "data:text/javascript,export const useRef=()=>({});export const useState=()=>[undefined,()=>{}];"');
+const stubbed = code.replace('from "react"', 'from "data:text/javascript,export const useEffect=()=>{};export const useRef=()=>({});export const useState=()=>[undefined,()=>{}];"');
 writeFileSync(file, stubbed);
 const { storageUsable, storageSource, storageChecked, storageLifecycleReady } = await import(`file://${file}`);
 
@@ -17,6 +17,10 @@ const ready = { id: "nfs-1", host_id: "host-1", status: "succeeded", access: { s
 assert.equal(storageUsable(ready, "host-1"), true);
 assert.equal(storageUsable({ ...ready, access: { ...ready.access, writable: false } }, "host-1"), false);
 assert.equal(storageUsable({ ...ready, capabilities: {} }, "host-1"), false);
+const member = { repository_id: "nfs-1", host_id: "host-1", generation: 2, identity: "nfs-id", readable: true, writable: true, qemu_writable: true, locking: true, observed_at: new Date().toISOString() };
+assert.equal(storageUsable({ ...ready, kind: "nfs", host_id: "master", generation: 2, member_access: [member] }, "host-1"), true);
+assert.equal(storageUsable({ ...ready, kind: "nfs", host_id: "master", generation: 2, member_access: [{ ...member, locking: false }] }, "host-1"), false);
+assert.equal(storageUsable({ ...ready, kind: "nfs", host_id: "master", generation: 2, member_access: [{ ...member, observed_at: new Date(Date.now() - 31_000).toISOString() }] }, "host-1"), false);
 assert.match(storageSource(ready), /nfs\.example\.test/);
 assert.equal(storageSource({ ...ready, source: { smb: { server: "files.example.test", share: "vms" } } }), "//files.example.test/vms");
 assert.equal(storageSource({ ...ready, source: { zfs: { pool: "tank", dataset: "vms", mount_path: "/tank/vms" } } }), "tank/vms");

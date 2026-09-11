@@ -375,7 +375,7 @@
       "get": {
         "operationId": "listPool",
         "summary": "List pools",
-        "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Pools are never created by administrators: each enrolling Core host becomes the master of a new pool named after its hostname (master_host_id). Joining a member host to an existing pool, changing the master and ejecting a member are planned for Phase 4 and are not available. Results represent persisted controller state.",
+        "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Pools are never created by administrators: each enrolling Core host becomes the master of a new pool named after its hostname (master_host_id). The development Core local API provides an authenticated member join flow; Controller has no join UI or membership-mutation route and only adopts Core-reported membership. Master change and member eject remain unavailable. Results represent persisted controller state.",
         "tags": [
           "Client → Controller"
         ],
@@ -1223,7 +1223,7 @@
       "post": {
         "operationId": "enrollHost",
         "summary": "Enroll a Core host",
-        "description": "Implemented in development product 0.1.0, protocol v1. Outbound HTTPS; agent must verify Controller identity before transmitting its site-bound token. Provide a signed PEM ECDSA P-256 CSR and nonblank hostname (maximum 200 UTF-8 bytes, no CR/LF/NUL). Identity is host-owned: the host presents the host_id it generated and, as its pool's master, the pool_id and pool_name it keeps, and the Controller adopts them unchanged, so a replacement Controller recovers the pool with its original ID and name. host_id and pool_id must be canonical lowercase UUIDs (or the 64-hex form issued to hosts enrolled before host-owned identity) and pool_name a valid name, else 400. A fresh enrollment creates the pool in the token site with this host as its master, then records the host in that pool in the same transaction (audit pool.create and host.enroll); older agents that present no identity get Controller-minted IDs and a pool named after the hostname, which the response reports for the host to keep. A presented host_id already on record, or a pool_id already held by another master host, is 409: only a token bound to a revoked host may re-issue that host, and it must present that host and its pool (409 otherwise); multi-host pools are not available. The same key is the same host: a request whose CSR matches a recorded active credential (a retry after a lost response, even with a new token) returns that credential unchanged. Issues a 90-day host-specific client certificate and CA. The token binds to its first CSR; an identical token/CSR retry before token expiry returns the same identity without duplicate enrollment. A different CSR returns 409. After expiry or revocation obtain a new site-bound token; replacement requires explicit revoked host selection. Enrollment has no VM side effects. Compatibility: an older Controller rejects the new fields with 400 (unknown field); upgrade Controller and Core together.",
+        "description": "Implemented in development product 0.1.0, protocol v1. Outbound HTTPS; agent must verify Controller identity before transmitting its site-bound token. Provide a signed PEM ECDSA P-256 CSR and nonblank hostname (maximum 200 UTF-8 bytes, no CR/LF/NUL). Identity is host-owned: the host presents the host_id it generated and, as its pool's master, the pool_id and pool_name it keeps, and the Controller adopts them unchanged, so a replacement Controller recovers the pool with its original ID and name. host_id and pool_id must be canonical lowercase UUIDs (or the 64-hex form issued to hosts enrolled before host-owned identity) and pool_name a valid name, else 400. A fresh enrollment creates the pool in the token site with this host as its master, then records the host in that pool in the same transaction (audit pool.create and host.enroll); older agents that present no identity get Controller-minted IDs and a pool named after the hostname, which the response reports for the host to keep. A presented host_id already on record, or a pool_id already held by another master host, is 409: only a token bound to a revoked host may re-issue that host, and it must present that host and its pool (409 otherwise). A separate authenticated Core-local peer flow can subsequently join a member; this enrollment endpoint neither joins members nor changes master. The same key is the same host: a request whose CSR matches a recorded active credential (a retry after a lost response, even with a new token) returns that credential unchanged. Issues a 90-day host-specific client certificate and CA. The token binds to its first CSR; an identical token/CSR retry before token expiry returns the same identity without duplicate enrollment. A different CSR returns 409. After expiry or revocation obtain a new site-bound token; replacement requires explicit revoked host selection. Enrollment has no VM side effects. Compatibility: an older Controller rejects the new fields with 400 (unknown field); upgrade Controller and Core together.",
         "tags": [
           "Core agent → Controller"
         ],
@@ -2147,6 +2147,27 @@
               }
             }
           }
+        }
+      }
+    },
+    "/api/v1/storage/discover": {
+      "post": {
+        "operationId": "discoverStorage",
+        "summary": "Discover a storage source from Nex Core",
+        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. The Controller validates pool/host scope then relays one bounded discovery request only to the addressed authenticated Core advertising storage-repositories-v1 and storage-discovery-v1. Discovery is an observation, never a registration: it cannot create directories, mount or log in a source, retain iSCSI nodes/sessions, change repository state or journal work. The Controller keeps the request (including SMB/CHAP credentials when supplied) only in an in-memory request/response relay, deletes it on Core delivery, result, browser cancellation or the 30-second deadline, and writes neither credentials nor candidates to SQLite, a journal, audit log or cache. Core limits work to eight seconds and returns sanitized candidates only; no credentials, device paths, mount options or command output. A 200 result may be empty, failed or stale; 504 is stale when no Core result arrives before the deadline. Retry with a new request ID after timeout or cancellation.",
+        "security": [{"AdminSession": []}],
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client",
+        "parameters": [{"name": "X-CSRF-Token", "in": "header", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/StorageDiscoveryRequest"}}}},
+        "responses": {
+          "200": {"description": "Sanitized Core observation, including empty or failed discovery.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/StorageDiscoveryResult"}}}},
+          "400": {"description": "Malformed JSON, unknown field, invalid request ID, scope, source selector or credential bounds."},
+          "401": {"description": "Administrator session required."},
+          "403": {"description": "Origin or CSRF rejected."},
+          "409": {"description": "Host is not an eligible pool Core, lacks a required capability, or this request ID is already active."},
+          "504": {"description": "Core did not complete before the deadline; body is a stale StorageDiscoveryResult."},
+          "500": {"description": "Controller persistence failure while checking host scope; no discovery was relayed."}
         }
       }
     },
@@ -4449,7 +4470,9 @@
               "vm-create",
               "vm-update",
               "vm-power",
-              "vm-media"
+              "vm-media",
+              "pool-member-join",
+              "pool-storage-reconcile"
             ]
           },
           "storage": {
@@ -4521,6 +4544,9 @@
           },
           "credential_retire": {
             "anyOf": [{"$ref": "#/components/schemas/StorageCredentialRetireRequest"}, {"type": "null"}]
+          },
+          "pool": {
+            "anyOf": [{"$ref": "#/components/schemas/PoolCommand"}, {"type": "null"}]
           }
         },
         "required": [
@@ -5094,6 +5120,11 @@
             },
             "maxItems": 32,
             "description": "Advertised on every report. managed-vm-v1 enables managed command delivery. Omission or null disables managed delivery for this report; a newer sequence also replaces stored capabilities."
+          },
+          "storage_discoveries": {
+            "type": ["array", "null"],
+            "items": {"$ref": "#/components/schemas/StorageDiscoveryResult"},
+            "description": "One-shot sanitized results from prior report-response discovery requests. Never journaled or adopted."
           }
         },
         "required": [
@@ -5153,6 +5184,11 @@
           "storage_repositories": {
             "anyOf": [{"$ref": "#/components/schemas/StorageRepositorySupport"}, {"type": "null"}],
             "description": "Controller-first acknowledgement of protocol v2 storage support."
+          },
+          "storage_discoveries": {
+            "type": ["array", "null"],
+            "items": {"$ref": "#/components/schemas/StorageDiscoveryRequest"},
+            "description": "One-shot addressed Core observations. Controller removes each request from its bounded relay on delivery."
           }
         },
         "required": [
@@ -5197,7 +5233,9 @@
               "vm-create",
               "vm-update",
               "vm-power",
-              "vm-media"
+              "vm-media",
+              "pool-member-join",
+              "pool-storage-reconcile"
             ]
           },
           "request_id": {
@@ -5786,13 +5824,13 @@
         "additionalProperties": false
       },
       "NFSStorageSource": {
-        "type": "object", "properties": {"server": {"type": "string"}, "export": {"type": "string"}}, "required": ["server", "export"], "x-go-type": "protocol.NFSStorageSource"
+        "type": "object", "properties": {"server": {"type": "string"}, "export": {"type": "string"}, "directory": {"type": "string", "description": "Validated existing relative subdirectory beneath the NFS export."}}, "required": ["server", "export"], "x-go-type": "protocol.NFSStorageSource"
       },
       "ZFSStorageSource": {
         "type": "object", "properties": {"pool": {"type": "string"}, "dataset": {"type": "string"}, "mount_path": {"type": "string", "description": "Original existing ZFS dataset mount path. It rejects Unicode whitespace/control characters, percent and backslash because Core uses it as a systemd What value."}}, "required": ["pool", "dataset", "mount_path"], "x-go-type": "protocol.ZFSStorageSource"
       },
       "SMBStorageSource": {
-        "type": "object", "properties": {"server": {"type": "string"}, "share": {"type": "string"}}, "required": ["server", "share"], "x-go-type": "protocol.SMBStorageSource"
+        "type": "object", "properties": {"server": {"type": "string"}, "share": {"type": "string"}, "directory": {"type": "string", "description": "Validated existing subdirectory below the SMB share; never an SMB path."}}, "required": ["server", "share"], "x-go-type": "protocol.SMBStorageSource"
       },
       "ISCSIStorageSource": {
         "type": "object", "properties": {"portal": {"type": "string"}, "target_iqn": {"type": "string"}, "lun": {"type": "integer", "minimum": 0}, "wwid": {"type": "string"}, "filesystem_uuid": {"type": "string"}, "mount_path": {"type": "string"}, "exclusive_target": {"type": "boolean"}}, "required": ["portal", "target_iqn", "lun", "wwid", "filesystem_uuid", "mount_path", "exclusive_target"], "x-go-type": "protocol.ISCSIStorageSource"
@@ -5841,6 +5879,15 @@
       "StorageCredentials": {
         "type": "object", "properties": {"username": {"type": "string"}, "secret": {"type": "string", "writeOnly": true}}, "required": ["secret"], "x-go-type": "protocol.StorageCredentials"
       },
+      "StorageDiscoveryRequest": {
+        "type": "object", "properties": {"request_id": {"type": "string"}, "pool_id": {"type": "string"}, "host_id": {"type": "string"}, "kind": {"type": "string", "enum": ["local", "nfs", "zfs", "smb", "iscsi"]}, "server": {"type": "string"}, "path": {"type": "string"}, "credentials": {"anyOf": [{"$ref": "#/components/schemas/StorageCredentials"}, {"type": "null"}], "writeOnly": true}}, "required": ["request_id", "pool_id", "host_id", "kind"], "x-go-type": "protocol.StorageDiscoveryRequest"
+      },
+      "StorageDiscoveryCandidate": {
+        "type": "object", "properties": {"kind": {"type": "string"}, "source": {"$ref": "#/components/schemas/StorageSource"}, "path": {"type": "string"}, "browsable": {"type": "boolean"}}, "required": ["kind", "source", "browsable"], "x-go-type": "protocol.StorageDiscoveryCandidate"
+      },
+      "StorageDiscoveryResult": {
+        "type": "object", "properties": {"request_id": {"type": "string"}, "pool_id": {"type": "string"}, "host_id": {"type": "string"}, "status": {"type": "string"}, "candidates": {"type": ["array", "null"], "items": {"$ref": "#/components/schemas/StorageDiscoveryCandidate"}}, "error": {"type": "string"}, "observed_at": {"type": "string", "format": "date-time"}}, "required": ["request_id", "pool_id", "host_id", "status", "observed_at"], "x-go-type": "protocol.StorageDiscoveryResult"
+      },
       "StorageCredentialHandoff": {
         "type": "object", "properties": {"offer": {"$ref": "#/components/schemas/StorageCredentialOffer"}, "credentials": {"$ref": "#/components/schemas/StorageCredentials"}}, "required": ["offer", "credentials"], "x-go-type": "protocol.StorageCredentialHandoff"
       },
@@ -5852,6 +5899,26 @@
       },
       "StorageRepositorySupport": {
         "type": "object", "properties": {"protocol_version": {"type": "integer"}, "capability": {"type": "string"}}, "required": ["protocol_version", "capability"], "x-go-type": "protocol.StorageRepositorySupport"
+      },
+      "PoolMember": {
+        "type": "object", "properties": {"host_id": {"type": "string"}, "certificate_sha256": {"type": "string"}, "generation": {"type": "integer", "minimum": 0}, "status": {"type": "string"}, "observed_at": {"type": "string", "format": "date-time"}, "error": {"type": "string"}}, "required": ["host_id", "certificate_sha256", "generation", "status", "observed_at"], "x-go-type": "protocol.PoolMember"
+      },
+      "PoolMembership": {
+        "type": "object", "properties": {"pool_id": {"type": "string"}, "master_host_id": {"type": "string"}, "generation": {"type": "integer", "minimum": 0}, "members": {"type": ["array", "null"], "items": {"$ref": "#/components/schemas/PoolMember"}}}, "required": ["pool_id", "master_host_id", "generation", "members"], "x-go-type": "protocol.PoolMembership"
+      },
+      "PoolCommand": {
+        "type": "object", "properties": {"request_id": {"type": "string"}, "action": {"type": "string"}, "membership": {"$ref": "#/components/schemas/PoolMembership"}, "member_endpoint": {"type": "string"}, "repository_id": {"type": "string"}, "expected_version": {"type": "integer", "minimum": 0}}, "required": ["request_id", "action", "membership"], "x-go-type": "protocol.PoolCommand"
+      },
+      "PoolStorageAccess": {
+        "type": "object", "properties": {"repository_id": {"type": "string"}, "host_id": {"type": "string"}, "generation": {"type": "integer", "minimum": 0}, "identity": {"type": "string", "description": "Core-canonical secret-free identity observed after member preparation."}, "readable": {"type": "boolean"}, "writable": {"type": "boolean"}, "qemu_writable": {"type": "boolean"}, "locking": {"type": "boolean", "description": "Member proved the shared non-blocking lock against the master for this generation."}, "observed_at": {"type": "string", "format": "date-time"}, "error": {"type": "string"}}, "required": ["repository_id", "host_id", "generation", "identity", "readable", "writable", "qemu_writable", "locking", "observed_at"], "x-go-type": "protocol.PoolStorageAccess"
+      },
+      "PoolStorageReservationRequest": {
+        "type": "object", "properties": {"operation_id": {"type": "string"}, "generation": {"type": "integer", "minimum": 0}}, "required": ["operation_id", "generation"], "additionalProperties": false,
+        "description": "Authenticated member-to-master peer request. The master binds the reservation to the mTLS member identity, not a client host field."
+      },
+      "PoolStorageReservationRelease": {
+        "type": "object", "properties": {"operation_id": {"type": "string"}, "release_unused": {"type": "boolean"}}, "additionalProperties": false,
+        "description": "Peer DELETE query shape. release_unused is used only by a member after its healthy serialized Core journal proves no managed VM disk or ISO reference remains."
       },
       "StorageRegistration": {
         "type": "object",
@@ -5900,6 +5967,7 @@
           "credential_present": {"type": "boolean"},
           "capabilities": {"$ref": "#/components/schemas/StorageCapabilities"},
           "access": {"$ref": "#/components/schemas/StorageAccess"}
+          ,"member_access": {"type": ["array", "null"], "items": {"$ref": "#/components/schemas/PoolStorageAccess"}}
         },
         "required": [
           "id",
@@ -6635,7 +6703,8 @@
             "type": ["array", "null"],
             "items": {"$ref": "#/components/schemas/StorageCredentialReceipt"},
             "description": "Redacted Core-owned receipt metadata for adoption; it never contains credential bytes."
-          }
+          },
+          "membership": {"anyOf": [{"$ref": "#/components/schemas/PoolMembership"}, {"type": "null"}]}
         },
         "required": [],
         "x-go-type": "protocol.ManagedState",
@@ -7165,6 +7234,18 @@
     }
   },
   "x-commands": {
+    "pool-member-join": {
+      "transport": "POST /api/v1/agent/report response.commands",
+      "payload": {"$ref": "#/components/schemas/PoolCommand"},
+      "result": {"$ref": "#/components/schemas/Result"},
+      "semantics": "Reserved master-directed pool command. Core refuses it because membership is admitted only through the authenticated one-use Core-peer exchange; Controller cannot create or replace membership."
+    },
+    "pool-storage-reconcile": {
+      "transport": "POST /api/v1/agent/report response.commands",
+      "payload": {"$ref": "#/components/schemas/PoolCommand"},
+      "result": {"$ref": "#/components/schemas/Result"},
+      "semantics": "Master-directed reconciliation for one NFS or SMB repository. The addressed member pulls the master record over pinned TLS 1.3 peer mTLS, stores an SMB secret only in its own Core credential state, journals native preparation, verifies QEMU access and a cross-Core non-blocking lock, then posts its generation-bound access observation. Before member VM/media work it reserves the current repository generation at the master; failed local work releases that reservation, while a durable definition retains it until the healthy serialized member journal proves it unused. Master source/credential/detach mutations write a Core-owned marker and fail closed while reservations exist. Local ZFS, ordinary iSCSI and generic native disks remain local and are refused/no fencing applies. Controller does not authorize membership, receive SMB secret bytes, or drive retries."
+    },
     "storage-register": {
       "transport": "POST /api/v1/agent/report response.commands",
       "capability": "managed-vm-v1",

@@ -1,0 +1,9 @@
+{
+  "summary": "Record primary native acceptance and remaining work for BUG-0093 through BUG-0096; BUG-0097 remains excluded. API impact: existing contracts exercised, with runtime changes assessed by their owning records.",
+  "paths": ["docs/BUG_LEDGER.md", "docs/qa/2026-09-12-bug-ledger.md"],
+  "guide": {"impact": "none", "reason": "This evidence/status update changes no operator steps; affected workflows are updated in the implementation records.", "pages": []},
+  "api": {"impact": "none", "reason": "The ledger and QA report record exercised contracts rather than introduce API behavior.", "pages": []},
+  "roadmap": {"impact": "none", "reason": "Individual regression evidence does not establish a whole phase acceptance gate.", "pages": []},
+  "state": {"owner": "none", "reason": "Documentation records observed results and adds no product state."},
+  "verification": {"method": "Primary executed native sandbox, package enrollment/automatic ISO adoption/restart, libvirt health failure/recovery, discovery browser selection/registration, two-host QEMU locks, member NFS/SMB VM execution, access/peer failure recovery, generation catch-up, safe detach and fresh Controller replacement. Final full Go race suite, 159 Python tests, UI typecheck/tests/build, 20-outcome phase1 browser and nine-scenario storage browser suite passed. Independent review accepted the scoped slices; privacy, documentation and diff gates passed. No hosted CI, UEFI or whole-Phase-4 acceptance is claimed.", "evidence": ["docs/qa/2026-09-12-bug-ledger.md", "docs/qa/bug-0093/packaged-service.md"]}
+}

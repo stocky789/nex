@@ -8,7 +8,111 @@ import (
 	"net/http"
 	"nex.local/nex/internal/protocol"
 	"strings"
+	"sync"
+	"time"
 )
+
+type storageDiscoveryPending struct {
+	request    protocol.StorageDiscoveryRequest
+	result     chan protocol.StorageDiscoveryResult
+	dispatched bool
+}
+type storageDiscoveryBroker struct {
+	mu      sync.Mutex
+	pending map[string]storageDiscoveryPending
+}
+
+var storageDiscoveryBrokers sync.Map // map[*Controller]*storageDiscoveryBroker; transient only
+func (c *Controller) discoveryBroker() *storageDiscoveryBroker {
+	v, _ := storageDiscoveryBrokers.LoadOrStore(c, &storageDiscoveryBroker{pending: map[string]storageDiscoveryPending{}})
+	return v.(*storageDiscoveryBroker)
+}
+func (c *Controller) takeStorageDiscoveries(host string) []protocol.StorageDiscoveryRequest {
+	b := c.discoveryBroker()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []protocol.StorageDiscoveryRequest
+	for id, pending := range b.pending {
+		if pending.request.HostID == host && !pending.dispatched {
+			request := pending.request // the only outbound copy may carry credentials
+			pending.request.Credentials = nil
+			out = append(out, request)
+			pending.dispatched = true
+			b.pending[id] = pending
+		}
+	}
+	return out
+}
+func (c *Controller) completeStorageDiscoveries(host string, results []protocol.StorageDiscoveryResult) {
+	b := c.discoveryBroker()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, result := range results {
+		pending, ok := b.pending[result.RequestID]
+		if !ok || result.HostID != host || result.HostID != pending.request.HostID || result.PoolID != pending.request.PoolID {
+			continue
+		}
+		if ch := pending.result; ch != nil {
+			select {
+			case ch <- result:
+			default:
+			}
+			delete(b.pending, result.RequestID)
+		}
+	}
+}
+func (c *Controller) discoverStorage(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	var request protocol.StorageDiscoveryRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	if err := protocol.ValidateStorageDiscovery(request); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	tx, err := c.db.Begin()
+	if err != nil {
+		fail(w, 500, "storage unavailable")
+		return
+	}
+	defer tx.Rollback()
+	if err = c.storageRepositoryHost(tx, request.PoolID, request.HostID); err != nil {
+		fail(w, http.StatusConflict, err.Error())
+		return
+	}
+	var raw string
+	if err = tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", request.HostID).Scan(&raw); err != nil || !strings.Contains(raw, protocol.StorageDiscoveryCapability) {
+		fail(w, http.StatusConflict, "host does not support storage discovery")
+		return
+	}
+	if err = tx.Commit(); err != nil {
+		fail(w, 500, "storage unavailable")
+		return
+	}
+	b := c.discoveryBroker()
+	result := make(chan protocol.StorageDiscoveryResult, 1)
+	b.mu.Lock()
+	if _, exists := b.pending[request.RequestID]; exists {
+		b.mu.Unlock()
+		fail(w, http.StatusConflict, "storage discovery request is already active")
+		return
+	}
+	b.pending[request.RequestID] = storageDiscoveryPending{request: request, result: result}
+	b.mu.Unlock()
+	defer func() {
+		b.mu.Lock()
+		delete(b.pending, request.RequestID)
+		b.mu.Unlock()
+	}()
+	select {
+	case found := <-result:
+		write(w, http.StatusOK, found)
+	case <-r.Context().Done():
+		return
+	case <-time.After(30 * time.Second):
+		write(w, http.StatusGatewayTimeout, protocol.StorageDiscoveryResult{RequestID: request.RequestID, PoolID: request.PoolID, HostID: request.HostID, Status: "stale", Error: "Core did not complete discovery before the deadline", ObservedAt: time.Now().UTC()})
+	}
+}
 
 type storageRegisterRequest struct {
 	RequestID           string                 `json:"request_id"`

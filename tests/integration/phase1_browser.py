@@ -5,6 +5,7 @@ import re
 import hashlib
 import sqlite3
 import time
+from copy import deepcopy
 
 from web_security import browser_security, peer_throttle
 from pathlib import Path
@@ -378,8 +379,61 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         expect(page.locator('.metric').filter(has_text='Pool master')).to_contain_text(host['hostname'])
         capture('pool-master-desktop')
         checks = next(h for h in lab.api('/api/v1/hosts') if h['id'] == host_id)['inventory']['checks']
-        expected_health = 'healthy' if all(c['status'] == 'healthy' and c['freshness'] == 'fresh' for c in checks) else 'degraded'
+        expected_health = max((c['status'] if c['freshness'] == 'fresh' else c['freshness'] for c in checks),
+                              key=lambda status: {'healthy': 0, 'unsupported': 1, 'degraded': 2, 'unknown': 3, 'stale': 4, 'failed': 5}[status])
         expect(page.locator('tbody tr').first.locator('td').nth(2)).to_contain_text(expected_health)
+        # BUG-0096: summaries keep the current Core observation rather than flattening every
+        # non-healthy result to "degraded". These are disposable browser fixtures; Core's
+        # sanitization is covered by its own agent regression test.
+        summary_host = deepcopy(host)
+        summary_host['inventory']['checks'] = [{'name': 'libvirt', 'status': 'degraded', 'freshness': 'fresh',
+                                                'observed_at': '2026-09-12T00:00:00Z',
+                                                'error': 'Core sanitized: libvirt response exceeded its deadline'}]
+        page.route('**/api/v1/hosts', lambda route: route.fulfill(json=[summary_host]))
+        refresh_route('pools/' + pool_id)
+        pool_health = page.locator('.pool-health-summary')
+        expect(pool_health).to_contain_text('degraded')
+        expect(pool_health).to_contain_text('libvirt: Core sanitized: libvirt response exceeded its deadline')
+        expect(pool_health.get_by_role('link', name='View host health', exact=True)).to_have_attribute('href', '#/hosts/' + host_id)
+        expect(pool_health).not_to_contain_text('internal-token')
+        summary_host['inventory']['checks'] = [
+            {'name': 'libvirt', 'status': 'failed', 'freshness': 'fresh', 'observed_at': '2026-09-12T00:00:00Z', 'error': 'Core sanitized: libvirt is unavailable'},
+            {'name': 'storage', 'status': 'unknown', 'freshness': 'fresh', 'observed_at': '2026-09-12T00:00:00Z', 'error': 'Core sanitized: storage probe timed out'},
+        ]
+        refresh_route('pools/' + pool_id)
+        expect(pool_health).to_contain_text('failed')
+        expect(pool_health).to_contain_text('2 checks need attention.')
+        expect(pool_health).to_contain_text('libvirt: Core sanitized: libvirt is unavailable')
+        expect(pool_health).to_contain_text('storage: Core sanitized: storage probe timed out')
+        capture('health-summary-multiple')
+        summary_host['inventory']['checks'] = [{'name': 'libvirt', 'status': 'healthy', 'freshness': 'stale',
+                                                'observed_at': '2026-09-12T00:00:00Z',
+                                                'error': 'Core sanitized: last libvirt result is stale'}]
+        refresh_route('pools/' + pool_id)
+        expect(pool_health).to_contain_text('stale')
+        expect(pool_health).to_contain_text('Core sanitized: last libvirt result is stale')
+        summary_host['inventory']['checks'] = [{'name': 'libvirt', 'status': 'unknown', 'freshness': 'fresh',
+                                                'observed_at': '2026-09-12T00:00:00Z',
+                                                'error': 'Core sanitized: no current libvirt observation'}]
+        refresh_route('pools/' + pool_id)
+        expect(pool_health).to_contain_text('unknown')
+        expect(pool_health).to_contain_text('Core sanitized: no current libvirt observation')
+        summary_host['revoked'] = True
+        summary_host['connection'] = 'revoked'
+        refresh_route('pools/' + pool_id)
+        expect(pool_health).to_contain_text('revoked')
+        expect(pool_health).to_contain_text('Access revoked; this host is not reporting.')
+        capture('health-summary-revoked')
+        summary_host['revoked'] = False
+        summary_host['connection'] = 'fresh'
+        summary_host['inventory']['checks'] = [{'name': 'libvirt', 'status': 'healthy', 'freshness': 'fresh',
+                                                'observed_at': '2026-09-12T00:00:00Z'}]
+        refresh_route('pools/' + pool_id)
+        expect(pool_health.locator('.badge.healthy')).to_be_visible()
+        expect(pool_health.get_by_role('link', name='View host health', exact=True)).to_have_count(0)
+        page.unroute('**/api/v1/hosts')
+        refresh_route('pools/' + pool_id)
+        lab.passed('browser host and pool health summaries: compact healthy, current degraded/failed reasons, multiple affected checks, stale/unknown observations and revoked host')
         refresh_route('hosts/' + host_id)
         probe_mode('failed')
         page.wait_for_timeout(700)

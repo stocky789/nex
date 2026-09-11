@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -76,6 +77,27 @@ func TestFailedProbeRetainsObservationWithoutClaimingFreshSuccess(t *testing.T) 
 	snapshot.Checks[0].Status = "corrupted"
 	if m.Snapshot().Checks[0].Status != "failed" {
 		t.Fatal("snapshot aliases mutable state")
+	}
+}
+
+func TestSnapshotRedactsUnsafeProbeFailureButKeepsSafeReason(t *testing.T) {
+	m := NewMonitor(time.Second, map[string]Probe{
+		"libvirt": func(context.Context) (any, error) {
+			return nil, errors.New("connect qemu+ssh://operator:private-token@host.example.test/system: permission denied")
+		},
+		"block-disks": func(context.Context) (any, error) {
+			return nil, publicProbeError("block device observation limit exceeded (256)")
+		},
+	})
+	m.Tick(context.Background())
+	waitProbe(t, m, "libvirt", "failed")
+	waitProbe(t, m, "block-disks", "failed")
+	checks := m.Snapshot().Checks
+	if checks[0].Error != "block device observation limit exceeded (256)" {
+		t.Fatalf("safe reason was not retained: %+v", checks[0])
+	}
+	if checks[1].Error != "local libvirt is unavailable" || strings.Contains(checks[1].Error, "private-token") || strings.Contains(checks[1].Error, "host.example.test") {
+		t.Fatalf("unsafe libvirt failure reached inventory: %+v", checks[1])
 	}
 }
 

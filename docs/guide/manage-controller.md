@@ -156,6 +156,10 @@ is separate from the historical Phase 1 evidence below.
    A fresh heartbeat alone does not prove every capability is healthy. By default the agent
    reports every ten seconds, and Controller marks a connection stale after thirty seconds.
    Read **Last observed health** together with the connection and observation timestamps.
+   Host summaries and **Pool health** show the affected checks and Core's public reasons
+   below an unhealthy status. Multiple affected checks show their count and each reason;
+   select **View host health** for the detailed host view. Healthy summaries stay compact.
+   Stale data and revoked management access cannot establish whether workloads are running.
    Open **Task history** for **Activity and health history**, which records observed health
    changes and administrative actions separately from asynchronous tasks. This development
    view shows the newest 1,000 task and activity records without pagination; older records
@@ -314,6 +318,11 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
   the revoked host and are not moved; use **Re-enroll host**, which keeps the identity.
 
 ## Verification
+
+The [bug ledger local walkthrough](../qa/2026-09-12-bug-ledger.md) verifies immediate
+host/pool health reasons and the detail link with a real Core libvirt outage and
+recovery. Additional browser scenarios cover healthy, multiple affected checks,
+stale/unknown observations and revoked access using simulated reports.
 
 **Replace a failed Controller (troubleshooting) — verified with real processes and libvirt:**
 the [pool VLAN network checks](../qa/pool-vlan-networks/checks.md) record runs with real

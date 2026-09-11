@@ -192,6 +192,27 @@ func storagePathAccess(path, identity string, readonly bool) (storageAccess, err
 	return storageAccess{Path: path, Identity: identity, FilesystemID: fsid, Total: stat.Blocks * uint64(stat.Bsize), Available: stat.Bavail * uint64(stat.Bsize), ReadOnly: readonly || stat.Flags&statfsReadOnly != 0, Health: "healthy"}, nil
 }
 
+func remoteSubpathAccess(mountRoot, directory string, base storageAccess) (storageAccess, error) {
+	if directory == "" || filepath.IsAbs(directory) || filepath.Clean(directory) != directory || directory == "." || directory == ".." || strings.HasPrefix(directory, "../") {
+		return storageAccess{}, errors.New("unsafe remote storage directory")
+	}
+	path := mountRoot
+	for _, part := range strings.Split(directory, "/") {
+		path = filepath.Join(path, part)
+		info, err := os.Lstat(path)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return storageAccess{}, errors.New("remote storage directory is unavailable or unsafe")
+		}
+	}
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return storageAccess{}, err
+	}
+	base.Path, base.Total, base.Available = path, stat.Blocks*uint64(stat.Bsize), stat.Bavail*uint64(stat.Bsize)
+	base.ReadOnly = base.ReadOnly || stat.Flags&statfsReadOnly != 0
+	return base, nil
+}
+
 // credentialFile only returns Core-owned, receipt-addressed files. Credentials never reach a
 // command line or the Controller journal.
 func credentialFile(ctx context.Context, s protocol.StorageRegistration) (string, error) {

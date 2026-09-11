@@ -1,0 +1,36 @@
+{
+  "summary": "Deliver the native SMB and NFS directory-discovery clients required by Core: smbclient and libnfs-utils (nfs-ls). API impact: existing contract; Core's implemented storage-discovery command now has its required separately executed Debian programs in both supported delivery paths.",
+  "paths": [
+    "installer/packages.txt",
+    "packaging/core-local/build-inside.sh",
+    "tests/integration/bug_ledger_lab.py",
+    "tests/test_storage_packaging.py",
+    "docs/LICENSING.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Storage-discovery operator steps and API behavior do not change; this supplies the already documented Core prerequisites.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No endpoint, payload, authorization rule, result schema, or Core command changes. The existing storage-discovery contract invokes the newly delivered local programs.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This corrects delivery prerequisites for an in-progress storage-discovery slice and does not change a published milestone status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Package dependencies and executable discovery tools add no Nex durable state; Core's existing transient discovery results remain nonpersistent."
+  },
+  "verification": {
+    "method": "Regression first: tests/test_storage_packaging.py failed after requiring libnfs-utils and smbclient because neither delivery list contained them. On a disposable Debian 13 guest, apt installed libnfs-utils 5.0.2-1+b2 (source libnfs) and smbclient 2:4.22.10+dfsg-0+deb13u2 (source samba); dpkg ownership verified nfs-ls and smbclient, and each command started successfully. The package test is rerun after the lists change; native share/export browsing is covered by the storage-discovery owner on the same disposable lab.",
+    "evidence": [
+      "tests/test_storage_packaging.py",
+      "docs/LICENSING.md"
+    ]
+  }
+}

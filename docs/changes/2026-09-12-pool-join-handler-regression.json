@@ -1,0 +1,9 @@
+{
+  "summary": "Guard real Core local pool-join offers against enrollment-token length limits. API impact: existing contract; test the implemented authenticated join exchange.",
+  "paths": ["internal/localcore/pool_join_test.go"],
+  "guide": {"impact": "none", "reason": "Regression coverage changes no operator workflow.", "pages": []},
+  "api": {"impact": "none", "reason": "The test exercises the existing local join route with an actual issued peer offer; implementation and reference changes are assessed separately.", "pages": []},
+  "roadmap": {"impact": "none", "reason": "This test does not close native pool acceptance.", "pages": []},
+  "state": {"owner": "none", "reason": "Only disposable test state is created."},
+  "verification": {"method": "Ran go test ./internal/localcore ./internal/agent successfully. TestJoinPoolAcceptsRealOneUseOffer submits a real issued offer larger than 256 bytes through the authenticated local handler and verifies peer join and rehome. Both CI providers already run this Go suite on pushes and pull requests.", "evidence": ["internal/localcore/pool_join_test.go", ".github/workflows/phase1.yml", ".gitea/workflows/phase1.yml"]}
+}

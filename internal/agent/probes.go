@@ -30,6 +30,12 @@ type ProbeResult struct {
 	Data                    any
 }
 
+// publicProbeError is an intentionally operator-safe probe reason. Probe errors otherwise
+// stay local: OS and command errors may disclose private paths, endpoints or credentials.
+type publicProbeError string
+
+func (e publicProbeError) Error() string { return string(e) }
+
 type probeWorker struct {
 	probe    Probe
 	busy     bool
@@ -96,7 +102,7 @@ func (m *Monitor) run(ctx context.Context, w *probeWorker) {
 	// satisfy a request for fresh post-command inventory.
 	w.result.ObservedAt = w.deadline.Add(-m.timeout)
 	if err != nil {
-		w.result.Status, w.result.Message = "failed", err.Error()
+		w.result.Status, w.result.Message = "failed", probeReason(w.result.Name, err)
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, exec.ErrNotFound) {
 			w.result.Status = "unsupported"
 		}
@@ -104,6 +110,31 @@ func (m *Monitor) run(ctx context.Context, w *probeWorker) {
 	}
 	w.result.Data, w.result.Status, w.result.Message = data, "healthy", ""
 	w.result.LastSuccess = w.result.ObservedAt
+}
+
+func probeReason(name string, err error) string {
+	var safe publicProbeError
+	if errors.As(err, &safe) {
+		return safe.Error()
+	}
+	switch name {
+	case "inventory":
+		return "host inventory observation failed"
+	case "cpu-models":
+		return "CPU model observation failed"
+	case "block-disks":
+		return "block device observation failed"
+	case "disk":
+		return "disk capacity observation failed"
+	case "kvm":
+		return "KVM is unavailable"
+	case "guest":
+		return "guest agent observation failed"
+	case "libvirt":
+		return "local libvirt is unavailable"
+	default:
+		return "probe observation failed"
+	}
 }
 
 func (m *Monitor) Results() []ProbeResult {
@@ -211,7 +242,7 @@ func NativeProbes(version string) map[string]Probe {
 			}
 			names := strings.Fields(ids)
 			if len(names) > 256 {
-				return nil, fmt.Errorf("VM observation limit exceeded (256)")
+				return nil, publicProbeError("VM observation limit exceeded (256)")
 			}
 			vms := make([]protocol.VM, 0, len(names))
 			for _, id := range names {
@@ -268,7 +299,7 @@ func guestProbe() Probe {
 		}
 		running := strings.Fields(ids)
 		if len(running) > 256 {
-			return nil, fmt.Errorf("VM observation limit exceeded (256)")
+			return nil, publicProbeError("VM observation limit exceeded (256)")
 		}
 		seen := map[string]bool{}
 		out := make([]guestObservation, 0, len(running))
@@ -375,12 +406,12 @@ func cpuModels(output string) ([]string, error) {
 	seen := map[string]bool{}
 	for _, model := range strings.Fields(output) {
 		if !protocol.ValidCPUModel(model) {
-			return nil, fmt.Errorf("invalid CPU model from libvirt")
+			return nil, publicProbeError("invalid CPU model from libvirt")
 		}
 		seen[model] = true
 	}
 	if len(seen) > 256 {
-		return nil, fmt.Errorf("CPU model limit exceeded")
+		return nil, publicProbeError("CPU model limit exceeded")
 	}
 	models := make([]string, 0, len(seen))
 	for model := range seen {
@@ -439,7 +470,7 @@ type cappedOutput struct{ bytes.Buffer }
 
 func (b *cappedOutput) Write(p []byte) (int, error) {
 	if b.Len()+len(p) > 1024*1024 {
-		return 0, fmt.Errorf("virsh output exceeded 1 MiB")
+		return 0, publicProbeError("libvirt response exceeded 1 MiB")
 	}
 	return b.Buffer.Write(p)
 }
@@ -520,7 +551,7 @@ func readBlockDisks(ctx context.Context, root string) ([]protocol.Disk, error) {
 		return nil, err
 	}
 	if len(entries) > 256 {
-		return nil, fmt.Errorf("block device observation limit exceeded (256)")
+		return nil, publicProbeError("block device observation limit exceeded (256)")
 	}
 	disks := make([]protocol.Disk, 0, len(entries))
 	for _, entry := range entries {
@@ -536,7 +567,7 @@ func readBlockDisks(ctx context.Context, root string) ([]protocol.Disk, error) {
 			return nil, e
 		}
 		if sectors > ^uint64(0)/512 {
-			return nil, fmt.Errorf("block device size overflow")
+			return nil, publicProbeError("block device size overflow")
 		}
 		disks = append(disks, protocol.Disk{Name: "/dev/" + entry.Name(), SizeBytes: sectors * 512})
 	}

@@ -1,0 +1,32 @@
+{
+  "summary": "Add a disposable two-node BIOS/KVM harness for BUG-0093 through BUG-0096 local acceptance. API impact: none; the harness boots private Debian overlays, creates only ignored lab assets, and prepares native NFS, SMB and iSCSI fixtures without changing product behavior.",
+  "paths": [
+    "tests/integration/bug_ledger_lab.py",
+    "docs/changes/2026-09-12-bug-ledger-disposable-lab-harness.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This is contributor-only disposable-lab setup and changes no operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The harness uses guest-native services and private SSH only; it introduces no Nex Controller/Core or client-facing contract.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Lab preparation neither completes nor changes published product scope.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "All overlays, generated SSH material, SMB credential, ports and fixture state are disposable ignored .cache assets; the harness creates no product durable state."
+  },
+  "verification": {
+    "method": "Ran python3 -m py_compile tests/integration/bug_ledger_lab.py and python3 -m unittest discover -s tests -p 'test_repository_privacy.py'. The first live run used an earlier helper revision with a private-link address and fixture setup corrected during that run; its final observed state was two BIOS/KVM guests, active libvirtd and libvirt-qemu on node b, NFS4 and CIFS mounts writable as libvirt-qemu, and iSCSI discovery of the single-ACL 8 GiB ext4 LUN. The corrected reusable script was inspected after those corrections (systemd-managed ens4 link, root-only credential staging, numeric QEMU ownership, no world-writable source, and no generated iSCSI ACLs), but a full fresh run of that exact revision has not yet been executed. This record makes no BUG-0093--0096 acceptance claim.",
+    "evidence": [
+      "tests/integration/bug_ledger_lab.py"
+    ]
+  }
+}

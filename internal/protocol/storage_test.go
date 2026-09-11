@@ -103,6 +103,19 @@ func TestValidateStorageRegistration(t *testing.T) {
 	}
 }
 
+func TestStorageSubdirectoryValidationAllowsNamesAndRejectsTraversalControls(t *testing.T) {
+	for _, directory := range []string{"discovered", "team/vms", "r-n-x-0"} {
+		if !storageSubdirectory(directory) {
+			t.Fatalf("safe directory %q rejected", directory)
+		}
+	}
+	for _, directory := range []string{".", "..", "../x", "x/../y", "/x", "x\\y", "x\x00y", "x\ny", "x\ry", "x\ty"} {
+		if storageSubdirectory(directory) {
+			t.Fatalf("unsafe directory %q accepted", directory)
+		}
+	}
+}
+
 func TestValidateStorageLifecycle(t *testing.T) {
 	base := StorageLifecycleRequest{RepositoryID: "repo-1", PoolID: "pool-1", HostID: "host-1"}
 	for _, c := range []struct {
@@ -149,6 +162,21 @@ func TestValidateStorageCredentialRetire(t *testing.T) {
 	command, err := json.Marshal(Command{Kind: "storage-credential-retire", CredentialRetire: &StorageCredentialRetireRequest{Receipt: "receipt-1", PoolID: "pool-1", HostID: "host-1"}})
 	if err != nil || strings.Contains(string(command), "secret") {
 		t.Fatalf("credential retirement command carries secret material: %s", command)
+	}
+}
+
+func TestStorageDiscoveryIsScopedAndNeverCarriesSecretsInResults(t *testing.T) {
+	v := StorageDiscoveryRequest{RequestID: "discover-1", PoolID: "pool-1", HostID: "host-1", Kind: StorageKindSMB, Server: "files.example.test", Credentials: &StorageCredentials{Username: "operator", Secret: "secret"}}
+	if err := ValidateStorageDiscovery(v); err != nil {
+		t.Fatal(err)
+	}
+	v.Server = "bad;server"
+	if err := ValidateStorageDiscovery(v); err == nil {
+		t.Fatal("unsafe discovery server accepted")
+	}
+	b, err := json.Marshal(StorageDiscoveryResult{RequestID: "discover-1", Status: "succeeded", Candidates: []StorageDiscoveryCandidate{{Kind: StorageKindSMB, Source: StorageSource{SMB: &SMBStorageSource{Server: "files.example.test", Share: "vms"}}}}})
+	if err != nil || strings.Contains(string(b), "secret") {
+		t.Fatalf("discovery result leaks a credential: %s", b)
 	}
 }
 

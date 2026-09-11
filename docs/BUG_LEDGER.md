@@ -2009,3 +2009,168 @@ Local results and artifact limits are in the QA report; hosted runs remain unexe
 - Avoid: treating a capacity refusal as complete cleanup, disarming prepare rollback before
   admission finishes, discarding detach errors after a rejected registration, or rolling back
   iSCSI preparation with a bare background context that drops the engine owner-root.
+
+## Current bug work and unresolved issues
+
+## BUG-0093 — Default ISO library cannot self-register on installed hosts
+
+- Date: 2026-09-12.
+- Status: fixed; packaged Core and native Controller adoption verified in the disposable lab.
+- Symptom: a new Nex Core host has `/var/lib/libvirt/images` created by the agent service,
+  but its default **ISO** library is not adopted by Nex Controller. Manual registration fails
+  with `storage is not traversable by libvirt-qemu: runuser: cannot set user id: Operation not permitted`.
+- Expected behavior: every Nex Core installation self-registers its local **ISO** storage at
+  `/var/lib/libvirt/images` in the Core managed journal; the Controller then adopts and shows
+  it without operator action.
+- Root cause: `qemuStorageAccess` runs `runuser -u libvirt-qemu` during local-storage
+  verification. Installed hosts run the embedded agent inside `nex-core-local.service`,
+  whose sandbox lacked the effective/permitted `CAP_SETUID` capability. The earlier
+  investigation incorrectly blamed `RestrictSUIDSGID`: that directive restricts file-mode
+  bits, not the identity-change syscall. The failed access probe blocked `RegisterDefaults`.
+- Fix: add only `AmbientCapabilities=CAP_SETUID` to the actual packaged Core-local service;
+  retain `NoNewPrivileges` and `RestrictSUIDSGID` and the other confinement settings.
+- Impact and temporary workaround: ISO upload and VM-install workflows are blocked until a
+  Core/service fix restores the QEMU access probe, then registration is retried; creating the
+  directory manually cannot cure this. Do not add Controller-owned fallback state.
+- Regression evidence: `python3 -m unittest tests.test_core_local_package` passes; both
+  Actions providers run the Python suite on pushes and pull requests. The primary reproduced
+  the original sandbox failure, verified the minimal capability correction, built/installed
+  the package on a disposable BIOS ISO-installed host and verified automatic healthy ISO
+  adoption with the same Core ID after restart. See [native acceptance and lab prerequisites](qa/2026-09-12-bug-ledger.md).
+- Avoid: weakening the wrong standalone service, removing SUID/SGID file protections, or
+  adding a Controller-owned fallback registration.
+
+## BUG-0094 — Pool-wide remote repository access is not available
+
+- Date: 2026-09-12.
+- Status: fixed for the scoped NFS/SMB multi-host slice; native acceptance and independent review passed.
+- Original behavior: registering NFS, SMB, ZFS or iSCSI storage selects one host and creates a
+  host-specific Core record. Other members of the same pool do not receive an equivalent
+  registration, access check or mount/session configuration.
+- Requested behavior: a pool-scoped remote repository is held by the pool master and reconciled
+  on every eligible pool member, with Core reporting each host's real access state. A fresh
+  Controller must adopt that Core-owned record and per-host observations without re-entry.
+- Scope and safety: NFS and SMB may become multi-host only after each host passes source,
+  identity, locking, QEMU-access and shared-writer checks. Local ZFS remains local unless a
+  later replicated/shared design is implemented. An ordinary-filesystem iSCSI LUN must never
+  be mounted writable by every host: it requires explicit single-writer placement or a separate
+  shared-block, clustered-filesystem and fencing design.
+- Cluster-aware acceptance: Core must manage member-specific mount/session lifecycle,
+  reconnect and health observations; validate protocol locking and cache/durability behavior;
+  serialize configuration changes; and fail closed on an ambiguous writer, failed fencing or
+  lost/replaced backing identity. A timeout or Controller outage must never authorize a second
+  writable VM execution.
+- Initial investigation: the API, UI and Core journal bound every registration to one `host_id`.
+  This was an intentional limit: the storage plan deferred multi-host placement and
+  shared-writer protection to Phase 4, even though the table is presented under a pool.
+- State and API direction: durable pool registration and member-access results belong on Nex
+  Core (the pool master plus members), recoverable through Core inventory/adoption. Implementing
+  it needs a changed/new Core contract; Controller must not probe, retain or reconcile it.
+- Fix: authenticated Core-local join establishes durable peer trust and membership. Members
+  pull master-owned NFS/SMB registrations, retain their IDs and generations, and report native
+  backing identity, QEMU access and shared locking. Durable reservations fence master mutations
+  while member workloads retain references. Controller adoption recovers member VMs backed by
+  master-owned repositories, and UI placement uses fresh Core-reported member access.
+- Regression evidence: `go test -race ./...`, Python/API suites, UI checks and both browser
+  suites pass; both Actions providers run them on pushes and pull requests. Focused cases cover
+  peer authentication/replay, valid operation IDs, generation convergence, identity mismatch,
+  reservation retention/release over real mTLS and fresh Controller member-VM adoption.
+  The primary's [native walkthrough](qa/2026-09-12-bug-ledger.md) passed NFS/SMB member VM
+  execution, permission failure/recovery, safe in-use detach refusal, peer outage with VM
+  survival, missed-generation recovery, unused detach/unmount and fresh Controller replacement.
+  The isolated iSCSI fixture rejected its unauthorized second initiator without a session.
+- Limits: local/ZFS/iSCSI remain single-host; this does not complete Phase 4, migration,
+  master change, member ejection, HA or physical-hardware acceptance. BUG-0097 remains excluded.
+- Avoid: copying desired pool state into Controller persistence, treating local storage as
+  shared, declaring access from stale/cached results, or dropping a reservation on an
+  ambiguous/failed operation while another durable workload still holds the repository.
+
+## BUG-0095 — Storage registration lacks discovery and a guided workflow
+
+- Date: 2026-09-12.
+- Status: fixed; native browser walkthrough and independent review passed.
+- Symptom: operators must manually enter server names, exports/shares, paths, target details
+  and related values. The form cannot discover available safe sources or guide an operator
+  through selecting a directory within an authorized SMB/NFS source.
+- Expected behavior: storage setup starts with Core-reported discovery and a guided workflow:
+  discover reachable supported sources, select a validated export/share/target and directory,
+  display only compatible options, then confirm the exact host access and safety limits before
+  registration. Manual entry remains available for environments discovery cannot reach.
+- Design boundary: discovery and validation run on Nex Core, scoped to the selected pool/host;
+  Controller only requests and renders results. Discovery results are transient observations,
+  not Controller-owned inventory or credentials. Browsing must not create directories, mount
+  arbitrary sources, expose secrets or weaken SMB/NFS/iSCSI safety checks.
+- State and API direction: this needs new Core discovery contracts, including credential-scoped
+  SMB browsing where applicable; Controller retains neither results nor credentials.
+- Fix: bounded Core-native discovery reports safe local/ZFS sources, NFS exports/directories,
+  authenticated SMB shares/directories and iSCSI targets. The guided form retains manual entry
+  and explicit exclusive-initiator confirmation. Core verifies host/pool scope; Controller
+  erases relayed credentials after delivery and retains no durable discovery inventory.
+- Regression evidence: `go test ./internal/agent ./internal/controller ./internal/vmhost
+  ./internal/protocol` and the API contract suite pass; both Actions providers run the Go,
+  API and storage-browser suites on pushes and pull requests. The primary exercised native
+  selection and healthy master registration for exact NFS/SMB directories, iSCSI discovery,
+  empty ZFS/manual fallback, invalid SMB credentials, cancellation and stale Core exclusion;
+  see [native acceptance](qa/2026-09-12-bug-ledger.md). Independent review accepted the slice.
+- Avoid: Controller-side probing, retaining delivered credentials, treating arbitrary export
+  paths as URI query strings, or assuming source discovery proves safe shared execution.
+
+## BUG-0096 — Host and pool health summaries omit the observed cause
+
+- Date: 2026-09-12.
+- Status: fixed; focused regression, full browser suite and primary native walkthrough passed.
+- Symptom: the Hosts table shows only **degraded** under **Last observed health**. An operator
+  must open the host and inspect separate health checks to learn which check failed and why.
+- Expected behavior: wherever a host or pool summary reports degraded, failed, unknown or stale
+  health, show the current affected check and its sanitized Core-reported reason immediately
+  below the status, with a direct link to the detailed host health view. A healthy summary stays
+  compact. Multiple affected checks must state their count and expose each reason without
+  concealing the most severe condition.
+- Investigation: the existing host inventory contract already carries named `checks` with
+  status, freshness, observed time and `error`; the detailed host page renders that error. The
+  summary reduces all non-healthy checks to the bare `degraded` badge and drops the available
+  context.
+- State and API direction: existing contract for the initial UI fix; no new durable state.
+  Core remains the source of check results and sanitizes operator-visible detail. The Controller
+  must display observations, not invent diagnoses or retain a separate health-cause cache.
+- Fix: shared health summaries expose severity, affected-check count, each sanitized
+  Core-reported reason and a direct detail link; healthy remains compact. Core permits only
+  explicitly public probe errors and replaces arbitrary native detail with safe check reasons.
+- Regression evidence: `go test ./internal/agent`, web typecheck/build and
+  `tests/integration/phase1.py --browser` pass. Both Actions providers run the Go and browser
+  suites on pushes and pull requests. Browser cases cover healthy, one/multiple failures,
+  unknown/stale and revoked states. The primary stopped native lab libvirt, verified matching
+  summary/detail causes and restored it to a fresh healthy observation; see
+  [native acceptance](qa/2026-09-12-bug-ledger.md).
+- Avoid: collapsing all problems to `degraded`, inventing Controller diagnoses, or rendering
+  arbitrary command output as a public health reason.
+
+## BUG-0097 — Starting a UEFI guest can crash a nested Nex Core lab host
+
+- Date: 2026-09-12.
+- Status: unresolved lab-critical defect; root cause not yet established.
+- Symptom: starting a UEFI guest on a Nex Core host running as a nested VM under XCP-ng causes
+  libvirt or the Nex Core guest to crash. BIOS guest launch is the comparison path; the exact
+  outer-hypervisor and Core crash evidence has not yet been captured.
+- Investigation: Nex asks libvirt for KVM x86-64/q35 domain capabilities and only emits
+  `firmware='efi'` when EFI is advertised; it does not select a private firmware binary or
+  directly control the outer hypervisor. Nex has successfully started an OVMF UEFI guest in a
+  separate disposable nested-KVM lab, so UEFI is not known to fail on all nested hosts.
+  Earlier nested-lab ISO QA also recorded KVM/OVMF stalling at the EFI loader for both stock
+  Debian and Nex media, which supports an environment/firmware lead rather than a proven Nex
+  regression. Libvirt may select a Secure-Boot OVMF variant with SMM and per-VM NVRAM, so that
+  selection is part of the evidence to capture.
+  XCP-ng documents its nested-virtualization support as partial, experimental and unsupported,
+  with possible host crashes; CPU passthrough and exposed virtualization extensions do not make
+  that configuration equivalent to a supported bare-metal KVM host. The outer Xen/KVM nesting
+  boundary is therefore the leading hypothesis, but not proof.
+- Required diagnostics: reproduce only in a disposable lab and retain the pre-crash domain XML,
+  `virsh domcapabilities` output, selected OVMF loader/VARS paths, QEMU/libvirt log, Nex agent
+  and kernel journal from the affected and previous boot, `coredumpctl`, package versions, plus
+  the XCP-ng/Xen host logs and exact versions. Compare BIOS, default UEFI and a stock libvirt
+  UEFI guest on this lab, then repeat on bare-metal KVM or another supported host. Do not
+  repeatedly start the guest after a crash without collecting evidence.
+- Safety and acceptance: Core must reject a detectable incompatible firmware/runtime with
+  actionable host evidence, and must not cause a host crash. UEFI launch needs regression
+  coverage on a disposable nested XCP-ng/Xen lab and a supported non-nested host; neither a
+  successful definition nor a boot menu on another environment establishes safety.

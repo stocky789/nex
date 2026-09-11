@@ -1,0 +1,27 @@
+{
+  "summary": "Authorize implementation and disposable local acceptance for BUG-0093 through BUG-0096, excluding nested UEFI BUG-0097. API impact: none for this plan; runtime slices require existing and new Core contracts as described.",
+  "paths": ["docs/plans/2026-09-12-unresolved-bug-ledger.md", "docs/plans/2026-09-08-nex-platform.md"],
+  "guide": {
+    "impact": "none",
+    "reason": "This plan records authorized work and acceptance requirements, not an implemented operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The plan introduces no runtime endpoint; implementation records must cover the actual discovery and peer contracts.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Implementation is in progress and no acceptance or published milestone has completed.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The work plan itself creates no durable product state; it requires Core ownership in the implementing slices."
+  },
+  "verification": {
+    "method": "Reviewed unresolved ledger entries and existing storage and platform plans to define scope and verification targets. Runtime acceptance remains pending.",
+    "evidence": ["docs/plans/2026-09-12-unresolved-bug-ledger.md", "docs/BUG_LEDGER.md"]
+  }
+}

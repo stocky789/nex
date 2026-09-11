@@ -103,8 +103,10 @@ restarted from the host. Older agents still enroll (see host-owned identity abov
 builds that call `POST /api/v1/pools` or send `{pool_id}` to `POST /api/v1/enrollment-tokens`
 receive 404 and 400 respectively.
 
-Planned, **not available**: joining a second host to an existing pool as a member host,
-changing the pool master, and ejecting a member (Phase 4 multi-host pools).
+Core-local authenticated member join and NFS/SMB reconciliation are implemented;
+see [Core pool peer join](#core-pool-peer-join-and-repository-observations).
+Changing the pool master and ejecting a member remain planned, **not available**
+Phase 4 work. This slice does not establish the full multi-host phase gate.
 
 ## Simple host enrollment (add host by address + root password)
 
@@ -293,6 +295,7 @@ the operator setup workflow belongs in the [user guide](guide/README.md).
 | `-tls-cert`, `-tls-key` | Required host-local server certificate/key files; verify this host identity independently. |
 | `-data-dir` | Private service state, default `/var/lib/nex/core-local`; exclusive process lock and durable deployment journal. |
 | `-agent-state-dir` | Exclusive outbound agent identity, default `/var/lib/nex-core-agent`. |
+| `-pool-peer-listen` | TLS 1.3 Core-peer listener for one-use pool joins, default `:9444`; it uses the pool CA and peer identity held in the agent state directory. |
 | `-storage-dir`, `-bridge` | Selected local storage and existing management bridge; deployment never edits host networking. |
 | `-image`, `-manifest`, `-signature`, `-trusted-key` | Provisioned qcow2 image, signed manifest, detached Ed25519 signature and independently trusted raw public key. |
 | `-libvirt-uri` | Local connection, default `qemu:///system`; only this and `qemu:///session` are accepted. |
@@ -456,9 +459,105 @@ generation, access observation and credential receipt. Controller holds only a d
 projection recovered from `Inventory.managed.storage`; a new Controller does not need paths or
 secrets re-entered.
 
+### Transient Core storage discovery
+
+API impact: **new client operation and changed Core report contract** —
+`POST /api/v1/storage/discover` accepts an administrator/CSRF-protected
+`StorageDiscoveryRequest` scoped to one eligible pool host. The Controller passes it once in
+the authenticated protocol-v2 report response only after that Core advertises both
+`storage-repositories-v1` and `storage-discovery-v1`; the Core returns the matching
+`StorageDiscoveryResult` on its next report. This is a bounded request/response relay, not a
+repository command or durable operation: Controller deletes its in-memory entry on delivery,
+result, browser cancellation or 30 seconds, and neither side journals, adopts, audits or caches
+candidates or supplied SMB/CHAP credentials. The Controller receives credential bytes only for
+that relay; its database never contains them.
+
+Core limits each observation to eight seconds. `200` returns a sanitized result (including an
+empty or failed observation); `504` returns `status: stale` after the relay deadline. Invalid
+scope, source selector, request ID or credential bounds is `400`; an inactive/wrong-pool Core,
+missing capability or duplicate active request is `409`. Core rejects local symlinks, enumerates
+unmounted NFS exports with `showmount`, uses an ephemeral mode-0600 SMB credential file for
+`smbclient` source/share/directory browsing, sends iSCSI discovery only with nonpersistent
+`iscsiadm` discoverydb settings, and lists already mounted ZFS sources. Results contain only kind,
+source, directory path and browsable state—never passwords, device paths, mount options or command
+output. Discovery cannot create a directory, mount/login a backend, retain an iSCSI node/session,
+change repository configuration or weaken later registration validation. A cancelled or stale
+request must use a new request ID.
+
+### Core pool peer join and repository observations
+
+API impact: **new host-local/Core peer contract** — an enrolled joining Core accepts
+`POST /api/local/v1/pool/join-csr` first produces the joining host's `{host_id,csr_pem}`. The
+selected master then accepts `{member_host_id,member_csr_pem,master_url}` at local
+`POST /api/local/v1/pool/join-offer` and returns the pinned pool CA plus a one-use offer. Finally,
+the joining host calls local `POST /api/local/v1/pool/join` with `{master_url,pool_ca_pem,offer}`.
+All three calls use that Core's local root session, same Origin and CSRF boundary. The last call
+pauses outbound reporting, then calls the master's Core-peer `POST /api/v1/pool/join` on its
+configured pool-peer listener (default `:9444`) with an ECDSA P-256 CSR. The peer endpoint is TLS
+1.3, pins the master's pool CA/certificate identity and accepts no redirect. Its only
+unauthenticated peer exception is the unredeemed 15-minute one-use offer; it verifies the bound
+host/CSR digest, atomically consumes the offer and advances the master-owned membership generation
+before issuing the member certificate. A retry after acceptance must reconcile
+`Inventory.managed.membership`; it must not resend the offer.
+
+The offer is bounded to 15 minutes and to exactly the returned member host ID and CSR hash; the
+master rejects malformed, expired, used-for-another-CSR or used-for-another-host offers. An
+interrupted successful peer reply may be repeated with that same offer/CSR: the master returns the
+same issued certificate and membership, never a second member. The joining Core persists its
+pending CSR/key and pool rehome before changing scope. After a restart it resumes rehoming its
+managed local defaults into the accepted pool; a rehome failure is an honest join-recovery error,
+not permission to repeat the join with another identity. Joining is refused while the member has
+managed VMs or remote storage, so this slice does not move workloads or storage during join.
+
+The master retains pool CA material, offers and `PoolMembership` in its Core peer state; the member
+retains its pool certificate/key and copied membership only after validating the master's signed
+response. The Controller neither authorizes a membership mutation nor persists membership intent:
+it adopts the Core-reported master membership and per-repository `member_access` observations.
+The master's Core peer listener also exposes pool-storage reconciliation only to an authenticated
+member certificate: it serves desired NFS/SMB repositories and accepts that member's access result
+at `/api/v1/pool/storage/{repository_id}` and `/access`. It never exposes a local ZFS or ordinary
+iSCSI repository. For SMB, it transfers the secret only over this pinned mTLS connection and the
+member immediately replaces it with a member-scoped Core-local receipt; the Controller never
+receives it. A member persists the desired registration through its normal managed-storage journal,
+prepares the mount as its QEMU identity, verifies a shared non-blocking filesystem lock against
+the master, then reports identity/readable/writable/QEMU-writable/locking observations. The master
+retains desired records and member access observations in Core state, and a replacement Controller
+adopts their inventory projection.
+
+`PoolStorageAccess` is an observation, not placement permission. The Controller permits an NFS or
+SMB repository for a member VM only when the master has recently reported matching generation,
+identity, readable, writable, QEMU-writable and locking fields without an error. Before a VM
+write/start Core rechecks source identity and access; ambiguous ownership, a failed lock/fence or
+replaced backing identity fails closed. The member pulls desired records on its own periodic Core
+lane and retries stored reconciliation after an outage; Controller does not drive a retry loop.
+There is no compatibility promise beyond matching development protocol v2 peers/capabilities.
+
+Before a member executes a VM disk, ISO/media or related managed operation on reconciled NFS/SMB
+storage, it reserves the repository and its observed generation at the master over peer mTLS.
+The master accepts only the authenticated member's own reservation for a current non-tombstoned
+NFS/SMB record; a pending source/credential/detach mutation, changed generation or invalid body
+is refused. A failed local operation releases its reservation. A successful durable definition
+keeps it until the member's healthy serialized managed journal proves no VM disk or ISO still
+references that repository; then the member releases the unused reservation. This prevents a
+master source change or detach from racing a member workload.
+
+For a master NFS/SMB source update, credential change or detach, Core first writes a durable
+mutation marker and refuses new reservations. It fails closed while any member reservation exists;
+there is no dependency RPC that guesses whether a member workload stopped. On failure/restart the
+marker/reconciliation state remains Core-owned and reports an honest unavailable result until the
+normal serialized journal/retry path can converge. These contracts apply only to Nex-managed
+repository references: generic native guest disks remain host-local and this slice neither
+discovers nor fences them.
+
+Members also report the existing `Inventory.checks` entry
+`pool-storage-reconciliation`: it is `unknown` before the first reconciliation or after a stale
+two-minute observation, `failed` after a Core reconciliation failure, and `passed` only after a
+fresh successful reconciliation. It adds no route or durable Controller state; the Controller
+renders the Core observation and must not infer readiness when it is stale or unknown.
+
 `POST /api/v1/storage` keeps the v1 `{path}` local-directory form. Typed registrations select
-`kind` and exactly one non-secret `source`: NFS `{server,export}`, existing mounted ZFS
-`{pool,dataset,mount_path}`, SMB `{server,share}`, or iSCSI `{portal,target_iqn,lun,wwid,
+`kind` and exactly one non-secret `source`: NFS `{server,export,directory?}`, existing mounted ZFS
+`{pool,dataset,mount_path}`, SMB `{server,share,directory?}`, or iSCSI `{portal,target_iqn,lun,wwid,
 filesystem_uuid,exclusive_target}`. Core allocates the repository ID and chooses the iSCSI
 mount path under `/var/lib/nex-storage/<repository-id>`; client input must not supply it. It verifies the
 source as its real QEMU identity, and reports canonical identity, capacity, access, capabilities

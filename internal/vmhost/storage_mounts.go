@@ -66,7 +66,7 @@ func systemdMountUnit(path string) string {
 	return b.String() + ".mount"
 }
 
-func prepareNFS(ctx context.Context, s protocol.StorageRegistration) (storageAccess, error) {
+func prepareNFS(ctx context.Context, s protocol.StorageRegistration) (access storageAccess, retErr error) {
 	if err := protocol.ValidateStoredStorageRegistration(s, false); err != nil || s.StorageKind() != protocol.StorageKindNFS {
 		return storageAccess{}, errors.New("invalid NFS storage registration")
 	}
@@ -75,10 +75,25 @@ func prepareNFS(ctx context.Context, s protocol.StorageRegistration) (storageAcc
 		return storageAccess{}, errors.New("NFS identity does not match registration")
 	}
 	source := v.Server + ":" + v.Export
+	_, unitPath := remoteUnitPath(s)
+	_, unitAlreadyPresent := os.Lstat(unitPath)
 	path, err := prepareRemote(ctx, s, source, "nfs4", "vers=4,hard,_netdev")
 	if err != nil {
 		return storageAccess{}, err
 	}
+	defer func() {
+		// A brand-new mount that fails validation is not a usable registration. The
+		// managed engine repeats this cleanup defensively, but preparation is also
+		// used directly by recovery paths, so do not leave a live unit behind here.
+		if retErr == nil || !errors.Is(unitAlreadyPresent, os.ErrNotExist) {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(storageCleanupContext(ctx), 20*time.Second)
+		defer cancel()
+		if cleanupErr := detachRemote(cleanupCtx, s); cleanupErr != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("%w: clean up rejected NFS mount: %v", ErrStorageRollbackUncertain, cleanupErr))
+		}
+	}()
 	if err := verifyRemoteMount(ctx, path, source, "nfs4", []string{"hard"}); err != nil {
 		return storageAccess{}, err
 	}
@@ -124,6 +139,7 @@ func prepareSMB(ctx context.Context, s protocol.StorageRegistration) (access sto
 	options := smbMountOptions(credential, uid, gid)
 	unit, unitPath := remoteUnitPath(s)
 	oldUnit, oldUnitErr := os.ReadFile(unitPath)
+	_, unitAlreadyPresent := os.Lstat(unitPath)
 	remountAllowed, _ := ctx.Value(storageRemountAllowedKey{}).(bool)
 	defer func() {
 		// A credential update is not committed until the new mount has passed all
@@ -153,6 +169,19 @@ func prepareSMB(ctx context.Context, s protocol.StorageRegistration) (access sto
 	if err != nil {
 		return storageAccess{}, err
 	}
+	defer func() {
+		// Do not retain a newly-created mount when its identity, selected directory,
+		// or QEMU probe fails. Existing mounts are handled by the credential-rotation
+		// rollback above; a failed first registration has no prior state to retain.
+		if retErr == nil || !errors.Is(unitAlreadyPresent, os.ErrNotExist) {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(storageCleanupContext(ctx), 20*time.Second)
+		defer cancel()
+		if cleanupErr := detachRemote(cleanupCtx, s); cleanupErr != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("%w: clean up rejected SMB mount: %v", ErrStorageRollbackUncertain, cleanupErr))
+		}
+	}()
 	if err := verifyRemoteMount(ctx, path, source, "cifs", smbRequiredMountOptions(uid, gid)); err != nil {
 		return storageAccess{}, err
 	}
@@ -160,10 +189,22 @@ func prepareSMB(ctx context.Context, s protocol.StorageRegistration) (access sto
 	if err != nil {
 		return storageAccess{}, err
 	}
-	if err = qemuStorageAccess(ctx, path); err != nil {
+	access, err = smbIdentity(s, v, path, source, access) // identity/marker always belongs to the share root.
+	if err != nil {
 		return storageAccess{}, err
 	}
-	return smbIdentity(s, v, path, source, access)
+	dataPath := filepath.Join(path, v.Directory)
+	if v.Directory != "" {
+		data, e := remoteSubpathAccess(path, v.Directory, access)
+		if e != nil {
+			return storageAccess{}, e
+		}
+		access.Path, access.Total, access.Available, access.ReadOnly = dataPath, data.Total, data.Available, data.ReadOnly
+	}
+	if err = qemuStorageAccess(ctx, dataPath); err != nil {
+		return storageAccess{}, err
+	}
+	return access, nil
 }
 
 // inspectSMB is the read-only counterpart to prepareSMB; it never replays credentials or mounts.
@@ -183,7 +224,23 @@ func inspectSMB(ctx context.Context, s protocol.StorageRegistration) (storageAcc
 	if err := verifyRemoteMount(ctx, path, source, "cifs", smbRequiredMountOptions(uid, gid)); err != nil {
 		return storageAccess{}, err
 	}
-	return smbAccess(s, v, path, source)
+	access, err := smbPathAccess(path, source)
+	if err != nil {
+		return storageAccess{}, err
+	}
+	access, err = smbIdentity(s, v, path, source, access)
+	if err != nil {
+		return storageAccess{}, err
+	}
+	if v.Directory != "" {
+		dataPath := filepath.Join(path, v.Directory)
+		data, e := remoteSubpathAccess(path, v.Directory, access)
+		if e != nil {
+			return storageAccess{}, e
+		}
+		access.Path, access.Total, access.Available, access.ReadOnly = dataPath, data.Total, data.Available, data.ReadOnly
+	}
+	return access, nil
 }
 
 func smbMountOptions(credential, uid, gid string) string {
@@ -230,7 +287,17 @@ func nfsAccess(s protocol.StorageRegistration, v *protocol.NFSStorageSource, pat
 	if err != nil {
 		return storageAccess{}, err
 	}
-	return nfsIdentity(s, v, source, a, fsid)
+	a, err = nfsIdentity(s, v, source, a, fsid)
+	if err != nil || v.Directory == "" {
+		return a, err
+	}
+	data, err := remoteSubpathAccess(path, v.Directory, a)
+	if err != nil {
+		return storageAccess{}, err
+	}
+	// The selected subdirectory has its own access/capacity view, while identity remains
+	// bound to the mounted export's protocol FSID and explicit relative directory.
+	return data, nil
 }
 
 func nfsIdentity(s protocol.StorageRegistration, v *protocol.NFSStorageSource, source string, a storageAccess, fsid string) (storageAccess, error) {
@@ -243,7 +310,7 @@ func nfsIdentity(s protocol.StorageRegistration, v *protocol.NFSStorageSource, s
 		}
 	}
 	a.FilesystemID = fsid
-	a.Identity = "nfs:" + source + ":fsid=" + fsid
+	a.Identity = "nfs:" + source + ":directory=" + v.Directory + ":fsid=" + fsid
 	a.Observed.NFS = &protocol.NFSStorageIdentity{Server: v.Server, Export: v.Export, FilesystemID: fsid}
 	return a, nil
 }
@@ -410,6 +477,9 @@ func prepareRemote(ctx context.Context, s protocol.StorageRegistration, source, 
 		return "", errors.New("invalid remote storage source")
 	}
 	path := remoteMountPath(s)
+	if err := ensureStorageMountRoot(); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(path, 0755); err != nil {
 		return "", err
 	}
@@ -447,6 +517,46 @@ func prepareRemote(ctx context.Context, s protocol.StorageRegistration, source, 
 		return "", err
 	}
 	return path, nil
+}
+
+// ensureStorageMountRoot repairs only Nex's configured local mount-root. It never chmods a
+// mounted repository leaf or administrator path; service UMask=0077 must not hide mounts from QEMU.
+func ensureStorageMountRoot() error {
+	if !filepath.IsAbs(storageMountRoot) || filepath.Clean(storageMountRoot) != storageMountRoot {
+		return errors.New("storage mount root is invalid")
+	}
+	if err := os.Mkdir(storageMountRoot, 0711); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	// This is Nex's fixed, local mount root, never a repository leaf. Open it
+	// without following links and repair only this root-owned directory through
+	// the descriptor, so the agent's UMask=0077 cannot make every remote mount
+	// unreachable to QEMU.
+	fd, err := syscall.Open(storageMountRoot, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return errors.New("storage mount root is unsafe")
+	}
+	f := os.NewFile(uintptr(fd), storageMountRoot)
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	// The installed service is root; accepting the effective Core owner also keeps
+	// the same safety property in an explicitly unprivileged test/development
+	// service without treating another account's directory as ours.
+	if !info.IsDir() || !ok || st.Uid != uint32(os.Geteuid()) || info.Mode().Perm()&0022 != 0 {
+		return errors.New("storage mount root is not Core-owned and safe")
+	}
+	if err := f.Chmod(0711); err != nil {
+		return err
+	}
+	atPath, err := os.Lstat(storageMountRoot)
+	if err != nil || atPath.Mode()&os.ModeSymlink != 0 || !os.SameFile(info, atPath) {
+		return errors.New("storage mount root changed during repair")
+	}
+	return nil
 }
 
 // restoreManagedMountUnit restores the exact known-good Nex unit after a failed credential

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"nex.local/nex/internal/agent"
+	"nex.local/nex/internal/vmhost"
 )
 
 type HandoffConfig struct{ ControllerURL, ServerName, TrustPEM, AdminPassword, SiteName, VMID, Name, RequestID, AgentStateDir string }
@@ -197,6 +198,7 @@ func releaseHandoffAgent(dir string) {
 		return
 	}
 }
+
 // startHandoffAgent runs the embedded agent under a context derived from ctx (the
 // service lifetime), so a.stop can pause this one agent — e.g. so a live
 // re-enrollment can safely mutate its store — without tearing down the registry
@@ -215,6 +217,15 @@ func startHandoffAgent(ctx context.Context, dir string, a *runningAgent) {
 	key, _ := filepath.Abs(dir)
 	go func() {
 		if a.hostID != "" {
+			go func() {
+				if err := agent.ResumePoolRehome(agentCtx, a.store); err != nil && agentCtx.Err() == nil {
+					log.Printf("pool scope recovery: %v", err)
+				} else if agentCtx.Err() == nil {
+					if err := vmhost.RehomePoolScope(filepath.Join(dir, "managed-vms"), a.store.State.PoolID, a.store.State.HostID); err != nil {
+						log.Printf("pool journal scope recovery: %v", err)
+					}
+				}
+			}()
 			err := agent.Run(agentCtx, a.store, agent.RunConfig{Heartbeat: time.Second, ProbeInterval: 5 * time.Second, ProbeTimeout: 3 * time.Second})
 			if err != nil {
 				log.Printf("local agent stopped: %v", err)

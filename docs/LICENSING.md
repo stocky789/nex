@@ -95,12 +95,18 @@ or substitute for checking each component's license terms.
 
 ## VM storage client dependencies — 2026-09-11
 
-The VM-storage repository work adds Debian's `nfs-common`, `cifs-utils` and
-`open-iscsi` as separately executed host client programs. Nex does not copy,
-link, enable a storage target service, or alter their protocol implementations.
-Retain each exact package's copyright notice and corresponding source with the
-component manifest before external distribution, under the release evidence
-gate above.
+The VM-storage repository work adds Debian's `nfs-common`, `libnfs-utils`,
+`cifs-utils`, `smbclient` and `open-iscsi` as separately executed host client
+programs. Nex does not copy, link, enable a storage target service, or alter
+their protocol implementations. A disposable Debian 13 package inspection on
+2026-09-12 identified `libnfs-utils` 5.0.2-1+b2 (source `libnfs`) as
+LGPL-2.1-or-later for its primary sources, with preserved BSD and GPL notices,
+and `smbclient` 2:4.22.10+dfsg-0+deb13u2 (source `samba`) as GPL-3.0-or-later
+with preserved third-party notices. These are aggregate components, not code
+combined with Nex. Retain each exact package's copyright notice and
+corresponding source with the component manifest before external distribution,
+under the release evidence gate above. This inspection does not grant external
+release clearance.
 
 OpenZFS is intentionally not included in the ISO or `nex-core-local` package.
 It remains an optional existing-host capability pending an exact package/source
