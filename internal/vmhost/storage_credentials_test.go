@@ -100,6 +100,36 @@ func TestStorageCredentialRejectsInvalidScope(t *testing.T) {
 	}
 }
 
+func TestStorageCredentialMountFileIncludesDomain(t *testing.T) {
+	state := t.TempDir()
+	handoff := testCredentialHandoff()
+	handoff.Credentials.Domain = "truenas"
+	receipt, err := SaveStorageCredential(state, handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mount, err := os.ReadFile(filepath.Join(state, credentialDirectory, receipt.Receipt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(mount) != "username=operator\npassword=not-in-a-command\ndomain=truenas\n" {
+		t.Fatalf("mount credential %q", mount)
+	}
+	replay := handoff
+	replay.Credentials.Domain = "other"
+	if _, err = SaveStorageCredential(state, replay); err == nil {
+		t.Fatal("domain change accepted as the same receipt")
+	}
+}
+
+func TestStorageCredentialRejectsDomainWithEquals(t *testing.T) {
+	handoff := testCredentialHandoff()
+	handoff.Credentials.Domain = "tru=enas"
+	if _, err := SaveStorageCredential(t.TempDir(), handoff); err == nil {
+		t.Fatal("unsafe domain accepted")
+	}
+}
+
 // This fails before BUG-0170 because an identical replay always atomically
 // rewrites the already-correct mount credential.
 func TestStorageCredentialReplayDoesNotRewriteVerifiedMountCredential(t *testing.T) {

@@ -44,6 +44,9 @@ unexecuted items are kept apart.
 | Storage placement transitions | BUG-0132's stopped local → NFS → local walkthrough passed. Broader transitions and native disk-placement conversion remain open. |
 | Activation failure/replay | The selected BUG-0135 master fence/replay passed. The remaining failure modes are open. |
 | Five-host scale and soak | Three-host results do not certify five hosts, long-duration load or repeated fault recovery. |
+| Member authority replica | Planned, not implemented: signed, generation-numbered master push of pool authority to every ready member, with observed replica generation. See [pool authority transfer](2026-09-08-nex-platform.md#pool-authority-transfer-and-master-succession). |
+| Authority transfer / automatic succession | Planned, not implemented: planned handover, eject, manual promotion and quorum-plus-fence automatic succession, with their lab gates in the same section. |
+| Placement approval on master | Controller still validates placement from its mirror of host reports; the master Core must approve it from its own records. |
 | Physical SAN/NAS and fence devices | Needs an explicitly disposable supported hardware profile covering durability, power loss and exclusion. Nested virsh fencing does not certify physical devices. |
 | Recovery, mobility and HA | Snapshots, verified backup/restore, permanent host/master loss, migration, upgrades and separately gated automatic HA/failback keep their platform gates. Shared storage does not provide them. |
 | Latest ISO full installation | The tenth ISO passed artifact audit and the native wizard only. The full BIOS install/persistence evidence belongs to the seventh ISO. UEFI and physical hardware are unaccepted. |

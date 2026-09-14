@@ -1,0 +1,33 @@
+{
+  "summary": "Allow a standalone pool master with no pool peer record to register NFS/SMB storage; an existing invalid record or clustered iSCSI still fails closed. API impact: none.",
+  "paths": [
+    "docs/BUG_LEDGER.md",
+    "internal/agent/managed.go",
+    "internal/agent/managed_test.go"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Restores the already documented NFS/SMB registration workflow on single-host pools; no instructions change.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. The storage-register command and result contract are unchanged; only Core's local admission gate is corrected.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fix within the current storage milestone.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state added or changed; storage registrations remain recorded by Core as before."
+  },
+  "verification": {
+    "method": "Regression test fails before the fix (standalone NFS refused) and passes after; go vet and go test -race ./internal/agent pass. Not yet re-exercised against a lab host.",
+    "evidence": [
+      "internal/agent/managed_test.go"
+    ]
+  }
+}

@@ -93,7 +93,7 @@ func validClusterSecret(s *Store, r ClusterSecretReceipt, m ClusterSecretMateria
 	if r.RepositoryID == "" && r.ClusterRequestID == "" {
 		return errors.New("unbound cluster secret is invalid")
 	}
-	if m.Credentials != nil && (len(m.Credentials.Username) > 4096 || len(m.Credentials.Secret) == 0 || len(m.Credentials.Secret) > 65536 || strings.ContainsAny(m.Credentials.Username+m.Credentials.Secret, "\x00\r\n")) {
+	if m.Credentials != nil && (len(m.Credentials.Username) > 4096 || len(m.Credentials.Secret) == 0 || len(m.Credentials.Secret) > 65536 || len(m.Credentials.Domain) > 253 || strings.ContainsAny(m.Credentials.Username+m.Credentials.Secret+m.Credentials.Domain, "\x00\r\n")) {
 		return errors.New("invalid cluster credential")
 	}
 	switch r.Kind {

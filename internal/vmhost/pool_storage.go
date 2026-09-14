@@ -144,7 +144,7 @@ func PoolStorageCredential(stateDir, receipt string) (protocol.StorageCredential
 		}
 		var stored storedCredential
 		if json.Unmarshal(b, &stored) == nil && stored.Receipt == receipt && stored.Status == "ready" {
-			return protocol.StorageCredentials{Username: stored.Username, Secret: stored.Secret}, nil
+			return protocol.StorageCredentials{Username: stored.Username, Secret: stored.Secret, Domain: stored.Domain}, nil
 		}
 	}
 	return protocol.StorageCredentials{}, errors.New("storage credential is unavailable")

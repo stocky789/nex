@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"nex.local/nex/internal/protocol"
 	"nex.local/nex/internal/vmhost"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -149,7 +150,7 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 					memberStore := &Store{dir: dir, State: identity}
 					reserved := false
 					membership, membershipErr := Membership(memberStore)
-					if membershipErr != nil && commandReferencesRemoteStorage(ctx, memberStore, cmd) {
+					if remoteStorageMembershipUnavailable(ctx, memberStore, cmd, membershipErr) {
 						err = errors.New("pool membership is unavailable for remote storage operation")
 					} else if membershipErr == nil && membership.MasterHostID != identity.HostID {
 						if poolMemberStorageRegistrationDenied(membership, identity.HostID, cmd.Storage) {
@@ -255,6 +256,17 @@ func shouldReleaseUnusedReservation(membership protocol.PoolMembership, membersh
 
 func poolMemberStorageRegistrationDenied(membership protocol.PoolMembership, hostID string, storage *protocol.StorageRegistration) bool {
 	return membership.MasterHostID != hostID && storage != nil && protocol.IsPoolSharedStorage(*storage)
+}
+
+// A standalone master has no pool peer record until it issues its first join offer, and
+// NFS/SMB storage needs no membership there. A present but invalid record, or clustered
+// iSCSI, still fails closed.
+func remoteStorageMembershipUnavailable(ctx context.Context, s *Store, cmd protocol.Command, membershipErr error) bool {
+	if membershipErr == nil || !commandReferencesRemoteStorage(ctx, s, cmd) {
+		return false
+	}
+	_, err := os.Stat(poolStatePath(s))
+	return !os.IsNotExist(err) || (cmd.Storage != nil && protocol.IsClusteredISCSI(*cmd.Storage))
 }
 
 func commandReferencesRemoteStorage(ctx context.Context, s *Store, cmd protocol.Command) bool {

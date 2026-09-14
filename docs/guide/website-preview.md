@@ -31,7 +31,9 @@ infrastructure management or credential-entry forms.
    can Tab to a question and press Enter to open or close it.
 7. Follow **Gallery** to see Controller development screenshots with fictional demo
    infrastructure: the host overview, the pool's virtual machines, a single VM's
-   configuration, the Create VM review step, networking, storage and activity. Follow a
+   configuration, the Create VM review step, networking, storage and activity. Below them,
+   the installer section walks through the Nex Core installer from the boot menu through
+   the Host, Network, Disk and Review steps to installation progress. Follow a
    screenshot's full-size link to inspect it, then use your browser's Back action to return.
 
 ## Expected result

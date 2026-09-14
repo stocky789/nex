@@ -310,8 +310,9 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
   on a later report. A `failed` **managed-journal** check names a journal file on the host
   that could not be read; the other entries are still adopted. Limits: sites, administrator accounts,
   audit history, enrollment tokens and the Controller CA are not recovered and must be
-  re-created; multi-host pool membership is not restored (joining members is not available
-  in this build). Never run the old and new Controller at the same time. If you re-enroll a
+  re-created. A pool member returns to its pool only after you also connect that member to
+  the new Controller and its master reports it as a ready member; members are joined through the
+  [host-local join workflow](join-a-pool.md), not from Controller. Never run the old and new Controller at the same time. If you re-enroll a
   host with the *same* Controller under a new host record instead, its old records stay with
   the revoked host and are not moved; use **Re-enroll host**, which keeps the identity.
 

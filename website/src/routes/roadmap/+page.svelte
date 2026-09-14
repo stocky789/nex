@@ -83,7 +83,10 @@
         "A pool that spans hosts, with storage they can all reach and honest placement rules.",
       done: [],
       open: [
-        "Joining a second host to an existing pool as a member under its master, changing which host is the master, and ejecting a member — each with its own safety checks",
+        "Joining a second host to an existing pool as a member under its master, changing which host is the master, and ejecting a member — one authority handover design with its own safety checks",
+        "Every member keeps a signed, versioned copy of the master's pool records, so a surviving member can become master without losing VM ownership, membership or storage settings",
+        "Automatic master succession when the master is lost: only with a majority of the pool and proof the old master is powered off, never from a missed heartbeat; two-host pools promote manually",
+        "The master, not the Controller, approves which host a VM is placed on",
         "Registering external NFS storage at pool level, with access, permissions and capacity verified separately on every host",
         "Showing plainly which storage is local and which is shared, and never starting a second writer just because a host stopped reporting",
         "Mapping logical networks to host bridges and VLANs with compatibility checks, applying remote network changes in stages, and rolling them back automatically if management access is lost",
@@ -114,7 +117,7 @@
       open: [
         "Moving a stopped VM, transferring its disks when the storage is local to one host",
         "Manual recovery after a host dies: install a replacement Core, select surviving VMs on NFS or SMB storage and boot them after restoring their configuration and proving the old host cannot still write; iSCSI requires an exclusive LUN handover",
-        "Recovering when the failed host was the pool master or the only Core, using protected VM and pool recovery records that survive on network storage rather than depending on the old host or Controller",
+        "Recovering when the failed host was the pool master by promoting a member from its copy of the pool records, and when it was the only Core from protected recovery records that survive on network storage, never depending on the old host or Controller",
         "Live migration for guests on shared storage, once CPU model, firmware, machine type, networking and versions have all been checked",
         "Draining a host for maintenance and returning it to service afterwards",
         "Recovering correctly when the migration network drops mid-transfer — a timeout is never treated as a finished move",
@@ -142,7 +145,7 @@
       done: [],
       open: [
         "High availability per pool, with real quorum and fencing — a missing heartbeat will never be enough on its own to restart a VM somewhere else",
-        "HA and migration controlled by the active pool master, including safe master succession; returning VMs to a preferred host only when requested or explicitly enabled, with stability checks to prevent repeated moves",
+        "HA and migration controlled by the active pool master, building on the earlier master succession; returning VMs to a preferred host only when requested or explicitly enabled, with stability checks to prevent repeated moves",
         "Repeated disaster-recovery, fencing and failback tests under partitions, master loss and stale-host return, with independent safety review before any supported reliability claim",
         "Container Services: Docker Swarm inside Nex-managed node VMs, deployed and operated from Controller rather than over SSH",
         "Guided passthrough of physical hardware to a VM",

@@ -106,7 +106,11 @@ func (b *credentialBroker) receipt(host, requestID, poolID, repositoryID, regist
 
 func (b *credentialBroker) proof(v storageCredentialRequest) []byte {
 	m := hmac.New(sha256.New, b.key[:])
-	for _, field := range []string{v.RequestID, v.RegistrationRequestID, v.PoolID, v.HostID, v.RepositoryID, v.Credentials.Username, v.Credentials.Secret} {
+	fields := []string{v.RequestID, v.RegistrationRequestID, v.PoolID, v.HostID, v.RepositoryID, v.Credentials.Username, v.Credentials.Secret}
+	if v.Credentials.Domain != "" {
+		fields = append(fields, v.Credentials.Domain)
+	}
+	for _, field := range fields {
 		_, _ = m.Write([]byte(field))
 		_, _ = m.Write([]byte{0})
 	}
@@ -235,7 +239,7 @@ func (c *Controller) storageCredentials(w http.ResponseWriter, r *http.Request, 
 	if !decodeLimit(w, r, &v, 1<<20) {
 		return
 	}
-	if !nameValid(v.RequestID) || !nameValid(v.PoolID) || !nameValid(v.HostID) || (v.RepositoryID != "" && !nameValid(v.RepositoryID)) || (v.RegistrationRequestID != "" && !nameValid(v.RegistrationRequestID)) || (v.RepositoryID == "" && v.RegistrationRequestID == "") || len(v.Credentials.Username) > 4096 || len(v.Credentials.Secret) == 0 || len(v.Credentials.Secret) > 65536 || v.Credentials.SSHPrivateKey != "" || v.Credentials.SSHKnownHosts != "" || strings.ContainsAny(v.Credentials.Username+v.Credentials.Secret, "\x00\r\n") {
+	if !nameValid(v.RequestID) || !nameValid(v.PoolID) || !nameValid(v.HostID) || (v.RepositoryID != "" && !nameValid(v.RepositoryID)) || (v.RegistrationRequestID != "" && !nameValid(v.RegistrationRequestID)) || (v.RepositoryID == "" && v.RegistrationRequestID == "") || len(v.Credentials.Username) > 4096 || len(v.Credentials.Secret) == 0 || len(v.Credentials.Secret) > 65536 || len(v.Credentials.Domain) > 253 || strings.ContainsAny(v.Credentials.Domain, "/\\= \t;'\"`$&|<>()") || v.Credentials.SSHPrivateKey != "" || v.Credentials.SSHKnownHosts != "" || strings.ContainsAny(v.Credentials.Username+v.Credentials.Secret+v.Credentials.Domain, "\x00\r\n") {
 		fail(w, 400, "valid request, pool, host and bounded credential required")
 		return
 	}

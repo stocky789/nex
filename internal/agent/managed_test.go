@@ -405,3 +405,26 @@ func TestOversizedResultErrorDoesNotBlockHeartbeat(t *testing.T) {
 		t.Fatal("full local error not retained/acknowledged")
 	}
 }
+
+func TestStandaloneMasterMayRegisterRemoteStorageWithoutPeerRecord(t *testing.T) {
+	s := peerStore(t, "host-1", "pool-1")
+	nfs := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: "host-1", Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/exports"}}}
+	cmd := protocol.Command{Kind: "storage-register", Storage: &nfs}
+	_, membershipErr := Membership(s)
+	if membershipErr == nil {
+		t.Fatal("fresh standalone host unexpectedly has membership")
+	}
+	if remoteStorageMembershipUnavailable(context.Background(), s, cmd, membershipErr) {
+		t.Fatal("standalone master NFS registration was refused for missing membership")
+	}
+	clustered := protocol.StorageRegistration{ID: "repo-2", PoolID: "pool-1", HostID: "host-1", Kind: protocol.StorageKindISCSI, Source: protocol.StorageSource{ISCSI: &protocol.ISCSIStorageSource{Mode: "clustered_gfs2"}}}
+	if !remoteStorageMembershipUnavailable(context.Background(), s, protocol.Command{Kind: "storage-register", Storage: &clustered}, membershipErr) {
+		t.Fatal("clustered iSCSI was admitted without membership")
+	}
+	if err := os.WriteFile(poolStatePath(s), []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, membershipErr = Membership(s); membershipErr == nil || !remoteStorageMembershipUnavailable(context.Background(), s, cmd, membershipErr) {
+		t.Fatal("invalid pool peer record did not fail closed")
+	}
+}

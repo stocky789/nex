@@ -2308,6 +2308,9 @@
             "type": "string",
             "writeOnly": true
           },
+          "domain": {
+            "type": "string"
+          },
           "ssh_private_key": {
             "type": "string",
             "writeOnly": true
@@ -2319,7 +2322,7 @@
         },
         "required": [],
         "x-go-type": "protocol.StorageCredentials",
-        "description": "Transient credential bytes only. The selected operation validates the applicable secret form; inventory, journals, results and diagnostics never carry these fields."
+        "description": "Transient credential bytes only. Optional domain is the SMB workgroup or AD domain used with username/secret. The selected operation validates the applicable secret form; inventory, journals, results and diagnostics never carry these fields."
       },
       "StorageIdentity": {
         "type": "object",

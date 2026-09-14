@@ -158,6 +158,7 @@ type StorageCredentialOffer struct {
 type StorageCredentials struct {
 	Username      string `json:"username,omitempty"`
 	Secret        string `json:"secret,omitempty"`
+	Domain        string `json:"domain,omitempty"`
 	SSHPrivateKey string `json:"ssh_private_key,omitempty"`
 	SSHKnownHosts string `json:"ssh_known_hosts,omitempty"`
 }
@@ -204,6 +205,10 @@ type StorageDiscoveryCandidate struct {
 	Source    StorageSource `json:"source"`
 	Path      string        `json:"path,omitempty"`
 	Browsable bool          `json:"browsable"`
+	// Existing is true when Core observed a leftover or current Nex repository
+	// marker in that folder. It is advisory for picking; registration still
+	// verifies identity and access.
+	Existing bool `json:"existing,omitempty"`
 }
 
 // StorageDiscoveryResult deliberately returns only operator-safe source metadata and
@@ -245,6 +250,13 @@ func storageSubdirectory(raw string) bool {
 }
 func storageSMBShare(raw string) bool {
 	return strings.TrimSpace(raw) == raw && storageSMBShareName.MatchString(raw)
+}
+
+func storageSMBDomain(raw string) bool {
+	if raw == "" {
+		return true
+	}
+	return len(raw) <= 253 && strings.TrimSpace(raw) == raw && !strings.ContainsAny(raw, "/\\= \t\x00\r\n;'\"`$&|<>()")
 }
 
 // ValidateStorageRegistration validates client-supplied intent as well as Core replay input.
@@ -445,7 +457,7 @@ func ValidateStorageDiscovery(v StorageDiscoveryRequest) error {
 	if v.Path != "" && !storagePath(v.Path) {
 		return errors.New("storage discovery path is invalid")
 	}
-	if v.Credentials != nil && (len(v.Credentials.Secret) > 4096 || len(v.Credentials.Username) > 253 || strings.ContainsAny(v.Credentials.Username+v.Credentials.Secret, "\x00\r\n")) {
+	if v.Credentials != nil && (len(v.Credentials.Secret) > 4096 || len(v.Credentials.Username) > 253 || !storageSMBDomain(v.Credentials.Domain) || strings.ContainsAny(v.Credentials.Username+v.Credentials.Secret+v.Credentials.Domain, "\x00\r\n")) {
 		return errors.New("storage discovery credentials are invalid")
 	}
 	if v.Kind == StorageKindSMB && v.Server == "" {

@@ -6,12 +6,19 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.1.9` →
-> Debian `0.1.9`).
+> development software. Builds use the newest numbered changelog heading (`0.2.0` →
+> Debian `0.2.0`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.2.0] — 2026-09-14
+
+### Bug Fixes
+
+- A single-host pool can register NFS and SMB storage again instead of failing with *pool
+  membership is unavailable for remote storage operation* (BUG-0178).
 
 ## [0.1.9] — 2026-09-14
 
@@ -24,7 +31,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Added guided discovery for existing local directories, ZFS datasets, NFS exports, SMB shares
   and iSCSI targets; manual entry remains available (BUG-0095).
-- Added an NFS/SMB folder picker and iSCSI target discovery that fill the source fields.
+- Added an optional SMB domain/workgroup with repository credentials, and marked existing
+  repository folders with **E** in the share picker.
 - Clustered iSCSI setup also offers target discovery; LUN, WWID and filesystem UUID stay explicit.
 - Clustered iSCSI, NFS and SMB passed multi-host concurrent-write lab scenarios; clustered iSCSI
   is not accepted for production (BUG-0138, BUG-0143).

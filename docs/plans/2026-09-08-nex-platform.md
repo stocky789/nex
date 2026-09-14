@@ -105,7 +105,7 @@ Each milestone must work end to end before the next one expands the scope. The f
 | 1. Local foundation | Stock Debian runs a persistent guest through libvirt | 0 |
 | 2. First managed VM | One controller, site, pool, host, local disk, VM, and browser console | 1–2 |
 | 3. Installable host and Controller bootstrap | Nex Core installs; its local UI deploys a Controller VM or connects to an existing Controller | 3 |
-| 4. Shared pool | Two hosts use pool-level NFS storage with explicit VM placement | 4 |
+| 4. Shared pool | Two hosts use pool-level NFS storage with explicit VM placement; master authority replicates and transfers, including automatic succession | 4 |
 | 5. Recovery | Snapshot rollback, independent backups, scheduling, and proven restores | 5–6 |
 | 6. Mobility | Shared-storage live migration and host evacuation | 7 |
 | 7. Supported release | Upgrade/recovery checks, access controls, and operator documentation | 8 |
@@ -358,14 +358,16 @@ The pool-local cluster layer supplies quorum, fencing and execution exclusion, a
 integrated with the active master as one authority, never a competing scheduler. Members execute
 authorized work, not independent relocation decisions. Controller connectivity is not a quorum
 vote; a Controller or WAN outage alone must not remove the pool's decision-making authority.
-The master is a transferable role, not a permanent dependency on one physical host. Before HA
-can operate through master failure, prove quorum-authorized succession, recovery of its durable
-records, and exclusion of stale-master commands. Without a provably valid master/ownership
-authority, block new starts and transfers and apply the tested no-quorum/self-fencing policy.
+The master is a transferable role, not a permanent dependency on one physical host; every
+change of master follows the [pool authority transfer](#pool-authority-transfer-and-master-succession)
+design. Without a provably valid master/ownership authority, block new starts and transfers and
+apply the tested no-quorum policy: the native cluster freezes on quorum loss
+(`no-quorum-policy=freeze`) and exclusion comes from verified external power-off fencing, not
+from hosts fencing themselves.
 
 Controller outage leaves running guests and established pool-local HA operating. Before HA exists, uncertainty results in alerts and restricted operations, never an automatic failover. With HA enabled, a missing heartbeat alone still cannot authorize a second VM start: the HA authority must establish quorum, required storage/capacity, and successful fencing of an uncertain previous owner.
 
-Define and test no-quorum and fence-failure behavior before enabling HA, including any required stopping/self-fencing of existing resources; do not promise every guest keeps running through a pool partition. Failed or unconfirmed fencing must prevent recovery elsewhere. Routine monitoring does not introduce a competing restart path.
+Define and test no-quorum and fence-failure behavior before enabling HA, including any required freezing or stopping of existing resources; do not promise every guest keeps running through a pool partition. Failed or unconfirmed fencing must prevent recovery elsewhere. Routine monitoring does not introduce a competing restart path.
 
 ## Delivery phases and acceptance gates
 
@@ -560,7 +562,7 @@ All these gates remain outstanding until implemented and executed.
 
 ### 4. Multi-host pools and shared storage
 
-1. Enroll a second host; join it to an existing pool as a member host under that pool's master (“Add host to pool”), provide master change and member eject with safety checks, and provide pool-wide inventory and explicit placement. A join is a Core-to-Core convergence operation: the master retains the durable pool membership and every pool-wide configuration record, sends each applicable generation to the member, and retains that member's result. At minimum reconcile logical networks (including VLAN/uplink mappings), pool storage registrations and the member's real access state; materialize only configuration applicable to that member, never another host's local storage or runtime state. The Controller asks the master and displays durable per-member pending, succeeded, failed or needs-attention results; it neither stores a second desired-state copy nor runs the reconciliation. On member reconnect, reboot or interrupted join, the master resumes reconciliation from its durable record before reporting the member ready for placement on an affected resource. Require authenticated Core-to-Core calls, capability and identity checks, generation/idempotency rules, narrow member credential delivery, and safe retry/outage behavior. Until this phase every enrolled host remains the master of its own pool.
+1. Enroll a second host; join it to an existing pool as a member host under that pool's master (“Add host to pool”), provide master change and member eject through [pool authority transfer](#pool-authority-transfer-and-master-succession), and provide pool-wide inventory and explicit placement approved by the master. A join is a Core-to-Core convergence operation: the master retains the durable pool membership and every pool-wide configuration record, sends each applicable generation to the member, and retains that member's result. At minimum reconcile logical networks (including VLAN/uplink mappings), pool storage registrations and the member's real access state; materialize only configuration applicable to that member, never another host's local storage or runtime state. The Controller asks the master and displays durable per-member pending, succeeded, failed or needs-attention results; it neither stores a second desired-state copy nor runs the reconciliation. On member reconnect, reboot or interrupted join, the master resumes reconciliation from its durable record before reporting the member ready for placement on an affected resource. Require authenticated Core-to-Core calls, capability and identity checks, generation/idempotency rules, narrow member credential delivery, and safe retry/outage behavior. Until this phase every enrolled host remains the master of its own pool.
 2. Add existing NFS storage through the pool UI. Validate access, write permissions, identity, capacity, and mount health per host before marking it usable.
 3. Distinguish local/shared storage visibly. Track disk attachment and exclusive VM execution; never launch a second writer because a host stopped reporting.
 4. Add logical LAN bridges/VLAN mappings with host compatibility checks. Do not assume bridge names mean equivalent connectivity. Remote host network edits require staged apply, explicit confirmation, and timed recovery if management connectivity is lost.
@@ -569,6 +571,55 @@ All these gates remain outstanding until implemented and executed.
 **UX acceptance:** guide “Add host to pool” (joining an existing pool as a member under its master) through identity/capability checks; explain storage location, per-host access, capacity, and failure consequences. Pair network relationships with accessible details and a preview of affected VMs/management access; verify staged apply and timed recovery before offering remote edits. A visual view does not require a freeform network canvas.
 
 **Gate:** join a disposable member to a configured pool and prove that the master reconciles every applicable logical network/VLAN and pool storage registration to it, recording per-member success and actionable failure without Controller-held desired state. Exercise incompatible or missing uplinks, unavailable/unwritable storage, interrupted Core-to-Core delivery, member reboot/reconnect and Controller replacement; retry must converge without duplicate bridges, mounts, credentials, registrations or writers. VMs can be placed on either compatible host, inaccessible storage prevents placement, shared free space is reported once, and a disconnected host does not trigger duplicate VM startup.
+
+#### Pool authority transfer and master succession
+
+**Decision: project owner, 2026-09-14; planned, not implemented.** One design covers planned
+master change, member eject, manual promotion after permanent master loss
+([Phase 7](#manual-recovery-after-permanent-host-loss)) and automatic succession. Phase 7 and
+[Phase 9](#9-optional-per-pool-ha) reference it; they do not redesign it.
+
+- **Member replica.** The master pushes a signed, monotonically generation-numbered replica of
+  its durable pool authority to every ready member: the pool CA key encrypted for members,
+  membership, VM ownership, epochs and pending updates (`pool-vms.json`), and the pool storage,
+  network and native-cluster records. Members store it read-only and never act on it unless
+  promoted; until then it is not an independent authority. Each Core reports its replica
+  generation and freshness as observed state; Controller stores none of it. This is the
+  recoverable copy required by Phase 7 item 2.
+- **Transfer steps**, identical for every trigger:
+  1. Freeze authority writes on the master (new placements, membership, storage/network and VM
+     ownership changes); running guests continue.
+  2. Replicate to the target and confirm it holds the current generation.
+  3. When the old master is not cooperating, obtain verified power-off through the existing
+     fencing proof mechanism. A timeout or heartbeat loss is never proof.
+  4. The target activates as master at generation + 1 and signs the new authority.
+  5. Members re-point to the new master and accept only the higher generation.
+  6. The old master is demoted, or refused by generation/epoch check when it returns, and
+     rejoins only as a member. Eject is the same flow with the target staying master and the
+     ejected host's membership removed at the new generation.
+- **Automatic succession** elects a new master only with a strict quorum majority of current
+  members (counted by the established pool quorum layer, not a Nex consensus), a verified fence
+  proof of the old master, and the most recent replica generation among the majority. Pools that
+  cannot form a majority, including two hosts, never auto-elect and use manual, fence-verified
+  promotion. Succession does not restart VMs; automatic restart keeps the Phase 9 HA gates.
+- **Health after promotion.** A new master re-collects fresh member access observations before
+  reporting health (member access is memory-only, BUG-0158); the replica is never health evidence.
+- **Placement approval moves to the master.** Controller relays the operator's chosen host; the
+  master Core validates and approves placement from its own records. Gap to close: Controller
+  currently validates placement from its mirror of host reports.
+
+**Planned API impact: new contracts** — Core peer replica push/ack; promotion, planned-transfer
+and eject operations; succession election messages; master placement approval; Controller-facing
+observed replica generation and transfer status. Define authentication, generation/epoch checks,
+safe retries, reconnect and version compatibility on both sides when implementing.
+**State owner: core** — the durable record is the member replica on each Core; a fresh Controller
+reads the active master's inventory.
+
+**Gate — all outstanding (disposable lab):** planned handover on a healthy pool; master power-off
+on three hosts with automatic succession; two-host manual, fence-verified promotion; returning old
+master refused and rejoined as a member; interrupted transfer at each step. Throughout, prove no
+duplicate writer or dual master, VM ownership and epochs preserved, no health reported from the
+replica alone, and a fresh Controller re-adopting the new master with every pool setting.
 
 ### 5. Snapshots and rollback
 
@@ -720,11 +771,12 @@ storage discovery or pool join does not provide this capability.
 2. **Recover pool authority, including master loss.** Cover failure of a member, the master,
    and the only Core in a pool. A replacement Core gets its own host identity and recovers
    the original pool identity and accepted VM identities from trusted Core-owned recovery
-   records. The master journal remains authoritative during normal operation; recover its
-   pool configuration, membership, storage registrations and credential custody from a
-   protected surviving recovery record before accepting mutations. The recovery design must
-   define authority transfer, freshness/rollback protection and exclusion of a returning old
-   master; neither an empty Controller database nor a live old Core may be prerequisites.
+   records. The master journal remains authoritative during normal operation; a lost master's
+   authority is recovered from the surviving member replica through
+   [pool authority transfer](#pool-authority-transfer-and-master-succession), which owns
+   freshness/rollback protection and exclusion of a returning old master. A sole-host pool has
+   no member replica and needs the recovery record above. Neither an empty Controller database
+   nor a live old Core may be prerequisites.
    Do not turn recovery into ordinary creation of a second pool or a second VM identity.
 3. **Discover and preflight.** Through Controller, ask Core to inspect explicitly selected
    storage and show recoverable VMs, their former owner, recovery-record status and blockers.
@@ -957,9 +1009,9 @@ count. The following are blocking requirements for HA, migration and disaster-re
 
 - **One authority, including after master failure.** All policy changes, placement decisions,
   recovery, evacuation and return moves are owned by the active pool master and persisted on
-  Core. Map the master role and its succession to the established quorum/fencing stack before
-  enabling HA; do not build an ad hoc election or let Controller, member agents, libvirt
-  autostart and the HA scheduler race each other. Test loss of the master during fencing,
+  Core. Master succession follows [pool authority transfer](#pool-authority-transfer-and-master-succession);
+  do not build a second election or let Controller, member agents, libvirt autostart and the
+  HA scheduler race each other. Test loss of the master during fencing,
   migration cutover and failback. A new master must recover the same operation/ownership state
   and reject stale-master/member commands before allowing further work. Never force a new
   master merely because the old one stopped responding.
@@ -1170,8 +1222,10 @@ connecting each pool master to it, with every setting coming across. Decisions:
 - **Status:** implemented for storage registrations, networks, media and VM definitions
   (`Inventory.managed`, adoption with preserved IDs); an enrolled host pointed at a different
   Controller takes a fresh identity there in place, keeping its journal. Evidence:
-  [controller replacement checks](../qa/pool-vlan-networks/checks.md). Open: pool membership and
-  master role for multi-host pools, later policies, and backup/restore of Controller-scoped data.
+  [controller replacement checks](../qa/pool-vlan-networks/checks.md). Pool membership is also
+  implemented: a fresh Controller adopts a connected member once its master reports it ready
+  ([join walkthrough](../guide/join-a-pool.md#verification)). Open: master role transfer
+  ([authority transfer](#pool-authority-transfer-and-master-succession)), later policies, and backup/restore of Controller-scoped data.
   The lost-Controller test in the Phase 6 gate becomes a **Controller replacement gate** for the
   first supported release: destroy the Controller appliance, deploy a fresh one, connect the
   master, and verify the pool's networks, storage, media, VMs and policies return with their
@@ -1218,16 +1272,16 @@ Returning to Review resets consent. Keep target selection, identity rechecks and
 validation. API impact: none; confirmation remains local to the installer. Guide impact:
 updated, including the changed review step and safety behavior.
 
-### Xen disk eligibility and compact network feedback
+### Paravirtual disk eligibility and compact network feedback
 
-GUI discovery and the backend now share disk-name eligibility, including Xen `xvd` devices.
+GUI discovery and the backend now share disk-name eligibility, including paravirtual `xvd` devices.
 The previous GUI offered `/dev/xvda` but the backend rejected its prefix. Existing whole-disk,
 read-only, removable, installation-media, capacity and identity checks remain required.
 A green light accompanies detected carrier; other states retain neutral lights and text.
 Verbose hostname hover explanations are removed; validation and errors remain.
 API impact: none; local installer discovery/validation and display use no Controller operation,
 agent command/result or client-facing API. Guide impact: updated.
-See [Xen disk QA](../qa/iso/2026-09-08-installer-xen-disk.md) for evidence and Xen runtime limits.
+See [paravirtual disk QA](../qa/iso/2026-09-08-installer-xen-disk.md) for evidence and paravirtual runtime limits.
 
 Keyboard startup feedback correction: successful layout application is silent; genuine
 errors still block credentials and layout changes still clear both password fields.

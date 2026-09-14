@@ -42,8 +42,8 @@ for production workloads. Use an explicitly selected disposable lab host.
   boot. Nex never creates, imports or upgrades a pool, mounts or unmounts the dataset, or changes
   pool or dataset properties. The mount point must be a clean absolute path without whitespace,
   control characters, `%` or `\`.
-- **SMB3 share:** an existing SMB 3.1.1 server/share with encryption support, and an account and
-  password with access for every intended member Core and QEMU. SMB1 and relaxed cache/locking
+- **SMB3 share:** an existing SMB 3.1.1 server/share with encryption support, and an account,
+  optional domain/workgroup, and password with access for every intended member Core and QEMU. SMB1 and relaxed cache/locking
   modes are not supported. New registration needs permission to create and retain one hidden
   identity file at the share root.
 - **Ordinary exclusive iSCSI LUN:** an existing target portal, target IQN, LUN, WWID and one ext4
@@ -61,8 +61,9 @@ for production workloads. Use an explicitly selected disposable lab host.
    **Host**, then choose **Repository type**.
 3. Browse the destination before entering paths manually:
 
-   - **SMB3 share:** enter **SMB server**, **Account** and **Password**, then select
-     **Browse shared folders**. The picker lists the server's shares for that account.
+   - **SMB3 share:** enter **SMB server**, **Account**, optional **Domain**, and **Password**, then select
+     **Browse shared folders**. The picker lists the server's shares for that account. Folders that
+     already have a Nex repository marker show **E**.
    - **NFSv4 export:** enter **NFS server**, then select **Browse exports**.
    - In either picker, select a row and **Select folder**, or double-click a row to open it.
      **Up** returns to the parent and **Refresh** lists it again. **Cancel** or Escape closes the
@@ -81,8 +82,9 @@ for production workloads. Use an explicitly selected disposable lab host.
    - **OpenZFS dataset:** enter **Imported pool**, **Existing dataset** and its original
      **Reported mount point**. Core creates its own managed bind alias for VM disk paths; do not
      enter that alias in the form.
-   - **SMB3 share:** confirm **Share** and optional existing directory, and keep **SMB server**,
-     **Account** and **Password** filled. Core creates or reuses `.nex-storage-marker` at the
+   - **SMB3 share:** confirm **Share**. Pick a nested folder in **Browse shared folders** instead of
+     typing a path; the selected relative folder appears under **Share**. Keep **SMB server**,
+     **Account**, optional **Domain** and **Password** filled. Core creates or reuses `.nex-storage-marker` at the
      share root. Do not rename, delete or replace that file.
    - **iSCSI LUN:** enter **Target portal**, **Target IQN**, **LUN**, **LUN WWID** and
      **Existing filesystem UUID**. Select **This LUN is restricted to this Core initiator only**.
@@ -99,7 +101,7 @@ for production workloads. Use an explicitly selected disposable lab host.
    the VM's disks; see [Create a virtual machine](create-virtual-machine.md).
 7. Use **Recheck** after repairing a server, share, dataset, target or permission issue. A
    name-only **Update** (without new CHAP fields) does not reconnect and is allowed while in use.
-   **Host** and **Repository type** stay fixed. SMB updates always include account and password.
+   **Host** and **Repository type** stay fixed. SMB updates always include account, optional domain and password.
    Changing a local path or any ZFS, NFS, SMB or iSCSI source detail reconnects the repository, so
    remove or complete every VM-disk, retained-disk and media dependency first.
 8. To rotate SMB credentials, use **Update / rotate credentials**; for iSCSI CHAP, use **Update**
@@ -247,7 +249,8 @@ A terminal `failed` task is not retried; fix the cause and submit a new request.
   SMB, correct the credentials and browse again; for NFS, the server must advertise exports. An
   empty result is not proof the server has no storage. Listings stop at 64 results; enter a known
   path manually if needed. SMB names with internal spaces and `$` are supported; other
-  unsupported names are not offered. A stale or unsupported Core cannot browse.
+  unsupported names are not offered. A stale or unsupported Core cannot browse. An **E** badge
+  marks a folder that already has a Nex repository marker.
 - **Registration or Recheck fails:** read the Core error in the row and **Task history**. Check
   reachability, source identity, filesystem health, capacity, mount permissions and QEMU access,
   then **Recheck**. Do not create an empty local directory at an unavailable remote mount point.
@@ -259,7 +262,7 @@ A terminal `failed` task is not retried; fix the cause and submit a new request.
 - **ZFS access fails:** confirm the pool is imported and `ONLINE`, the dataset is mounted at the
   reported mount point, the module/tools work on the running kernel, and there is capacity. Unlock
   encrypted datasets through boot configuration; do not force-import or change pool settings.
-- **SMB access fails:** confirm share, account/password, transport-encryption policy, permissions
+- **SMB access fails:** confirm share, account, domain/workgroup, password, transport-encryption policy, permissions
   and locking. Passwords are not recoverable from Controller; rotate them with an update. A missing
   or changed `.nex-storage-marker` fails safely: restore it from a trusted copy, then **Recheck**.
   Do not recreate it or detach/re-register a repository with VM disks.
@@ -285,7 +288,9 @@ A terminal `failed` task is not retried; fix the cause and submit a new request.
 
 Local, NFS, SMB, ZFS and iSCSI registration, guest write/reboot, outage recovery and Controller
 replacement are recorded in [storage repository checks](../qa/storage-repositories/checks.md). The
-SMB/NFS folder picker is covered in [network picker verification](../qa/2026-09-12-network-storage-picker.md),
+SMB/NFS folder picker is covered in [network picker verification](../qa/2026-09-12-network-storage-picker.md)
+and the SMB domain/existing-folder picker in
+[SMB domain and existing-folder picker](../qa/2026-09-14-smb-domain-existing-folder.md),
 the two-Core NFS/SMB member workflow in
 [bug-ledger lab evidence](../qa/2026-09-12-bug-ledger.md#bug-0094-primary-native-pool-walkthrough),
 and clustered GFS2 in [concurrent storage verification](../qa/2026-09-12-concurrent-pool-storage.md).

@@ -164,7 +164,11 @@ func discoverSMB(ctx context.Context, r protocol.StorageDiscoveryRequest) ([]pro
 	}
 	text := "password=\n"
 	if r.Credentials != nil {
-		text = "username=" + r.Credentials.Username + "\npassword=" + r.Credentials.Secret + "\n"
+		body, err := smbAuthFileBody(r.Credentials.Username, r.Credentials.Secret, r.Credentials.Domain)
+		if err != nil {
+			return nil, err
+		}
+		text = body
 	}
 	if _, err = f.WriteString(text); err != nil {
 		f.Close()
@@ -180,7 +184,7 @@ func discoverSMB(ctx context.Context, r protocol.StorageDiscoveryRequest) ([]pro
 		if err != nil {
 			return nil, err
 		}
-		return parseSMBShares(ctx, r.Server, string(b)), nil
+		return markExistingSMBCandidates(ctx, name, parseSMBShares(ctx, r.Server, string(b))), nil
 	}
 	share, dir, ok := discoverySMBPath(r.Path)
 	if !ok {
@@ -191,7 +195,7 @@ func discoverSMB(ctx context.Context, r protocol.StorageDiscoveryRequest) ([]pro
 	if err != nil {
 		return nil, err
 	}
-	return parseSMBDirectories(ctx, r.Server, share, dir, string(b)), nil
+	return markExistingSMBCandidates(ctx, name, parseSMBDirectories(ctx, r.Server, share, dir, string(b))), nil
 }
 func discoverySMBPath(v string) (string, string, bool) {
 	p := strings.Split(strings.TrimPrefix(path.Clean(v), "/"), "/")
@@ -232,6 +236,43 @@ func parseSMBDirectories(ctx context.Context, server, share, dir, text string) [
 		out = append(out, protocol.StorageDiscoveryCandidate{Kind: protocol.StorageKindSMB, Source: protocol.StorageSource{SMB: &protocol.SMBStorageSource{Server: server, Share: share}}, Path: "/" + share + "/" + strings.TrimPrefix(dir+"/"+p[1], "/"), Browsable: true})
 	}
 	return out
+}
+
+func markExistingSMBCandidates(ctx context.Context, credFile string, candidates []protocol.StorageDiscoveryCandidate) []protocol.StorageDiscoveryCandidate {
+	for i := range candidates {
+		if err := ctx.Err(); err != nil {
+			break
+		}
+		if candidates[i].Source.SMB == nil {
+			continue
+		}
+		share, dir, ok := discoverySMBPath(candidates[i].Path)
+		if !ok {
+			continue
+		}
+		candidates[i].Existing = smbMarkerPresent(ctx, credFile, candidates[i].Source.SMB.Server, share, dir)
+	}
+	return candidates
+}
+
+func smbMarkerPresent(ctx context.Context, credFile, server, share, dir string) bool {
+	args := []string{"-g", "-A", credFile, "//" + server + "/" + share}
+	if dir != "" {
+		args = append(args, "-D", dir)
+	}
+	args = append(args, "-c", "ls "+smbMarkerName)
+	b, err := nativeRun(ctx, "smbclient", args...)
+	return err == nil && smbListingHasMarker(string(b))
+}
+
+func smbListingHasMarker(text string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		p := discoverySMBLine.FindStringSubmatch(line)
+		if len(p) == 3 && p[1] == smbMarkerName && !strings.Contains(p[2], "D") {
+			return true
+		}
+	}
+	return false
 }
 
 func discoveryNFSDirectory(line string) (string, bool) {

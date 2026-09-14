@@ -1,0 +1,35 @@
+{
+  "summary": "Fix the ISO URL browser check's stale-host step. Since the pool member join and clustered iSCSI change, Destination storage deliberately omits storage whose assigned Core is not freshly connected, so the check now asserts the option is absent, the current-access help is shown and Download ISO is disabled, instead of selecting the hidden option. API impact: none; test-only change.",
+  "paths": [
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-14-iso-url-browser-storage-option.json",
+    "tests/integration/iso_url_browser.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Product UI behavior is unchanged; only the browser check was aligned with the existing storage filter.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Mocked browser check only; no client-facing API, Controller operation, Core command or observed-state contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Test maintenance only.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "A test change creates no runtime state."
+  },
+  "verification": {
+    "method": "Reproduced the timeout locally at the stale-host Destination storage selection with the current web build. After the change, tests/integration/iso_url_browser.py passes all five checks in headless Chromium with a fully mocked API; web typecheck, npm test and build pass. The script already runs in both GitHub and Gitea phase1 workflows.",
+    "evidence": [
+      "tests/integration/iso_url_browser.py",
+      ".github/workflows/phase1.yml",
+      ".gitea/workflows/phase1.yml"
+    ]
+  }
+}

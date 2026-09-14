@@ -505,21 +505,24 @@ missing capability or duplicate active request is `409`. Core rejects local syml
 unmounted NFS exports with `showmount`, uses an ephemeral mode-0600 SMB credential file for
 `smbclient` source/share/directory browsing, sends iSCSI discovery only with nonpersistent
 `iscsiadm` discoverydb settings, and lists already mounted ZFS sources. Results contain only kind,
-source, directory path and browsable state—never passwords, device paths, mount options or command
+source, directory path, browsable state and an optional existing-repository flag—never passwords, device paths, mount options or command
 output. Discovery cannot create a directory, mount/login a backend, retain an iSCSI node/session,
 change repository configuration or weaken later registration validation. A cancelled or stale
 request must use a new request ID.
 
 The network picker reuses this contract: omit `path` to enumerate an SMB server's shares
-using the supplied account, or an NFS server's advertised exports. Supply the returned
+using the supplied account, optional domain and secret, or an NFS server's advertised exports. Supply the returned
 absolute path to list its immediate directories. These are live remote observations, not
-registered-repository inventory. Each result is capped at 64 candidates. The client retains
+registered-repository inventory. Each result is capped at 64 candidates. SMB folder results may
+set `existing` when Core sees a `.nex-storage-marker` in that folder; the flag is advisory and
+does not skip registration identity checks. The client retains
 the originally selected NFS export and submits a relative `directory` when registering a
 nested selection; it must not replace that export with each subsequent listing root.
 SMB share names support letters, numbers, internal spaces and `._$:()-`; leading/trailing
 whitespace and command/unit syntax are rejected. SMB/NFS relative directories can contain
 spaces; traversal, backslashes and control characters remain rejected. SMB browsing passes
-the selected directory as a separate native argument, never an interpolated command.
+the selected directory as a separate native argument, never an interpolated command. Marker
+probes use a fixed `ls .nex-storage-marker` command with the folder in `-D`.
 The clustered-GFS2 setup panel also reuses this existing request, always scoped to the selected
 pool master, to enumerate and select an iSCSI target IQN for its portal. That observation neither
 logs in nor mounts a target, and it does not provide the LUN number, WWID or filesystem UUID:
@@ -950,7 +953,8 @@ while Controller is unavailable.
 
 `POST /api/v1/storage/credentials` is administrator-session and CSRF protected. It accepts a
 credential request ID, target pool/host, at least one of a new registration request ID or
-existing repository ID, and `{username?,secret}`. Controller retains the bytes only for the 15-second
+existing repository ID, and `{username?,secret,domain?}`. Optional `domain` is the SMB workgroup or
+AD domain used with the account. Controller retains the bytes only for the 15-second
 bounded delivery window. The addressed authenticated Core redeems an opaque report offer,
 persists its secret locally, then acknowledges a durable receipt; only then does the endpoint
 return `201`. `503` means delivery is uncertain: retry the same request ID. Ordinary commands,

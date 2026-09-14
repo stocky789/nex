@@ -140,6 +140,9 @@ small { display: block; color: var(--muted); font-size: 11px; line-height: 1.5; 
 .storage-browser-list li + li { border-top: 1px solid #e0e5ea; }
 .storage-browser-folder { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; border: 0; border-radius: 0; background: #fff; text-align: left; }
 .storage-browser-folder[aria-pressed="true"] { background: #dbe7ff; color: #10306b; }
+.storage-browser-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.storage-existing-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 3px; font-size: 11px; font-weight: 700; line-height: 1; color: #1e3a5f; background: #dbe7ff; }
+.storage-selected-folder { margin: 0; padding: 4px 0; color: #334155; }
 .shell { display: grid; grid-template-columns: 238px minmax(0, 1fr); flex: 1; min-height: 0; }
 aside { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-right: 4px solid #d3d6da; background: #fff; overflow: auto; }
 .nav-title { position: sticky; top: 0; z-index: 1; padding: 5px 9px; font-size: 12px; font-weight: 600; background: linear-gradient(#f9f9f9, #e6e6e6); border-bottom: 1px solid var(--line); }

@@ -61,7 +61,7 @@ def main():
             if path == "":
                 return [{"kind": "smb", "source": {"smb": {"server": "files.example.test", "share": "team-share"}}, "path": "/team-share", "browsable": True}]
             if path == "/team-share":
-                return [{"kind": "smb", "source": {"smb": {"server": "files.example.test", "share": "team-share"}}, "path": "/team-share/vms", "browsable": True}]
+                return [{"kind": "smb", "source": {"smb": {"server": "files.example.test", "share": "team-share"}}, "path": "/team-share/vms", "browsable": True, "existing": True}]
         return []
 
     def api(route):
@@ -230,7 +230,7 @@ def main():
             checks.append("NFS root browsing omits stale draft paths; loading, cancellation and late replies preserve form fields; keyboard navigation, refresh, empty and Core-error states stay actionable until a selected folder is applied")
             # All backend field sets exist and use native constraints before a request leaves the browser.
             for kind, labels in [("zfs", ("Imported pool", "Existing dataset", "Reported mount point")),
-                                 ("smb", ("SMB server", "Share", "Account", "Password")),
+                                 ("smb", ("SMB server", "Share", "Account", "Domain", "Password")),
                                  ("iscsi", ("Target portal", "Target IQN", "LUN", "LUN WWID", "Existing filesystem UUID"))]:
                 form.get_by_label("Repository type").select_option(kind)
                 for label in labels:
@@ -247,6 +247,7 @@ def main():
             form.get_by_label("Name", exact=True).fill("VM share")
             form.get_by_label("SMB server").fill("files.example.test")
             form.get_by_label("Account", exact=True).fill("nex-vm")
+            form.get_by_label("Domain", exact=True).fill("truenas")
             secret = "not-for-display-qa-secret"
             password = form.get_by_label("Password", exact=True)
             expect(password).to_have_attribute("type", "password")
@@ -255,20 +256,21 @@ def main():
             # share is optional until selection and is never smuggled into the root request.
             expect(form.get_by_role("button", name="Browse shared folders", exact=True)).to_be_enabled()
             form.get_by_label("Share", exact=True).fill("old-share")
-            form.get_by_label("Existing directory within share").fill("old/draft")
+            expect(form.get_by_label("Existing directory within share")).to_have_count(0)
             form.get_by_role("button", name="Browse shared folders", exact=True).click()
             smb_browser = page.get_by_role("dialog", name="Browse shared folders", exact=True)
             expect(smb_browser).to_be_visible()
             smb_root = submissions[-1][1]
-            assert smb_root["kind"] == "smb" and smb_root["credentials"] == {"username": "nex-vm", "secret": secret} and "path" not in smb_root, smb_root
+            assert smb_root["kind"] == "smb" and smb_root["credentials"] == {"username": "nex-vm", "secret": secret, "domain": "truenas"} and "path" not in smb_root, smb_root
             smb_browser.get_by_role("button", name="Open /team-share", exact=True).dblclick()
-            share_folder = smb_browser.get_by_role("button", name="Open /team-share/vms", exact=True)
+            share_folder = smb_browser.get_by_role("button", name="Open /team-share/vms, existing repository", exact=True)
             share_folder.click()
             expect(share_folder).to_have_attribute("aria-pressed", "true")
+            expect(share_folder.get_by_text("E", exact=True)).to_be_visible()
             page.screenshot(path=str(args.evidence / "smb-browser.png"), full_page=True)
             smb_browser.get_by_role("button", name="Select folder", exact=True).click()
             expect(form.get_by_label("Share", exact=True)).to_have_value("team-share")
-            expect(form.get_by_label("Existing directory within share")).to_have_value("vms")
+            expect(form.locator(".storage-selected-folder")).to_have_text("vms")
             checks.append("SMB browsing works before a manual share exists and applies the selected share plus relative directory only after confirmation")
             page.get_by_role("button", name="Register and check access", exact=True).click()
             expect(page.get_by_text("Storage registration queued", exact=False)).to_be_visible()
@@ -276,7 +278,7 @@ def main():
             assert "core-assigned-repository" == data["storage"][0]["id"]
             credential = next(body for path, body in submissions if path == "storage/credentials")
             register = next(body for path, body in submissions if path == "storage")
-            assert credential["credentials"] == {"username": "nex-vm", "secret": secret}, credential
+            assert credential["credentials"] == {"username": "nex-vm", "secret": secret, "domain": "truenas"}, credential
             assert register["source"] == {"smb": {"server": "files.example.test", "share": "team-share", "directory": "vms"}}, register
             assert register["credential_receipt"] == "core-only-receipt" and secret not in json.dumps(register), register
             assert credential["registration_request_id"] == register["request_id"] == register["credential_request_id"], (credential, register)

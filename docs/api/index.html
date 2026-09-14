@@ -8419,6 +8419,9 @@
       &quot;type&quot;: &quot;string&quot;,
       &quot;writeOnly&quot;: true
     },
+    &quot;domain&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
     &quot;ssh_private_key&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;writeOnly&quot;: true
@@ -8430,7 +8433,7 @@
   },
   &quot;required&quot;: [],
   &quot;x-go-type&quot;: &quot;protocol.StorageCredentials&quot;,
-  &quot;description&quot;: &quot;Transient credential bytes only. The selected operation validates the applicable secret form; inventory, journals, results and diagnostics never carry these fields.&quot;
+  &quot;description&quot;: &quot;Transient credential bytes only. Optional domain is the SMB workgroup or AD domain used with username/secret. The selected operation validates the applicable secret form; inventory, journals, results and diagnostics never carry these fields.&quot;
 }</pre></details>
 <details id="StorageDiscoveryRequest"><summary>StorageDiscoveryRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -8493,6 +8496,9 @@
       &quot;type&quot;: &quot;string&quot;
     },
     &quot;browsable&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;existing&quot;: {
       &quot;type&quot;: &quot;boolean&quot;
     }
   },

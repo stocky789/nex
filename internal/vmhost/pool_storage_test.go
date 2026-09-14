@@ -239,3 +239,20 @@ func TestPoolSMBCredentialUsesMemberScopedRegistrationRequest(t *testing.T) {
 		t.Fatalf("member-scoped receipt did not bind: %v", err)
 	}
 }
+
+func TestPoolSMBCredentialPreservesDomain(t *testing.T) {
+	state := t.TempDir()
+	want := protocol.StorageCredentials{Username: "operator", Secret: "secret", Domain: "truenas"}
+	receipt, err := SavePoolStorageCredential(state, "pool-1", "member-1", "repo-1", 3, want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := PoolStorageCredential(state, receipt)
+	if err != nil || got != want {
+		t.Fatalf("pool SMB credential = %#v, %v", got, err)
+	}
+	mount, err := os.ReadFile(filepath.Join(state, credentialDirectory, receipt))
+	if err != nil || !strings.Contains(string(mount), "domain=truenas\n") || !strings.Contains(string(mount), "username=operator\n") {
+		t.Fatalf("mount credential %q: %v", mount, err)
+	}
+}

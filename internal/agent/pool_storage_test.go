@@ -799,7 +799,8 @@ func TestMemberReconcilePostsLaterAccessAfterEarlierDeadline(t *testing.T) {
 		}
 		return postPoolStorageAccess(ctx, s, masterURL, id, access)
 	}
-	if err := reconcilePoolStorageFromMaster(context.Background(), member, 10*time.Millisecond); err == nil {
+	// The budget also covers the master list and each TLS POST; 10ms expired those under CI load.
+	if err := reconcilePoolStorageFromMaster(context.Background(), member, time.Second); err == nil {
 		t.Fatal("first repository deadline failure was hidden")
 	}
 	if firstPost == nil {

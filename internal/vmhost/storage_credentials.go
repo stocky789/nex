@@ -25,6 +25,7 @@ type storedCredential struct {
 	protocol.StorageCredentialReceipt
 	Username string `json:"username,omitempty"`
 	Secret   string `json:"secret"`
+	Domain   string `json:"domain,omitempty"`
 	Proof    string `json:"proof"`
 }
 
@@ -89,9 +90,17 @@ func credentialKey(stateDir string) ([]byte, error) {
 	return key, nil
 }
 
+func credentialProofFields(h protocol.StorageCredentialHandoff) []string {
+	fields := []string{h.Offer.RequestID, h.Offer.RegistrationRequestID, h.Offer.PoolID, h.Offer.HostID, h.Offer.RepositoryID, h.Credentials.Username, h.Credentials.Secret}
+	if h.Credentials.Domain != "" {
+		fields = append(fields, h.Credentials.Domain)
+	}
+	return fields
+}
+
 func credentialProof(key []byte, h protocol.StorageCredentialHandoff) string {
 	m := hmac.New(sha256.New, key)
-	for _, v := range []string{h.Offer.RequestID, h.Offer.RegistrationRequestID, h.Offer.PoolID, h.Offer.HostID, h.Offer.RepositoryID, h.Credentials.Username, h.Credentials.Secret} {
+	for _, v := range credentialProofFields(h) {
 		_, _ = m.Write([]byte(v))
 		_, _ = m.Write([]byte{0})
 	}
@@ -107,10 +116,10 @@ func receiptID() (string, error) {
 }
 
 func validCredentialHandoff(h protocol.StorageCredentialHandoff) error {
-	if len(h.Offer.RequestID) == 0 || len(h.Offer.RequestID) > 128 || len(h.Offer.RegistrationRequestID) > 128 || len(h.Offer.PoolID) == 0 || len(h.Offer.PoolID) > 128 || len(h.Offer.HostID) == 0 || len(h.Offer.HostID) > 128 || len(h.Offer.RepositoryID) > 128 || (h.Offer.RepositoryID == "" && h.Offer.RegistrationRequestID == "") || len(h.Credentials.Username) > 4096 || len(h.Credentials.Secret) == 0 || len(h.Credentials.Secret) > 65536 {
+	if len(h.Offer.RequestID) == 0 || len(h.Offer.RequestID) > 128 || len(h.Offer.RegistrationRequestID) > 128 || len(h.Offer.PoolID) == 0 || len(h.Offer.PoolID) > 128 || len(h.Offer.HostID) == 0 || len(h.Offer.HostID) > 128 || len(h.Offer.RepositoryID) > 128 || (h.Offer.RepositoryID == "" && h.Offer.RegistrationRequestID == "") || len(h.Credentials.Username) > 4096 || len(h.Credentials.Secret) == 0 || len(h.Credentials.Secret) > 65536 || len(h.Credentials.Domain) > 253 || strings.Contains(h.Credentials.Username, "=") || strings.Contains(h.Credentials.Domain, "=") {
 		return errors.New("invalid storage credential handoff")
 	}
-	for _, v := range []string{h.Offer.RequestID, h.Offer.RegistrationRequestID, h.Offer.PoolID, h.Offer.HostID, h.Offer.RepositoryID, h.Credentials.Username, h.Credentials.Secret} {
+	for _, v := range []string{h.Offer.RequestID, h.Offer.RegistrationRequestID, h.Offer.PoolID, h.Offer.HostID, h.Offer.RepositoryID, h.Credentials.Username, h.Credentials.Secret, h.Credentials.Domain} {
 		if strings.ContainsAny(v, "\x00\r\n") {
 			return errors.New("invalid storage credential handoff")
 		}
@@ -118,8 +127,22 @@ func validCredentialHandoff(h protocol.StorageCredentialHandoff) error {
 	return nil
 }
 
+func smbAuthFileBody(username, secret, domain string) (string, error) {
+	if strings.Contains(username, "=") || strings.Contains(domain, "=") {
+		return "", errors.New("storage credential cannot be used by the native mount")
+	}
+	contents := "password=" + secret + "\n"
+	if username != "" {
+		contents = "username=" + username + "\n" + contents
+	}
+	if domain != "" {
+		contents += "domain=" + domain + "\n"
+	}
+	return contents, nil
+}
+
 func materializeMountCredential(stateDir string, stored storedCredential) error {
-	if !storageID.MatchString(stored.Receipt) || strings.Contains(stored.Username, "=") {
+	if !storageID.MatchString(stored.Receipt) {
 		return errors.New("storage credential cannot be used by the native mount")
 	}
 	root, err := credentialDir(stateDir)
@@ -133,9 +156,9 @@ func materializeMountCredential(stateDir string, stored storedCredential) error 
 	if err != nil || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
 		return errors.New("native credential directory must be private")
 	}
-	contents := "password=" + stored.Secret + "\n"
-	if stored.Username != "" {
-		contents = "username=" + stored.Username + "\n" + contents
+	contents, err := smbAuthFileBody(stored.Username, stored.Secret, stored.Domain)
+	if err != nil {
+		return err
 	}
 	path := filepath.Join(root, stored.Receipt)
 	current, err := mountCredentialCurrent(path, []byte(contents))
@@ -212,11 +235,11 @@ func SaveStorageCredential(stateDir string, h protocol.StorageCredentialHandoff)
 		return empty, err
 	}
 	receipt := protocol.StorageCredentialReceipt{Receipt: id, RequestID: h.Offer.RequestID, PoolID: h.Offer.PoolID, HostID: h.Offer.HostID, RepositoryID: h.Offer.RepositoryID, RegistrationRequestID: h.Offer.RegistrationRequestID, CreatedAt: time.Now().UTC(), Status: "ready"}
-	b, err := json.Marshal(storedCredential{StorageCredentialReceipt: receipt, Username: h.Credentials.Username, Secret: h.Credentials.Secret, Proof: proof})
+	stored := storedCredential{StorageCredentialReceipt: receipt, Username: h.Credentials.Username, Secret: h.Credentials.Secret, Domain: h.Credentials.Domain, Proof: proof}
+	b, err := json.Marshal(stored)
 	if err != nil {
 		return empty, err
 	}
-	stored := storedCredential{StorageCredentialReceipt: receipt, Username: h.Credentials.Username, Secret: h.Credentials.Secret, Proof: proof}
 	if err = atomicWrite(path, b); err != nil {
 		return empty, err
 	}
@@ -375,7 +398,7 @@ func retireStorageCredential(stateDir, receipt, poolID, hostID string, attached 
 			return errors.New("storage credential receipt does not belong to this pool and host")
 		}
 		if stored.Status == "ready" {
-			stored.Status, stored.Secret, stored.Username = "retired", "", ""
+			stored.Status, stored.Secret, stored.Username, stored.Domain = "retired", "", "", ""
 			retired, err := json.Marshal(stored)
 			if err != nil {
 				return err

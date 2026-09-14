@@ -257,7 +257,9 @@ keys are stored separately with root-only permissions, not in commands, inventor
 logs or Controller SQL. The master also owns the VM execution assignment record.
 Exact implemented filenames and inventory/adoption paths must be recorded in the
 change assessment before acceptance. Member configuration is a generation-bound
-replica, not an independent source of desired pool state.
+replica, not an independent source of desired pool state. The planned
+[member authority replica](2026-09-08-nex-platform.md#pool-authority-transfer-and-master-succession)
+is also read-only and becomes authority only through that promotion design.
 
 Controller authenticates and authorizes the operator and relays setup/status;
 the Core continues accepted work after Controller disconnect. Retries use a

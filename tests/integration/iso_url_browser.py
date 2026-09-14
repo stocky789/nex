@@ -111,9 +111,11 @@ def main():
             page.reload()
             open_iso()
             page.get_by_label('ISO source').select_option('url')
-            page.get_by_label('Destination storage').select_option(storage['id'])
+            # A stale owner cannot report current ISO access, so its storage is not offered at all.
+            expect(page.get_by_label('Destination storage').locator(f'option[value="{storage["id"]}"]')).to_have_count(0)
+            expect(page.get_by_text('wait for its assigned Core to report current ISO access', exact=False)).to_be_visible()
             expect(page.get_by_role('button', name='Download ISO', exact=True)).to_be_disabled()
-            checks.append('Old Core and stale host block URL download')
+            checks.append('Old Core blocks URL download; stale owner host hides its storage and blocks download')
             host['connection'] = 'fresh'
             data['storage'] = []
             page.reload()

@@ -1,0 +1,32 @@
+{
+  "summary": "Fix a flaky member-reconciliation deadline test whose 10ms per-repository budget also expired the master list and later TLS POST under CI load. API impact: none.",
+  "paths": [
+    "docs/BUG_LEDGER.md",
+    "internal/agent/pool_storage_test.go"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Test-only timing correction; no operator behavior changed.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Test-only change; the member access POST contract, per-repository deadline and the transport's refusal to send an already-expired request are unchanged.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "CI reliability fix within the current storage milestone.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state, setting or execution authority added or changed."
+  },
+  "verification": {
+    "method": "Before: temporarily logging the reconcile error, 32 parallel race-built instances at GOMAXPROCS=1 with -test.count=20 failed 256 of 640 runs (174 master-list deadline, 7 local-observation/list deadline, 67 later-POST deadline) and reported 32 data races from late master handler writes; the fake for the first repository never ran in the line-806 failures. After raising the test budget to 1s: the same stress at -test.cpu=1,2 passed 1280 of 1280 with zero races; gofmt, go vet, GOMAXPROCS=2 go test ./internal/agent and go test -race ./internal/agent passed. Both GitHub and Gitea phase1 workflows already run go test -race ./...",
+    "evidence": [
+      "internal/agent/pool_storage_test.go"
+    ]
+  }
+}

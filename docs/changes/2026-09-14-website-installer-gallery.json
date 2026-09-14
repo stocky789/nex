@@ -1,0 +1,45 @@
+{
+  "summary": "Add a Nex Core installer section to the website gallery: ten screenshots captured from the 0.1.9 ISO installing into a disposable QEMU virtual machine, covering the boot menu, the Welcome, Host, Network (static and DHCP lease preview), Disk and Review wizard steps, installation progress, the completion page and the installed host's first-boot console. API impact: none — static website images and copy only.",
+  "paths": [
+    "docs/changes/2026-09-14-website-installer-gallery.json",
+    "docs/guide/website-preview.md",
+    "docs/qa/website-installer-captures/results.md",
+    "website/src/routes/gallery/+page.svelte",
+    "website/static/gallery/installer-boot-menu.png",
+    "website/static/gallery/installer-complete.png",
+    "website/static/gallery/installer-disk.png",
+    "website/static/gallery/installer-first-boot.png",
+    "website/static/gallery/installer-host.png",
+    "website/static/gallery/installer-network-dhcp.png",
+    "website/static/gallery/installer-network.png",
+    "website/static/gallery/installer-progress.png",
+    "website/static/gallery/installer-review.png",
+    "website/static/gallery/installer-welcome.png"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The gallery gains an installer section, so the website preview guide's gallery step now describes it.",
+    "pages": [
+      "docs/guide/website-preview.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Prerendered static images and copy. No Controller operation, Core agent command, observed-state flow or client-facing API is involved.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Screenshots of an already-built installer; no milestone status changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Website source and evidence only; holds no Nex Controller or Core state."
+  },
+  "verification": {
+    "method": "Real Nex Core 0.1.9 ISO in a disposable QEMU/KVM VM with a sparse 32 GiB file disk and two user-mode NICs, driven through QMP input events; captures are unedited QEMU screendumps. The install completed and the installed disk booted to the console. Example values only: example.com hostname and 192.0.2.0/24 documentation addresses; the DHCP preview shows QEMU's built-in user-network address. svelte-check and the static build passed; the website browser check ran against a local static serve of the build. Details in docs/qa/website-installer-captures/results.md.",
+    "evidence": [
+      "docs/qa/website-installer-captures/results.md"
+    ]
+  }
+}

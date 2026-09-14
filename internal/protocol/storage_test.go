@@ -192,10 +192,15 @@ func TestValidateStorageCredentialRetire(t *testing.T) {
 }
 
 func TestStorageDiscoveryIsScopedAndNeverCarriesSecretsInResults(t *testing.T) {
-	v := StorageDiscoveryRequest{RequestID: "discover-1", PoolID: "pool-1", HostID: "host-1", Kind: StorageKindSMB, Server: "files.example.test", Credentials: &StorageCredentials{Username: "operator", Secret: "secret"}}
+	v := StorageDiscoveryRequest{RequestID: "discover-1", PoolID: "pool-1", HostID: "host-1", Kind: StorageKindSMB, Server: "files.example.test", Credentials: &StorageCredentials{Username: "operator", Secret: "secret", Domain: "truenas"}}
 	if err := ValidateStorageDiscovery(v); err != nil {
 		t.Fatal(err)
 	}
+	v.Credentials.Domain = "bad;domain"
+	if err := ValidateStorageDiscovery(v); err == nil {
+		t.Fatal("unsafe discovery domain accepted")
+	}
+	v.Credentials.Domain = "truenas"
 	v.Server = "bad;server"
 	if err := ValidateStorageDiscovery(v); err == nil {
 		t.Fatal("unsafe discovery server accepted")

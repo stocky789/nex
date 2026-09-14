@@ -92,16 +92,23 @@ func TestDiscoverStorageNativeSources(t *testing.T) {
 	if g.Status != "succeeded" || len(g.Candidates) != 1 || g.Candidates[0].Source.NFS.Directory != "Team VMs" {
 		t.Fatalf("NFS directory discovery %+v", g)
 	}
-	if !slices.Contains(calls[2], "nonpersistent") || slices.Contains(calls[2], "--login") {
-		t.Fatalf("%q", calls[2])
-	}
+	iscsi := false
 	for _, c := range calls {
+		if c[0] == "iscsiadm" {
+			iscsi = true
+			if !slices.Contains(c, "nonpersistent") || slices.Contains(c, "--login") {
+				t.Fatalf("%q", c)
+			}
+		}
 		if c[0] == "smbclient" {
 			_, e := os.Stat(c[slices.Index(c, "-A")+1])
 			if !errors.Is(e, os.ErrNotExist) {
 				t.Fatal("credential retained")
 			}
 		}
+	}
+	if !iscsi {
+		t.Fatal("iscsi discovery was not invoked")
 	}
 }
 
@@ -111,6 +118,12 @@ func TestDiscoverSMBDirectoriesSupportsSpacesWithoutCommandParsing(t *testing.T)
 	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		switch name {
 		case "smbclient":
+			if slices.Contains(args, "ls "+smbMarkerName) {
+				if !slices.Contains(args, "-D") || !slices.Contains(args, "Team VMs; quit/Finance VMs") || slices.ContainsFunc(args, func(v string) bool { return strings.Contains(v, "; quit") && strings.Contains(v, "ls ") }) {
+					t.Fatalf("SMB marker probe interpolated the directory into -c: %q", args)
+				}
+				return []byte("  " + smbMarkerName + "                 A       32  Wed Jan 1 00:00:00 2026\n"), nil
+			}
 			if !slices.Contains(args, "//storage.example.test/VM Files$") || !slices.Contains(args, "Team VMs; quit") || !slices.Contains(args, "-D") || !slices.Contains(args, "-c") || !slices.Contains(args, "ls") {
 				t.Fatalf("SMB directory was not passed as a separate argument: %q", args)
 			}
@@ -121,8 +134,44 @@ func TestDiscoverSMBDirectoriesSupportsSpacesWithoutCommandParsing(t *testing.T)
 	r := request(protocol.StorageKindSMB)
 	r.Path = "/VM Files$/Team VMs; quit"
 	g := DiscoverStorage(context.Background(), r)
-	if g.Status != "succeeded" || len(g.Candidates) != 1 || g.Candidates[0].Path != "/VM Files$/Team VMs; quit/Finance VMs" {
+	if g.Status != "succeeded" || len(g.Candidates) != 1 || g.Candidates[0].Path != "/VM Files$/Team VMs; quit/Finance VMs" || !g.Candidates[0].Existing {
 		t.Fatalf("SMB directory discovery %+v", g)
+	}
+}
+
+func TestDiscoverSMBWritesDomainAndLeavesNonMarkerFoldersUnmarked(t *testing.T) {
+	oldRun := nativeRun
+	t.Cleanup(func() { nativeRun = oldRun })
+	var auth []byte
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name != "smbclient" {
+			return nil, errors.New("unexpected native command")
+		}
+		i := slices.Index(args, "-A")
+		b, err := os.ReadFile(args[i+1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		auth = b
+		if slices.Contains(args, "-L") {
+			return []byte("Disk|vms|storage\nDisk|media|storage\n"), nil
+		}
+		if slices.Contains(args, "ls "+smbMarkerName) {
+			if slices.Contains(args, "//storage.example.test/vms") {
+				return []byte("  " + smbMarkerName + "                 A       32  Wed Jan 1 00:00:00 2026\n"), nil
+			}
+			return nil, errors.New("no marker")
+		}
+		return nil, errors.New("unexpected smbclient")
+	}
+	r := request(protocol.StorageKindSMB)
+	r.Credentials = &protocol.StorageCredentials{Username: "operator", Secret: "secret", Domain: "truenas"}
+	g := DiscoverStorage(context.Background(), r)
+	if g.Status != "succeeded" || len(g.Candidates) != 2 || !g.Candidates[0].Existing || g.Candidates[1].Existing || g.Candidates[1].Path != "/media" {
+		t.Fatalf("SMB existing discovery %+v", g)
+	}
+	if string(auth) != "username=operator\npassword=secret\ndomain=truenas\n" {
+		t.Fatalf("SMB auth file %q", auth)
 	}
 }
 func TestDiscoverStorageCancellationIsReported(t *testing.T) {

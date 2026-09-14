@@ -1,0 +1,52 @@
+{
+  "summary": "Add optional SMB domain credentials and mark existing repository folders in the share picker. API impact: existing contract.",
+  "paths": [
+    "internal/protocol/storage.go",
+    "internal/protocol/storage_test.go",
+    "internal/vmhost/storage_credentials.go",
+    "internal/vmhost/storage_credentials_test.go",
+    "internal/vmhost/storage_discovery.go",
+    "internal/vmhost/storage_discovery_test.go",
+    "internal/vmhost/pool_storage.go",
+    "internal/vmhost/pool_storage_test.go",
+    "internal/controller/storage_credentials.go",
+    "internal/agent/storage_cluster_secrets.go",
+    "web/src/storage.tsx",
+    "web/src/storage.test.mjs",
+    "web/src/style.css",
+    "tests/integration/storage_repositories_browser.py",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/guide/storage-repositories.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-14-smb-domain-existing-folder.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators now enter an optional SMB domain and pick nested folders in the share browser, where existing Nex repositories show E.",
+    "pages": ["docs/guide/storage-repositories.md"]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "API impact: existing contract. Optional domain on StorageCredentials and existing on StorageDiscoveryCandidate; no new endpoints.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/index.html", "docs/api/peer-openapi.json", "docs/api/peer.html"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Corrects SMB registration credentials and picker UX; does not complete a milestone.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "SMB domain is stored only in Core's private credential receipt and mount auth file on the pool master, then copied to members over peer mTLS with the existing SMB secret transfer. A fresh Controller recovers the repository from master inventory; operators re-enter domain only when rotating credentials.",
+    "reason": "Credentials remain Core-owned; Controller still keeps no secret or domain copy after the one-time handoff."
+  },
+  "verification": {
+    "method": "Run focused Go tests and the built-UI storage browser check; native domain authentication against a NAS was not run.",
+    "evidence": ["docs/qa/2026-09-14-smb-domain-existing-folder.md", "tests/integration/storage_repositories_browser.py", "internal/vmhost/storage_credentials_test.go", "internal/vmhost/storage_discovery_test.go"]
+  }
+}

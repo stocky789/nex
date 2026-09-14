@@ -1835,3 +1835,39 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: start from an empty slice and set `Content-Type: application/json`. The only caller decodes `null` and `[]` identically, so mixed-version pools are unaffected.
 - Regression: `TestStorageClusterEmptyProofListIsJSONArray` failed on the old handler and passes; `go test ./internal/agent` normal/race pass; both CI providers run this suite.
 - Avoid: documenting accidental content sniffing, or making callers depend on `null` versus `[]`.
+
+## BUG-0176 — ISO URL browser check selects storage hidden for a stale host
+
+- Date: 2026-09-14. Status: fixed (test); passes locally; hosted CI rerun pending.
+- Symptom: the controller-browser job timed out at `tests/integration/iso_url_browser.py` selecting **Destination storage** ("did not find some options").
+- Root cause: ISO-ready storage is intentionally filtered to repositories whose owner Core is fresh (`isoReadyStorage` in `web/src/managed.tsx`, `storageOwnerFresh` in `web/src/storage.tsx`); the check's stale-host step still tried to select that hidden option.
+- Fix: the stale-host step now asserts the option is absent, the current-access help is shown and **Download ISO** is disabled; product behavior unchanged.
+- Regression: `.cache/phase1-qa-venv/bin/python tests/integration/iso_url_browser.py --evidence .cache/iso-url-browser` passes; web typecheck/tests/build pass; both GitHub and Gitea phase1 workflows run it.
+- Avoid: re-offering storage from stale hosts to satisfy an outdated check; run browser checks whenever storage filters change.
+
+## BUG-0177 — Member reconcile deadline test is flaky under CI race load
+
+- Date: 2026-09-14. Status: fixed (test); stress passes; hosted CI rerun pending.
+- Symptom: `TestMemberReconcilePostsLaterAccessAfterEarlierDeadline` intermittently failed under CI `-race` load with "expired first repository published healthy member access".
+- Root cause: the test's 10ms budget also covered the master list request and each TLS access POST, so reconciliation could fail before the first repository's fake ran; the late master handler write also raced the test's read. Product ruled out: the HTTP transport refuses to send an already-expired request, so an expired repository cannot publish access.
+- Fix: test budget raised to 1s with unchanged assertions; product code unchanged.
+- Regression: `go test -race ./...` in both CI providers; stress (32 parallel race builds) failed 256/640 before and passed 1280/1280 after with zero races.
+- Avoid: millisecond deadlines around real network test stages, or blaming product publish-after-expiry without checking the transport's up-front context check.
+
+## BUG-0178 — Standalone pool master cannot register NFS or SMB storage
+
+- Date: 2026-09-14. Status: fixed; focused and package tests pass locally; hosted CI rerun pending.
+- Symptom: `storage-register` for NFS failed on a single-host pool with "pool membership is unavailable for remote storage operation".
+- Root cause: the managed worker's fail-closed membership gate treated a missing pool peer record as unavailable membership. A standalone master has no peer record until it issues its first join offer, so every remote storage command was refused.
+- Fix: `remoteStorageMembershipUnavailable` in `internal/agent/managed.go` only fails closed when a peer record exists but is invalid, or for clustered iSCSI.
+- Regression: `TestStandaloneMasterMayRegisterRemoteStorageWithoutPeerRecord` in `internal/agent/managed_test.go`, run by `go test -race ./...` in both GitHub and Gitea phase1 workflows.
+- Avoid: using `Membership` errors as proof of a joined host; distinguish "never joined" from "joined but unreadable".
+
+## BUG-0179 — SMB registration has no domain field and hides existing folders
+
+- Date: 2026-09-14. Status: fixed; focused tests pass locally; hosted CI rerun pending.
+- Symptom: SMB credentials accepted only account and password, so workgroup/AD logins (for example a TrueNAS domain) could not be supplied. Nested share folders were typed into **Existing directory within share** instead of being marked in the folder picker.
+- Root cause: `StorageCredentials` and the CIFS/smbclient auth file had no `domain` line; discovery listed folders without probing `.nex-storage-marker`.
+- Fix: optional `domain` on the credential handoff, discovery request and mount auth file; member transfer copies it; the picker shows **E** when a marker is present and no longer offers a typed share subdirectory.
+- Regression: `TestStorageCredentialMountFileIncludesDomain`, `TestPoolSMBCredentialPreservesDomain`, `TestDiscoverSMBWritesDomainAndLeavesNonMarkerFoldersUnmarked`, `tests/integration/storage_repositories_browser.py`; both phase1 workflows run those suites. Native NAS login not run.
+- Avoid: stuffing `DOMAIN\\user` into Account, interpolating folder names into smbclient `-c`, or treating `existing` as proof of a healthy registration.

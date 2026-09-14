@@ -7,6 +7,9 @@ import assert from "node:assert/strict";
 
 const src = readFileSync(new URL("./storage.tsx", import.meta.url), "utf8");
 assert.match(src, /<tr key=\{s\.id\} data-storage-id=\{s\.id\}>/);
+assert.match(src, />Domain</);
+assert.match(src, /storage-existing-badge/);
+assert.doesNotMatch(src, /Existing directory within share/);
 const { code } = transformSync(src, { loader: "tsx", format: "esm" });
 const dir = mkdtempSync(join(tmpdir(), "storage-check-"));
 const file = join(dir, "storage.mjs");
