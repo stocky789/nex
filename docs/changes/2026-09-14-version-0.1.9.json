@@ -1,0 +1,35 @@
+{
+  "summary": "Bump the release version to 0.1.9 and move changes made after the published 0.1.8 release (pool-wide NFS/SMB/clustered iSCSI storage, related fixes and BUG-0173 to BUG-0175) under its release notes. API impact: none; release metadata only.",
+  "paths": [
+    "CHANGELOG.md",
+    "tests/test_release_version.py",
+    "docs/changes/2026-09-14-version-0.1.9.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Release version and notes only; operator workflows are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Builds consume the existing changelog version resolver; no client-facing API, Controller operation, Core command or observed-state contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Release metadata only.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Release metadata does not create runtime state."
+  },
+  "verification": {
+    "method": "release-version.py --current resolves 0.1.9; release-version unit tests, docs gate and privacy test pass. The 0.1.8 section keeps exactly the entries published from commit b0fa760. No build, tag or publish performed.",
+    "evidence": [
+      "scripts/release-version.py",
+      "tests/test_release_version.py",
+      "CHANGELOG.md"
+    ]
+  }
+}

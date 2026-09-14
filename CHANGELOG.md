@@ -6,14 +6,14 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.1.8` →
-> Debian `0.1.8`).
+> development software. Builds use the newest numbered changelog heading (`0.1.9` →
+> Debian `0.1.9`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
 
-## [0.1.8] — 2026-09-11
+## [0.1.9] — 2026-09-14
 
 ### Major Feature
 
@@ -31,6 +31,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
+- SMB shared storage no longer reports false cross-host lock failures when several hosts check at once (BUG-0173).
+- Core peer routes return correct status codes for a wrong method and an empty fence-proof list (BUG-0174, BUG-0175).
 - Restored usable CPU-model inventory (BUG-0154).
 - Member storage-reconciliation health now shows a safe failure stage and outcome (BUG-0155).
 - Disk-selection explanations stay wrapped at the installer's 800×600 resolution (BUG-0153).
@@ -87,6 +89,16 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Installed Core hosts register their default **ISO** library automatically again (BUG-0093).
 - Host and pool health summaries show affected checks and reasons (BUG-0096).
 - Fixed pool storage recovery after member outages, missed updates and access failures.
+
+### Miscellaneous
+
+- Verified bug-ledger fixes in a disposable lab; the nested UEFI crash (BUG-0097) remains open.
+- Documented the internal Core-to-Core pool peer API and enforced reference coverage for every peer route and agent command.
+
+## [0.1.8] — 2026-09-11
+
+### Bug Fixes
+
 - Fixed leftover iSCSI sessions after a refused undersized registration.
 - Fixed concurrent SMB storage marker creation.
 - Fixed Controller gallery captures when Create VM had no healthy storage.
@@ -99,10 +111,6 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Registration forms no longer follow you between pool views; entries are kept.
 - Fixed Controller deployment and VM creation when libvirt denied the console emulator wrapper;
   console quality presets no longer change lossy JPEG detail.
-
-### Miscellaneous
-
-- Verified bug-ledger fixes in a disposable lab; the nested UEFI crash (BUG-0097) remains open.
 
 ## [0.1.7-alpha1] — 2026-09-11
 
