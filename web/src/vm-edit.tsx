@@ -53,8 +53,7 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
   const setNIC = (i: number, patch: Partial<NICRow>) => edit({ nics: draft.nics.map((n, x) => x === i ? { ...n, ...patch } : n) });
   const hostStorage = storage.filter(s => storageUsable(s, vm.host_id));
   const hostNetworks = networks.filter(n => n.host_id === vm.host_id && n.status === "succeeded").sort((a, b) => (a.vlan || 0) - (b.vlan || 0) || a.name.localeCompare(b.name));
-  const diskTargets = new Set(draft.disks.map(d => d.storage_id));
-  const availableMedia = media.filter(m => m.host_id === vm.host_id && m.status === "succeeded" && diskTargets.has(m.storage_id));
+  const availableMedia = media.filter(m => m.host_id === vm.host_id && m.status === "succeeded");
   const maxCPUs = Math.min(host?.inventory?.cpu_count || 64, 64);
   const maxMiB = Math.min(host?.inventory ? Math.floor(host.inventory.memory_bytes / 1024 ** 2) : 262144, 262144);
   const topoIssue = topologyIssue(draft.cpu);

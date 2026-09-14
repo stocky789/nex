@@ -97,8 +97,8 @@ for production workloads. Use an explicitly selected disposable lab host.
    a recent check time. `Unknown` or `unavailable` is not ready for VM disks.
 6. To use the repository, open **Virtual machines** and select **Create VM**. On **Disks**, select
    it from **Storage**. Only healthy, writable, VM-disk-capable storage available on the placement
-   host appears under **Select VM-ready storage**. An install ISO must be on storage used by one of
-   the VM's disks; see [Create a virtual machine](create-virtual-machine.md).
+   host appears under **Select VM-ready storage**. An install ISO can live on a different
+   repository from the VM's disks; see [Create a virtual machine](create-virtual-machine.md).
 7. Use **Recheck** after repairing a server, share, dataset, target or permission issue. A
    name-only **Update** (without new CHAP fields) does not reconnect and is allowed while in use.
    **Host** and **Repository type** stay fixed. SMB updates always include account, optional domain and password.

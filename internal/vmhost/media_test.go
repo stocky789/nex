@@ -242,3 +242,58 @@ esac`)
 		t.Fatalf("eject must issue change-media against the live tray: %q", got)
 	}
 }
+
+func TestManagedMediaInsertFromSeparateStorage(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(t.TempDir(), "virsh.log")
+	isoDir := t.TempDir()
+	isoPath := filepath.Join(isoDir, "media-1.iso")
+	body, media := managedTestISO()
+	media.StorageID = "iso-lib"
+	if err := os.WriteFile(isoPath, body, 0444); err != nil {
+		t.Fatal(err)
+	}
+	xmlEmpty := `<domain><devices><disk device="disk" type="file"><target dev="vda" bus="virtio"/></disk><disk device="cdrom" type="file"><target dev="sda" bus="sata"/><readonly/></disk></devices></domain>`
+	fakeCommand(t, "virsh", `echo "$*" >> "$VMHOST_LOG"
+case "$3" in
+domstate) printf '%s\n' "$VMHOST_STATE";;
+dumpxml) printf '%s\n' "$VMHOST_XML";;
+change-media) exit 0;;
+*) exit 2;;
+esac`)
+	t.Setenv("VMHOST_LOG", log)
+	t.Setenv("VMHOST_STATE", "running")
+	t.Setenv("VMHOST_XML", xmlEmpty)
+	e := NewManaged(dir)
+	vm := "11111111-2222-4333-a444-555555555555"
+	ok := protocol.Result{OperationID: "create", Status: "succeeded"}
+	create := managedJournal{
+		Command: protocol.Command{OperationID: "create", Kind: "vm-create", VM: &protocol.VMCreateSpec{
+			ID: vm, PoolID: "pool1", HostID: "host1", Name: "guest",
+			CPU: protocol.VMCPU{Count: 1, Model: "host-passthrough"}, Memory: protocol.VMMemory{Mode: "dedicated", SizeMiB: 512},
+			Disks: []protocol.VMDisk{{StorageID: "disks", Name: "system", SizeGiB: 10, Bus: "virtio", BootOrder: 1}},
+			Boot:  protocol.VMBoot{Firmware: "bios"},
+		}},
+		Result: ok,
+	}
+	disks := managedJournal{Command: protocol.Command{OperationID: "st-d", Kind: "storage-register", Storage: &protocol.StorageRegistration{ID: "disks", PoolID: "pool1", HostID: "host1", Name: "disks", Path: t.TempDir()}}, Result: protocol.Result{OperationID: "st-d", Status: "succeeded"}}
+	isoStore := managedJournal{Command: protocol.Command{OperationID: "st-i", Kind: "storage-register", Storage: &protocol.StorageRegistration{ID: "iso-lib", PoolID: "pool1", HostID: "host1", Name: "iso", Path: isoDir}}, Result: protocol.Result{OperationID: "st-i", Status: "succeeded"}}
+	iso := managedJournal{Command: protocol.Command{OperationID: "iso", Kind: "iso-import", Media: &media}, Result: protocol.Result{OperationID: "iso", Status: "succeeded"}, MediaPath: isoPath}
+	for _, j := range []managedJournal{disks, isoStore, iso, create} {
+		b, err := json.Marshal(j)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, j.Command.OperationID+".json"), b, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := protocol.Command{OperationID: "ins", Kind: "vm-media", VMMedia: &protocol.VMMediaRequest{VMID: vm, PoolID: "pool1", HostID: "host1", Action: "insert", MediaID: "media-1"}}
+	if r, err := e.Execute(context.Background(), cmd, nil); err != nil || r.Status != "succeeded" {
+		t.Fatalf("insert from ISO library: %v %+v", err, r)
+	}
+	got, _ := os.ReadFile(log)
+	if !strings.Contains(string(got), isoPath) {
+		t.Fatalf("insert must attach the library ISO path: %q", got)
+	}
+}

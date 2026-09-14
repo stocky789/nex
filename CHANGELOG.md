@@ -6,12 +6,21 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.2.0` →
-> Debian `0.2.0`).
+> development software. Builds use the newest numbered changelog heading (`0.2.1` →
+> Debian `0.2.1`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.2.1] — 2026-09-14
+
+### Bug Fixes
+
+- VM creation and ISO insert work with an ISO stored on SMB storage instead of failing with *ISO
+  size or immutable permissions changed* (BUG-0181).
+- A VM can attach an install ISO from any storage on its host, not only the repository that
+  holds the VM's disks (BUG-0180).
 
 ## [0.2.0] — 2026-09-14
 

@@ -63,11 +63,19 @@ func TestManagedISOPublication(t *testing.T) {
 			if err := receiveISO(ctx, path, m, bytes.NewReader(body)); err == nil {
 				t.Fatal("existing ISO overwritten")
 			}
-			if err := os.Chmod(path, 0644); err != nil {
+			// SMB mounts force file_mode=0600, so chmod 0444 cannot stick there;
+			// content integrity rests on size and SHA-256, not permission bits.
+			if err := os.Chmod(path, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyISO(path, m); err != nil {
+				t.Fatalf("SMB-mode ISO refused: %v", err)
+			}
+			if err := os.WriteFile(path, append(append([]byte{}, body...), 0), 0600); err != nil {
 				t.Fatal(err)
 			}
 			if verifyISO(path, m) == nil {
-				t.Fatal("writable ISO accepted")
+				t.Fatal("changed ISO accepted")
 			}
 		})
 	}
@@ -1180,6 +1188,22 @@ func TestManagedReferencesIgnorePoolAndHostIDs(t *testing.T) {
 	}
 	if _, _, err := managedMedia(js, "other"); err == nil {
 		t.Fatal("unknown ISO accepted")
+	}
+}
+
+func TestPublishedMediaPathIndependentOfDiskStorage(t *testing.T) {
+	ok := protocol.Result{Status: "succeeded"}
+	isoStore := managedJournal{Command: protocol.Command{OperationID: "iso-st", Kind: "storage-register", Storage: &protocol.StorageRegistration{ID: "iso-lib", Path: "/var/lib/libvirt/images"}}, Result: ok}
+	diskStore := managedJournal{Command: protocol.Command{OperationID: "disk-st", Kind: "storage-register", Storage: &protocol.StorageRegistration{ID: "disks", Path: "/srv/vms"}}, Result: ok}
+	iso := managedJournal{Command: protocol.Command{OperationID: "m", Kind: "iso-import", Media: &protocol.Media{ID: "m", StorageID: "iso-lib"}}, Result: ok, MediaPath: "/var/lib/libvirt/images/nex-media/m.iso"}
+	m, path, err := publishedMediaPath([]managedJournal{isoStore, diskStore, iso}, "m")
+	if err != nil || m.StorageID != "iso-lib" || path != "/var/lib/libvirt/images/nex-media/m.iso" {
+		t.Fatalf("ISO on a separate library: %+v %q %v", m, path, err)
+	}
+	wrong := iso
+	wrong.MediaPath = "/srv/vms/nex-media/m.iso"
+	if _, _, err := publishedMediaPath([]managedJournal{isoStore, diskStore, wrong}, "m"); err == nil {
+		t.Fatal("ISO path on disk storage accepted as the published library file")
 	}
 }
 

@@ -71,27 +71,8 @@ func (c *Controller) mediaVM(w http.ResponseWriter, r *http.Request, user, csrf 
 		return
 	}
 	if v.Action == "insert" {
-		media, e := readyResource(tx, v.MediaID, "iso-import", pool, host)
-		if e != nil {
+		if _, e := readyResource(tx, v.MediaID, "iso-import", pool, host); e != nil {
 			fail(w, 404, "the install ISO is not registered and verified on the selected host and pool")
-			return
-		}
-		var cmdRaw string
-		if tx.QueryRow("SELECT command FROM managed_resources WHERE id=? AND kind='vm-create'", id).Scan(&cmdRaw) != nil {
-			fail(w, 404, "VM not found")
-			return
-		}
-		var create protocol.Command
-		if json.Unmarshal([]byte(cmdRaw), &create) != nil || create.VM == nil {
-			fail(w, 500, "VM definition unavailable")
-			return
-		}
-		on := false
-		for _, d := range create.VM.Disks {
-			on = on || (media.Media != nil && media.Media.StorageID == d.StorageID)
-		}
-		if !on {
-			fail(w, 409, "the install ISO must be on one of the VM's disk storage targets")
 			return
 		}
 	}

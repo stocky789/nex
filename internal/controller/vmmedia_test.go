@@ -172,6 +172,36 @@ func TestMirrorVMMediaKeepsBootOrderOnEject(t *testing.T) {
 	}
 }
 
+func TestCreateAndInsertISOFromSeparateStorage(t *testing.T) {
+	l := newManagedLab(t, protocol.ManagedVMCapability, protocol.MediaCapability)
+	var disks protocol.StorageRegistration
+	read(t, l.a.call("POST", "/api/v1/storage", registrationRequest{RequestID: "disks", PoolID: l.pool, HostID: l.host.HostID, Name: "Disks", Path: "/var/lib/nex/vms"}, nil, 201), &disks)
+	l.report()
+	l.report(protocol.Result{OperationID: disks.OperationID, Status: "succeeded"})
+	iso := make([]byte, 65536)
+	copy(iso[32769:], "CD001")
+	var media protocol.Media
+	read(t, l.a.call("POST", "/api/v1/media?storage_id="+l.storage+"&name=guest.iso&request_id=iso-lib", string(iso), nil, 201), &media)
+	l.report()
+	l.report(protocol.Result{OperationID: media.OperationID, Status: "succeeded"})
+
+	spec := vmSpec(l.pool, l.host.HostID, "guest-split", disks.ID, l.network, media.ID)
+	var created createdVM
+	read(t, l.create("create-split", spec, 202), &created)
+	cmds := l.report().Commands
+	if len(cmds) != 1 || cmds[0].VM == nil || cmds[0].VM.MediaID != media.ID || cmds[0].VM.Disks[0].StorageID != disks.ID {
+		t.Fatalf("create should attach an ISO from library storage: %+v", cmds)
+	}
+	l.report(protocol.Result{OperationID: created.Operation.ID, Status: "succeeded"})
+
+	blank := vmSpec(l.pool, l.host.HostID, "guest-blank", disks.ID, l.network, "")
+	var other createdVM
+	read(t, l.create("create-blank", blank, 202), &other)
+	l.report()
+	l.report(protocol.Result{OperationID: other.Operation.ID, Status: "succeeded"})
+	l.a.call("POST", "/api/v1/vms/"+other.VMID+"/media", map[string]string{"request_id": "insert-lib", "action": "insert", "media_id": media.ID}, nil, 202)
+}
+
 // mirrorVMMedia used to rewrite the vm-create row's stored request payload, the record
 // replayResource compares an idempotent replay against. A media change must not disturb it:
 // replaying the original create request_id must still return the original VM, not a conflict.

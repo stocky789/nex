@@ -97,8 +97,8 @@ Use an explicitly selected disposable lab host.
    Wait for the host task to show `succeeded` before using either source. URL download size
    and SHA-256 appear after the host verifies the completed image; there is no byte-progress
    or cancel control for host downloads in this build. Each request targets the selected
-   host's storage; it does not copy the image to every host. Choose storage the VM's disks
-   will use: an ISO can only be attached from a storage target one of the VM's own disks sits on.
+   host's storage; it does not copy the image to every host. Disks can use any VM-ready
+   repository on that host; they do not need to share storage with the ISO library.
    To check one host, select it in **Resources**, open **Storage**, and look under
    **Host ISO images**. Each row shows the ISO, destination storage/directory, size,
    availability and transfer task. Return to the pool to continue creating the VM.
@@ -202,10 +202,10 @@ Use an explicitly selected disposable lab host.
       - **Firmware** — **UEFI** (the default) or **BIOS**. UEFI must be advertised by the
         host's libvirt capabilities. Firmware cannot be changed after creation, and an
         installed guest generally cannot be moved between the two.
-      - **Install ISO** — an optional transferred ISO, or **No install media**. Only ISOs
-        stored on a storage target one of this VM's own disks uses can be attached; the host
-        resolves the image there. The ISO is attached read-only as a SATA CD-ROM, so any
-        guest installer can read it. Use **Open ISO library** if none is available.
+      - **Install ISO** — an optional transferred ISO, or **No install media**. Any ISO
+        already imported on this placement host can be attached, including one stored on a
+        different repository from the VM's disks. The ISO is attached read-only as a SATA
+        CD-ROM, so any guest installer can read it. Use **Open ISO library** if none is available.
       - **Boot order** — the list shows every disk and, when one is selected, the install
         media. **Up** and **Down** reorder it, and Nex renumbers the devices from 1. The host
         tries them in this order: put **Install media** first to install a guest. Removing
@@ -332,8 +332,8 @@ failed and uncertain transfers show their own status.
 - **The wizard refuses to continue:** the page states the reason in place. Sockets × cores ×
   threads must equal the vCPU count (leave all three blank for the default); disk names must
   be unique within the VM; a manual MAC must be lower-case, colon-separated and unicast; and
-  the install ISO must sit on storage one of this VM's disks uses. Add a disk on that storage,
-  choose another ISO, or continue without install media.
+  the install ISO must already be transferred to this placement host. Choose another ISO,
+  or continue without install media.
 - **A selection is no longer available:** *Some selections are no longer validated on this
   host. Reselect them before continuing.* appears when a storage target, network or ISO you
   picked has stopped being verified for this host — usually because the host went stale or a
@@ -409,6 +409,8 @@ Recorded checks and their limits:
 - [Fresh local installation](../qa/fresh-install/checks.md) — packaged stopped-UEFI-VM creation.
 - [VM display names](../qa/vm-display-names/checks.md) and
   [dedicated memory](../qa/dedicated-memory/checks.md).
+- [ISO library independent of VM disks](../qa/2026-09-14-iso-separate-from-vm-disks.md) —
+  Controller and Core unit tests; no browser walkthrough of the wizard.
 
 Guest installation, physical hardware and arbitrary storage-failure recovery remain unverified;
 see the [platform plan](../plans/2026-09-08-nex-platform.md).

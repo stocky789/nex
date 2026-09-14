@@ -1,0 +1,34 @@
+{
+  "summary": "Stop refusing ISOs on SMB storage as writable: SMB mounts force file_mode=0600, so verifyISO now relies on regular file, size and SHA-256. API impact: none.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Restores the documented ISO import and VM creation workflow on SMB storage; no instructions change.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. vm-create, vm-update and vm-media commands and results are unchanged; only Core's local ISO integrity check changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fix within the current storage milestone.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state added or changed."
+  },
+  "verification": {
+    "method": "Regression case fails before the fix (0600 ISO refused) and passes after; changed content is still refused; go vet and go test -race ./internal/vmhost pass. Not re-run on a lab SMB host.",
+    "evidence": [
+      "internal/vmhost/managed_test.go"
+    ]
+  }
+}

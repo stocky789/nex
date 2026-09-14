@@ -1180,8 +1180,10 @@ MAC uniqueness and host capacity stay with their owners.
   the host check uniqueness against its journal and domain definitions by plain string comparison.
 - **Boot order.** `0` means "not a boot device". Non-zero values are unique across every disk and
   `boot.media_boot_order`; gaps are allowed (ejecting media leaves one), and at least one boot
-  device is required. A non-zero `media_boot_order` requires `media_id`, and the install ISO must
-  reside on a storage target the VM uses. Order is per device because libvirt forbids mixing
+  device is required. A non-zero `media_boot_order` requires `media_id`. The install ISO must be
+  imported and verified on the placement host; it may live on any storage that host can read and
+  does not need to share a repository with the VM's disks. Order is per device because libvirt
+  forbids mixing
   per-device boot with an `<os><boot dev>` list.
 - **`boot`.** `firmware` `uefi` (the default; requires EFI firmware advertised by the host's
   `domcapabilities`) or `bios`. `machine` is empty for Core's default (q35) or a plain machine
@@ -1215,8 +1217,8 @@ MAC uniqueness and host capacity stay with their owners.
 `createVM` refusals, in the order they are evaluated: **400** for a client-supplied `id`, an
 invalid `request_id` or name, any `protocol.ValidateVMSpec` violation (its message is returned
 verbatim) and the Controller ceilings `cpu.count > 64` or `memory.size_mib > 262144`; **409** for
-a replay whose payload changed, a host outside the named pool, a stale or revoked host, a
-`media_id` on a storage target none of the VM's disks use, and capacity above the host's observed
+a replay whose payload changed, a host outside the named pool, a stale or revoked host, and
+capacity above the host's observed
 CPU or memory; **404** for any `disks[].storage_id`, `nics[].network_id` or non-empty `media_id`
 that is not a registration this pool and host have verified. A **200** replay returns the
 original VM and operation; a new request returns **202**. Name and MAC uniqueness and

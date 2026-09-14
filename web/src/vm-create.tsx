@@ -141,9 +141,6 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
   const readyNetworks = (id: string) => networks.filter(n => n.host_id === id && n.status === "succeeded").sort((a, b) => (a.vlan || 0) - (b.vlan || 0) || a.name.localeCompare(b.name));
   const hostNetworks = readyNetworks(draft.host_id);
   const hostMedia = media.filter(m => m.host_id === draft.host_id && m.status === "succeeded");
-  // An ISO can only be attached from storage this VM's own disks use, as the host resolves it there.
-  const diskTargets = new Set(draft.disks.map(d => d.storage_id).filter(Boolean));
-  const availableMedia = hostMedia.filter(m => diskTargets.has(m.storage_id));
   const selectedMedia = media.find(m => m.id === draft.media_id);
   const maxCPUs = Math.min(selectedHost?.inventory?.cpu_count || 64, 64);
   const maxMiB = Math.min(selectedHost?.inventory ? Math.floor(selectedHost.inventory.memory_bytes / 1024 ** 2) : 262144, 262144);
@@ -160,10 +157,8 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
     : macs.some((m, i) => macs.indexOf(m) !== i) ? "MAC addresses must be unique within this VM." : "";
   const staleDisks = draft.disks.some(d => d.storage_id && !hostStorage.some(s => s.id === d.storage_id));
   const staleNICs = draft.nics.some(n => n.network_id && !hostNetworks.some(x => x.id === n.network_id));
-  const staleMedia = Boolean(draft.media_id) && !availableMedia.some(m => m.id === draft.media_id);
-  const mediaIssue = !staleMedia ? "" : selectedMedia
-    ? `${selectedMedia.name} is on ${storage.find(s => s.id === selectedMedia.storage_id)?.name || "other storage"}, which none of this VM's disks use. Add a disk on that storage, choose another ISO, or continue without install media.`
-    : "That ISO is no longer available on this host. Choose another or continue without install media.";
+  const staleMedia = Boolean(draft.media_id) && !hostMedia.some(m => m.id === draft.media_id);
+  const mediaIssue = staleMedia ? "That ISO is no longer available on this host. Choose another or continue without install media." : "";
   const stepIssue = ["", topoIssue, diskIssue || (staleDisks ? staleText : ""), macIssue || (staleNICs ? staleText : ""), mediaIssue, ""][step];
   const hostReady = Boolean(selectedHost && readyHost(selectedHost));
   const blocked = Boolean(vmNameIssue(draft.name)) || !hostReady || staleDisks || staleNICs || staleMedia || Boolean(topoIssue || diskIssue || macIssue);
@@ -267,11 +262,11 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
         <label>Firmware<select value={draft.boot.firmware} onChange={e => edit({ boot: { ...draft.boot, firmware: e.target.value } })}><option value="uefi">UEFI</option><option value="bios">BIOS</option></select></label>
         <label>Install ISO<select value={draft.media_id} aria-describedby={mediaIssue ? "vm-media-issue" : undefined} onChange={e => edit({ media_id: e.target.value })}>
           <option value="">No install media</option>
-          {availableMedia.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          {hostMedia.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
           {staleMedia && <option value={draft.media_id} disabled>{selectedMedia?.name || draft.media_id} · not available</option>}
         </select></label>
         {mediaIssue && <p className="task-error" id="vm-media-issue">{mediaIssue}</p>}
-        {!availableMedia.length && <p className="help">{hostMedia.length ? "No transferred ISO is stored on the storage this VM's disks use." : "No transferred ISO is available on this host."} <button type="button" onClick={() => setTab("ISO library")}>Open ISO library</button></p>}
+        {!hostMedia.length && <p className="help">No transferred ISO is available on this host. <button type="button" onClick={() => setTab("ISO library")}>Open ISO library</button></p>}
         <fieldset>
           <legend>Boot order</legend>
           <ol className="boot-order">{order.map((k, i) => <li key={k}><span>{bootLabel(k)}</span><button type="button" disabled={busy || i === 0} aria-label={`Move ${bootLabel(k)} up in the boot order`} onClick={() => move(i, -1)}>Up</button><button type="button" disabled={busy || i === order.length - 1} aria-label={`Move ${bootLabel(k)} down in the boot order`} onClick={() => move(i, 1)}>Down</button></li>)}</ol>

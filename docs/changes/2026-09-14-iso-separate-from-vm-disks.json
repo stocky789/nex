@@ -1,0 +1,63 @@
+{
+  "summary": "Allow a VM to attach an install ISO from any storage on its host. API impact: changed contract.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/media_test.go",
+    "internal/controller/managed.go",
+    "internal/controller/managed_test.go",
+    "internal/controller/vmmedia.go",
+    "internal/controller/vmmedia_test.go",
+    "web/src/vm-create.tsx",
+    "web/src/vm-edit.tsx",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/storage-repositories.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-14-iso-separate-from-vm-disks.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Create, edit and storage pages no longer require the install ISO to share a repository with the VM disks.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/edit-virtual-machine.md",
+      "docs/guide/storage-repositories.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "API impact: changed contract. createVM, updateVM and mediaVM no longer 409 when media_id storage differs from the VM disk repositories; the ISO must still be verified on the placement host.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html",
+      "docs/api/peer-openapi.json",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Corrects ISO attachment policy; does not complete a milestone.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable record; ISO and disk placements stay on existing Core journal entries."
+  },
+  "verification": {
+    "method": "Run focused Go tests for create/insert with ISO and disks on different repositories, plus UI typecheck/test. Browser wizard and native host attach were not run.",
+    "evidence": [
+      "docs/qa/2026-09-14-iso-separate-from-vm-disks.md",
+      "internal/controller/vmmedia_test.go",
+      "internal/vmhost/managed_test.go",
+      "internal/vmhost/media_test.go"
+    ]
+  }
+}

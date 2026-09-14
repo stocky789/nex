@@ -1871,3 +1871,21 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: optional `domain` on the credential handoff, discovery request and mount auth file; member transfer copies it; the picker shows **E** when a marker is present and no longer offers a typed share subdirectory.
 - Regression: `TestStorageCredentialMountFileIncludesDomain`, `TestPoolSMBCredentialPreservesDomain`, `TestDiscoverSMBWritesDomainAndLeavesNonMarkerFoldersUnmarked`, `tests/integration/storage_repositories_browser.py`; both phase1 workflows run those suites. Native NAS login not run.
 - Avoid: stuffing `DOMAIN\\user` into Account, interpolating folder names into smbclient `-c`, or treating `existing` as proof of a healthy registration.
+
+## BUG-0180 — Install ISO forced onto the same repository as VM disks
+
+- Date: 2026-09-14. Status: fixed; focused tests pass locally; hosted CI rerun pending.
+- Symptom: Create VM listed no ISO, or Controller returned 409 *the install ISO must be on one of the VM's disk storage targets*, whenever the ISO library was a different repository from the VM disks. Typical case: ISO on the default local library, disks on NFS or SMB.
+- Root cause: UI, Controller create/update/insert-media, and Core create/update all required `media.storage_id` to match a VM disk `storage_id`. Libvirt only needs a readable ISO path on the placement host.
+- Fix: attach any ISO imported and verified on the placement host; keep the Core check that the file is still at the host-published `nex-media/<id>.iso` path on the ISO's own storage.
+- Regression: `TestCreateAndInsertISOFromSeparateStorage`, `TestPublishedMediaPathIndependentOfDiskStorage`, `TestManagedMediaInsertFromSeparateStorage`; `go test -race ./...` in both GitHub and Gitea phase1 workflows. Browser wizard not walked through.
+- Avoid: treating the CDROM source path as a disk-repository constraint.
+
+## BUG-0181 — ISO on SMB storage fails verification as writable
+
+- Date: 2026-09-14. Status: fixed; focused and package tests pass locally; hosted CI rerun pending; not re-run on a lab host.
+- Symptom: VM creation failed with "ISO size or immutable permissions changed" for an ISO imported to SMB storage.
+- Root cause: SMB repositories mount with `file_mode=0600`, so the import's `chmod 0444` has no effect; `verifyISO` rejected any file with a write bit.
+- Fix: `verifyISO` in `internal/vmhost/managed.go` no longer checks permission bits; regular file, size and SHA-256 still prove the content is unchanged.
+- Regression: `TestReceiveISO…` case in `internal/vmhost/managed_test.go` accepts a 0600 ISO and refuses changed content; run by `go test -race ./...` in both GitHub and Gitea phase1 workflows.
+- Avoid: using permission bits as an integrity check on remote filesystems whose mount options fix file modes.

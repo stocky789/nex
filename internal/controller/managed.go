@@ -879,17 +879,7 @@ func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf
 		}
 	}
 	if v.MediaID != "" {
-		media, ok := resolve(v.MediaID, "iso-import", "the install ISO")
-		if !ok {
-			return
-		}
-		// Nex Core attaches the ISO from one of the VM's own storage targets.
-		on := false
-		for _, d := range v.Disks {
-			on = on || (media.Media != nil && media.Media.StorageID == d.StorageID)
-		}
-		if !on {
-			fail(w, 409, "the install ISO must be on one of the VM's disk storage targets")
+		if _, ok := resolve(v.MediaID, "iso-import", "the install ISO"); !ok {
 			return
 		}
 	}
@@ -1101,16 +1091,7 @@ func (c *Controller) updateVM(w http.ResponseWriter, r *http.Request, user, csrf
 		}
 	}
 	if spec.MediaID != "" {
-		media, ok := resolve(spec.MediaID, "iso-import", "the install ISO")
-		if !ok {
-			return
-		}
-		on := false
-		for _, d := range spec.Disks {
-			on = on || (media.Media != nil && media.Media.StorageID == d.StorageID)
-		}
-		if !on {
-			fail(w, 409, "the install ISO must be on one of the VM's disk storage targets")
+		if _, ok := resolve(spec.MediaID, "iso-import", "the install ISO"); !ok {
 			return
 		}
 	}

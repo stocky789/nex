@@ -210,11 +210,6 @@ func TestManagedWorkflowScopeRetryAndMedia(t *testing.T) {
 	if replay.VMID != created.VMID || replay.Operation.ID != created.Operation.ID {
 		t.Fatalf("replay created a second VM operation: %+v", replay)
 	}
-	// Nex Core attaches the ISO from one of the VM's own storage targets.
-	elsewhere := createVMRequest{RequestID: "vm-iso-elsewhere", VMCreateSpec: vmSpec(pool, host.HostID, "guest2", "host-iso", network.ID, media.ID)}
-	if w := a.call("POST", "/api/v1/vms", elsewhere, nil, 409); !strings.Contains(w.Body.String(), "disk storage targets") {
-		t.Fatal(w.Body.String())
-	}
 	v.CPU.Count = 3
 	a.call("POST", "/api/v1/vms", v, nil, 409)
 	v.RequestID = "vm2"

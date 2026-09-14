@@ -47,8 +47,9 @@ available in this build.
      MAC; **Remove** detaches one. Both work on a running VM. An existing interface's network,
      adapter model, MAC and MTU change only while stopped. Existing interfaces show their
      actual MAC, which stays fixed across later edits.
-   - **Install ISO**: choose another ISO, or **No install media** to eject the current one.
-     Both work while the VM runs; the CD drive keeps its place in the boot order.
+   - **Install ISO**: choose another ISO already on this VM's host, or **No install media**
+     to eject the current one. The ISO library does not have to be the repository that holds
+     the VM's disks. Both work while the VM runs; the CD drive keeps its place in the boot order.
 3. Select **Save changes**. Controller checks the definition against the host and pool the
    same way creation does and queues a `vm-update` task for the host. Select **Cancel** to
    discard the form.

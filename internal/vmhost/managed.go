@@ -1377,6 +1377,23 @@ func managedMedia(js []managedJournal, id string) (protocol.Media, string, error
 	return protocol.Media{}, "", errors.New("ISO is not imported on this host")
 }
 
+// publishedMediaPath is the file this host wrote for an imported ISO. The CDROM only needs a
+// readable path on this host; it is independent of any VM disk repository.
+func publishedMediaPath(js []managedJournal, mediaID string) (protocol.Media, string, error) {
+	m, path, err := managedMedia(js, mediaID)
+	if err != nil {
+		return protocol.Media{}, "", err
+	}
+	s, err := managedStorage(js, m.StorageID)
+	if err != nil {
+		return protocol.Media{}, "", err
+	}
+	if path != filepath.Join(storageRegistrationPath(s), "nex-media", m.ID+".iso") {
+		return protocol.Media{}, "", errors.New("the install ISO is not at the path this host published")
+	}
+	return m, path, nil
+}
+
 // managedTarget is one storage registration a VM's disks land on: the space that target must
 // provide for them, and the exclusive per-VM directory that reserves it.
 type managedTarget struct {
@@ -2161,8 +2178,10 @@ func verifyISO(path string, m protocol.Media) error {
 	}
 	defer f.Close()
 	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() != m.SizeBytes || info.Mode().Perm()&0222 != 0 {
-		return errors.New("ISO size or immutable permissions changed")
+	// Permission bits are not checked: SMB mounts force file_mode=0600, so the import's
+	// chmod 0444 cannot stick there. Size and SHA-256 prove the content is unchanged.
+	if err != nil || !info.Mode().IsRegular() || info.Size() != m.SizeBytes {
+		return errors.New("ISO size changed or is not a regular file")
 	}
 	h := sha256.New()
 	if _, err = io.Copy(h, io.LimitReader(f, m.SizeBytes+1)); err != nil {
@@ -2585,19 +2604,9 @@ func (e *ManagedEngine) create(ctx context.Context, j *managedJournal, js []mana
 	}
 	mediaPath := ""
 	if v.MediaID != "" {
-		m, path, err := managedMedia(js, v.MediaID)
+		m, path, err := publishedMediaPath(js, v.MediaID)
 		if err != nil {
 			return err
-		}
-		// The ISO must sit on one of the VM's own storage targets, at the path this host published.
-		on := ""
-		for _, t := range targets {
-			if t.ID == m.StorageID {
-				on = t.Path
-			}
-		}
-		if on == "" || path != filepath.Join(on, "nex-media", m.ID+".iso") {
-			return errors.New("the install ISO must be published on one of the VM's storage targets")
 		}
 		if storageWasPrepared(js, m.StorageID) {
 			if _, _, err = managedStorageByID(ctx, js, m.StorageID, 0); err != nil {
@@ -3266,8 +3275,7 @@ func powerObserved(ctx context.Context, p protocol.VMPowerRequest) error {
 // when the domain has none; QEMU cannot hot-plug SATA, so a running VM without a tray is refused.
 func (e *ManagedEngine) changeMedia(ctx context.Context, j *managedJournal, js []managedJournal) error {
 	req := *j.Command.VMMedia
-	vm, err := managedVM(js, req.VMID)
-	if err != nil {
+	if _, err := managedVM(js, req.VMID); err != nil {
 		return err
 	}
 	path := ""
@@ -3275,13 +3283,6 @@ func (e *ManagedEngine) changeMedia(ctx context.Context, j *managedJournal, js [
 		m, mediaPath, err := managedMedia(js, req.MediaID)
 		if err != nil {
 			return err
-		}
-		on := false
-		for _, d := range vm.Disks {
-			on = on || d.StorageID == m.StorageID
-		}
-		if !on {
-			return errors.New("the install ISO must be on one of the VM's disk storage targets")
 		}
 		if storageWasPrepared(js, m.StorageID) {
 			if _, _, err = managedStorageByID(ctx, js, m.StorageID, 0); err != nil {
@@ -3718,20 +3719,9 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 	}
 	mediaPath := ""
 	if v.MediaID != "" {
-		m, path, err := managedMedia(js, v.MediaID)
+		m, path, err := publishedMediaPath(js, v.MediaID)
 		if err != nil {
 			return err
-		}
-		on := ""
-		for _, d := range v.Disks {
-			if d.StorageID == m.StorageID {
-				if s, err := managedStorage(js, d.StorageID); err == nil {
-					on = storageRegistrationPath(s)
-				}
-			}
-		}
-		if on == "" || path != filepath.Join(on, "nex-media", m.ID+".iso") {
-			return errors.New("the install ISO must be published on one of the VM's storage targets")
 		}
 		if _, _, err = managedStorageByID(ctx, js, m.StorageID, 0); err != nil {
 			return err
