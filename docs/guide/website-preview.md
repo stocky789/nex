@@ -56,12 +56,7 @@ milestone stays marked as in testing while any of its checks remain unrun.
 
 ## Verification
 
-See the [website walkthrough](../qa/website/checks.md) for the original build and
-browser captures, and [private HTTPS operation](operate-website.md) for deployment,
-monitoring and rollback. The hardening evidence records the exercised HTTPS checks and
-their limits.
+See the [website walkthrough](../qa/website/checks.md) and the
+[roadmap page verification](../qa/website-roadmap/checks.md); the roadmap check used a local
+build, not the deployed site.
 
-The [roadmap page verification](../qa/website-roadmap/checks.md) records the roadmap build,
-its browser walkthrough at three widths and with JavaScript disabled, the inspected captures,
-and how each milestone's status was checked against the repository. That run used the generated
-build on a local listener; it was not published, so no deployed-site evidence follows from it.

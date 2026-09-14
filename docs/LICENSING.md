@@ -87,8 +87,7 @@ do not assume today's binary and source package versions match.
 
 Future Nex network services must provide the source-access mechanism required
 by the AGPL where applicable, including corresponding source for modifications.
-Do not ship a placeholder or broken source link. No controller or agent service
-is implemented by this licensing change.
+Do not ship a placeholder or broken source link.
 
 This file records scope and required evidence; it does not certify a release
 or substitute for checking each component's license terms.
@@ -114,6 +113,49 @@ license review, DKMS and supported-kernel build evidence, offline dependency
 evidence, Secure Boot signing/key-handling evidence where applicable, and
 known-good boot recovery testing. This record grants no ZFS redistribution
 clearance and makes no Secure Boot compatibility claim.
+
+## Native clustered-GFS2 dependencies — 2026-09-12
+
+Clustered shared iSCSI uses separately executed Debian 13 programs: `corosync`
+3.1.9-2+deb13u1, `dlm-controld` 4.3.0-3 (source `dlm`), `gfs2-utils` 3.6.1-1,
+`pacemaker` and `pacemaker-cli-utils` 3.0.0-2, `pcs` 0.12.0.2-1, and the selected `fence-agents-redfish`,
+`fence-agents-ipmilan`, and `fence-agents-virsh` 4.16.0-3 packages (source
+`fence-agents`). A package-archive inspection verified their installed copyright
+files and commands/services: `corosync`/`corosync.service`,
+`dlm_controld`/`dlm.service`, `tunegfs2`, `pacemaker.service`, `cibadmin`, `pcs`, and the
+three typed fence commands. Their notices identify BSD-3-Clause/GPL-3+ material
+in Corosync and GPL-2+ primary licensing for the DLM, GFS2 utilities,
+Pacemaker, PCS, and fence-agent packages; upstream notices remain authoritative.
+Debian's `pacemaker` Depends chain includes `pacemaker-resource-agents` then
+`resource-agents`; the exact archives place `ocf:pacemaker:controld` in
+`pacemaker` and `ocf:heartbeat:Filesystem` in `resource-agents`. The explicitly
+selected `fence-agents-virsh` archive supplies `fence_virsh`. These are required
+dependencies, so Debian APT resolves them even with `--no-install-recommends`;
+no redundant direct resource-agent package is needed.
+
+Nex invokes these as separate aggregate programs and does not copy or link their
+implementation. The installer disables their units after installation; only an
+explicit validated Core clustered-storage configuration may enable Corosync and
+Pacemaker. Preserve each exact binary package's installed copyright, source
+package/version, checksum, and corresponding source with the ISO component
+manifest before external distribution. This review is not release certification;
+the existing complete-source, notice, firmware, and artwork gates remain open.
+
+BUG-0128 requires a separately rebuilt Debian DLM package whose fencing helper
+matches the selected Pacemaker ABI. The Nex build recipe remains original AGPL
+code; DLM and its modified Debian packaging retain their own licenses and remain
+separate programs. Retain the untouched Debian source inputs, complete rebuilt
+source package with packaging changes, exact build/runtime versions, checksums
+and copyright notices alongside the binary. A successful ABI smoke check does
+not establish native fencing/recovery or complete ISO source compliance; both
+remain separate acceptance gates.
+
+The installer explicitly requests Debian's `linux-image-amd64` metapackage rather
+than relying on a cloud-image kernel. A Debian 13 archive inspection found
+`linux-image-6.12.107+deb13-amd64` 6.12.107-1 (source `linux-signed-amd64`
+6.12.107+1) contains `kernel/fs/gfs2/gfs2.ko.xz`. The release manifest must
+record the exact selected kernel and retain its required corresponding source;
+this one package inspection does not certify a built ISO or hardware support.
 
 ## Custom installer frontend — 2026-09-08
 

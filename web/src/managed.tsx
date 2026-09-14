@@ -4,10 +4,10 @@ import type { Guest } from "./console";
 import { Icon } from "./icons";
 import { VMWizard, adapterNames, busNames, cpuNames, describeNetwork, guestNames, readyHost, type DiskRow, type NICRow } from "./vm-create";
 import { VMEditor, editBlocker } from "./vm-edit";
-import { StorageRepositories } from "./storage";
+import { StorageRepositories, storageOwnerFresh } from "./storage";
 
 export type Registration = { id: string; pool_id: string; host_id: string; name: string; operation_id: string; status: string; error?: string };
-export type StorageSource = { nfs?: { server: string; export: string; directory?: string }; zfs?: { pool: string; dataset: string; mount_path: string }; smb?: { server: string; share: string; directory?: string }; iscsi?: { portal: string; target_iqn: string; lun: number; wwid: string; filesystem_uuid: string; exclusive_target: boolean } };
+export type StorageSource = { nfs?: { server: string; export: string; directory?: string }; zfs?: { pool: string; dataset: string; mount_path: string }; smb?: { server: string; share: string; directory?: string }; iscsi?: { portal: string; target_iqn: string; lun: number; wwid: string; filesystem_uuid: string; exclusive_target: boolean; mode?: "exclusive" | "clustered_gfs2"; cluster_id?: string; lock_table?: string; eligible_host_ids?: string[] } };
 // `member_access` is a Core observation from the pool master. It is deliberately
 // separate from repository configuration: Controller uses it only to render and
 // preflight placement; Core rechecks access and writer safety for the operation.
@@ -57,6 +57,7 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
   const [isoName, setIsoName] = useState<string>(restored("iso").url ? restored("iso").name : "");
   const downloadHost = hosts.find(h => h.id === storage.find(s => s.id === uploadStorage)?.host_id);
   const canDownload = Boolean(downloadHost && readyHost(downloadHost) && downloadHost.capabilities?.includes("iso-download-v1"));
+  const isoReadyStorage = storage.filter(s => s.status === "succeeded" && s.access?.status === "healthy" && s.access?.writable && s.capabilities?.iso && storageOwnerFresh(s, hosts));
   const [networkHost, setNetworkHost] = useState<string>(restored("network").host_id || "");
   const [connection, setConnection] = useState<string>(() => { const r = restored("network"); return r.kind === "vlan" ? `vlan:${r.uplink}` : r.kind ? "custom" : ""; });
   const lock = useRef(false);
@@ -209,7 +210,7 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
         if (mounted.current) { setFile(null); if (input.current) input.current.value = ""; }
         await reload(); if (mounted.current) setNotice(`ISO received by Controller; host transfer ${result.status}. Wait for a succeeded result before creating a VM.`);
       }, false); }}>
-        <label>Destination storage<select required value={uploadStorage} onChange={e => setUploadStorage(e.target.value)} disabled={busy || uploading}><option value="">Select ISO-ready storage</option>{storage.filter(s => s.status === "succeeded" && s.access?.status === "healthy" && s.access?.writable && s.capabilities?.iso).map(s => <option key={s.id} value={s.id}>{s.name} · {hostName(s.host_id)}</option>)}</select></label>
+        <label>Destination storage<select required value={uploadStorage} onChange={e => setUploadStorage(e.target.value)} disabled={busy || uploading}><option value="">Select ISO-ready storage</option>{isoReadyStorage.map(s => <option key={s.id} value={s.id}>{s.name} · {hostName(s.host_id)}</option>)}</select></label>
         <label>ISO source<select value={isoSource} disabled={busy || uploading} onChange={e => { setIsoSource(e.target.value); setError(""); }}><option value="file">Upload from computer</option><option value="url">Download from public URL</option></select></label>
         {isoSource === "url" ? <>
           <label>Public ISO URL<input type="url" required maxLength={4096} value={isoURL} disabled={busy} onChange={e => setIsoURL(e.target.value)} placeholder="https://downloads.example.org/installer.iso" /></label>
@@ -222,8 +223,8 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
           {file && <p className="iso-filename">{file.name} · {(file.size / GiB).toFixed(2)} GiB</p>}
         </div>}
         {uploading && <p className="help" role="status">Upload running · see Recent tasks</p>}
-        {!storage.some(s => s.status === "succeeded" && s.access?.status === "healthy" && s.access?.writable && s.capabilities?.iso) && <p className="help">Register storage and wait for Core to report ISO access first.</p>}
-        <button className="primary" disabled={busy || uploading || unavailable || !uploadStorage || (isoSource === "url" ? !canDownload || !isoURL.trim() || !isoName.trim() : !file)}>{busy ? "Submitting…" : uploading ? "Uploading…" : isoSource === "url" ? "Download ISO" : "Upload and transfer ISO"}</button>
+        {!isoReadyStorage.length && <p className="help">Register storage and wait for its assigned Core to report current ISO access first.</p>}
+        <button className="primary" disabled={busy || uploading || unavailable || !isoReadyStorage.some(s => s.id === uploadStorage) || (isoSource === "url" ? !canDownload || !isoURL.trim() || !isoName.trim() : !file)}>{busy ? "Submitting…" : uploading ? "Uploading…" : isoSource === "url" ? "Download ISO" : "Upload and transfer ISO"}</button>
       </form>
     </section>}
     {form === "vm" && <div hidden={!showForm}><VMWizard poolID={poolID} poolName={poolName} hosts={hosts} storage={storage} networks={networks} media={media} restored={() => restored("vm")} create={create} busy={busy} unavailable={unavailable} setTab={setTab} onClose={() => setForm("")} /></div>}

@@ -109,9 +109,15 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 			return
 		case <-ticker.C:
 			defaults()
+			memberStore := &Store{dir: dir, State: identity}
+			_ = PublishPoolVMInventory(ctx, memberStore)
+			ReconcilePoolVMAutostart(ctx, memberStore)
 			// Joined pools reconcile remote repositories through the master-owned desired
 			// projection. Generic journal replay could otherwise bypass the peer mutation fence.
-			if _, joined := Membership(&Store{dir: dir, State: identity}); joined == nil {
+			if _, joined := Membership(memberStore); joined == nil {
+				if err := reconcileRemoteVMCreateStopped(ctx, memberStore, engine); err != nil {
+					log.Printf("remote VM definition reconciliation did not complete; inspect the Core journal")
+				}
 				continue
 			}
 			if err := engine.ReconcileStorage(ctx); err != nil {
@@ -146,20 +152,38 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 					if membershipErr != nil && commandReferencesRemoteStorage(ctx, memberStore, cmd) {
 						err = errors.New("pool membership is unavailable for remote storage operation")
 					} else if membershipErr == nil && membership.MasterHostID != identity.HostID {
-						if cmd.Storage != nil && (cmd.Storage.StorageKind() == protocol.StorageKindNFS || cmd.Storage.StorageKind() == protocol.StorageKindSMB) {
+						if poolMemberStorageRegistrationDenied(membership, identity.HostID, cmd.Storage) {
 							err = errors.New("only the pool master may register remote storage; wait for Core reconciliation")
 						} else if err = ReservePoolStorage(ctx, memberStore, cmd); err == nil {
 							reserved = true
 						}
 					}
 					var finishMutation func(bool)
+					var finishVMExecution func(protocol.Result, error) error
 					executed := false
 					if err == nil {
 						finishMutation, err = BeginPoolStorageMutation(ctx, memberStore, cmd)
 					}
 					if err == nil {
+						finishVMExecution, err = AdmitPoolVMExecution(ctx, memberStore, cmd)
+					}
+					executionCtx := ctx
+					if err == nil {
+						executionCtx, err = poolVMCommandExecutionContext(ctx, memberStore, cmd)
+					}
+					if err == nil {
 						executed = true
-						result, err = engine.Execute(ctx, cmd, mediaFetcher(identity))
+						result, err = engine.Execute(executionCtx, cmd, mediaFetcher(identity))
+					}
+					if finishVMExecution != nil {
+						if finishErr := finishVMExecution(result, err); finishErr != nil && err == nil {
+							// The host-side journal may prove a local mutation or a
+							// local failure, but the master did not confirm the matching
+							// durable owner transition. Keep every such ambiguity visible
+							// and fail closed rather than leaving a stuck reservation
+							// hidden behind a terminal native result.
+							result.Status, result.Error = "needs_attention", finishErr.Error()
+						}
 					}
 					if finishMutation != nil {
 						finishMutation(err == nil && (result.Status == "succeeded" || result.Status == "failed"))
@@ -189,12 +213,52 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 	}
 }
 
+// reconcileRemoteVMCreateStopped is intentionally a Core worker path, not a Controller
+// retry. A remote-backed create that died while defining has already reserved a master-owned
+// VM identity; only a current owner and storage validation may let its stopped definition be
+// observed and settled. The vmhost method has no create/start/delete path.
+func reconcileRemoteVMCreateStopped(ctx context.Context, s *Store, engine *vmhost.ManagedEngine) error {
+	work, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	return engine.ReconcileRemoteVMCreateStopped(work, func(ctx context.Context, v protocol.VMCreateSpec) error {
+		if v.ID == "" || v.PoolID != s.State.PoolID || v.HostID != s.State.HostID || protocol.ValidateVMSpec(v) != nil {
+			return errors.New("remote VM definition no longer matches this Core identity")
+		}
+		observed, shared, err := poolSharedVM(ctx, s, protocol.Command{Kind: "vm-create", VM: &v})
+		if err != nil {
+			return err
+		}
+		if !shared || observed.ID != v.ID || observed.Revision != v.Revision || len(observed.Disks) != len(v.Disks) {
+			return errors.New("remote VM storage is not currently eligible")
+		}
+		// define with create=false is the established idempotent owner check. It refuses
+		// an absent or foreign master record and does not issue a permit or native action.
+		if err = poolVMRequestPeer(ctx, s, v.ID, "define", nil, false, &v, nil); err != nil {
+			return errors.New("remote VM is not currently owned by this Core")
+		}
+		_, err = poolVMExecutionContext(ctx, s, v)
+		return err
+	}, func(v protocol.VMCreateSpec) error {
+		if !v.Autostart {
+			return nil
+		}
+		// Suppress a later periodic autostart in this boot before exposing a recovered
+		// stopped VM to Applied. A prior claim is already the desired suppression.
+		_, err := ClaimPoolVMAutostartAttempt(s.dir, v.ID)
+		return err
+	})
+}
+
 func shouldReleaseUnusedReservation(membership protocol.PoolMembership, membershipErr error, hostID string, executed bool, executionErr error, status string) bool {
 	return membershipErr == nil && membership.MasterHostID != hostID && executed && executionErr == nil && status == "succeeded"
 }
 
+func poolMemberStorageRegistrationDenied(membership protocol.PoolMembership, hostID string, storage *protocol.StorageRegistration) bool {
+	return membership.MasterHostID != hostID && storage != nil && protocol.IsPoolSharedStorage(*storage)
+}
+
 func commandReferencesRemoteStorage(ctx context.Context, s *Store, cmd protocol.Command) bool {
-	if cmd.Storage != nil && (cmd.Storage.StorageKind() == protocol.StorageKindNFS || cmd.Storage.StorageKind() == protocol.StorageKindSMB) {
+	if cmd.Storage != nil && protocol.IsPoolSharedStorage(*cmd.Storage) {
 		return true
 	}
 	ids := poolStorageCommandIDs(ctx, s, cmd)
@@ -204,7 +268,7 @@ func commandReferencesRemoteStorage(ctx context.Context, s *Store, cmd protocol.
 	managed, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(ctx)
 	for _, storage := range managed.Storage {
 		for _, id := range ids {
-			if storage.ID == id && (storage.StorageKind() == protocol.StorageKindNFS || storage.StorageKind() == protocol.StorageKindSMB) {
+			if storage.ID == id && protocol.IsPoolSharedStorage(storage) {
 				return true
 			}
 		}

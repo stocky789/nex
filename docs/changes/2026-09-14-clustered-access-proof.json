@@ -1,0 +1,36 @@
+{
+  "summary": "Remove duplicate QEMU access proof in clustered repository wrappers (BUG-0159). API impact: existing contract; verification in progress.",
+  "paths": [
+    "internal/vmhost/pool_storage.go",
+    "internal/vmhost/pool_storage_test.go",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-14-cluster-storage-reliability.md",
+    "docs/plans/2026-09-12-concurrent-pool-storage.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Existing operator workflows and full native admission checks are retained.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: existing contract. Reconciliation and storage preparation retain current validation, identity, authentication, errors and results; only an already-completed duplicate probe is omitted.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Correction within the current storage acceptance scope; no new capability.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No state is introduced or moved; existing Core records remain authoritative."
+  },
+  "verification": {
+    "method": "Original validation wrapper regression failed with two proofs; fixed wrapper/failure checks, full vmhost and agent/vmhost race suites passed. Independent review passed. Wrapper success uses a controlled clustered-validator seam; native acceptance remains open.",
+    "evidence": [
+      "docs/qa/2026-09-14-cluster-storage-reliability.md",
+      "internal/vmhost/pool_storage_test.go"
+    ]
+  }
+}

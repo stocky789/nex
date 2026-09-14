@@ -1,0 +1,9 @@
+{
+  "summary": "Add completed BUG-0093 through BUG-0096 release notes to 0.1.8 and correct stale current-version wording. API impact: none; release-note editing changes no Controller/Core or client contract.",
+  "paths": ["CHANGELOG.md"],
+  "guide": {"impact": "none", "reason": "The notes summarize already documented workflows without changing operator steps.", "pages": []},
+  "api": {"impact": "none", "reason": "No caller, operation, Core command, result or observed-state behavior changes.", "pages": []},
+  "roadmap": {"impact": "none", "reason": "This records accepted bug slices, not a new feature decision or phase acceptance gate.", "pages": []},
+  "state": {"owner": "none", "reason": "Release notes introduce no durable product state."},
+  "verification": {"method": "Compare notes with the bug ledger and native QA evidence; review Markdown structure and scope, verify the release version remains 0.1.8, and run documentation, repository privacy and diff checks. No application behavior is changed or newly verified by this edit.", "evidence": ["docs/BUG_LEDGER.md", "docs/qa/2026-09-12-bug-ledger.md"]}
+}

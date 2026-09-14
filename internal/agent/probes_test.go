@@ -151,6 +151,84 @@ func TestCPUModelsAreValidatedSortedAndDistinct(t *testing.T) {
 	}
 }
 
+func TestCPUModelProbeUsesNormalConnectionWhileOtherVirshQueriesStayReadonly(t *testing.T) {
+	bin := t.TempDir()
+	calls := filepath.Join(t.TempDir(), "virsh-calls")
+	script := `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "$NEX_VIRSH_CALLS"
+case " $* " in
+  *" domcapabilities "*)
+    case " $* " in
+      *" --readonly "*) echo 'operation forbidden: read only access prevents virConnectGetDomainCapabilities' >&2; exit 41 ;;
+    esac
+    printf '%s\n' '<domainCapabilities><cpu><mode name="custom"><model usable="yes">qemu64</model></mode></cpu></domainCapabilities>'
+    ;;
+  *" list --all --uuid "*)
+    case " $* " in
+      *" --readonly "*) : ;;
+      *) echo 'list query was not readonly' >&2; exit 42 ;;
+    esac
+    ;;
+  *) echo "unexpected virsh arguments: $*" >&2; exit 43 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "virsh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("NEX_VIRSH_CALLS", calls)
+
+	probes := NativeProbes("test")
+	data, err := probes["cpu-models"](context.Background())
+	if err != nil {
+		t.Fatalf("CPU model probe failed: %v", err)
+	}
+	if got, want := data, any([]string{"qemu64"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("CPU models = %#v, want %#v", got, want)
+	}
+	if _, err := probes["libvirt"](context.Background()); err != nil {
+		t.Fatalf("readonly libvirt probe failed: %v", err)
+	}
+
+	lines := strings.FieldsFunc(string(mustReadFile(t, calls)), func(r rune) bool { return r == '\n' })
+	if len(lines) != 2 {
+		t.Fatalf("virsh calls = %q", lines)
+	}
+	if strings.Contains(lines[0], "--readonly") || !strings.Contains(lines[0], "--connect qemu:///system domcapabilities") {
+		t.Fatalf("domcapabilities connection = %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "--readonly --connect qemu:///system list --all --uuid") {
+		t.Fatalf("list connection lost readonly mode: %q", lines[1])
+	}
+}
+
+func TestCPUModelProbeFailsClosedOnInvalidCapabilities(t *testing.T) {
+	bin := t.TempDir()
+	script := `#!/bin/sh
+case " $* " in
+  *" domcapabilities "*) printf '%s\n' '<domainCapabilities><cpu><mode name="custom"><model usable="yes">bad/model</model></mode></cpu></domainCapabilities>' ;;
+  *) exit 99 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "virsh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if _, err := NativeProbes("test")["cpu-models"](context.Background()); err == nil {
+		t.Fatal("invalid domain capabilities were accepted")
+	}
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 func TestFailedCPUModelProbeIsNotPresentedAsCurrent(t *testing.T) {
 	var calls atomic.Int32
 	m := NewMonitor(time.Second, map[string]Probe{"cpu-models": func(context.Context) (any, error) {

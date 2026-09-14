@@ -3,8 +3,10 @@ package vmhost
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -16,6 +18,146 @@ func TestPreparePoolStorageRefusesLocalZFSAndISCSISecondaryWriter(t *testing.T) 
 		s := protocol.StorageRegistration{ID: "repo-1", Kind: kind}
 		if _, err := PreparePoolStorage(context.Background(), t.TempDir(), s); err == nil {
 			t.Fatalf("%s secondary writer accepted", kind)
+		}
+	}
+}
+
+func TestPreparePoolStorageRejectsClusteredISCSIWithoutCoreProfile(t *testing.T) {
+	s := protocol.StorageRegistration{ID: "repo-1", Kind: protocol.StorageKindISCSI, Source: protocol.StorageSource{ISCSI: &protocol.ISCSIStorageSource{Mode: "clustered_gfs2", EligibleHostIDs: []string{"host-1", "host-2", "host-3"}}}}
+	if _, err := PreparePoolStorage(context.Background(), t.TempDir(), s); err == nil {
+		t.Fatal("clustered iSCSI was prepared without a Core-owned cluster profile")
+	}
+}
+
+func TestValidatePoolStorageAccessRunsOneClusteredQEMUProof(t *testing.T) {
+	oldNative, oldValidate := nativeRun, validateClusteredPoolStorageAccess
+	t.Cleanup(func() { nativeRun, validateClusteredPoolStorageAccess = oldNative, oldValidate })
+	c := clusterTestConfig()
+	path := t.TempDir()
+	proofs := 0
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "runuser" && len(args) > 5 && args[3] == "test" && args[4] == "-x" {
+			proofs++
+		}
+		if name == "id" {
+			return []byte(strconv.Itoa(os.Getuid())), nil
+		}
+		return nil, nil
+	}
+	validateClusteredPoolStorageAccess = func(ctx context.Context, _ string, _ protocol.StorageRegistration, _ protocol.StorageClusterConfig) (storageAccess, error) {
+		if err := qemuStorageAccess(ctx, path); err != nil {
+			return storageAccess{}, err
+		}
+		return storageAccess{Path: path, Health: "healthy"}, nil
+	}
+	ctx := WithStorageClusterStateDir(WithStorageClusterConfig(context.Background(), c), t.TempDir())
+	if _, err := ValidatePoolStorageAccess(ctx, clusterTestRegistration(c)); err != nil {
+		t.Fatal(err)
+	}
+	if proofs != 1 {
+		t.Fatalf("clustered QEMU proofs = %d, want 1", proofs)
+	}
+}
+
+func TestValidatePoolStorageAccessPropagatesClusteredQEMUProofFailure(t *testing.T) {
+	oldNative, oldCluster, oldHealth := nativeRun, clusterRun, clusterHealthyAt
+	t.Cleanup(func() { nativeRun, clusterRun, clusterHealthyAt = oldNative, oldCluster, oldHealth })
+	c := clusterTestConfig()
+	c.MountPath = "/var/lib"
+	s := clusterTestRegistration(c)
+	s.Path, s.Source.ISCSI.MountPath = c.MountPath, c.MountPath
+	nativeRun = func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		switch name {
+		case "lsblk":
+			return []byte(`{"blockdevices":[{"path":"/dev/fake","type":"disk","uuid":"12345678-1234-1234-1234-123456789abc","wwn":"3600508b400105e210000900000490000","fstype":"gfs2","hctl":"0:0:0:1"}]}`), nil
+		case "runuser":
+			return nil, errors.New("denied")
+		default:
+			t.Fatalf("unexpected native command %s", name)
+			return nil, nil
+		}
+	}
+	clusterRun = func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		switch name {
+		case "tunegfs2":
+			return []byte("Lock protocol: lock_dlm\nLock table: pool-1:repo-1\n"), nil
+		case "gfs2_edit":
+			return []byte("journal0: clean\njournal1: clean\njournal2: clean\n"), nil
+		default:
+			t.Fatalf("unexpected cluster command %s", name)
+			return nil, nil
+		}
+	}
+	clusterHealthyAt = func(context.Context, string, protocol.StorageRegistration, protocol.StorageClusterConfig) (protocol.StorageClusterStatus, error) {
+		return protocol.StorageClusterStatus{Healthy: true, Quorate: true, Mounted: true, FencingVerified: true}, nil
+	}
+	ctx := WithStorageClusterStateDir(WithStorageClusterConfig(context.Background(), c), t.TempDir())
+	if _, err := ValidatePoolStorageAccess(ctx, s); err == nil || !strings.Contains(err.Error(), "not traversable") {
+		t.Fatalf("clustered QEMU proof failure = %v", err)
+	}
+}
+
+func TestPreparePoolStorageRunsOneClusteredQEMUProof(t *testing.T) {
+	oldNative, oldPrepare := nativeRun, prepareClusteredPoolStorageAccess
+	t.Cleanup(func() { nativeRun, prepareClusteredPoolStorageAccess = oldNative, oldPrepare })
+	c := clusterTestConfig()
+	path := t.TempDir()
+	proofs := 0
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "runuser" && len(args) > 5 && args[3] == "test" && args[4] == "-x" {
+			proofs++
+		}
+		if name == "id" {
+			return []byte(strconv.Itoa(os.Getuid())), nil
+		}
+		return nil, nil
+	}
+	prepareClusteredPoolStorageAccess = func(ctx context.Context, _ string, s protocol.StorageRegistration, _ protocol.StorageClusterConfig) (storageAccess, error) {
+		if err := qemuStorageAccess(ctx, path); err != nil {
+			return storageAccess{}, err
+		}
+		return storageAccess{Path: path, Health: "healthy", Observed: s.Identity}, nil
+	}
+	if _, err := PreparePoolStorage(WithStorageClusterConfig(context.Background(), c), t.TempDir(), clusterTestRegistration(c)); err != nil {
+		t.Fatal(err)
+	}
+	if proofs != 1 {
+		t.Fatalf("clustered QEMU proofs = %d, want 1", proofs)
+	}
+}
+
+func TestPreparePoolStorageRunsQEMUProofForNFSAndSMB(t *testing.T) {
+	oldNative, oldPrepare := nativeRun, preparePoolStorageAt
+	t.Cleanup(func() {
+		nativeRun, preparePoolStorageAt = oldNative, oldPrepare
+	})
+	path := t.TempDir()
+	proofs := 0
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "runuser" && len(args) > 5 && args[3] == "test" && args[4] == "-x" {
+			proofs++
+		}
+		if name == "id" {
+			return []byte(strconv.Itoa(os.Getuid())), nil
+		}
+		return nil, nil
+	}
+	preparePoolStorageAt = func(context.Context, protocol.StorageRegistration, string) (storageAccess, error) {
+		return storageAccess{Path: path, Health: "healthy"}, nil
+	}
+	for _, tc := range []struct {
+		name string
+		s    protocol.StorageRegistration
+	}{
+		{name: "nfs", s: protocol.StorageRegistration{ID: "repo-1", Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/vms"}}}},
+		{name: "smb", s: protocol.StorageRegistration{ID: "repo-1", Kind: protocol.StorageKindSMB, Source: protocol.StorageSource{SMB: &protocol.SMBStorageSource{Server: "files.example.test", Share: "vms"}}}},
+	} {
+		proofs = 0
+		if _, err := PreparePoolStorage(context.Background(), t.TempDir(), tc.s); err != nil {
+			t.Fatalf("%s preparation = %v", tc.name, err)
+		}
+		if proofs != 1 {
+			t.Fatalf("%s QEMU proofs = %d, want 1", tc.name, proofs)
 		}
 	}
 }

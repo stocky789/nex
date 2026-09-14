@@ -138,6 +138,14 @@ const date = (value?: string | null) =>
   value && !value.startsWith("0001-")
     ? new Date(value).toLocaleString()
     : "Not observed";
+const adoptedOutcomePrefix = "adopt-outcome:";
+export function taskTimestamp(operation: Pick<Operation, "id" | "host_id" | "request_id" | "updated_at">) {
+  const reobserved = operation.request_id === `${adoptedOutcomePrefix}${operation.host_id}:${operation.id}`;
+  return {
+    reobserved,
+    value: date(operation.updated_at),
+  };
+}
 const size = (value: number) =>
   `${(value / 1024 ** 3).toLocaleString(undefined, { maximumFractionDigits: 1 })} GiB`;
 function Brand() {
@@ -1680,8 +1688,9 @@ function Tasks({
             </thead>
             <tbody>
               {upload && onCancelUpload && <UploadRow upload={upload} onCancel={onCancelUpload} />}
-              {operations.map((o) => (
-                <tr key={o.id}>
+              {operations.map((o) => {
+                const timestamp = taskTimestamp(o);
+                return <tr key={o.id}>
                   <td>
                     <strong>
                       {o.kind === "refresh-inventory"
@@ -1704,9 +1713,9 @@ function Tasks({
                     )}
                   </td>
                   <td>{o.actor}</td>
-                  <td>{date(o.updated_at)}</td>
+                  <td>{timestamp.reobserved ? <><strong>Reobserved from Core history</strong><small>{timestamp.value}</small><small>Original outcome time was not reported.</small></> : timestamp.value}</td>
                 </tr>
-              ))}
+              })}
             </tbody>
           </table>
         </div>

@@ -1,0 +1,41 @@
+{
+  "summary": "Keep current member access observations in master Core memory while preserving durable configuration and admission fences (BUG-0158). API impact: existing contract. Native acceptance remains open.",
+  "paths": [
+    "internal/agent/state.go",
+    "internal/agent/pool_storage.go",
+    "internal/agent/pool_storage_test.go",
+    "docs/guide/storage-repositories.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-14-cluster-storage-reliability.md",
+    "docs/plans/2026-09-12-concurrent-pool-storage.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Describe awaiting new member access reports after a master management restart.",
+    "pages": [
+      "docs/guide/storage-repositories.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: existing contract. Peer access reports and master inventory retain their schemas, authentication, validation, errors and freshness rules; current observations are no longer synchronously persisted. Native access/execution gates are unchanged.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This is a correction within the current storage milestone; no acceptance gate is declared complete.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Master Core owns configuration and reports current member observations. No Controller-owned state or new pool setting is added.",
+    "record": "Managed storage journals and pool-storage.json retain durable repository/reservation/mutation records. Access observations are process-local, cleared on restart, and rebuilt from authenticated members. A fresh Controller adopts master inventory and current reports."
+  },
+  "verification": {
+    "method": "Residual native timings show synchronous access-report file/directory flush latency. Authenticated regression, independent review and full candidate Go race suite passed. Clean fixed-build five-minute idle observation still recorded two deadline episodes (five failed samples of 150); acceptance remains open. See QA for actual results and limits.",
+    "evidence": [
+      "docs/qa/2026-09-14-cluster-storage-reliability.md",
+      "internal/agent/pool_storage_test.go"
+    ]
+  }
+}

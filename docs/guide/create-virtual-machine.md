@@ -17,8 +17,8 @@ After creation the VM can be changed in place; see [Edit a virtual machine](edit
 An existing disk's storage, size and provisioning cannot be changed, and deleting a VM is not
 yet available in this development build. Start the VM with its [Power controls](vm-power.md),
 then install the guest through [Open a VM console](vm-console.md).
-An adopted Controller appliance remains visibly protected and is not recreated by this workflow.
-Use an explicitly selected disposable lab host; this is not production acceptance.
+An adopted Controller appliance remains protected and is not recreated by this workflow.
+Use an explicitly selected disposable lab host.
 
 ## Prerequisites
 
@@ -229,12 +229,11 @@ Use an explicitly selected disposable lab host; this is not production acceptanc
 | **Dedicated** | The full amount is allocated and locked in host RAM before the VM runs, with no swapping or page sharing. Stopping the VM releases physical RAM; Nex still counts its capacity commitment. | Predictable performance; guests without the balloon driver; anything you do not want competing for memory. |
 | **Maximum** | A ceiling only. The VM reserves nothing, uses the memory it actually touches, and gives back memory it frees. | Fitting more guests on a host when their real use is well below the ceiling. |
 
-For an existing **Dedicated** VM created before this correction, upgrade Nex Core, then
-[shut down the VM](vm-power.md), wait for **shut off**, open **General → VM details → Edit**,
-and select **Save changes** with the same memory mode and size. Wait for the `vm-update` task
-to succeed, then start it. Saving while stopped installs the new reservation; an agent upgrade,
-a guest reboot, or stop/start without saving does not change the old definition. Existing guests
-are not stopped automatically. See [Edit a virtual machine](edit-virtual-machine.md).
+A **Dedicated** VM created before physical reservation existed keeps its old definition until
+it is saved while stopped: upgrade Nex Core, [shut down the VM](vm-power.md), wait for
+**shut off**, open **General → VM details → Edit**, select **Save changes** with the same memory
+mode and size, wait for the `vm-update` task to succeed, then start it. An agent upgrade, guest
+reboot or stop/start without saving changes nothing. See [Edit a virtual machine](edit-virtual-machine.md).
 
 A running 4096 MiB dedicated VM now holds at least 4096 MiB of host RAM, plus QEMU's overhead,
 even if applications inside the guest use only 1 GiB. Allow headroom for the host and that overhead.
@@ -246,13 +245,10 @@ Three limits to know before choosing **Maximum**:
 - **Returning freed memory needs the balloon driver running inside the guest.** Linux has it
   built into the kernel. Windows gets it from the virtio-win guest tools; see
   [Install guest tools](guest-tools.md). Until the driver runs, the guest keeps every page it
-  has touched, so usage can drift up to its ceiling. This does not preallocate or lock RAM
-  as dedicated mode does. Even with the driver, only memory
+  has touched, so usage can drift up to its ceiling. Even with the driver, only memory
   the guest counts as free comes back; pages it holds as file cache stay with the guest.
 - **Nothing grows or shrinks a guest under host memory pressure.** This build has no daemon
-  that reclaims memory when the host runs short. **Maximum** means the ceiling is enforced and
-  free pages come back when the guest reports them; it does not mean Nex balances memory
-  between guests.
+  that reclaims memory when the host runs short, and Nex does not balance memory between guests.
 - **The ceiling is checked in both modes.** The host must be able to meet the full size, plus
   a 2 GiB reserve for itself, at creation time, so a VM that cannot reach its maximum is
   refused. **Maximum** lets the ceilings of several VMs add up to more than the host has, and
@@ -275,11 +271,10 @@ With **Start after creation** the creation task itself ends by starting the VM, 
 page can briefly show a stopped VM while the task finishes. No guest operating system is installed by this workflow — start the VM,
 open its [console](vm-console.md) and install the guest from the attached ISO.
 
-**Host ISO images** lists only transfers assigned to the selected host and pool.
-**Transfer succeeded · not rescanned** means import succeeded, storage was validated and
-the host is freshly connected; the file itself is not checked again until VM creation. Pending, failed and uncertain transfers are listed
-with their own status. This is Nex's transfer record, not a scan of every ISO on
-the host; files are checked again when creating a VM.
+**Host ISO images** lists Nex's transfer records for the selected host and pool, not a scan of
+every ISO on the host. **Transfer succeeded · not rescanned** means import succeeded, storage was
+validated and the host is freshly connected; the file is checked again at VM creation. Pending,
+failed and uncertain transfers show their own status.
 
 ## Troubleshooting
 
@@ -379,7 +374,7 @@ the host; files are checked again when creating a VM.
 - **A Maximum VM never gives memory back:** on Windows the balloon driver is missing; install
   the virtio-win [guest tools](guest-tools.md). On Linux the driver is in the kernel, and only
   memory the guest counts as free comes back, so a guest holding a large file cache can sit
-  near its ceiling legitimately. Nothing in this build reclaims memory under host pressure.
+  near its ceiling legitimately.
 - **The response is lost or Controller disconnects:** inspect **Task history** and the
   existing resource before submitting another request. Preserve the original form while
   reconciling an uncertain response. This browser tab retains submitted request identities
@@ -400,89 +395,22 @@ the host; files are checked again when creating a VM.
 
 ## Verification
 
-**Public URL ISO downloads (2026-09-11):** see the [URL ISO verification report](../qa/iso-url/checks.md)
-for executable backend and browser checks and their simulation boundaries. Installed
-Controller/Core packages and installation media require a matching rebuild and deployment.
+Recorded checks and their limits:
 
-**Storage repositories (2026-09-11) — lab testing in progress.** NFSv4, existing OpenZFS
-datasets, SMB3 shares and iSCSI LUNs now use the storage workflow described above. The
-[storage repository checks](../qa/storage-repositories/checks.md) distinguish runnable checks
-from the pending disposable-lab VM I/O, outage, reboot and Controller-replacement workflows.
+- [Managed VM creation](../qa/managed-vm/checks.md) — records the earlier four-page, single-disk,
+  single-interface form. The six-page wizard, multiple disks and interfaces, memory modes, boot
+  order, autostart, start after creation, host-owned default registrations and background ISO
+  upload have no browser or lab walkthrough yet; treat step 5 as untested.
+- [URL ISO downloads](../qa/iso-url/checks.md), [host ISO visibility](../qa/host-isos/checks.md)
+  and [storage repositories](../qa/storage-repositories/checks.md).
+- [Pool VLAN networks](../qa/pool-vlan-networks/checks.md) — simulated browser and namespace
+  checks; VLAN connectivity through a real switch is unverified.
+- [Pool master](../qa/pool-master/checks.md) and its [lab run](../qa/pool-master/lab/checks.md).
+- [Fresh local installation](../qa/fresh-install/checks.md) — packaged stopped-UEFI-VM creation.
+- [VM display names](../qa/vm-display-names/checks.md) and
+  [dedicated memory](../qa/dedicated-memory/checks.md).
 
-**Full VM creation (2026-09-10) — not yet walked through.** The six-page wizard, multiple
-disks and interfaces, the memory modes, per-device boot order, autostart and the follow-on
-start request are new in this build, and **no browser walkthrough or lab run has been
-executed against them yet**. The reports below were produced against the earlier four-page,
-single-disk, single-interface form and remain valid only for the parts of this procedure that
-did not change: sign-in, storage/network registration, ISO upload and transfer, and the
-stopped-VM outcome. Treat every instruction in step 5 as untested until a report covering the
-six pages is linked here.
-
-**Host-owned defaults, validation and start after creation (2026-09-10) — not yet walked
-through in a browser.** The host now self-registers the **ISO** storage and untagged networks
-(steps 2–3), refuses duplicate paths, bridges, VM names, MACs and unpromisable dedicated
-memory as failed tasks, and starts a VM itself when **Start after creation** is selected.
-This is covered by Core and Controller unit tests (`go test ./...`) and the UI typecheck
-only; the browser walkthrough, the disposable-host defaults registration and a real start
-after creation are not yet recorded.
-
-**Background ISO upload / no fixed size cap (2026-09-10) — not yet walked through in a
-browser.** Step 4's Recent tasks progress/rate/Cancel behaviour and uploads larger than the
-old 8 GiB cap are covered by Controller unit tests and UI typecheck only until a disposable
-lab walkthrough is recorded.
-
-**Pool VLAN networks (2026-09-09):** the [VLAN network checks](../qa/pool-vlan-networks/checks.md)
-record the simulated browser walkthrough of the new **Connection** / **VLAN ID** form and the
-disposable network-namespace check of real bridge creation and refusals. The native
-nested-KVM lab and physical switches were not exercised; the "Other" path reuses earlier
-evidence. Treat VLAN connectivity through a real switch as unverified.
-
-**Pool master change verified (2026-09-09):** the pool in step 1 is now created automatically at
-enrollment; the [pool master checks](../qa/pool-master/checks.md) (simulated host) and the
-[real lab run](../qa/pool-master/lab/checks.md) show the pool page with **Pool master** and the
-retained storage, network and media registrations after upgrade. Steps 2–6 use unchanged
-contracts and were not re-run in the lab after this change.
-
-The [host ISO visibility report](../qa/host-isos/checks.md) verifies host/pool
-filtering, transfer labels, missing/stale/error states and keyboard/narrow layouts;
-it separates simulated cases from the retained local Controller's actual ISO record.
-
-The [fresh local installation](../qa/fresh-install/checks.md) adds packaged
-`0.1.0+managed1` evidence: Controller deployed from the fresh Core ISO, automatic
-enrollment with the installed embedded agent, successful first storage/network
-registrations, genuine Debian ISO upload and creation of a stopped UEFI VM through
-the browser. Desktop, 360-pixel and keyboard workflows were exercised without
-mocking the APIs. Consult that report for subsequent boot/recovery results and limits.
-
-The [development verification report](../qa/managed-vm/checks.md) records build identities,
-checks and limits. Default **ISO** auto-registration is covered by Controller unit tests;
-a live enroll walkthrough that skips manual storage registration is not yet recorded.
-The [native browser walkthrough](../qa/managed-vm/browser-native-results.json)
-used Chromium, a real HTTPS Controller and a disposable Debian host with nested KVM/libvirt.
-It exercised sign-in, resource registration/reuse, ISO upload, the creation pages as they
-were then, stopped-VM
-details, lost-response/reload recovery, keyboard use and desktop/360px layouts. The final
-run rejected duplicate storage and network registrations and reused the directory and
-bridge successfully registered in preceding native browser attempts. Its stale/error/response-loss presentation was
-injected; these checks do not represent physical failures.
-
-The [simulated browser walkthrough](../qa/managed-vm/browser-simulated-results.json) separately
-covers the full registration-to-creation flow with a simulated agent and synthetic ISO, in its
-earlier four-page form. Its screenshots verify browser behavior, not native storage execution.
-Desktop review and mobile VM-details captures from both walkthroughs were inspected against
-the instructions as they stood then.
-
-The [native execution checks](../qa/managed-vm/results.json) and
-[definition checks](../qa/managed-vm/definition-verification.json) additionally exercised
-BIOS/UEFI creation, locally initiated lab boots, Controller outage and process restart/replay.
-Those local boots are separate from this stopped-VM GUI workflow. Guest installation,
-central power/console controls, physical hardware and arbitrary storage-failure recovery
-remain unverified; see the [remaining platform gates](../plans/2026-09-08-nex-platform.md).
+Guest installation, physical hardware and arbitrary storage-failure recovery remain unverified;
+see the [platform plan](../plans/2026-09-08-nex-platform.md).
 
 [Back to the user guide](README.md)
-
-VM naming validation and host-reported adoption are covered by the
-[display-name checks](../qa/vm-display-names/checks.md); browser coverage uses a simulated host.
-
-Dedicated-memory correction checks and limits are recorded in the
-[physical reservation QA report](../qa/dedicated-memory/checks.md).

@@ -1,0 +1,36 @@
+{
+  "summary": "BUG-0168: Isolate eligible NFS access probes while preserving full root-squash fallback. API impact: existing contract.",
+  "paths": [
+    "internal/vmhost/storage_native.go",
+    "internal/vmhost/storage_native_test.go",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-14-cluster-storage-reliability.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "docs/plans/2026-09-12-concurrent-pool-storage.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Internal probe placement only; existing operator workflow and root-squash full-probe behavior remain unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: existing contract. Native QEMU access validation retains current Controller/Core and client-facing operations, schemas, authorization and result semantics; no new resource or setting.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Reliability correction within the current storage milestone; acceptance remains open.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Per-Core empty probe leaves are regenerable artifacts, not durable pool state or cached health. Existing Core-owned records and adoption remain authoritative."
+  },
+  "verification": {
+    "method": "The old GFS-only selector failed the focused NFS placement regression. Fixed placement/owner-fallback checks and full vmhost/agent normal and race suites passed. Independent source review, native candidate-bound NFS proof on all three Cores, six-guest writes/reboot hashes/lock exclusion/preservation/cleanup and a 150-sample healthy observation passed. Root-squash fallback remains unit-tested, not a new native root-squash walkthrough. The separate unattributed post-GFS/SMB-startup repository deadlines remain under investigation.",
+    "evidence": [
+      "docs/qa/2026-09-14-cluster-storage-reliability.md"
+    ]
+  }
+}

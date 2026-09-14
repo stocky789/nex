@@ -49,6 +49,12 @@ type ISCSIStorageSource struct {
 	// ExclusiveTarget is the operator attestation required when Core cannot inspect the
 	// target ACL. CHAP authenticates an initiator but does not prove exclusive write access.
 	ExclusiveTarget bool `json:"exclusive_target"`
+	// Mode is exclusive (the legacy/default single-writer profile) or clustered_gfs2.
+	// A clustered LUN is an already-formatted GFS2 filesystem; Core never formats it.
+	Mode            string   `json:"mode,omitempty"`
+	ClusterID       string   `json:"cluster_id,omitempty"`
+	LockTable       string   `json:"lock_table,omitempty"`
+	EligibleHostIDs []string `json:"eligible_host_ids,omitempty"`
 }
 
 // StorageSource carries only typed, non-secret connection configuration. Local repositories
@@ -85,6 +91,9 @@ type ISCSIStorageIdentity struct {
 	LUN            uint64 `json:"lun"`
 	WWID           string `json:"wwid"`
 	FilesystemUUID string `json:"filesystem_uuid"`
+	FilesystemType string `json:"filesystem_type,omitempty"`
+	GFS2LockTable  string `json:"gfs2_lock_table,omitempty"`
+	GFS2Journals   uint32 `json:"gfs2_journals,omitempty"`
 }
 
 // StorageIdentity is observed and canonicalized by Core. It is how Core detects a replaced
@@ -147,8 +156,10 @@ type StorageCredentialOffer struct {
 // StorageCredentials appears only in the transient, authenticated credential handoff body.
 // It must never be embedded in Command, a journal record, inventory, result, or diagnostic.
 type StorageCredentials struct {
-	Username string `json:"username,omitempty"`
-	Secret   string `json:"secret"`
+	Username      string `json:"username,omitempty"`
+	Secret        string `json:"secret,omitempty"`
+	SSHPrivateKey string `json:"ssh_private_key,omitempty"`
+	SSHKnownHosts string `json:"ssh_known_hosts,omitempty"`
 }
 type StorageCredentialHandoff struct {
 	Offer       StorageCredentialOffer `json:"offer"`
@@ -207,12 +218,13 @@ type StorageDiscoveryResult struct {
 	ObservedAt time.Time                   `json:"observed_at"`
 }
 
-var storageName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,253}$`)
 var zfsName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]*(/[A-Za-z0-9][A-Za-z0-9_.:-]*)*$`)
+var storageSMBShareName = regexp.MustCompile(`^[\pL\pN][\pL\pN ._$:()\-]{0,253}$`)
 var storageUUID = regexp.MustCompile(`^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$`)
 var iscsiWWID = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,255}$`)
 var storageOpaqueID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 var storageMarkerID = regexp.MustCompile(`^[0-9a-f]{32}$`)
+var storageLockTable = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 
 func storagePath(raw string) bool {
 	return filepath.IsAbs(raw) && raw != "/" && filepath.Clean(raw) == raw && !strings.ContainsAny(raw, "\x00\r\n")
@@ -229,7 +241,10 @@ func storageSubdirectory(raw string) bool {
 	if raw == "" {
 		return true
 	}
-	return !filepath.IsAbs(raw) && filepath.Clean(raw) == raw && raw != "." && raw != ".." && !strings.HasPrefix(raw, "../") && !strings.ContainsAny(raw, "\\\x00\r\n") && !strings.ContainsFunc(raw, unicode.IsSpace)
+	return !filepath.IsAbs(raw) && filepath.Clean(raw) == raw && raw != "." && raw != ".." && !strings.HasPrefix(raw, "../") && !strings.ContainsAny(raw, "\\\x00\r\n") && !strings.ContainsFunc(raw, unicode.IsControl)
+}
+func storageSMBShare(raw string) bool {
+	return strings.TrimSpace(raw) == raw && storageSMBShareName.MatchString(raw)
 }
 
 // ValidateStorageRegistration validates client-supplied intent as well as Core replay input.
@@ -281,13 +296,22 @@ func validateStorageRegistration(s StorageRegistration, allowEmptyID, allowResol
 		}
 	case StorageKindSMB:
 		v := s.Source.SMB
-		if v == nil || !storageServer(v.Server) || !storageName.MatchString(v.Share) || !storageSubdirectory(v.Directory) || (s.Path != "" && (!allowResolvedPath || !storagePath(s.Path))) {
+		if v == nil || !storageServer(v.Server) || !storageSMBShare(v.Share) || !storageSubdirectory(v.Directory) || (s.Path != "" && (!allowResolvedPath || !storagePath(s.Path))) {
 			return errors.New("SMB storage needs a server and share")
 		}
 	case StorageKindISCSI:
 		v := s.Source.ISCSI
-		if v == nil || !storageServer(v.Portal) || !(strings.HasPrefix(v.TargetIQN, "iqn.") || strings.HasPrefix(v.TargetIQN, "eui.") || strings.HasPrefix(v.TargetIQN, "naa.")) || strings.ContainsAny(v.TargetIQN, "/\\\x00 \t\r\n") || !iscsiWWID.MatchString(v.WWID) || !storageUUID.MatchString(v.FilesystemUUID) || !v.ExclusiveTarget {
-			return errors.New("iSCSI storage needs portal, target IQN, LUN WWID, filesystem UUID and exclusive-target attestation")
+		if v == nil || !storageServer(v.Portal) || !(strings.HasPrefix(v.TargetIQN, "iqn.") || strings.HasPrefix(v.TargetIQN, "eui.") || strings.HasPrefix(v.TargetIQN, "naa.")) || strings.ContainsAny(v.TargetIQN, "/\\\x00 \t\r\n") || !iscsiWWID.MatchString(v.WWID) || !storageUUID.MatchString(v.FilesystemUUID) {
+			return errors.New("iSCSI storage needs portal, target IQN, LUN WWID and filesystem UUID")
+		}
+		if IsClusteredISCSI(s) {
+			if v.ExclusiveTarget || !validEligibleHosts(v.EligibleHostIDs) || (allowResolvedPath && (!storageOpaqueID.MatchString(v.ClusterID) || !storageLockTable.MatchString(v.LockTable))) || (!allowResolvedPath && ((v.ClusterID != "" && !storageOpaqueID.MatchString(v.ClusterID)) || (v.LockTable != "" && !storageLockTable.MatchString(v.LockTable)))) {
+				return errors.New("clustered iSCSI needs cluster ID, lock table and three to five eligible hosts")
+			}
+		} else if v.Mode != "" && v.Mode != "exclusive" {
+			return errors.New("iSCSI mode must be exclusive or clustered_gfs2")
+		} else if !v.ExclusiveTarget || v.ClusterID != "" || v.LockTable != "" || len(v.EligibleHostIDs) != 0 {
+			return errors.New("exclusive iSCSI needs exclusive-target attestation only")
 		}
 		if allowResolvedPath {
 			if !storagePath(v.MountPath) || (s.Path != "" && (!storagePath(s.Path) || s.Path != v.MountPath)) {
@@ -300,6 +324,31 @@ func validateStorageRegistration(s StorageRegistration, allowEmptyID, allowResol
 		return errors.New("storage kind must be local, nfs, zfs, smb or iscsi")
 	}
 	return nil
+}
+
+// IsPoolSharedStorage identifies source types that may legitimately be prepared on
+// more than one Core. It is not a VM execution lease: callers still authorize a
+// single writable VM owner through the pool master.
+func IsPoolSharedStorage(s StorageRegistration) bool {
+	return s.StorageKind() == StorageKindNFS || s.StorageKind() == StorageKindSMB || IsClusteredISCSI(s)
+}
+
+func IsClusteredISCSI(s StorageRegistration) bool {
+	return s.StorageKind() == StorageKindISCSI && s.Source.ISCSI != nil && s.Source.ISCSI.Mode == "clustered_gfs2"
+}
+
+func validEligibleHosts(hosts []string) bool {
+	if len(hosts) < 3 || len(hosts) > 5 {
+		return false
+	}
+	seen := make(map[string]bool, len(hosts))
+	for _, host := range hosts {
+		if !storageOpaqueID.MatchString(host) || seen[host] {
+			return false
+		}
+		seen[host] = true
+	}
+	return true
 }
 
 func (s StorageSource) count() int {

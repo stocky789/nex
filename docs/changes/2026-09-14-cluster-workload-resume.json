@@ -1,0 +1,36 @@
+{
+  "summary": "Correct retained workload markers, adopted failed-create evidence and master-outage admission error handling (BUG-0160/0161/0162).",
+  "paths": [
+    "tests/integration/cluster_storage_workloads.py",
+    "tests/test_cluster_storage_workloads.py",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-14-cluster-storage-reliability.md",
+    "docs/plans/2026-09-12-concurrent-pool-storage.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Disposable lab harness corrections; product operator workflows are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "BUG-0160 API impact: none, test marker ordering only. BUG-0161 API impact: existing contract, consuming existing Controller-adopted Core outcomes without changing any endpoint/schema. BUG-0162 consumes the exact existing master inventory connection-refusal error.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Completes existing acceptance tooling; no new product capability.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No product durable state; private workload receipts remain test evidence."
+  },
+  "verification": {
+    "method": "Native checkpoint rejection reproduced before writer/outage work. Original producer/poller failed three isolated regressions; original exclusion guard failed adopted-absence regression. Fixed public 55/private nine tests, full Python discovery 242 and independent review passed. Corrected native acceptance remains open. BUG-0162 original guard failed its new exact-refusal regression; fixed public suite passed 56 tests and independent review approved. The corrected diagnostic native master-agent outage passed six-writer continuity, refused admission, recovered reconciliation and independent complete-payload hashes/rereads; general reconciliation reliability remains open. See QA for timestamp audit limits.",
+    "evidence": [
+      "docs/qa/2026-09-14-cluster-storage-reliability.md",
+      "tests/test_cluster_storage_workloads.py"
+    ]
+  }
+}

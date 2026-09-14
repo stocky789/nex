@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"nex.local/nex/internal/protocol"
 )
@@ -19,9 +20,11 @@ import (
 const discoveryLimit = 64
 
 var (
-	discoveryMounts    = func() (*os.File, error) { return os.Open("/proc/mounts") }
-	discoveryName      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
-	discoveryLocalSafe = localStorage
+	discoveryMounts       = func() (*os.File, error) { return os.Open("/proc/mounts") }
+	discoveryNFSLine      = regexp.MustCompile(`^d[-rwxstST]{9}\s+\d+\s+\d+\s+\d+\s+\d+\s+(.+)$`)
+	discoverySMBLine      = regexp.MustCompile(`^\s*(.+?)\s+([A-Z]+)\s+\d+\s+`)
+	discoverySMBShareName = regexp.MustCompile(`^[\pL\pN][\pL\pN ._$:()\-]{0,253}$`)
+	discoveryLocalSafe    = localStorage
 )
 
 // DiscoverStorage performs transient observations only: it does not mount, log in or persist data.
@@ -116,11 +119,11 @@ func discoverNFS(ctx context.Context, r protocol.StorageDiscoveryRequest) ([]pro
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			fields := strings.Fields(line)
-			if len(fields) == 0 || !strings.HasPrefix(fields[0], "d") || !discoveryName.MatchString(fields[len(fields)-1]) {
+			directory, ok := discoveryNFSDirectory(line)
+			if !ok {
 				continue
 			}
-			out = append(out, protocol.StorageDiscoveryCandidate{Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: r.Server, Export: r.Path, Directory: fields[len(fields)-1]}}, Path: r.Path + "/" + fields[len(fields)-1], Browsable: true})
+			out = append(out, protocol.StorageDiscoveryCandidate{Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: r.Server, Export: r.Path, Directory: directory}}, Path: r.Path + "/" + directory, Browsable: true})
 			if len(out) == discoveryLimit {
 				break
 			}
@@ -183,7 +186,7 @@ func discoverSMB(ctx context.Context, r protocol.StorageDiscoveryRequest) ([]pro
 	if !ok {
 		return nil, errors.New("unsafe SMB path")
 	}
-	args = append(args, "//"+r.Server+"/"+share, "-c", "cd "+dir+"; ls")
+	args = append(args, "//"+r.Server+"/"+share, "-D", dir, "-c", "ls")
 	b, err := nativeRun(ctx, "smbclient", args...)
 	if err != nil {
 		return nil, err
@@ -195,8 +198,8 @@ func discoverySMBPath(v string) (string, string, bool) {
 	if len(p) == 0 {
 		return "", "", false
 	}
-	for _, x := range p {
-		if !discoveryName.MatchString(x) {
+	for i, x := range p {
+		if !discoveryComponent(x) || (i == 0 && !discoverySMBShare(x)) {
 			return "", "", false
 		}
 	}
@@ -209,7 +212,7 @@ func parseSMBShares(ctx context.Context, server, text string) []protocol.Storage
 			break
 		}
 		p := strings.Split(line, "|")
-		if len(p) < 2 || p[0] != "Disk" || !discoveryName.MatchString(p[1]) {
+		if len(p) < 2 || p[0] != "Disk" || !discoverySMBShare(p[1]) {
 			continue
 		}
 		out = append(out, protocol.StorageDiscoveryCandidate{Kind: protocol.StorageKindSMB, Source: protocol.StorageSource{SMB: &protocol.SMBStorageSource{Server: server, Share: p[1]}}, Path: "/" + p[1], Browsable: true})
@@ -222,13 +225,32 @@ func parseSMBDirectories(ctx context.Context, server, share, dir, text string) [
 		if ctx.Err() != nil || len(out) == discoveryLimit {
 			break
 		}
-		p := strings.Fields(line)
-		if len(p) < 2 || p[0] == "." || p[0] == ".." || !discoveryName.MatchString(p[0]) || !strings.Contains(line, "D") {
+		p := discoverySMBLine.FindStringSubmatch(line)
+		if len(p) != 3 || !strings.Contains(p[2], "D") || !discoveryComponent(p[1]) {
 			continue
 		}
-		out = append(out, protocol.StorageDiscoveryCandidate{Kind: protocol.StorageKindSMB, Source: protocol.StorageSource{SMB: &protocol.SMBStorageSource{Server: server, Share: share}}, Path: "/" + share + "/" + strings.TrimPrefix(dir+"/"+p[0], "/"), Browsable: true})
+		out = append(out, protocol.StorageDiscoveryCandidate{Kind: protocol.StorageKindSMB, Source: protocol.StorageSource{SMB: &protocol.SMBStorageSource{Server: server, Share: share}}, Path: "/" + share + "/" + strings.TrimPrefix(dir+"/"+p[1], "/"), Browsable: true})
 	}
 	return out
+}
+
+func discoveryNFSDirectory(line string) (string, bool) {
+	if p := discoveryNFSLine.FindStringSubmatch(line); len(p) == 2 && discoveryComponent(p[1]) {
+		return p[1], true
+	}
+	p := strings.Fields(line)
+	if len(p) == 2 && strings.HasPrefix(p[0], "d") && discoveryComponent(p[1]) {
+		return p[1], true
+	}
+	return "", false
+}
+
+func discoverySMBShare(v string) bool {
+	return strings.TrimSpace(v) == v && discoverySMBShareName.MatchString(v)
+}
+
+func discoveryComponent(v string) bool {
+	return v != "" && v != "." && v != ".." && len(v) <= 253 && !strings.ContainsAny(v, "/\\\x00\r\n") && !strings.ContainsFunc(v, unicode.IsControl)
 }
 
 func discoverISCSI(ctx context.Context, r protocol.StorageDiscoveryRequest) ([]protocol.StorageDiscoveryCandidate, error) {

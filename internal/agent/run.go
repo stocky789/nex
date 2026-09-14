@@ -12,6 +12,7 @@ import (
 	"nex.local/nex/internal/version"
 	"nex.local/nex/internal/vmhost"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -27,7 +28,13 @@ var transientStorageDiscoveries = struct {
 	byStore map[*Store][]protocol.StorageDiscoveryResult
 }{byStore: map[*Store][]protocol.StorageDiscoveryResult{}}
 
+var transientStorageClusters = struct {
+	sync.Mutex
+	byStore map[*Store][]protocol.StorageClusterResult
+}{byStore: map[*Store][]protocol.StorageClusterResult{}}
+
 const transientStorageDiscoveryLimit = 128
+const transientStorageClusterLimit = 128
 
 func drainStorageDiscoveries(s *Store) []protocol.StorageDiscoveryResult {
 	transientStorageDiscoveries.Lock()
@@ -47,6 +54,64 @@ func appendStorageDiscoveries(s *Store, results []protocol.StorageDiscoveryResul
 		}
 		transientStorageDiscoveries.byStore[s] = append(current, results...)
 	}
+}
+
+func drainStorageClusters(s *Store) []protocol.StorageClusterResult {
+	transientStorageClusters.Lock()
+	defer transientStorageClusters.Unlock()
+	out := transientStorageClusters.byStore[s]
+	delete(transientStorageClusters.byStore, s)
+	return out
+}
+func appendStorageClusters(s *Store, results []protocol.StorageClusterResult) {
+	transientStorageClusters.Lock()
+	defer transientStorageClusters.Unlock()
+	current := transientStorageClusters.byStore[s]
+	room := transientStorageClusterLimit - len(current)
+	if room > 0 {
+		if len(results) > room {
+			results = results[:room]
+		}
+		transientStorageClusters.byStore[s] = append(current, results...)
+	}
+}
+
+func resetStorageClusterProtocol(s *Store) error {
+	if !s.State.StorageClusterProtocolReady && !s.State.StorageClusterSessionMonitorProtocolReady {
+		return nil
+	}
+	s.State.StorageClusterProtocolReady = false
+	s.State.StorageClusterSessionMonitorProtocolReady = false
+	return s.Save()
+}
+
+// storageClusterResultsForController is a report-only compatibility
+// projection. Native peer state and the Core's durable operation are never
+// changed for an older Controller; it simply cannot decode the additive member
+// session-monitor field or its monitor-stage report.
+func storageClusterResultsForController(results []protocol.StorageClusterResult, sessionMonitorReady bool) []protocol.StorageClusterResult {
+	out := make([]protocol.StorageClusterResult, 0, len(results))
+	for _, result := range results {
+		copyResult := result
+		copyResult.Operations = make([]protocol.StorageClusterOperation, 0, len(result.Operations))
+		for _, operation := range result.Operations {
+			copyOperation := operation
+			copyOperation.Members = make([]protocol.StorageClusterMemberReport, 0, len(operation.Members))
+			for _, member := range operation.Members {
+				if !sessionMonitorReady && member.Stage == "monitor" {
+					continue
+				}
+				copyMember := member
+				if !sessionMonitorReady {
+					copyMember.Status.SessionMonitorReady = false
+				}
+				copyOperation.Members = append(copyOperation.Members, copyMember)
+			}
+			copyResult.Operations = append(copyResult.Operations, copyOperation)
+		}
+		out = append(out, copyResult)
+	}
+	return out
 }
 
 type RunConfig struct{ Heartbeat, ProbeInterval, ProbeTimeout time.Duration }
@@ -165,7 +230,9 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		checks = append(checks, protocol.Check{Name: "storage-credentials", Status: "failed", Error: "storage credential state is unavailable", ObservedAt: time.Now().UTC()})
 	}
 	managed.Appliances = vmhost.Deployments(ApplianceJournalDir)
-	managed.Outcomes = commandOutcomes(s.State.Journal, managed.Outcomes)
+	confirmCtx, cancelConfirm := context.WithTimeout(ctx, cfg.ProbeTimeout)
+	managed.Outcomes = confirmPoolVMUpdateOutcomes(confirmCtx, s, commandOutcomes(s.State.Journal, managed.Outcomes), managed.Storage)
+	cancelConfirm()
 	inv.Managed = managed
 	inv.Checks = append(inv.Checks, checks...)
 	completeJournal(s, inv, cfg.ProbeInterval+2*cfg.ProbeTimeout)
@@ -188,8 +255,21 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	if s.State.StorageProtocolReady {
 		capabilities = append(capabilities, "storage-repositories-v1", protocol.StorageDiscoveryCapability)
 	}
+	if s.State.StorageClusterProtocolReady {
+		capabilities = append(capabilities, protocol.StorageClusterCapability)
+	}
+	if version == protocol.Version {
+		// Offer the additive extension during every v2 preflight. An older
+		// Controller ignores it and acknowledges the base capability instead.
+		capabilities = append(capabilities, protocol.StorageClusterSessionMonitorCapability)
+	}
 	discoveries := drainStorageDiscoveries(s)
-	req := protocol.ReportRequest{Capabilities: capabilities, Version: version, Sequence: s.State.Sequence, Inventory: inv, Results: []protocol.Result{}, StorageDiscoveries: discoveries}
+	var clusters []protocol.StorageClusterResult
+	if s.State.StorageClusterProtocolReady {
+		clusters = drainStorageClusters(s)
+		clusters = storageClusterResultsForController(clusters, s.State.StorageClusterSessionMonitorProtocolReady)
+	}
+	req := protocol.ReportRequest{Capabilities: capabilities, Version: version, Sequence: s.State.Sequence, Inventory: inv, Results: []protocol.Result{}, StorageDiscoveries: discoveries, StorageClusters: clusters}
 	for id, e := range s.State.Journal {
 		if e.Status != "pending" && !e.Acknowledged {
 			req.Results = append(req.Results, protocol.Result{OperationID: id, Status: e.Status, Error: resultError(e.Error), ObservedAt: e.ObservedAt})
@@ -224,6 +304,23 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 			return persistenceError{fmt.Errorf("persist storage protocol preflight: %w", err)}
 		}
 	}
+	if response.StorageClusters != nil && (response.StorageClusters.Capability == protocol.StorageClusterCapability || response.StorageClusters.Capability == protocol.StorageClusterSessionMonitorCapability) {
+		changed := false
+		if !s.State.StorageClusterProtocolReady {
+			s.State.StorageClusterProtocolReady = true
+			changed = true
+		}
+		sessionMonitorReady := response.StorageClusters.Capability == protocol.StorageClusterSessionMonitorCapability
+		if s.State.StorageClusterSessionMonitorProtocolReady != sessionMonitorReady {
+			s.State.StorageClusterSessionMonitorProtocolReady = sessionMonitorReady
+			changed = true
+		}
+		if changed {
+			if err = s.Save(); err != nil {
+				return persistenceError{fmt.Errorf("persist clustered storage protocol preflight: %w", err)}
+			}
+		}
+	}
 	if err = redeemStorageCredentials(ctx, s, response.CredentialOffers); err != nil {
 		return persistenceError{fmt.Errorf("persist storage credential handoff: %w", err)}
 	}
@@ -244,6 +341,22 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 			appendStorageDiscoveries(s, results)
 		}(append([]protocol.StorageDiscoveryRequest(nil), response.StorageDiscoveries...))
 	}
+	if len(response.StorageClusterRequests) > 0 {
+		go func(requests []protocol.StorageClusterRequest) {
+			results := make([]protocol.StorageClusterResult, 0, len(requests))
+			for _, request := range requests {
+				if !storageClusterScopeMatches(s.State, request) {
+					continue
+				}
+				// A report ending cannot cancel Core-owned work. Execute validates and
+				// persists it before any native setup continues independently.
+				work, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				results = append(results, ExecuteStorageClusterRequest(work, s, request))
+				cancel()
+			}
+			appendStorageClusters(s, results)
+		}(append([]protocol.StorageClusterRequest(nil), response.StorageClusterRequests...))
+	}
 
 	for _, console := range response.Consoles {
 		go func(req protocol.ConsoleRequest) {
@@ -262,8 +375,107 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	return nil
 }
 
+// confirmPoolVMUpdateOutcomes prevents a successful local managed journal from
+// becoming a Controller-visible successful shared-VM definition change before
+// the pool master's exact durable record agrees. This covers both a lost
+// update-commit reply and a crash after vmhost saved its local journal but
+// before the managed worker recorded its completion. The existing define
+// recovery request is read/compare only when create is false; it rejects a
+// pending, foreign, or different master definition.
+func confirmPoolVMUpdateOutcomes(ctx context.Context, s *Store, outcomes []protocol.ManagedOutcome, storage []protocol.StorageRegistration) []protocol.ManagedOutcome {
+	// At most one current nonterminal revision per guest merits a peer round
+	// trip. Older interrupted revisions cannot be confirmed against the current
+	// master definition and remain honestly uncertain without delaying reports.
+	candidates := make(map[string]int)
+	for i := range outcomes {
+		outcome := &outcomes[i]
+		if outcome.Kind != "vm-update" || (outcome.Status != "succeeded" && outcome.Status != "failed") {
+			continue
+		}
+		entry, ok := s.State.Journal[outcome.OperationID]
+		if !ok || entry.Command == nil || entry.Command.Kind != "vm-update" || entry.Command.VM == nil {
+			outcome.Status = "needs_attention"
+			outcome.Error = "local VM update requires pool owner confirmation"
+			continue
+		}
+		// A terminal local result was already reported only after this same
+		// confirmation. Re-checking it would incorrectly turn an older completed
+		// revision into uncertainty after a later legitimate update.
+		if entry.Status == "succeeded" || entry.Status == "failed" {
+			continue
+		}
+		// Local-only VM updates never have a pool owner record. Reuse the
+		// already-read storage projection plus read-only update evidence to
+		// recognize an update that removed its last shared disk without adding a
+		// new native observation to the report path.
+		shared := vmUsesPoolSharedStorage(*entry.Command.VM, storage)
+		var failedEvidence *vmhost.VMUpdateEvidence
+		if outcome.Status == "succeeded" {
+			evidence, err := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).SuccessfulVMUpdateEvidence(ctx, entry.Command.VM.ID)
+			if err == nil && reflect.DeepEqual(evidence.Current, *entry.Command.VM) {
+				shared = shared || vmUsesPoolSharedStorage(evidence.Previous, storage)
+			}
+		} else {
+			evidence, err := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).FailedVMUpdateEvidence(ctx, entry.Command.VM.ID, outcome.OperationID, *entry.Command.VM)
+			if err == nil {
+				failedEvidence = &evidence
+				shared = shared || vmUsesPoolSharedStorage(evidence.Previous, storage)
+			}
+		}
+		if !shared {
+			continue
+		}
+		if outcome.Status == "failed" {
+			if failedEvidence == nil || poolVMUpdateRequestPeer(ctx, s, entry.Command.VM.ID, "update-abort", outcome.OperationID, nil, nil, failedEvidence) != nil {
+				outcome.Status = "needs_attention"
+				outcome.Error = "local VM update failure is pending pool owner confirmation"
+				continue
+			}
+			entry.Status, entry.Error, entry.ObservedAt = "failed", outcome.Error, time.Now().UTC()
+			s.State.Journal[outcome.OperationID] = entry
+			continue
+		}
+		if prior, ok := candidates[entry.Command.VM.ID]; ok {
+			priorEntry := s.State.Journal[outcomes[prior].OperationID]
+			if priorEntry.Command.VM.Revision >= entry.Command.VM.Revision {
+				outcome.Status, outcome.Error = "needs_attention", "local VM update requires pool owner confirmation"
+				continue
+			}
+			outcomes[prior].Status, outcomes[prior].Error = "needs_attention", "local VM update requires pool owner confirmation"
+		}
+		candidates[entry.Command.VM.ID] = i
+	}
+	for _, i := range candidates {
+		outcome := &outcomes[i]
+		entry := s.State.Journal[outcome.OperationID]
+		if err := poolVMRequestPeer(ctx, s, entry.Command.VM.ID, "define", nil, false, entry.Command.VM, nil); err != nil {
+			outcome.Status = "needs_attention"
+			outcome.Error = "local VM update succeeded but pool owner confirmation is pending"
+			continue
+		}
+		entry.Status, entry.Error, entry.ObservedAt = "succeeded", "", time.Now().UTC()
+		s.State.Journal[outcome.OperationID] = entry
+	}
+	return outcomes
+}
+
+func vmUsesPoolSharedStorage(vm protocol.VMCreateSpec, storage []protocol.StorageRegistration) bool {
+	for _, disk := range vm.Disks {
+		for _, registration := range storage {
+			if registration.ID == disk.StorageID && protocol.IsPoolSharedStorage(registration) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func storageDiscoveryScopeMatches(state State, request protocol.StorageDiscoveryRequest) bool {
 	return request.HostID == state.HostID && request.PoolID == state.PoolID
+}
+
+func storageClusterScopeMatches(state State, request protocol.StorageClusterRequest) bool {
+	return request.HostID == state.HostID && request.PoolID == state.PoolID && (request.Action == "apply" || request.Action == "status" || request.Action == "verify_fence")
 }
 
 func legacyStorageSafe(state State, managed *protocol.ManagedState, credentialsReadable bool) bool {
@@ -296,6 +508,12 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		return err
 	}
 	c.CloseIdleConnections()
+	// A stored acknowledgement belongs to the prior Controller connection. Never
+	// send a newer clustered-storage envelope until this connection acknowledges
+	// its exact capability again.
+	if err := resetStorageClusterProtocol(s); err != nil {
+		return err
+	}
 	// Pending read-only refreshes reconcile against a new sample after restart.
 	// Retain monotonic time in memory; serialized timestamps are history only.
 	for id, e := range s.State.Journal {
@@ -316,13 +534,40 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	m := NewMonitor(cfg.ProbeTimeout, NativeProbes(version.Version))
 	storage := vmhost.NewStorageMonitor(cfg.ProbeTimeout)
 	var poolReconcileRunning atomic.Bool
+	var clusterReconcileRunning atomic.Bool
 	probeCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// Cluster work is Core-owned. Run it at startup and with the existing probe
+	// cadence; a Controller report is only a transient trigger, never a worker.
+	scheduleClusterReconcile := func() {
+		if !clusterReconcileRunning.CompareAndSwap(false, true) {
+			return
+		}
+		go func() {
+			defer clusterReconcileRunning.Store(false)
+			work, done := context.WithTimeout(probeCtx, 5*time.Minute)
+			defer done()
+			// A retained peer advertisement is Core recovery work; retry it with
+			// the cluster worker, never from a Controller request.
+			_ = RetryPoolPeerOrigin(work, s)
+			membership, err := Membership(s)
+			if err != nil {
+				return
+			}
+			if membership.MasterHostID == s.State.HostID {
+				ResumeStorageClusterOperations(work, s)
+				return
+			}
+			_ = ReconcileStorageClustersFromMaster(work, s)
+		}()
+	}
+	scheduleClusterReconcile()
 	go m.WatchLibvirt(probeCtx)
 	go func() {
 		ticker := time.NewTicker(cfg.ProbeInterval)
 		defer ticker.Stop()
 		tickStorage := func() {
+			scheduleClusterReconcile()
 			managed, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(probeCtx)
 			storage.Tick(probeCtx, managed.Storage)
 			if !poolReconcileRunning.CompareAndSwap(false, true) {
@@ -330,9 +575,10 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			}
 			go func() {
 				defer poolReconcileRunning.Store(false)
-				work, done := context.WithTimeout(probeCtx, cfg.ProbeTimeout)
-				defer done()
-				_ = ReconcilePoolStorageFromMaster(work, s)
+				// Each repository gets its own bounded deadline. A single shared
+				// deadline would let one slow NFS/SMB/GFS2 access check skip every
+				// later member-access report in this pass.
+				_ = reconcilePoolStorageFromMaster(probeCtx, s, cfg.ProbeTimeout)
 			}()
 		}
 		m.Tick(probeCtx)
@@ -373,6 +619,9 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			var diskError persistenceError
 			if errors.As(err, &diskError) {
 				return err
+			}
+			if resetErr := resetStorageClusterProtocol(s); resetErr != nil {
+				return persistenceError{resetErr}
 			}
 			log.Printf("agent report: %v", err)
 			disconnected = true

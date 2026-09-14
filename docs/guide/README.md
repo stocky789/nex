@@ -37,25 +37,10 @@ Each procedure states its prerequisites, expected outcome, troubleshooting, and 
 limits. A documented procedure is not automatically a tested procedure: check its Verification
 section for the exact evidence and outstanding checks.
 
-Controller's development build includes its web GUI, administrator login, sites,
-enrollment (**Add host** by address and root password, or a manual token), observed host
-health and inventory, and read-only inventory refresh tasks.
-Pools are created automatically: each enrolled host becomes the pool master of its
-own pool, so there is no pool-creation step.
-The separate appliance slice adds local deployment and restricted VM power recovery.
-The managed-VM creation slice adds pool-owned storage repositories, VLAN or existing guest networks,
-ISO upload and creation of a stopped VM with multiple disks and network interfaces, either
-memory mode, an explicit boot order and optional autostart, with separate verification evidence.
-Editing a VM is available and has [its own page](edit-virtual-machine.md).
-Deleting a VM, managed snapshots/backups/restores,
-migrations, HA, and Docker Container Services remain **planned and unavailable**.
-Their intended behavior belongs in the
-[roadmap](../plans/2026-09-08-nex-platform.md).
+Pools are created automatically: each enrolled host becomes the pool master of its own pool.
+Deleting a VM, managed snapshots/backups/restores, migrations, HA, and Docker Container Services
+remain **planned and unavailable**; see the [roadmap](../plans/2026-09-08-nex-platform.md).
 
 The [API reference](../API.md) tracks implemented Nex interfaces separately. Build developers
 should use the [ISO build instructions](../../installer/README.md) or
 [Controller development instructions](../development.md).
-
-These are ordinary Markdown pages with relative links and stable filenames, ready for a future
-documentation website. Keep this index current when adding or retiring a procedure; preserve
-versioned release copies when publishing release documentation.

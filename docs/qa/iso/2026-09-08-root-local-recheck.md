@@ -1,50 +1,34 @@
 # Local root-only installer recheck
 
-Date: 2026-09-08. Nex Core 0.1.0-alpha1, committed source `f04721a`.
+2026-09-08, Nex Core 0.1.0-alpha1, committed source `f04721a`. Rerun of the
+[root-only installer QA](2026-09-08-root-account.md) flow; adds verification evidence only.
 
 ## Artifact and environment
 
-Rebuilt an isolated `git archive` of the committed source under
-`.cache/root-recheck-source/`. Another session edited `installer/build.sh` during the
-initial shared-tree build, which failed while reading the changing script. No shared
-source was changed by this recheck; the isolated build completed successfully.
-This report does not certify the other session's uncommitted installer changes.
+Built from an isolated `git archive` under `.cache/root-recheck-source/`: a first shared-tree build
+failed because another session edited `installer/build.sh` mid-build. This does not certify that
+session's uncommitted changes. ISO (relative to the isolated source) `dist/nex-core-0.1.0-alpha1-amd64.iso`,
+SHA256 `cea731c75dc8e904c3e02b0b9d19a4aeeb394fedca2d3baf2195d197225650d8`; checksum, Debian signature
+and base ISO checksum passed. Artifacts local and ignored by Git.
 
-ISO, relative to that isolated source:
-`dist/nex-core-0.1.0-alpha1-amd64.iso`. SHA256:
-`cea731c75dc8e904c3e02b0b9d19a4aeeb394fedca2d3baf2195d197225650d8`.
-The matching checksum check passed. Debian signature and base ISO checksum verification
-passed during the build. ISO/cache artifacts remain local and ignored by Git.
-
-Host: Linux `7.2.3-1-cachyos`, QEMU 11.1.1, KVM available. Each installation used
-its own new 24 GiB regular-file disk, two vCPUs, and no virtual NIC. No physical
-host disks were attached. Automated installation used 3 GiB RAM; interactive
-installation used 2 GiB. OVMF/TCG was used only for UEFI boot-menu inspection.
+Host Linux `7.2.3-1-cachyos`, QEMU 11.1.1, KVM. Each install: new 24 GiB file disk, 2 vCPUs, no NIC,
+no physical disks; automated 3 GiB RAM, interactive 2 GiB; OVMF/TCG only for UEFI menu inspection.
 
 ## Account screens
 
-The interactive VM booted the built image's Debian text installer kernel/initrd.
-A test-only appended initrd answered locale, keyboard, network and clock questions;
-shipping policy and hook were loaded from the ISO. Passwords and partitioning
-remained interactive. Input was sent through QEMU keyboard events and captures
-were inspected; this was a real installer in virtual hardware, not mocked UI.
+Built image's text installer kernel/initrd; test initrd answered locale, keyboard, network, clock;
+passwords and partitioning interactive via QEMU keyboard events. Captures (not committed) under
+`root-local-recheck/`; raw captures, test initrd, VM command and disk in the isolated source's
+`.cache/nex-iso/recheck-interactive/`:
 
-1. [Root password prompt](root-local-recheck/root-prompt.png) asks for the existing
-   root account's password and explicitly says no ordinary user will be created.
-2. Blank password and blank confirmation produce [Empty password](root-local-recheck/blank-error.png).
-   Continue returns to the root-password prompt.
-3. Different password and confirmation produce [Password input error](root-local-recheck/mismatch-error.png).
-   Continue returns to the root-password prompt.
-4. Matching nonempty password and confirmation advance directly to
-   [Partition disks](root-local-recheck/partition.png), with no ordinary-user questions.
+1. `root-prompt.png`: existing root account's password; says no ordinary user will be created.
+2. Blank/blank → `blank-error.png` (**Empty password**); Continue returns to the prompt.
+3. Mismatch → `mismatch-error.png` (**Password input error**); Continue returns to the prompt.
+4. Matching → `partition.png` (**Partition disks**), no ordinary-user questions.
 
-An independent reviewer inspected the prompt, both errors, both retry captures and
-partitioning capture and found no issue. Raw captures, test-only initrd, VM command
-and disposable disk are under the isolated source's `.cache/nex-iso/recheck-interactive/`.
+Independent reviewer inspected all captures: no issue.
 
 ## Automated installation and reboot
-
-From the isolated source, these commands passed:
 
 ```sh
 ./installer/check.sh
@@ -57,45 +41,24 @@ python3 tests/integration/iso-smoke.py dist/nex-core-0.1.0-alpha1-amd64.iso \
   --uefi-code /usr/share/OVMF/OVMF_CODE_4M.fd --uefi-accel tcg
 ```
 
-The dialog regression test uses the bundled Debian script with mocked debconf;
-it reproduced Debian's original blank-password fallback and passed valid input,
-blank/mismatch retries, initialization, repeat application and upstream-change rejection.
-
-The full smoke invocation exited zero uninterrupted. Logs in
-`.cache/nex-iso/recheck-smoke/` record offline installation, root password status `P`
-and no ordinary UID 1000–60000 accounts on both boots, active services, Nex identity
-surviving a base-files reinstall, nested libvirt KVM guest boot, and reboot persistence.
-BIOS and UEFI boot-menu captures were inspected. No post-install test repair was needed.
+All passed. `root-account.py` reproduced the blank-password fallback and passed its cases. Smoke
+exited zero uninterrupted with no post-install repair: logs in `.cache/nex-iso/recheck-smoke/` record
+offline install, root status `P` and no UID 1000–60000 accounts on both boots, active services,
+identity after base-files reinstall, nested KVM guest boot, reboot persistence. BIOS/UEFI menu captures inspected.
 
 ## Interactive installed login
 
-The same interactive VM completed installation after explicit selection and erase
-confirmation of its sole disposable `vda` disk. GRUB was installed to that disk.
-After the installer completed and shut down on its reboot request, the VM booted
-from the installed disk with the ISO and test initrd removed.
+The interactive VM installed after explicit selection and erase confirmation of its sole `vda` disk
+(GRUB on it), then booted from disk with ISO and test initrd removed. Root console login with the
+typed password succeeded; `id` returned `uid=0(root) gid=0(root) groups=0(root)`.
+`root-local-recheck/accounts.png` (not committed) shows the login, `id` and full `/etc/passwd`: root plus
+Debian system/service accounts, no ordinary account. No password reset or account change; both VMs powered off.
 
-Local console login as `root` succeeded using the unchanged password typed into
-the installer. `id` returned `uid=0(root) gid=0(root) groups=0(root)`.
-The [authenticated account inventory](root-local-recheck/accounts.png) shows the
-successful login, `id`, and complete `/etc/passwd`: root plus Debian system/service
-accounts, with no ordinary account. No password reset or account modification was
-used. The VM was shut down with `poweroff`; both test installations are stopped.
-
-The documentation structure check (`python3 scripts/check_docs.py --all`) passed.
-Committed-range coverage was not run: this report is uncommitted and other work
-is active in the shared checkout. No hosted CI result is claimed.
-
-Independent final review checked this report, its assessment, the authenticated
-account capture and installation/boot log markers; no findings remained.
+`check_docs.py --all` passed; range coverage and hosted CI not run. Independent final review of report,
+assessment, account capture and log markers: no findings.
 
 ## Scope
 
-API impact: **none** — test rerun of ISO → Debian account setup → local OS credentials;
-no Controller operation, Core agent command/result or client API is changed.
-Guide impact: **none** — existing root-password and local-console instructions remain
-unchanged; this report adds verification evidence only.
-
-This verifies virtual hardware only. Physical hardware, UEFI installation, Secure
-Boot, multiple-disk safety and full guest networking/data persistence remain outside
-this recheck. Root-only means the only human administrator account; required Debian
-system/service accounts remain. Root SSH remains disabled.
+Virtual hardware only. Not covered: physical hardware, UEFI installation, Secure Boot, multi-disk
+safety, guest networking/data persistence. Root-only means the only human admin account; Debian
+system/service accounts remain; root SSH disabled.

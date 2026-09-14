@@ -105,31 +105,10 @@ list the released version.
 
 ## Verification
 
-`python3 -m unittest discover -s tests -p 'test_*.py'` covers the pieces: `test_release_version.py`
-resolves the newest changelog version and its notes; `test_ci_docker.py` shows the Docker wrapper
-rewriting workspace bind mounts to the host path and refusing paths outside it; and
-`test_gitea_release.py` drives the release script against a stub server, checking it deletes the
-old release, moves the tag, creates the release as a pre-release and streams the asset bytes.
-`test_release_publish.py` still covers website publishing. All run in CI on GitHub and Gitea
-through the existing `test_*.py` discovery.
+`python3 -m unittest discover -s tests -p 'test_*.py'` covers version resolution
+(`test_release_version.py`), the Docker wrapper (`test_ci_docker.py`), release publication
+(`test_gitea_release.py`, `test_release_publish.py`) and the source-archive allowlist
+(`test_build_source.py`). One end-to-end release run published its assets; installing from that
+ISO and website publishing have not been verified. Check the source archive contents of a
+release's package before distributing it.
 
-The workspace-location step and the wrapper were exercised in a simulated container runner
-(`docker.gitea.com/runner-images:ubuntu-latest` with the workspace on a named volume and the
-host Docker socket): the step reported the volume's host path, and a builder container run
-through the wrapper read a file from a temporary input directory and wrote a file into `dist/`.
-Raw-body asset uploads named `.iso` and `.deb` were accepted by the live Gitea instance,
-including a 150 MB file, and the probe draft release was deleted afterwards.
-
-The first end-to-end run (Gitea run <redacted>, 2026-09-10) built and published `v0.1.5-alpha1` in
-21 minutes on the container runner: a 1.7 GB ISO with its checksum sidecar, a 707 MB
-`nex-core-local` package and a 131 MB `nex-controller` package, signed with the operator key
-from the secret, and the tag's creation triggered no other workflow. Installing from that
-ISO has not been re-verified. Website publishing has still never run: no ISO has been
-published to the live host, the runner's route to it is unconfirmed, and `bootstrap.sh` has
-not been applied there.
-
-The released package embeds the AGPL corresponding-source archive, and that archive was found
-to be missing a packaging file ([BUG-0045](../BUG_LEDGER.md)). `tests/test_build_source.py`
-cross-checks every packaging path a package builder installs against the archive's allowlist,
-so a future omission fails a check rather than a release. Verify the archive contents of the
-first package a release actually produces before distributing it.

@@ -1,0 +1,9 @@
+{
+  "summary": "Keep disk-selection explanations visible at 800×600 (BUG-0153). API impact: none; installer text formatting changes no API.",
+  "paths": ["installer/gui/nex-wizard.c", "tests/integration/installer-disk.py", "tests/integration/wizard-review.py", "docs/BUG_LEDGER.md", "CHANGELOG.md", "docs/changes/2026-09-13-installer-disk-explanations.json"],
+  "guide": {"impact": "none", "reason": "Existing selection, review and explicit erase-confirmation steps are unchanged; this restores visibility of existing explanations.", "pages": []},
+  "api": {"impact": "none", "reason": "API impact: none. Native installer label formatting has no Controller operation, Core command, observed-state flow or client-facing API change.", "pages": []},
+  "roadmap": {"impact": "none", "reason": "Presentation correction only; production acceptance remains open.", "pages": []},
+  "state": {"owner": "none", "reason": "No durable state or setting is introduced."},
+  "verification": {"method": "Actual seventh-ISO native regression failed on clipped text. Eighth-ISO rendering fixed both labels; an initial incorrect screenshot coordinate failed and was retained. The corrected locator was independently reviewed against actual pre/post captures. Full native wizard checks then passed at 800×600 and 1024×768, with direct ISO-extracted kernel/initrd, a preparation-observation marker, new disposable file disks, visible target review and unchecked erase refusal. Root inspected captures. Installer-disk, installer-check, Python compilation and privacy checks passed. Both CI providers run existing suites; hosted CI and eighth-ISO full installation remain unexecuted.", "evidence": ["tests/integration/installer-disk.py", "tests/integration/wizard-review.py", "docs/BUG_LEDGER.md"]}
+}

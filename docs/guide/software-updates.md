@@ -4,9 +4,7 @@
 
 Available in Nex Core / Controller development builds (alpha) that include
 the Updates APIs and packaged installers. Both packages ship the Nex archive signing
-key and configure the signed APT source, so updates are signature-verified. GUI
-walkthrough evidence is not yet recorded, and no host has yet taken an update that
-pulls a new dependency — the case apt-based updates exist to handle.
+key and configure the signed APT source, so updates are signature-verified.
 
 ## Prerequisites
 
@@ -47,8 +45,7 @@ Controller host page **Version** field; that package version is the only Nex Cor
   Check `repo_url`, then `apt policy nex-core-local` on the host.
 - "No newer … available" means apt found nothing to upgrade; the installed version is
   already the candidate.
-- Controller cannot run `apt` inside its own service (`ProtectSystem=strict`,
-  `NoNewPrivileges`); the privileged update path unit must be enabled so the helper can.
+- Controller applies updates through a privileged helper; its update path unit must be enabled.
 - Appliance images and new Core deploys include the update helper so **Update** works
   after deploy. Older Controller VMs without that helper need a redeploy (or a one-time
   `nex-controller` package install).
@@ -60,12 +57,7 @@ Controller host page **Version** field; that package version is the only Nex Cor
 
 ## Verification
 
-The [single Nex Core version checks](../qa/single-nex-core-version.md) record the package
-identity path (real `dpkg` into a temporary root, labeled simulation) and the Controller host
-page showing one **Version** row; no installed host has yet taken an update with this change.
+Automated API tests cover check/apply and apt failures; package identity was checked in a
+labeled simulation. A browser walkthrough and an on-host upgrade pulling a new dependency are
+outstanding. See the [single Nex Core version checks](../qa/single-nex-core-version.md).
 
-Automated API tests cover check/apply scheduling, that apply invokes `apt` and never
-`dpkg -i`, that a failing apt run surfaces its own message, and that an apply which did
-not advance the installed version is reported as failed. Browser walkthrough against a
-live update repo, and an on-host upgrade that actually pulls a new dependency, are
-both outstanding.

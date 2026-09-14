@@ -98,6 +98,7 @@
       done: [],
       open: [
         "Snapshots: create, list, revert and delete, covering every supported disk and the matching VM configuration, and recovering cleanly when a snapshot or its consolidation is interrupted",
+        "VM disk snapshots through QEMU/libvirt on validated disk-format and storage combinations, without requiring ZFS or Btrfs",
         "Backup repositories on storage separate from the VMs they protect, with their own credentials",
         "Full backups of stopped guests first, then running guests through libvirt's backup support, each with checksums and a manifest that can stand on its own",
         "Schedules, retention, bandwidth limits and per-VM overrides, with missed runs recorded rather than hidden",
@@ -112,6 +113,8 @@
       done: [],
       open: [
         "Moving a stopped VM, transferring its disks when the storage is local to one host",
+        "Manual recovery after a host dies: install a replacement Core, select surviving VMs on NFS or SMB storage and boot them after restoring their configuration and proving the old host cannot still write; iSCSI requires an exclusive LUN handover",
+        "Recovering when the failed host was the pool master or the only Core, using protected VM and pool recovery records that survive on network storage rather than depending on the old host or Controller",
         "Live migration for guests on shared storage, once CPU model, firmware, machine type, networking and versions have all been checked",
         "Draining a host for maintenance and returning it to service afterwards",
         "Recovering correctly when the migration network drops mid-transfer — a timeout is never treated as a finished move",
@@ -127,6 +130,7 @@
         "Upgrading hosts that already have VMs on them, with schema migrations and a stated Controller and host compatibility window",
         "Operator and viewer roles, scoped across sites and pools, with host enrollment and credentials kept to administrators",
         "Written and rehearsed procedures for host replacement, Controller loss, storage loss and certificate recovery",
+        "Rehearsing replacement-Core VM recovery separately on NFS, SMB and supported exclusive-handover iSCSI targets, including stale old-host return and refusal when safe ownership cannot be proven",
         "Surfacing the things that matter: failed tasks, ageing backups, low capacity, degraded storage, lost hosts and expiring certificates, plus diagnostic bundles with secrets stripped out",
         "A published hardware list, checksums, package manifests and release notes"
       ]
@@ -138,10 +142,14 @@
       done: [],
       open: [
         "High availability per pool, with real quorum and fencing — a missing heartbeat will never be enough on its own to restart a VM somewhere else",
+        "HA and migration controlled by the active pool master, including safe master succession; returning VMs to a preferred host only when requested or explicitly enabled, with stability checks to prevent repeated moves",
+        "Repeated disaster-recovery, fencing and failback tests under partitions, master loss and stale-host return, with independent safety review before any supported reliability claim",
         "Container Services: Docker Swarm inside Nex-managed node VMs, deployed and operated from Controller rather than over SSH",
         "Guided passthrough of physical hardware to a VM",
         "Templates, clones, cloud-init and creating several VMs at once",
         "Ceph storage, once the NFS path is solid",
+        "Changed-block tracking (CBT) and incremental backups after full restores are proven, with safe full-backup fallback if tracking is lost and retention that preserves complete restore chains",
+        "Storage-native ZFS and Btrfs snapshot integration, with separate lifecycle and recovery tests; evaluate native send/receive for off-host copies",
         "An optional, off-by-default MCP server so an authorized AI agent can use the same Controller operations a person would"
       ]
     }

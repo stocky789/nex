@@ -32,6 +32,10 @@
 <li><a href="#listStorageRegistration">GET /api/v1/storage</a></li>
 <li><a href="#createStorageRegistration">POST /api/v1/storage</a></li>
 <li><a href="#discoverStorage">POST /api/v1/storage/discover</a></li>
+<li><a href="#getStorageCluster">GET /api/v1/storage/cluster</a></li>
+<li><a href="#applyStorageCluster">POST /api/v1/storage/cluster/apply</a></li>
+<li><a href="#verifyStorageClusterFence">POST /api/v1/storage/cluster/verify-fence</a></li>
+<li><a href="#offerStorageClusterCredential">POST /api/v1/storage/cluster/credentials</a></li>
 <li><a href="#updateStorageRepository">POST /api/v1/storage/{id}/update</a></li>
 <li><a href="#recheckStorageRepository">POST /api/v1/storage/{id}/recheck</a></li>
 <li><a href="#detachStorageRepository">POST /api/v1/storage/{id}/detach</a></li>
@@ -58,6 +62,14 @@
 <li><a href="#updateVM">PUT /api/v1/vms/{id}</a></li>
 <li><a href="#downloadMedia">POST /api/v1/media/download</a></li>
 </ul></nav>
+<section><h2>refresh-inventory</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;payload&quot;: &quot;None: only operation_id and kind. Created by POST /api/v1/hosts/{id}/operations with a stable request_id; at most one queued or dispatched refresh per host.&quot;,
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Read-only request for a fresh host inventory sample. Core journals it as pending without a managed payload and completes it succeeded when a probe inventory observed after admission is reported, or failed with &#x27;fresh host inventory unavailable before probe deadline&#x27;. A pending refresh restarts its deadline after agent restart so it reconciles against a new sample. Delivered without the managed capability. A repeated operation_id is ignored as already admitted, including for legacy journal entries without a stored command; no effects are repeated.&quot;
+}</pre></section>
 <section><h2>pool-member-join</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
   &quot;payload&quot;: {
@@ -76,7 +88,24 @@
   &quot;result&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
-  &quot;semantics&quot;: &quot;Master-directed reconciliation for one NFS or SMB repository. The addressed member pulls the master record over pinned TLS 1.3 peer mTLS, stores an SMB secret only in its own Core credential state, journals native preparation, verifies QEMU access and a cross-Core non-blocking lock, then posts its generation-bound access observation. Before member VM/media work it reserves the current repository generation at the master; failed local work releases that reservation, while a durable definition retains it until the healthy serialized member journal proves it unused. Master source/credential/detach mutations write a Core-owned marker and fail closed while reservations exist. Local ZFS, ordinary iSCSI and generic native disks remain local and are refused/no fencing applies. Controller does not authorize membership, receive SMB secret bytes, or drive retries.&quot;
+  &quot;semantics&quot;: &quot;Master-directed reconciliation for one NFS or SMB repository. The addressed member pulls the master record over pinned TLS 1.3 peer mTLS, stores an SMB secret only in its own Core credential state, journals native preparation, verifies QEMU access and a cross-Core non-blocking lock, then posts its generation-bound access observation. Before member VM/media work it reserves the current repository generation at the master; failed local work releases that reservation, while a durable definition retains it until the healthy serialized member journal proves it unused. Master source/credential/detach mutations write a Core-owned marker and fail closed while reservations exist. Local ZFS, ordinary iSCSI and generic native disks remain local and are refused/no fencing applies. Controller does not authorize membership, receive SMB secret bytes, or drive retries.&quot;,
+  &quot;peer_lock&quot;: {
+    &quot;transport&quot;: &quot;POST/DELETE /api/v1/pool/storage/{repository_id}/lock on the Core-peer listener&quot;,
+    &quot;security&quot;: &quot;Pinned TLS 1.3 mTLS; current authenticated pool member. POST checks repository eligibility and generation. Lease ownership is bound to the authenticated member, repository, generation, challenge and mode.&quot;,
+    &quot;parameters&quot;: {
+      &quot;generation&quot;: &quot;Current repository generation&quot;,
+      &quot;challenge&quot;: &quot;32 hexadecimal characters, generated randomly per attempt&quot;,
+      &quot;probe_mode&quot;: &quot;Optional challenge-byte-v1; absent means legacy byte zero&quot;
+    },
+    &quot;acknowledgement&quot;: &quot;204; challenge-byte-v1 POST echoes X-Nex-Pool-Probe-Mode: challenge-byte-v1. Missing echo selects legacy byte zero; a different nonempty echo fails closed.&quot;,
+    &quot;semantics&quot;: &quot;A nonzero one-byte OFD range derived from the challenge on .nex-peer-lock isolates simultaneous proofs. Only EAGAIN/EACCES establish conflict; after DELETE the member must acquire the same range. A rare range collision fails closed. Unknown modes and malformed challenges are rejected; unavailable generation or lock returns failure. Leases expire after ten seconds and are not VM ownership or fencing authority.&quot;,
+    &quot;compatibility&quot;: &quot;New master supports legacy byte-zero requests. New member falls back to byte zero when an old master omits the acknowledgement, retaining the legacy contention limitation. Core retries periodically with a fresh challenge; no Controller retry job or new durable state.&quot;,
+    &quot;offset&quot;: &quot;SHA-256 of decoded 16-byte challenge; big-endian uint64 of first eight digest bytes, AND ((1&lt;&lt;63)-2), then add one. Byte zero is reserved for legacy peers.&quot;,
+    &quot;lease_limit&quot;: {
+      &quot;active&quot;: 64,
+      &quot;at_capacity&quot;: &quot;New leases return lock-unavailable conflict; exact held-lease replay remains idempotent. Release or ten-second expiry frees capacity.&quot;
+    }
+  }
 }</pre></section>
 <section><h2>storage-register</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -1523,12 +1552,12 @@
   }
 }</pre></details></section>
 <section id="reportHost"><h2>POST <code>/api/v1/agent/report</code></h2>
-<p>Report observations and reconcile commands</p><p>Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Versions 1 and 2 are accepted; version 2 starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409, foreign/unknown operation IDs return 400. Terminal results are acknowledged without rewriting the original outcome. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects. Upgrade Controller before Core because older Controllers reject the new fields.</p>
+<p>Report observations and reconcile commands</p><p>Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Versions 1 and 2 are accepted; version 2 starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Clustered storage has its own v2 acknowledgement: a Core sends neither clustered results nor storage-clustered-iscsi-v2 until it receives storage_clusters_support with that exact capability. The Controller sends that acknowledgement on every v2 preflight. A newly reconnected Core may offer the session-monitor preflight while withholding storage-clustered-iscsi-v2; before its acknowledged follow-up report, Controller clustered routes return retryable 503 negotiation pending without dispatching work or falling back. Core resets this readiness on start, Controller replacement/enrollment and report disconnect, so an older strict Controller sees only the clean preflight; queued Core results remain durable until a matching Controller acknowledges. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409, foreign/unknown operation IDs return 400. Terminal results are acknowledged without rewriting the original outcome. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;reportHost&quot;,
   &quot;summary&quot;: &quot;Report observations and reconcile commands&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Versions 1 and 2 are accepted; version 2 starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409, foreign/unknown operation IDs return 400. Terminal results are acknowledged without rewriting the original outcome. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects. Upgrade Controller before Core because older Controllers reject the new fields.&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Versions 1 and 2 are accepted; version 2 starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Clustered storage has its own v2 acknowledgement: a Core sends neither clustered results nor storage-clustered-iscsi-v2 until it receives storage_clusters_support with that exact capability. The Controller sends that acknowledgement on every v2 preflight. A newly reconnected Core may offer the session-monitor preflight while withholding storage-clustered-iscsi-v2; before its acknowledged follow-up report, Controller clustered routes return retryable 503 negotiation pending without dispatching work or falling back. Core resets this readiness on start, Controller replacement/enrollment and report disconnect, so an older strict Controller sees only the clean preflight; queued Core results remain durable until a matching Controller acknowledges. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409, foreign/unknown operation IDs return 400. Terminal results are acknowledged without rewriting the original outcome. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects.&quot;,
   &quot;tags&quot;: [
     &quot;Core agent \u2192 Controller&quot;
   ],
@@ -2446,13 +2475,266 @@
     }
   }
 }</pre></details></section>
+<section id="getStorageCluster"><h2>GET <code>/api/v1/storage/cluster</code></h2>
+<p>Read Core-owned clustered iSCSI status</p><p>Administrator session required. pool_id selects its current active master, which must have acknowledged and advertise storage-clustered-iscsi-v2. During a new Core&#x27;s bounded v2 preflight, 503 means negotiation is pending: no status relay was sent, so retry after the acknowledged follow-up report. A Core that never offers clustered support remains 409. The Controller forwards one transient status request only after acknowledgement and retains no cluster configuration, job or secret. A 200 is the Core&#x27;s current durable operation projection; a 504 means the Core did not answer within 30 seconds and is ambiguous, so retry this GET rather than assuming setup stopped. The Controller HTTPS write deadline is 45 seconds only to leave delivery margin for this existing 30-second relay contract; it does not extend Core work.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;getStorageCluster&quot;,
+  &quot;summary&quot;: &quot;Read Core-owned clustered iSCSI status&quot;,
+  &quot;description&quot;: &quot;Administrator session required. pool_id selects its current active master, which must have acknowledged and advertise storage-clustered-iscsi-v2. During a new Core&#x27;s bounded v2 preflight, 503 means negotiation is pending: no status relay was sent, so retry after the acknowledged follow-up report. A Core that never offers clustered support remains 409. The Controller forwards one transient status request only after acknowledgement and retains no cluster configuration, job or secret. A 200 is the Core&#x27;s current durable operation projection; a 504 means the Core did not answer within 30 seconds and is ambiguous, so retry this GET rather than assuming setup stopped. The Controller HTTPS write deadline is 45 seconds only to leave delivery margin for this existing 30-second relay contract; it does not extend Core work.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;pool_id&quot;,
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Core status projection.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterResult&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid pool_id.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Administrator session required.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Pool has no fresh capable master or does not support clustered storage.&quot;
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller scope lookup failed before relay.&quot;
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;A new Core is awaiting clustered-storage capability acknowledgement; no relay was sent. Retry after the next Core report.&quot;
+    },
+    &quot;504&quot;: {
+      &quot;description&quot;: &quot;No Core report before the deadline; body is needs_attention and completion is unknown.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="applyStorageCluster"><h2>POST <code>/api/v1/storage/cluster/apply</code></h2>
+<p>Start Core-owned clustered GFS2 iSCSI setup</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. The Controller selects the active capable pool master and relays this request only in memory. The Core persists and executes the job; a 200 only confirms the Core accepted/reported its current operation, not a healthy cluster. Same request_id with changed input conflicts at Core. Controller discards supplied mount/device paths and Core derives them from the validated iSCSI identity. The request cannot create formatting, arbitrary fence commands or Controller-held secrets. The Controller&#x27;s 45-second HTTPS write deadline only leaves delivery margin for the unchanged 30-second relay deadline; it does not extend Core work.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;applyStorageCluster&quot;,
+  &quot;summary&quot;: &quot;Start Core-owned clustered GFS2 iSCSI setup&quot;,
+  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. The Controller selects the active capable pool master and relays this request only in memory. The Core persists and executes the job; a 200 only confirms the Core accepted/reported its current operation, not a healthy cluster. Same request_id with changed input conflicts at Core. Controller discards supplied mount/device paths and Core derives them from the validated iSCSI identity. The request cannot create formatting, arbitrary fence commands or Controller-held secrets. The Controller&#x27;s 45-second HTTPS write deadline only leaves delivery margin for the unchanged 30-second relay deadline; it does not extend Core work.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterApplyRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Core operation projection.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterResult&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed, unknown, or inconsistent request.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Administrator session required.&quot;
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Duplicate active request, stale/ineligible pool state, or missing/unsupported capable master.&quot;
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller scope lookup failed before relay.&quot;
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Clustered-storage capability negotiation is pending; no native work was relayed. Retry after the next Core report.&quot;
+    },
+    &quot;504&quot;: {
+      &quot;description&quot;: &quot;No Core report before the deadline; body is needs_attention and durable Core work may continue.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="verifyStorageClusterFence"><h2>POST <code>/api/v1/storage/cluster/verify-fence</code></h2>
+<p>Ask Core to verify one cluster fence</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. request_id identifies the destructive attempt; host_id is the target, and fence_confirmation must be exactly FENCE &lt;host_id&gt;. The Controller validates target capability and relays the confirmation transiently to the pool master. It creates no durable fence intent. An immediate accepted response is not a proof: Core records its durable cluster operation as verifying_fence with a request-bound unverified pending proof, and performs the actual exclusion observation only at the executor. Browser input cannot claim a proof. An early failed observation is uncertain. The unchanged relay deadline is 30 seconds; the Controller&#x27;s 45-second HTTPS write deadline only leaves response-delivery margin. A timeout is ambiguous: the UI closes the dialog and disables that target until a successful Core status refresh, without automatic retry. A refreshed failed or uncertain proof may be manually reverified only with a new request_id and a new exact confirmation; Core retains the prior proof. A pending unverified proof remains disabled. This is existing recovery behavior, not a new interface.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;verifyStorageClusterFence&quot;,
+  &quot;summary&quot;: &quot;Ask Core to verify one cluster fence&quot;,
+  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. request_id identifies the destructive attempt; host_id is the target, and fence_confirmation must be exactly FENCE &lt;host_id&gt;. The Controller validates target capability and relays the confirmation transiently to the pool master. It creates no durable fence intent. An immediate accepted response is not a proof: Core records its durable cluster operation as verifying_fence with a request-bound unverified pending proof, and performs the actual exclusion observation only at the executor. Browser input cannot claim a proof. An early failed observation is uncertain. The unchanged relay deadline is 30 seconds; the Controller&#x27;s 45-second HTTPS write deadline only leaves response-delivery margin. A timeout is ambiguous: the UI closes the dialog and disables that target until a successful Core status refresh, without automatic retry. A refreshed failed or uncertain proof may be manually reverified only with a new request_id and a new exact confirmation; Core retains the prior proof. A pending unverified proof remains disabled. This is existing recovery behavior, not a new interface.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterFenceRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Immediate Core accepted lifecycle response; it does not itself establish a fence proof. Reconcile the durable verifying_fence operation and its request-bound proof through status.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterResult&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed input or confirmation does not exactly name the target.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Administrator session required.&quot;
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Target or master is not an active capable Core.&quot;
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller scope lookup failed before relay.&quot;
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Clustered-storage capability negotiation is pending; no fence request was relayed. Retry after the next Core report.&quot;
+    },
+    &quot;504&quot;: {
+      &quot;description&quot;: &quot;No Core report before deadline; fence outcome is unknown.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="offerStorageClusterCredential"><h2>POST <code>/api/v1/storage/cluster/credentials</code></h2>
+<p>Deliver a one-time clustered-storage credential to Core</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Delivers a CHAP secret, BMC password, or SSH private key only to the selected capable pool master through the existing authenticated one-time offer path. The Controller retains bytes only through redemption/acknowledgement (or its 15-second expiry), then zeroes them; it persists neither a secret nor receipt. Apply later names only a secret-free credential request reference. Retry the same request_id after 503 to reconcile unknown delivery.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;offerStorageClusterCredential&quot;,
+  &quot;summary&quot;: &quot;Deliver a one-time clustered-storage credential to Core&quot;,
+  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Delivers a CHAP secret, BMC password, or SSH private key only to the selected capable pool master through the existing authenticated one-time offer path. The Controller retains bytes only through redemption/acknowledgement (or its 15-second expiry), then zeroes them; it persists neither a secret nor receipt. Apply later names only a secret-free credential request reference. Retry the same request_id after 503 to reconcile unknown delivery.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterCredentialRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Master Core acknowledged the one-time handoff.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterCredentialAccepted&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed, oversized, or invalid scoped credential.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Administrator session required.&quot;
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Replay conflict, invalid target scope, or no fresh capable master.&quot;
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Either capability negotiation is pending (no offer was created; retry after the next Core report) or an offered credential was not acknowledged before expiry (delivery is unknown; reconcile with the same request_id).&quot;
+    }
+  }
+}</pre></details></section>
 <section id="updateStorageRepository"><h2>POST <code>/api/v1/storage/{id}/update</code></h2>
-<p>Update a storage repository</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Queues an update after Core&#x27;s current generation matches expected_generation. A name-only update is metadata-only and preserves the existing credential without reconnecting the backend. A source update uses the full dependency guard. Credential-only rotation is allowed while attached only when every referring VM is shut off and no pending or needs_attention disk, media or ISO work refers to the repository. Core revalidates source and receipt, journals before native effects, and reports generation/access. If rollback cannot be proven, the result is needs_attention, never a safe failed update. 202 is acceptance, not mount readiness; identical request_id replays and changed input is 409.</p>
+<p>Update a storage repository</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Queues an update after Core&#x27;s current generation matches expected_generation. A name-only update is metadata-only and preserves the existing credential without reconnecting the backend for non-clustered repositories. A source update uses the full dependency guard. Credential-only rotation is allowed while attached only when every referring VM is shut off and no pending or needs_attention disk, media or ISO work refers to the repository. Generic updates, including a rename, are refused for source.iscsi.mode clustered_gfs2 as a failed Core operation: clustered iSCSI updates require a coordinated Core cluster operation. No coordinated cluster update API exists. Core revalidates source and receipt, journals before native effects, and reports generation/access. If rollback cannot be proven, the result is needs_attention, never a safe failed update. 202 is acceptance, not mount readiness; identical request_id replays and changed input is 409.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;updateStorageRepository&quot;,
   &quot;summary&quot;: &quot;Update a storage repository&quot;,
-  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Queues an update after Core&#x27;s current generation matches expected_generation. A name-only update is metadata-only and preserves the existing credential without reconnecting the backend. A source update uses the full dependency guard. Credential-only rotation is allowed while attached only when every referring VM is shut off and no pending or needs_attention disk, media or ISO work refers to the repository. Core revalidates source and receipt, journals before native effects, and reports generation/access. If rollback cannot be proven, the result is needs_attention, never a safe failed update. 202 is acceptance, not mount readiness; identical request_id replays and changed input is 409.&quot;,
+  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Queues an update after Core&#x27;s current generation matches expected_generation. A name-only update is metadata-only and preserves the existing credential without reconnecting the backend for non-clustered repositories. A source update uses the full dependency guard. Credential-only rotation is allowed while attached only when every referring VM is shut off and no pending or needs_attention disk, media or ISO work refers to the repository. Generic updates, including a rename, are refused for source.iscsi.mode clustered_gfs2 as a failed Core operation: clustered iSCSI updates require a coordinated Core cluster operation. No coordinated cluster update API exists. Core revalidates source and receipt, journals before native effects, and reports generation/access. If rollback cannot be proven, the result is needs_attention, never a safe failed update. 202 is acceptance, not mount readiness; identical request_id replays and changed input is 409.&quot;,
   &quot;security&quot;: [
     {
       &quot;AdminSession&quot;: []
@@ -2593,12 +2875,12 @@
   }
 }</pre></details></section>
 <section id="detachStorageRepository"><h2>POST <code>/api/v1/storage/{id}/detach</code></h2>
-<p>Detach a storage repository</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Core checks expected_generation and applies the full dependency guard, including VM disks, retained disks, ISO media and pending or needs_attention disk/media work. A successful detach removes only Nex-owned configuration; it never formats or deletes backing data. If side-effect rollback is uncertain, Core reports needs_attention rather than a safe failure. 202 is not proof that unmount completed.</p>
+<p>Detach a storage repository</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Core checks expected_generation and applies the full dependency guard, including VM disks, retained disks, ISO media and pending or needs_attention disk/media work. A successful detach removes only Nex-owned configuration; it never formats or deletes backing data. Generic detach of source.iscsi.mode clustered_gfs2 is a failed Core operation before native commands: clustered iSCSI detach requires a coordinated Core cluster teardown. No coordinated teardown API exists. If side-effect rollback is uncertain, Core reports needs_attention rather than a safe failure. 202 is not proof that unmount completed.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;detachStorageRepository&quot;,
   &quot;summary&quot;: &quot;Detach a storage repository&quot;,
-  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Core checks expected_generation and applies the full dependency guard, including VM disks, retained disks, ISO media and pending or needs_attention disk/media work. A successful detach removes only Nex-owned configuration; it never formats or deletes backing data. If side-effect rollback is uncertain, Core reports needs_attention rather than a safe failure. 202 is not proof that unmount completed.&quot;,
+  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Core checks expected_generation and applies the full dependency guard, including VM disks, retained disks, ISO media and pending or needs_attention disk/media work. A successful detach removes only Nex-owned configuration; it never formats or deletes backing data. Generic detach of source.iscsi.mode clustered_gfs2 is a failed Core operation before native commands: clustered iSCSI detach requires a coordinated Core cluster teardown. No coordinated teardown API exists. If side-effect rollback is uncertain, Core reports needs_attention rather than a safe failure. 202 is not proof that unmount completed.&quot;,
   &quot;security&quot;: [
     {
       &quot;AdminSession&quot;: []
@@ -6154,7 +6436,7 @@
         &quot;x-max-utf8-bytes&quot;: 100
       },
       &quot;maxItems&quot;: 32,
-      &quot;description&quot;: &quot;Advertised on every report. managed-vm-v1 enables managed command delivery. Omission or null disables managed delivery for this report; a newer sequence also replaces stored capabilities.&quot;
+      &quot;description&quot;: &quot;Advertised on every report. managed-vm-v1 enables managed command delivery. storage-cluster-session-monitor-v1 offers the additive clustered session-monitor projection; it must be acknowledged through storage_clusters_support before Core sends that projection. Omission or null disables managed delivery for this report; a newer sequence also replaces stored capabilities.&quot;
     },
     &quot;storage_discoveries&quot;: {
       &quot;type&quot;: [
@@ -6165,6 +6447,16 @@
         &quot;$ref&quot;: &quot;#/components/schemas/StorageDiscoveryResult&quot;
       },
       &quot;description&quot;: &quot;One-shot sanitized results from prior report-response discovery requests. Never journaled or adopted.&quot;
+    },
+    &quot;storage_clusters&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterResult&quot;
+      },
+      &quot;description&quot;: &quot;Transient results for addressed clustered-storage requests, emitted only after the exact v2 storage_clusters_support acknowledgement. session_monitor_ready and monitor-stage members are included only after the offered storage-cluster-session-monitor-v1 extension is acknowledged. The result exposes Core-owned durable operation state but is not Controller state.&quot;
     }
   },
   &quot;required&quot;: [
@@ -6177,7 +6469,7 @@
     &quot;sequence&quot;: 1,
     &quot;results&quot;: []
   },
-  &quot;description&quot;: &quot;Version and sequence are required by runtime validation. Results may be omitted or null and defaults to no results. Inventory may be omitted or null for heartbeat only. Controller/Core development builds upgrade together for storage protocol v2; version-one reports retain existing non-storage behavior.&quot;,
+  &quot;description&quot;: &quot;Version and sequence are required by runtime validation. Results may be omitted or null and defaults to no results. Inventory may be omitted or null for heartbeat only. Clustered results and storage-clustered-iscsi-v2 are withheld until this Controller connection acknowledges storage_clusters_support. The additive session-monitor members are withheld unless the Core offered and the Controller acknowledged storage-cluster-session-monitor-v1. Both acknowledgements reset after a cluster preflight failure, reconnect or Controller re-enrolment. Version-one reports retain existing non-storage behavior.&quot;,
   &quot;x-go-emitted-fields&quot;: [
     &quot;version&quot;,
     &quot;sequence&quot;,
@@ -6237,6 +6529,17 @@
       ],
       &quot;description&quot;: &quot;Controller-first acknowledgement of protocol v2 storage support.&quot;
     },
+    &quot;storage_clusters_support&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterSupport&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Controller acknowledgement for the clustered v2 envelope. The base capability enables clustered results; storage-cluster-session-monitor-v1 is returned only when the Core offered it and enables the additive session-monitor report projection.&quot;
+    },
     &quot;storage_discoveries&quot;: {
       &quot;type&quot;: [
         &quot;array&quot;,
@@ -6246,6 +6549,16 @@
         &quot;$ref&quot;: &quot;#/components/schemas/StorageDiscoveryRequest&quot;
       },
       &quot;description&quot;: &quot;One-shot addressed Core observations. Controller removes each request from its bounded relay on delivery.&quot;
+    },
+    &quot;storage_clusters&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterRequest&quot;
+      },
+      &quot;description&quot;: &quot;One-shot addressed relay requests for a Core that has acknowledged and advertises storage-clustered-iscsi-v2. Controller deletes them after delivery, completion, cancellation, or deadline.&quot;
     }
   },
   &quot;required&quot;: [
@@ -6891,7 +7204,7 @@
     },
     &quot;directory&quot;: {
       &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;Validated existing relative subdirectory beneath the NFS export.&quot;
+      &quot;description&quot;: &quot;Validated existing relative subdirectory beneath the original NFS export; spaces are supported, traversal, backslashes and control characters are rejected.&quot;
     }
   },
   &quot;required&quot;: [
@@ -6928,11 +7241,12 @@
       &quot;type&quot;: &quot;string&quot;
     },
     &quot;share&quot;: {
-      &quot;type&quot;: &quot;string&quot;
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Ordinary share name: letters, numbers, internal spaces and ._$:()-; no leading/trailing whitespace or path/command/unit syntax.&quot;
     },
     &quot;directory&quot;: {
       &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;Validated existing subdirectory below the SMB share; never an SMB path.&quot;
+      &quot;description&quot;: &quot;Validated existing relative subdirectory below the SMB share, including spaces; never an SMB path. Traversal, backslashes and control characters are rejected.&quot;
     }
   },
   &quot;required&quot;: [
@@ -6965,6 +7279,30 @@
     },
     &quot;exclusive_target&quot;: {
       &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;mode&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;exclusive&quot;,
+        &quot;clustered_gfs2&quot;
+      ]
+    },
+    &quot;cluster_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;lock_table&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;eligible_host_ids&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;minItems&quot;: 3,
+      &quot;maxItems&quot;: 5
     }
   },
   &quot;required&quot;: [
@@ -6976,7 +7314,8 @@
     &quot;mount_path&quot;,
     &quot;exclusive_target&quot;
   ],
-  &quot;x-go-type&quot;: &quot;protocol.ISCSIStorageSource&quot;
+  &quot;x-go-type&quot;: &quot;protocol.ISCSIStorageSource&quot;,
+  &quot;description&quot;: &quot;exclusive is the legacy single-writer profile and needs exclusive_target. clustered_gfs2 instead requires cluster_id, lock_table and three to five unique eligible hosts, rejects exclusive_target, and only accepts an existing GFS2 filesystem; Core never formats it.&quot;
 }</pre></details>
 <details id="ISCSIStorageSourceIntent"><summary>ISCSIStorageSourceIntent</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -6999,6 +7338,30 @@
     },
     &quot;exclusive_target&quot;: {
       &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;mode&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;exclusive&quot;,
+        &quot;clustered_gfs2&quot;
+      ]
+    },
+    &quot;cluster_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;lock_table&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;eligible_host_ids&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;minItems&quot;: 3,
+      &quot;maxItems&quot;: 5
     }
   },
   &quot;required&quot;: [
@@ -7197,6 +7560,16 @@
     },
     &quot;filesystem_uuid&quot;: {
       &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;filesystem_type&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;gfs2_lock_table&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;gfs2_journals&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
     }
   },
   &quot;required&quot;: [
@@ -7206,6 +7579,606 @@
     &quot;filesystem_uuid&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.ISCSIStorageIdentity&quot;
+}</pre></details>
+<details id="StorageClusterFence"><summary>StorageClusterFence</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;redfish&quot;,
+        &quot;ipmilan&quot;,
+        &quot;virsh&quot;,
+        &quot;scsi_pr&quot;
+      ]
+    },
+    &quot;endpoint&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;target_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;credential_ref&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true
+    },
+    &quot;device_path&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;virsh_uri&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;For virsh, exactly qemu:///system or qemu+ssh://&lt;ssh_login&gt;@&lt;endpoint&gt;[:&lt;ssh_port&gt;]/system. The latter must match the pinned SSH fields; it rejects passwords, query strings, fragments and every other URI path. An omitted URI port is valid only when ssh_port is 22.&quot;
+    },
+    &quot;ssh_login&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;ssh_port&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;ssh_host_key_ref&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true
+    }
+  },
+  &quot;required&quot;: [
+    &quot;kind&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageClusterFence&quot;,
+  &quot;description&quot;: &quot;Closed Core fence profile. credential_ref and ssh_host_key_ref are opaque names for root-only Core secrets, never secret bytes; arbitrary commands and arguments are not accepted. virsh is development-only and remains unaccepted for native production use.&quot;
+}</pre></details>
+<details id="StorageClusterNode"><summary>StorageClusterNode</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;corosync_node_id&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;corosync_address&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;fence&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterFence&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;corosync_node_id&quot;,
+    &quot;corosync_address&quot;,
+    &quot;fence&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageClusterNode&quot;
+}</pre></details>
+<details id="StorageClusterFenceStatus"><summary>StorageClusterFenceStatus</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Optional stable ID of the actual destructive fence attempt. A Core verifies this binding before accepting a peer receipt.&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;unverified&quot;,
+        &quot;passed&quot;,
+        &quot;failed&quot;,
+        &quot;uncertain&quot;
+      ]
+    },
+    &quot;target_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;exclusion_verified&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;config_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;config_digest&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;status&quot;,
+    &quot;exclusion_verified&quot;,
+    &quot;config_generation&quot;,
+    &quot;config_digest&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageClusterFenceStatus&quot;,
+  &quot;description&quot;: &quot;Core-recorded result of an actual fence/exclusion observation, bound to a request ID when destructive work was attempted and to an exact configuration generation and digest.&quot;
+}</pre></details>
+<details id="StorageClusterConfig"><summary>StorageClusterConfig</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;cluster_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;lock_table&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;device_path&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;mount_path&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;nodes&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterNode&quot;
+      },
+      &quot;minItems&quot;: 3,
+      &quot;maxItems&quot;: 5
+    },
+    &quot;fence_proofs&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterFenceStatus&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;cluster_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;repository_id&quot;,
+    &quot;generation&quot;,
+    &quot;lock_table&quot;,
+    &quot;device_path&quot;,
+    &quot;mount_path&quot;,
+    &quot;nodes&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageClusterConfig&quot;,
+  &quot;description&quot;: &quot;Core-owned clustered-GFS2 projection. Controller relay input never grants a caller-owned device path, mount path, proof, or secret; Core derives/verifies those native details.&quot;
+}</pre></details>
+<details id="StorageClusterStatus"><summary>StorageClusterStatus</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;cluster_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;session_monitor_ready&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Authenticated member attestation that the fixed local transport-monitor wrapper and CLI are installed and passed a successful live exact portal/IQN session probe. It is distinct from aggregate GFS2 or cluster health, and is projected to Controller only after storage-cluster-session-monitor-v1 is acknowledged.&quot;
+    },
+    &quot;healthy&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;quorate&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;mounted&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;unconfigured&quot;,
+        &quot;pending&quot;,
+        &quot;blocked&quot;,
+        &quot;healthy&quot;,
+        &quot;failed&quot;
+      ]
+    },
+    &quot;fencing_verified&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;fences&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterFenceStatus&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;cluster_id&quot;,
+    &quot;repository_id&quot;,
+    &quot;healthy&quot;,
+    &quot;quorate&quot;,
+    &quot;mounted&quot;,
+    &quot;status&quot;,
+    &quot;fencing_verified&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageClusterStatus&quot;
+}</pre></details>
+<details id="StorageClusterRequest"><summary>StorageClusterRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;fence_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;fence_confirmation&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true
+    },
+    &quot;action&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;apply&quot;,
+        &quot;status&quot;,
+        &quot;verify_fence&quot;
+      ]
+    },
+    &quot;credential_requests&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterCredentialRef&quot;
+      },
+      &quot;maxItems&quot;: 8
+    },
+    &quot;registration&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageRegistration&quot;
+    },
+    &quot;config&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterConfig&quot;
+    },
+    &quot;expected_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;action&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageClusterRequest&quot;,
+  &quot;description&quot;: &quot;Authenticated Controller/Core report envelope. It is transient at Controller; Core persists accepted configuration and operation state.&quot;
+}</pre></details>
+<details id="StorageClusterCredentialRef"><summary>StorageClusterCredentialRef</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;chap&quot;,
+        &quot;fence_bmc&quot;,
+        &quot;fence_ssh&quot;
+      ]
+    },
+    &quot;target_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;kind&quot;,
+    &quot;target_host_id&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageClusterCredentialRef&quot;,
+  &quot;description&quot;: &quot;Secret-free reference to a one-time Core credential handoff.&quot;
+}</pre></details>
+<details id="StorageClusterOperation"><summary>StorageClusterOperation</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;membership_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;config&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterConfig&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;queued&quot;,
+        &quot;awaiting_fencing&quot;,
+        &quot;verifying_fence&quot;,
+        &quot;applying&quot;,
+        &quot;healthy&quot;,
+        &quot;degraded&quot;,
+        &quot;succeeded&quot;,
+        &quot;failed&quot;,
+        &quot;needs_attention&quot;
+      ]
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;updated_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;members&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterMemberReport&quot;
+      },
+      &quot;maxItems&quot;: 5
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;membership_generation&quot;,
+    &quot;config&quot;,
+    &quot;status&quot;,
+    &quot;updated_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageClusterOperation&quot;,
+  &quot;description&quot;: &quot;v2 operation projection. members are typed host-bound reports, never an unordered flattened status list. degraded is a Core-observed post-activation runtime state, not an activation receipt or client action.&quot;
+}</pre></details>
+<details id="StorageClusterMemberReport"><summary>StorageClusterMemberReport</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterStatus&quot;
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;membership_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;cluster_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;config_digest&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;stage&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;health&quot;,
+        &quot;monitor&quot;
+      ]
+    },
+    &quot;updated_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;status&quot;,
+    &quot;generation&quot;,
+    &quot;membership_generation&quot;,
+    &quot;cluster_id&quot;,
+    &quot;config_digest&quot;,
+    &quot;stage&quot;,
+    &quot;updated_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageClusterMemberReport&quot;,
+  &quot;description&quot;: &quot;Core-observed member report bound to one configured host and exact clustered-storage configuration. monitor is sent only after the offered storage-cluster-session-monitor-v1 extension is acknowledged. The Controller rejects duplicate, non-member or mismatched bindings.&quot;
+}</pre></details>
+<details id="StorageClusterResult"><summary>StorageClusterResult</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;accepted&quot;,
+        &quot;queued&quot;,
+        &quot;succeeded&quot;,
+        &quot;failed&quot;,
+        &quot;needs_attention&quot;,
+        &quot;stale&quot;
+      ]
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;operations&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterOperation&quot;
+      },
+      &quot;maxItems&quot;: 128
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;status&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageClusterResult&quot;
+}</pre></details>
+<details id="StorageClusterApplyRequest"><summary>StorageClusterApplyRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;expected_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;Optional optimistic generation. Omit or use zero for a candidate repository whose Core allocation has not yet assigned a generation.&quot;
+    },
+    &quot;credential_requests&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterCredentialRef&quot;
+      },
+      &quot;maxItems&quot;: 8
+    },
+    &quot;registration&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageRegistration&quot;
+    },
+    &quot;config&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterConfig&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;registration&quot;,
+    &quot;config&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="StorageClusterFenceRequest"><summary>StorageClusterFenceRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;fence_confirmation&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true,
+      &quot;description&quot;: &quot;Must be exactly FENCE &lt;host_id&gt;.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;repository_id&quot;,
+    &quot;fence_confirmation&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="StorageClusterCredentialRequest"><summary>StorageClusterCredentialRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;cluster_request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;target_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;chap&quot;,
+        &quot;fence_bmc&quot;,
+        &quot;fence_ssh&quot;
+      ]
+    },
+    &quot;credentials&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageCredentials&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;cluster_request_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;target_host_id&quot;,
+    &quot;kind&quot;,
+    &quot;credentials&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;One-time secret handoff. secret is bounded to 64 KiB and is never returned; username is optional.&quot;
+}</pre></details>
+<details id="StorageClusterCredentialAccepted"><summary>StorageClusterCredentialAccepted</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;const&quot;: &quot;accepted&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;status&quot;
+  ],
+  &quot;additionalProperties&quot;: false
 }</pre></details>
 <details id="StorageIdentity"><summary>StorageIdentity</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -7445,12 +8418,19 @@
     &quot;secret&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;writeOnly&quot;: true
+    },
+    &quot;ssh_private_key&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true
+    },
+    &quot;ssh_known_hosts&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true
     }
   },
-  &quot;required&quot;: [
-    &quot;secret&quot;
-  ],
-  &quot;x-go-type&quot;: &quot;protocol.StorageCredentials&quot;
+  &quot;required&quot;: [],
+  &quot;x-go-type&quot;: &quot;protocol.StorageCredentials&quot;,
+  &quot;description&quot;: &quot;Transient credential bytes only. The selected operation validates the applicable secret form; inventory, journals, results and diagnostics never carry these fields.&quot;
 }</pre></details>
 <details id="StorageDiscoveryRequest"><summary>StorageDiscoveryRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -7662,6 +8642,23 @@
   ],
   &quot;x-go-type&quot;: &quot;protocol.StorageRepositorySupport&quot;
 }</pre></details>
+<details id="StorageClusterSupport"><summary>StorageClusterSupport</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;capability&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;storage-clustered-iscsi-v2&quot;,
+        &quot;storage-cluster-session-monitor-v1&quot;
+      ]
+    }
+  },
+  &quot;required&quot;: [
+    &quot;capability&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageClusterSupport&quot;,
+  &quot;description&quot;: &quot;Controller-first acknowledgement for the clustered-storage v2 envelope. Return storage-cluster-session-monitor-v1 only when the Core offered it; otherwise return storage-clustered-iscsi-v2.&quot;
+}</pre></details>
 <details id="PoolMember"><summary>PoolMember</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;properties&quot;: {
@@ -7683,6 +8680,9 @@
       &quot;format&quot;: &quot;date-time&quot;
     },
     &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;peer_origin&quot;: {
       &quot;type&quot;: &quot;string&quot;
     }
   },

@@ -1,0 +1,45 @@
+{
+  "summary": "Document the Core-to-Core pool peer API as a machine-readable contract with a generated reference and route coverage test, add the missing refresh-inventory agent command, and enforce command-kind coverage. API impact: existing contract (documentation of implemented behavior).",
+  "paths": [
+    "docs/API.md",
+    "docs/api/index.html",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/changes/2026-09-14-peer-api-contract.json",
+    "scripts/generate_api.py",
+    "tests/test_api_contract.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Internal Core peer contract and Controller command reference; no operator workflow changes.",
+    "pages": []
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Existing contract: implemented peer routes (pool join/advertise, storage list/get/reserve/access/lock, pool VM inventory/actions, storage-cluster status/verify/proof) and the refresh-inventory command are now documented; no runtime behavior changed.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/peer-openapi.json",
+      "docs/api/peer.html",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Documentation coverage of implemented behavior.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation and tests only; no durable product state."
+  },
+  "verification": {
+    "method": "Contract/route coverage tests (29) pass; generator check reports all three references current; removing a peer route or command kind in memory fails the coverage tests; full Python suite and privacy test pass.",
+    "evidence": [
+      "tests/test_api_contract.py",
+      "docs/api/peer-openapi.json"
+    ]
+  }
+}

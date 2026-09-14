@@ -1,0 +1,38 @@
+{
+  "summary": "BUG-0165: Read the durable storage projection without unrelated VM inventory work. API impact: existing contract.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/agent/pool_storage.go",
+    "internal/agent/pool_storage_test.go",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-14-cluster-storage-reliability.md",
+    "docs/plans/2026-09-12-concurrent-pool-storage.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Internal read-path correction; operator workflows and required safety checks are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: existing contract. Core member repository reconciliation reads the existing applied generation/tombstone projection directly; full native identity/access/lock validation and authenticated results remain unchanged. Controller-facing schemas and retries are unchanged.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Reliability work within the current storage milestone; no published capability or milestone status changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable state, pool setting or execution authority. Existing Core-owned records and inventory adoption remain authoritative; temporary in-flight read results are discarded on completion."
+  },
+  "verification": {
+    "method": "The member-reconciliation and authenticated four-master-handler regressions failed with isolated restoration of the broad Applied reads. Fixed projection/reconciliation and endpoint generation/tombstone/corruption cases, full affected normal/race suites and independent source review passed. The completed diagnostic candidate passed build/artifact review, sequential three-Core rollout and selected native master fence/activation replay. The earlier partial candidate retained three distinct Core3 idle deadline observations; clean-candidate idle/loaded reliability remains open.",
+    "evidence": [
+      "internal/agent/pool_storage_test.go",
+      "docs/qa/2026-09-14-cluster-storage-reliability.md"
+    ]
+  }
+}

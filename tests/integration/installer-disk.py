@@ -12,6 +12,9 @@ import subprocess
 import tempfile
 
 source = Path(os.environ.get('NEX_DISK_VALIDATOR_SOURCE', 'installer/gui/nex-config.c')).read_text()
+wizard = Path('installer/gui/nex-wizard.c').read_text()
+assert 'disk will be erased.\\nOther disks are left untouched.' in wizard, 'Disk warning must retain a visible continuation line at 800x600'
+assert 'writable internal disk attached,\\nthen restart the installer.' in wizard, 'No-disk help must retain a visible continuation line at 800x600'
 validator = source.split('static void fail(', 1)[1].split('static void protected_write(', 1)[0]
 harness = r'''
 #define _GNU_SOURCE

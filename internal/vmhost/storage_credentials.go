@@ -2,6 +2,7 @@
 package vmhost
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"nex.local/nex/internal/protocol"
@@ -135,7 +137,36 @@ func materializeMountCredential(stateDir string, stored storedCredential) error 
 	if stored.Username != "" {
 		contents = "username=" + stored.Username + "\n" + contents
 	}
-	return atomicWrite(filepath.Join(root, stored.Receipt), []byte(contents))
+	path := filepath.Join(root, stored.Receipt)
+	current, err := mountCredentialCurrent(path, []byte(contents))
+	if err != nil {
+		return err
+	}
+	if current {
+		return nil
+	}
+	return atomicWrite(path, []byte(contents))
+}
+
+// mountCredentialCurrent accepts only the exact private file atomicWrite would
+// create. All other present files take the existing atomic repair path.
+func mountCredentialCurrent(path string, want []byte) (bool, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !info.Mode().IsRegular() || info.Mode() != 0600 || info.Size() != int64(len(want)) || !ok || st.Uid != uint32(os.Geteuid()) || st.Nlink != 1 {
+		return false, nil
+	}
+	got, err := readSmall(path, int64(len(want)))
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(got, want), nil
 }
 
 // SaveStorageCredential is the only path that persists an offered credential. The receipt is

@@ -1,6 +1,6 @@
 # Nex API reference
 
-Status: development product 0.1.0, HTTP API v1, Core protocol version 1.
+Status: development product 0.1.0, HTTP API v1, Core report protocol versions 1 and 2.
 Phase 1 implements administrator access, Sites → Pools (one master host + members) → Hosts,
 certificate enrollment,
 observations, and durable inventory refresh operations. The appliance bootstrap slice adds
@@ -8,8 +8,8 @@ host-local deployment/recovery and adoption of the existing Controller VM. The f
 slice adds local storage and existing-network registration, ISO transfer and creation of a
 stopped VM; the VM creation slice replaces that flat shape with the full specification
 (topology, memory modes, multiple disks and NICs, boot order, autostart).
-The console slice adds ticketed browser/host-local VNC streams. Central power controls and event streams remain unimplemented. Verification limits are recorded in the
-[platform plan](plans/2026-09-08-nex-platform.md).
+The console slice adds ticketed browser/host-local VNC streams. Event streams remain
+unimplemented. Verification limits are recorded in the [platform plan](plans/2026-09-08-nex-platform.md).
 
 ## Contract and generated reference
 
@@ -35,14 +35,19 @@ python3 -m unittest discover -s tests -p 'test_api_contract.py' -v
 go test ./internal/controller ./internal/agent ./internal/localcore ./internal/vmhost
 ```
 
-The Python checks establish reference/source coverage and generated-output freshness.
-The Go checks exercise authentication, enrollment, operations, and recovery; structural
-coverage alone cannot prove runtime behavior or successful hardware integration.
+The Python checks establish reference/source coverage and generated-output freshness; the Go
+checks exercise runtime behavior. Neither proves hardware integration. Per-feature test runs and
+lab results live in `docs/qa/`.
 
 The host-local API has a separate [OpenAPI contract](api/local-openapi.json) and
 [offline generated reference](api/local.html). Its browser callers authenticate to the
 selected Core host, independently of Controller availability; its credentials do not grant
-Controller administration. Both references are generated and checked by the commands above.
+Controller administration.
+
+The internal Core-to-Core pool peer API has its own [OpenAPI contract](api/peer-openapi.json) and
+[offline generated reference](api/peer.html). It is an mTLS contract between pool Cores on
+`--pool-peer-listen` (default `:9444`), not a client or Controller API. All three references are
+generated and checked by the commands above.
 
 ## Sites, pools and pool masters
 
@@ -84,6 +89,18 @@ Validation and conflicts:
   does) returns that credential unchanged rather than a duplicate or a refusal. The existing
   identical token/CSR replay is unchanged.
 
+Credential-replacement recovery uses this existing enrollment request and response shape; it
+does not add an endpoint or field. Before submitting a replacement enrollment, Core durably
+keeps the candidate key and CSR alongside its active credential. A rejected or lost response
+therefore leaves the old Controller trust, key and certificate usable and retains the same
+pending CSR for an identical retry. Core validates the returned host/pool identity and
+certificate/key pairing before atomically publishing the complete replacement credential, so it
+does not combine a new key or trust with an old certificate. If publication has already renamed
+the new private state file but its final durability confirmation fails, the local enrollment
+call returns an uncertain error and reports the state that is now visible; Controller must
+reconcile the host's observed identity and inventory before retrying rather than treating that
+error as proof that replacement failed.
+
 Compatibility: agents from before host-owned identity present no IDs; the Controller mints
 a 64-hex host ID and pool ID and names the pool after the hostname, exactly as before, and
 the response reports them for the agent to keep, so such a host presents them from then on
@@ -96,10 +113,9 @@ its earliest enrolled active host (or any host) as master, pools that never rece
 or resources are deleted, and pool-bound tokens/bootstrap records are recreated in the
 site-bound form. Tokens expire within ten minutes, so this loses nothing durable.
 
-Compatibility: Controller and Core development builds must be upgraded together. An older
-Core local service whose handoff still sends `pool_name` to `POST /api/v1/appliances/bootstrap`
-is rejected with 400 (unknown field); a handoff interrupted across the upgrade must be
-restarted from the host. Older agents still enroll (see host-owned identity above). Older UI
+Compatibility: an older Core local service whose handoff still sends `pool_name` to
+`POST /api/v1/appliances/bootstrap` is rejected with 400 (unknown field); a handoff interrupted
+across the upgrade must be restarted from the host. Older UI
 builds that call `POST /api/v1/pools` or send `{pool_id}` to `POST /api/v1/enrollment-tokens`
 receive 404 and 400 respectively.
 
@@ -165,8 +181,13 @@ Retries and outages: `addSiteHost` performs no retry of its own — a lost HTTP 
 the browser is safe to retry because the host-side 409 makes re-enrollment idempotent and
 no token is left dangling on any failure path. `localEnroll` relies on `agent.Enroll`'s
 existing idempotent-retry behavior for a lost Controller response during the underlying
-`POST /api/v1/agent/enroll` call. Controller outage during the host-local step surfaces as
-an ordinary 502 to the browser; no partial state is left keyed only on Controller memory.
+`POST /api/v1/agent/enroll` call. For a replacement, a rejected or lost response preserves
+the old active credential and its pending CSR, so retry the same request with the same Core
+state directory. A 502 reporting that the state was published but durability is uncertain is
+different: query `GET /api/local/v1/host` and refresh the Controller's host inventory first,
+then retry only after those observations establish which credential is active. Controller
+outage during the host-local step surfaces as an ordinary 502 to the browser; no recovery
+state is held only in Controller memory.
 
 Version compatibility: this is new, additive surface. An older host without
 `POST /api/local/v1/enrollment` cannot be added this way — `addSiteHost`'s push receives a
@@ -222,13 +243,9 @@ or its current value after an OS password change. Wrong passwords, other usernam
 or expired accounts/passwords and helper failures (including a five-second timeout) are
 rejected with a generic 401. Passwords must be 1–1024 UTF-8 bytes without NUL; invalid
 lengths or NUL return 400 before invoking the helper.
-Its `__Host-nex_local_session` cookie is `Secure`, `HttpOnly` and `SameSite=Strict`,
-with `Path=/` and no `Domain`;
-all mutations require the exact HTTPS `Origin`, including login, and authenticated
-mutations also require `X-CSRF-Token`. Sessions have a 30-minute idle limit and eight-hour
-absolute limit. Only authenticated mutations refresh the idle deadline; GET/HEAD polling
-does not. Local sessions are held in memory and also expire on service restart.
-JSON request bodies are limited to 32 KiB and reject unknown fields. The former separate
+Its `__Host-nex_local_session` cookie and session, Origin and CSRF rules are the shared rules
+in [Trust boundaries and compatibility](#trust-boundaries-and-compatibility); Origin is checked
+on login too. JSON request bodies are limited to 32 KiB and reject unknown fields. The former separate
 local `admin` credentials have no fallback and are removed by package initialization.
 New logins follow OS root password changes; active sessions retain the deadlines above.
 Deploy matching local service, PAM helper/configuration and web assets on upgrade, then
@@ -359,8 +376,6 @@ the replacement VM or prove a successful restore; verify the recovered identity 
 
 API impact: **new contract** — host-local session, preflight, deployment/progress/retry
 and owned power control; Controller bootstrap/adoption reuse outbound Core protocol v1.
-Guide impact: **updated** — appliance setup, progress and recovery need the matching user
-guide and executed walkthrough evidence; schema checks do not establish real guest deployment.
 
 ## Trust boundaries and compatibility
 
@@ -371,7 +386,8 @@ send `X-CSRF-Token` from the session response. Browser origins must match the Co
 HTTPS origin. Administrator authority currently spans all sites and pools; scoped roles
 remain Phase 8 work. Credentials and tokens must not enter logs or diagnostic artifacts.
 
-Both administrator services enforce a 30-minute idle deadline and eight-hour absolute
+The host-local `__Host-nex_local_session` cookie has the same attributes. Both administrator
+services enforce a 30-minute idle deadline and eight-hour absolute
 deadline, with at most 64 active sessions per service. An authenticated mutation refreshes
 idle expiry after origin/CSRF validation, even if later input validation rejects that action;
 GET/HEAD polling never extends it. Session response fields remain `username` and `csrf_token`,
@@ -411,19 +427,25 @@ client certificate; reporting and rotation require mutual TLS and current unrevo
 identity. Host credentials cannot perform administrator calls or submit another host's
 operation results. Revocation does not stop guests or remove local recovery access.
 
-Only protocol version `1` is supported by this development Controller/Core pair; unsupported
-versions are rejected. Deploy matching development builds. There is no promised mixed-version
-upgrade window yet. Preserve references with release tags; a future incompatible change must
-record migration guidance and update both peers and their contract checks in one slice.
+This development Controller accepts report protocol versions `1` and `2`; unsupported versions
+are rejected. Version 2 adds the storage-repository acknowledgement before a Core advertises its
+storage capability. Deploy matching development builds: report JSON is strict, so a new field can
+be refused by an older Controller before any capability is evaluated. **Shared upgrade rule:**
+upgrade Controller before Core, and deploy matching Controller/Core/web development builds;
+capability gates below are additive, not a general mixed-version guarantee. The clustered
+session-monitor extension is the one exception that projects additive fields away until
+acknowledged. Sections below reference this rule rather than restating it. A future incompatible
+change must record migration guidance and update both peers and their contract checks in one slice.
 
 ## Execution and observations
 
-Configuration changes finish in their HTTP request. Inventory refresh is a durable operation:
+Controller-scoped configuration changes finish in their HTTP request. Inventory refresh is a durable operation:
 clients persist a stable `request_id`, retrieve the same operation on retry, and inspect
 operation state for completion. Agent reports transport commands and acknowledged results;
-there is no separate command stream. `refresh-inventory` remains read-only; the managed-VM
-commands below add registration, ISO transfer and stopped-VM creation. No central VM start,
-stop, migration, cancellation, or automatic recovery command is implemented.
+there is no separate command stream. `refresh-inventory` remains an observation request.
+The managed-VM commands below cover registration, ISO transfer, definitions and power
+operations: Core executes them while Controller relays requests and presents results.
+Migration and automatic recovery retain their separate implementation and acceptance gates.
 
 A host's management connection is independent of each check's health. A heartbeat without
 new inventory does not validate old observations. Unknown/stale state cannot establish that
@@ -433,6 +455,12 @@ outage does not alter local guest execution. Process restart/reconnect requires 
 observations and operation reconciliation. See the OpenAPI schemas for timestamp units,
 nullable observations, ordering, command results, and acknowledgement fields.
 
+Usable CPU models come from Core's bounded libvirt domain-capabilities observation.
+That query uses a normal libvirt connection because libvirt rejects it on a read-only
+connection; other inventory queries retain read-only connections. The command only
+observes capabilities. Failures remain failed checks with unavailable model inventory;
+Core does not substitute guessed models.
+
 ## Managed VM creation
 
 API impact: **new contract** for client storage/network registration, raw ISO upload,
@@ -440,10 +468,8 @@ stopped-VM creation and assigned-host media download; **changed contract** for t
 existing VM list and capability-bearing agent reports/commands/results. Protocol version
 remains `1`. Matching Core reports `managed-vm-v1` on each heartbeat; Controller rejects
 new work for stale, revoked, wrong-pool or unsupported hosts and withholds managed commands
-from reports lacking that capability. Older agents retain inventory refresh support.
-Upgrade Controller before Core: older Controllers reject the new report fields through
-strict JSON decoding. This is an additive capability gate, not a general mixed-version
-upgrade guarantee.
+from reports lacking that capability. Older agents retain inventory refresh support; the
+shared upgrade rule applies.
 
 The browser uses its administrator session, exact HTTPS Origin and CSRF token. The shared
 `Command` transports one storage, network, media or VM specification through the existing
@@ -484,13 +510,31 @@ output. Discovery cannot create a directory, mount/login a backend, retain an iS
 change repository configuration or weaken later registration validation. A cancelled or stale
 request must use a new request ID.
 
+The network picker reuses this contract: omit `path` to enumerate an SMB server's shares
+using the supplied account, or an NFS server's advertised exports. Supply the returned
+absolute path to list its immediate directories. These are live remote observations, not
+registered-repository inventory. Each result is capped at 64 candidates. The client retains
+the originally selected NFS export and submits a relative `directory` when registering a
+nested selection; it must not replace that export with each subsequent listing root.
+SMB share names support letters, numbers, internal spaces and `._$:()-`; leading/trailing
+whitespace and command/unit syntax are rejected. SMB/NFS relative directories can contain
+spaces; traversal, backslashes and control characters remain rejected. SMB browsing passes
+the selected directory as a separate native argument, never an interpolated command.
+The clustered-GFS2 setup panel also reuses this existing request, always scoped to the selected
+pool master, to enumerate and select an iSCSI target IQN for its portal. That observation neither
+logs in nor mounts a target, and it does not provide the LUN number, WWID or filesystem UUID:
+those remain required storage-inventory attestations in the cluster apply registration, which Core
+validates on the selected members. It adds no clustered-storage discovery route or schema.
+The wire shape and capability negotiation are unchanged; older Core builds may reject
+newly supported names, so use matching Core and Controller builds for these sources.
+
 ### Core pool peer join and repository observations
 
-API impact: **new host-local/Core peer contract** — an enrolled joining Core accepts
+API impact: **new host-local/Core peer contract** — on an enrolled joining Core, local
 `POST /api/local/v1/pool/join-csr` first produces the joining host's `{host_id,csr_pem}`. The
 selected master then accepts `{member_host_id,member_csr_pem,master_url}` at local
 `POST /api/local/v1/pool/join-offer` and returns the pinned pool CA plus a one-use offer. Finally,
-the joining host calls local `POST /api/local/v1/pool/join` with `{master_url,pool_ca_pem,offer}`.
+the joining host calls local `POST /api/local/v1/pool/join` with `{master_url,pool_ca_pem,offer,peer_origin?}`.
 All three calls use that Core's local root session, same Origin and CSRF boundary. The last call
 pauses outbound reporting, then calls the master's Core-peer `POST /api/v1/pool/join` on its
 configured pool-peer listener (default `:9444`) with an ECDSA P-256 CSR. The peer endpoint is TLS
@@ -500,8 +544,7 @@ host/CSR digest, atomically consumes the offer and advances the master-owned mem
 before issuing the member certificate. A retry after acceptance must reconcile
 `Inventory.managed.membership`; it must not resend the offer.
 
-The offer is bounded to 15 minutes and to exactly the returned member host ID and CSR hash; the
-master rejects malformed, expired, used-for-another-CSR or used-for-another-host offers. An
+The master rejects malformed, expired, used-for-another-CSR or used-for-another-host offers. An
 interrupted successful peer reply may be repeated with that same offer/CSR: the master returns the
 same issued certificate and membership, never a second member. The joining Core persists its
 pending CSR/key and pool rehome before changing scope. After a restart it resumes rehoming its
@@ -509,10 +552,62 @@ managed local defaults into the accepted pool; a rehome failure is an honest joi
 not permission to repeat the join with another identity. Joining is refused while the member has
 managed VMs or remote storage, so this slice does not move workloads or storage during join.
 
-The master retains pool CA material, offers and `PoolMembership` in its Core peer state; the member
+The master retains pool CA material, offers and `PoolMembership` in its Core peer state; `peer_origin`
+is an optional HTTPS advertisement recorded for an admitted member and shown as
+`PoolMember.peer_origin`, never inferred from Controller connectivity. The member
 retains its pool certificate/key and copied membership only after validating the master's signed
 response. The Controller neither authorizes a membership mutation nor persists membership intent:
 it adopts the Core-reported master membership and per-repository `member_access` observations.
+
+The private peer `POST /api/v1/pool/vms/inventory` is a Core-to-master synchronization step,
+not a public Controller endpoint or VM execution admission. It accepts only the pinned,
+authenticated ready member identity. `204 No Content` means the master durably retained a complete
+current-generation snapshot; `202 Accepted` means it durably retained the member's current partial
+snapshot while it still waits for the other ready members. Neither response grants a start permit,
+changes VM placement, or establishes that a guest is running. A stale snapshot receives `409` with
+only the bounded authenticated master's `PoolMembership`. A member accepts that refresh only when
+it is valid for its own pool, names the same master, keeps the member's own certificate fingerprint
+unchanged, and has a strictly newer generation; it persists that membership and retries the inventory
+once. Any invalid, foreign, identity-changing, non-newer or second stale reply remains refused.
+
+API impact: **existing external contract; changed authenticated Core-peer contract** — a
+pool-shared `vm-update` now advances the master-owned VM definition through a durable private
+transition, rather than letting a member's local update leave the master's specification stale.
+The owner first passes full managed-command validation and reserves exactly its current master
+specification at revision *N* to one valid next specification at *N+1*. The master records only
+`pending_update:{operation_id,next_spec}` at this stage; it does not change the committed
+specification or autostart intent. It commits only read-only, successful local journal evidence
+whose operation ID, previous specification and current specification exactly match that pending
+record. A known failed journal result can abort the same pending transition only when it proves the
+same prior and next specifications. Timeout, `needs_attention`, post-native/ambiguous failure,
+missing evidence, stale owner, changed revision or malformed input retain the pending record and
+leave the command/report `needs_attention`.
+
+For the first local-to-pool-shared update, when no master record exists yet, `Previous` is only a
+comparison value. The master seeds a record only from the authenticated owner's exact inventory
+snapshot at the current membership generation, after that owner is `ready` and has a fresh local
+runtime observation (`running` or `shut off`). An absent, stale, partial, foreign, duplicate or
+mismatched inventory cannot adopt a definition. Once a VM has successfully used a registered
+pool-shared repository, read-only managed journals keep it on this pool-owned path even if a later
+definition removes its last shared disk or the repository is detached; a member-side cache or a
+current disk scan cannot remove that fence.
+
+`update-reserve`, `update-commit` and `update-abort` are pinned mTLS Core-peer actions, not
+Controller/browser endpoints. After its durable save, the master reply must bind the VM ID, action,
+operation ID, `update_accepted:true`, and attempted next revision; an empty, older-peer or
+mismatched acknowledgement fails closed. While pending, competing lifecycle actions are blocked.
+A lost commit response may later reconcile only through exact Core-side journal evidence for that
+same operation, then report it succeeded under the original ID; raw inventory never rewrites the
+master's definition. A pre-transition legacy update has the same bounded recovery requirement:
+authenticated owner evidence of an exact successful *N* to *N+1* journal transition, never an
+inferred inventory change. After a response-lost exact abort, the master retains one bounded
+`last_aborted_update` receipt solely to acknowledge that same authenticated abort; a different
+replay is refused, and the next reservation clears the receipt. Shared reboot is owner-authorized
+without inferring guest state. Shared media is explicitly refused: it changes the durable definition
+but has no matching journal-backed master transition. The master keeps this state in its Core
+`pool-vms.json`; a replacement Controller adopts the committed Core inventory and holds no durable
+VM definition.
+
 The master's Core peer listener also exposes pool-storage reconciliation only to an authenticated
 member certificate: it serves desired NFS/SMB repositories and accepts that member's access result
 at `/api/v1/pool/storage/{repository_id}` and `/access`. It never exposes a local ZFS or ordinary
@@ -521,8 +616,33 @@ member immediately replaces it with a member-scoped Core-local receipt; the Cont
 receives it. A member persists the desired registration through its normal managed-storage journal,
 prepares the mount as its QEMU identity, verifies a shared non-blocking filesystem lock against
 the master, then reports identity/readable/writable/QEMU-writable/locking observations. The master
-retains desired records and member access observations in Core state, and a replacement Controller
-adopts their inventory projection.
+retains desired records durably; current member access observations live in master Core memory
+and are rebuilt from authenticated reports after restart. A replacement Controller adopts their
+inventory projection.
+
+The synchronous peer lock check uses `POST` and `DELETE` at
+`/api/v1/pool/storage/{repository_id}/lock`, with the current `generation` and a
+32-hex-character random `challenge`. It is bound to the authenticated member,
+repository, generation, challenge and mode; POST requires current member eligibility.
+`probe_mode=challenge-byte-v1` selects a nonzero one-byte OFD lock range derived
+from the challenge on the existing `.nex-peer-lock` file. Version 1 hashes the
+decoded 16 challenge bytes with SHA-256, reads its first eight bytes as big-endian,
+clears bits 63 and 0, then adds one. The master acknowledges
+that exact mode in `X-Nex-Pool-Probe-Mode`. Separate challenges can prove exclusion
+and release without competing for byte zero. A rare range collision fails the
+probe; it never grants access. Only lock-conflict errors establish exclusion,
+and the member must also acquire the same range after master release.
+
+An absent mode, or no mode acknowledgement from an older master, uses legacy byte zero (with
+its contention limitation); an unexpected nonempty acknowledgement fails closed. Unknown
+requested modes and malformed challenges are rejected. Leases are
+process-local and expire after ten seconds if cleanup is lost; DELETE releases
+only that member's exact lease. The master admits at most 64 simultaneous probe
+leases; an exact held-lease replay remains idempotent at the limit, while a new
+lease receives a lock-unavailable conflict until release or expiry frees capacity.
+Periodic Core reconciliation retries with a fresh
+challenge after failure or reconnect. These probe leases are neither durable pool
+settings nor VM execution/fencing authority. Controller-facing schemas are unchanged.
 
 `PoolStorageAccess` is an observation, not placement permission. The Controller permits an NFS or
 SMB repository for a member VM only when the master has recently reported matching generation,
@@ -551,9 +671,220 @@ discovers nor fences them.
 
 Members also report the existing `Inventory.checks` entry
 `pool-storage-reconciliation`: it is `unknown` before the first reconciliation or after a stale
-two-minute observation, `failed` after a Core reconciliation failure, and `passed` only after a
+two-minute observation, `failed` after a Core reconciliation failure, and `healthy` only after a
 fresh successful reconciliation. It adds no route or durable Controller state; the Controller
 renders the Core observation and must not infer readiness when it is stale or unknown.
+The free-form `error` reports only a bounded stage (master address/client setup,
+repository-list retrieval, repository reconciliation, local observation, orphan detachment)
+and safe outcome, never raw peer/command text. Deadline and cancellation outcomes are failures.
+A fresh successful pass replaces the failed observation; healthy mount/access reports alone do
+not prove reconciliation succeeded.
+
+### Core-owned clustered GFS2 iSCSI
+
+API impact: **new contract** — an administrator can relay setup with
+`POST /api/v1/storage/cluster/apply`, read the current master-owned result with
+`GET /api/v1/storage/cluster?pool_id=...`, and request an actual target exclusion proof with
+`POST /api/v1/storage/cluster/verify-fence`. These routes require the administrator session,
+and mutations also require same-Origin CSRF. The Controller selects the fresh capable pool master
+(`storage-clustered-iscsi-v2`); a client cannot choose the setup host. It retains request data only
+for the active report round trip and removes it on delivery, result, cancellation or the 30-second
+deadline. The Controller's 45-second HTTPS write deadline is only a delivery margin for that
+30-second ambiguous relay response; it does not extend Core work. It never persists a cluster
+configuration, job, credential, credential receipt or proof.
+
+Clustered-storage protocol v2 has an explicit Controller-first acknowledgement. A newly started,
+reconnected or replacement-enrolled Core sends a clean v2 preflight: it advertises neither the
+base `storage-clustered-iscsi-v2` capability nor clustered result payloads. Only a matching Controller's
+`ReportResponse.storage_clusters_support:{capability:"storage-clustered-iscsi-v2"}` enables the
+Core to persist base readiness, advertise that capability and send its queued clustered results on
+a later report. The response's `storage_clusters` JSON array remains the dispatch envelope (the
+internal Go field name does not change the wire name).
+
+The same existing `ReportRequest.capabilities` list offers the additive
+`storage-cluster-session-monitor-v1` extension on every v2 preflight. A Controller returns that
+exact value in `storage_clusters_support.capability` only when the offer is present; otherwise it
+returns the base `storage-clustered-iscsi-v2` acknowledgement. A Core receiving the base value may
+use the base clustered contract, but projects `session_monitor_ready` and members with
+`stage:"monitor"` out of Controller reports. A Controller accepts those additions only when the
+offer was present, so an older Controller acknowledges base v2 and never receives an undecodable
+field; native peer state and the Core's durable operation are unchanged. Both acknowledgements are
+Controller-connection scoped and reset on a cluster preflight failure, reconnect or Controller
+re-enrolment. This is a scoped v2 acknowledgement, not a protocol-v3 bump.
+
+Until that acknowledgement arrives, every clustered-storage route that requires the master or a
+target Core (`GET /api/v1/storage/cluster`, setup, credential handoff and fence verification)
+returns **503** `clustered storage capability negotiation is pending`, creating no broker request,
+native work, credential offer or older-route fallback; retry the same request after the
+acknowledged follow-up report. A Core that never offers the v2 preflight is an unsupported **409**.
+
+Clustered iSCSI uses `source.iscsi.mode:"clustered_gfs2"` rather than the ordinary exclusive
+profile. It requires a cluster ID, lock table and exactly three to five unique eligible Core IDs,
+and rejects `exclusive_target`. Core accepts only an already-formatted GFS2 LUN whose lock table,
+UUID, WWID and journal count match the registration; it never formats the LUN. The `apply` payload
+has a stable request ID, pool ID, expected repository generation, typed registration and typed
+cluster configuration. Core derives the native device and mount paths from its verified iSCSI
+identity rather than trusting caller-supplied values. An identical request ID is restart-safe;
+changed input is refused. `expected_generation` is optional: omit it or use zero for a candidate
+repository before Core allocates its generation. A `200` gives the latest Core operation projection:
+`queued`, `awaiting_fencing`, `verifying_fence`, `applying`, `failed` and `needs_attention` are not
+a healthy multi-host mount. Initial setup remains `applying` until the master durably records a
+private activation receipt bound to the exact operation/configuration and membership after fresh
+health from every selected Core. The receipt is not a public field. Only after that completed
+activation can Core report `degraded`: it is a current runtime observation of a fresh strict
+ordinary-voter majority that includes the master, with exact membership/configuration/fence/CIB
+bindings and the required per-current-member DLM/GFS2 clones, but without fresh health from every
+member. It is not initial setup completion, HA, failover, ownership reassignment or a new client
+request. A missing majority remains `needs_attention`; a legacy record without the private receipt
+must requalify all selected Cores once and is never inferred from an old `healthy` status. Only the
+Core-derived `healthy` state represents the current all-member readiness predicate. `degraded`
+does not establish VM execution admission (not implemented). `504` is
+ambiguous: Core work may continue, so read status instead of assuming cancellation.
+
+API impact: **changed v2 clustered-storage contract** — each
+`StorageClusterResult.operations[].members` item is a `StorageClusterMemberReport`, not a
+flattened `StorageClusterStatus`. The wrapper carries the reporting `host_id`, nested `status`,
+storage and membership generations, cluster ID, configuration digest, `health` stage (or the
+negotiated `monitor` stage) and observation time. Core and Controller reject a blank, duplicate or
+non-configured host and any binding that does not match the operation configuration. A client
+expecting the former status-only member array is incompatible.
+
+API impact: **changed additive clustered-status contract; no new Controller route** — the nested
+`StorageClusterStatus.session_monitor_ready` is an authenticated member readiness attestation.
+Core sets it only after the fixed local wrapper/CLI is installed and a successful live, exact native
+session probe proves that adapter can monitor the configured portal/IQN. It is not aggregate
+GFS2/cluster health and does not mean a transport clone already exists. Older members omit it
+(false). It and the `monitor` stage reach Controller only after the session-monitor
+acknowledgement above. The master requires fresh, exact configuration/generation/membership-bound
+true reports from every configured member before first transport-clone creation or a recognized
+legacy CIB upgrade; unknown, missing, old, mismatched or failed-monitor reports block. Runtime
+health separately requires the active strict transport clone and its native session check. The
+Controller only relays the status report and stores no readiness state.
+
+The master persists its secret-free desired configuration, membership generation and operation
+state in its Core `pool-storage-cluster.json` record. Members pull its projection and post their
+generation-bound status over the existing pinned pool mTLS peer endpoint; the master records those
+reports. The master generates one private Corosync auth key and projects it, plus addressed
+secret-free metadata and recipient-specific private credential material, only across the pinned
+Core peer channel; Controller reports, inventory, operation results and the Controller database
+never carry that material. A fence request has a stable request ID. Before a destructive peer
+action, both the master and its selected sole survivor durably record that ID and its binding; a
+replay with changed input is refused. The private peer `POST /api/v1/pool/storage-cluster/verify`
+requires that request ID. After reconnect, the master retrieves only request-bound receipts that
+were actually executed locally by that sole survivor from its mTLS
+`GET /api/v1/pool/storage-cluster/proof/{repository_id}` endpoint; it does not accept a peer claim
+or synthesize a proof. Thus a lost peer reply is reconciled from Core state rather than treated as
+success. A fresh Controller recovers this state through Core reports and peer reconciliation, not a
+Controller database. Cluster setup stays blocked until Core sees the exact current membership as
+healthy, quorate, Pacemaker-mounted and fence-verified. Clustered-iSCSI VM execution admission is
+not available; an unavailable master, stale membership, missing proof or uncertain native state
+fails closed.
+
+When a clustered-storage operation is applied, Core installs its exact root-owned
+`nex-cluster-storage-ready.service` and a Pacemaker ordering drop-in. At OS boot the unit runs the
+same bounded local command exposed by both Core binaries:
+`nex-core-agent cluster-storage-ready --state-dir /var/lib/nex-core-agent` or
+`nex-core-local cluster-storage-ready --state-dir /var/lib/nex-core-agent` (the default state
+directory may be replaced with the configured private absolute directory). The command accepts no
+positional arguments and has a two-minute deadline. It reads a stable, private snapshot of the
+existing Core state, membership and `pool-storage-cluster.json` record without taking the live
+agent lock, contacting Controller or a peer, or writing the Pacemaker CIB. Before any iSCSI
+connection it rejects an unsafe or changing snapshot, ambiguous projection, non-current ready
+three-to-five-member membership, invalid registration/configuration, or missing recorded fence
+verification. Failure prevents the dependent Pacemaker service from starting; success is only
+bounded native preparation, not a report of healthy shared storage or VM execution admission.
+Clustered-GFS2 native acceptance (failed-fence admission, outages/adoption, HA, failover) remains
+open; results are in [concurrent storage verification](qa/2026-09-12-concurrent-pool-storage.md).
+
+Storage-loss protection is an internal Core/OCF interface, not a Controller or operator API.
+Both Core executables expose the root-only command
+`cluster-iscsi-session --portal <canonical-host:port> --target <exact-IQN> --session-id
+<nex-iscsi-full-SHA-256>`. `--validate-only` checks static parameters without querying iSCSI;
+without it the command has a fixed eight-second, read-only `iscsiadm -m session -P 1` check. It
+does not take a state directory or credentials and never discovers, logs in/out, mounts, formats or
+changes authentication. The `nex-core-local` package delivers the fixed root-owned OCF adapter at
+`/usr/lib/ocf/resource.d/nex/cluster-iscsi-session`, which invokes only
+`/usr/lib/nex/nex-core-local cluster-iscsi-session`: `start` and `monitor` perform one bounded
+check, while `stop` is a no-op. Its proposed monitor metadata is a five-second interval and
+ten-second timeout, not a fencing guarantee. Do not invoke this internal command or adapter as an
+operator recovery procedure.
+
+API impact: **existing contract** — clustered fencing policy is Core-owned runtime safety
+configuration, not a Controller setting or a new browser/API operation. The master requires the
+exact Pacemaker properties `stonith-enabled=true`, `stonith-action=off`,
+`startup-fencing=true`, and `no-quorum-policy=freeze`; a missing, duplicate or different value
+blocks health. Each Core-owned fence device also requires the exact
+`pcmk_reboot_action=off` mapping: an external DLM reboot request therefore maps to an off action,
+while DLM fencing itself remains enabled. The explicit off actions preserve a Core that a real
+proof deliberately powered off instead of allowing Pacemaker's default reboot action to return it
+automatically. For an already accepted master operation, Core may reconcile this policy only after
+it verifies current master/membership, exact durable configuration/digest/fence proofs, matching
+managed registration, and exact owned CIB resources, fences and ordering. It no-ops when the
+properties and every device mapping already match. There is no in-place upgrade of an older CIB
+layout: a CIB missing any current device mapping, monitor timeout or transport resource, or a
+wrong, duplicate, foreign or otherwise changed CIB, is refused without a write. A stale receipt or membership, failed
+CIB read, or cancellation also performs no write or health promotion; policy reconciliation never
+connects storage, mounts GFS2, or creates/reconciles CIB resources.
+
+A durable `needs_attention` operation may be resumed by Core from the previously accepted,
+secret-free Core record. That replay can repeat its bounded native setup stages (iSCSI preparation,
+native cluster apply and GFS2/Pacemaker readiness checks) for the same durable identity; it is not
+a new Controller request or reconstructed input. Its completed private activation receipt is copied
+and checked rather than reconstructed or inferred from the retry. This preserves the distinction
+between prior all-member activation and current health without authorizing an automatic fenced-host
+return, guest restart or a new fence action. There is no automated cold-recovery workflow;
+operators inspect the reported state and use the explicit proof/status workflow.
+
+API impact: **existing contract** — no Controller state, endpoint or browser action is added for
+native DLM/Pacemaker prerequisites. Clustered GFS2 fails closed when Core cannot validate a
+package-aligned DLM fencing helper. The inspection is non-destructive: it reads the helper's
+declared runtime `libstonithd` SONAME, requires exactly one loader-cache candidate of the same ELF
+class/machine with the required exported APIs, and does not execute the helper or a fence agent.
+An ABI mismatch blocks recovery; it is not a reason to substitute a library or acknowledge
+fencing. Until Core reports fresh validated status, clustered health and execution admission
+remain blocked.
+
+Fence profiles are closed types (`redfish`, `ipmilan`, `virsh`, or `scsi_pr`), not arbitrary
+commands. The development-only `virsh` profile must bind to the same pinned SSH scope: its
+`virsh_uri` is exactly `qemu:///system`, or
+`qemu+ssh://<ssh_login>@<endpoint>[:<ssh_port>]/system`. The latter has the same login and endpoint
+as the fence fields, permits an omitted URI port only when `ssh_port` is `22`, and rejects a
+password, query, fragment or any other libvirt URI/path. Core materializes a one-host default-port
+known-hosts entry written as `[DNS-or-IPv4]:22` to bare `DNS-or-IPv4` for OpenSSH lookup, while
+preserving the supplied credential receipt and leaving aliases, IPv6, non-default ports and
+ambiguous entries unchanged. `POST /api/v1/storage/cluster/verify-fence` names the repository and target host, carries
+a stable `request_id`, and requires the literal confirmation `FENCE <host_id>`. The Controller
+returns Core's immediate `accepted` lifecycle response and creates no durable fence intent itself.
+Core then records the real cluster operation as `verifying_fence` with a request-bound,
+`unverified` pending proof. Browser input cannot create a proof: the actual executor Core records
+an exclusion observation whose optional `request_id` binds it to this destructive attempt, as well
+as to the exact configuration generation and digest. An early failed observation is reported as
+`uncertain`, not proof of exclusion. The same 30-second relay timeout is ambiguous and must be
+reconciled through status before another destructive attempt. The UI closes and disables a target
+after an unknown transport outcome until a successful Core status refresh. A refreshed `failed` or
+`uncertain` proof can be manually reverified only with a new request ID and a new exact
+confirmation; Core retains the old proof and never retries it automatically. A pending
+`unverified` proof stays disabled. This is the existing recovery workflow, not a new endpoint.
+For an activated operation, every member's health report must carry an exact `Status.Fences`
+acknowledgement of that member's current passed exclusion proof: host, request, target, status,
+exclusion result, configuration generation/digest and observation time all bind. A successful
+direct re-verification immediately changes an otherwise all-member healthy operation to `degraded`
+by invalidating the target's earlier health report; only a fresh target report with that exact proof
+can restore `healthy`. Missing, stale, failed, pre-proof or mismatched reports do not count toward
+health or the majority. This uses the existing report/status shape and retains the private
+activation receipt.
+Automatic ownership reassignment, migration, HA/failover, ext4/XFS
+multi-writer use and arbitrary fence secrets/arguments remain unavailable.
+
+`POST /api/v1/storage/cluster/credentials` delivers only one bounded secret to the selected master
+through the existing authenticated one-time Core offer. Its request has a stable request ID, the
+cluster request ID, pool/target scope, `chap`, `fence_bmc` or `fence_ssh` kind, and
+`{username?,secret}` for CHAP/BMC, or `{username?,ssh_private_key,ssh_known_hosts}` for SSH
+(each secret field at most 64 KiB). The response is only `{request_id,status:"accepted"}`.
+The Controller zeroes the secret after one redemption/acknowledgement or the 15-second expiry and
+persists neither it nor a receipt. Setup refers later only to the corresponding secret-free
+credential request ID; Core resolves its own private alias and distributes peer material over
+pool mTLS. A `503` acknowledgement timeout leaves delivery unknown: retry the same request ID.
 
 `POST /api/v1/storage` keeps the v1 `{path}` local-directory form. Typed registrations select
 `kind` and exactly one non-secret `source`: NFS `{server,export,directory?}`, existing mounted ZFS
@@ -592,12 +923,18 @@ identity are not rewritten and fail closed instead of being silently upgraded.
 host and expected generation. Update changes typed configuration; recheck only observes it;
 detach is refused while disks, retained disks, media or active work depend on it and never
 deletes backing data. HTTP `202` means Core work is queued. Retry an identical request ID to
-recover an interrupted client reply; a changed replay or stale generation is `409`. Core blocks
+recover an interrupted client reply; a changed replay or stale generation is `409`. For a
+`source.iscsi.mode:"clustered_gfs2"` registration, these generic lifecycle mutations are
+intentionally not a cluster lifecycle: every generic update, including a rename, becomes a failed
+Core operation with `clustered iSCSI updates require a coordinated Core cluster operation`; generic
+detach fails with `clustered iSCSI detach requires a coordinated Core cluster teardown` before a
+native command. No coordinated update/teardown API exists in this slice. Recheck is observation
+only and does not authorize execution. Core blocks
 disk, media and guest-start writes if its source identity has changed, a mount is missing,
 read-only or inaccessible, or capacity is insufficient. It never writes into an unmounted
 directory.
 
-Changing only a repository name is metadata-only: it preserves the existing Core credential and
+For non-clustered repositories, changing only a repository name is metadata-only: it preserves the existing Core credential and
 does not reconnect the backend. Changing a source or detaching a repository uses the full
 dependency guard. Credential-only rotation may keep an attached receipt, but only after every VM
 using the repository is shut off and no pending or `needs_attention` disk, media, or ISO work
@@ -606,11 +943,10 @@ refers to it. If Core cannot prove rollback restored the previous backend state,
 
 An identical Controller request replay only returns its original accepted operation; it does not
 send a second storage command. Separately, Core's managed worker runs `ReconcileStorage` in its
-periodic one-minute lane, outside heartbeat reporting. It serializes with storage mutations and
+periodic one-minute lane, outside heartbeat reporting and serialized with storage mutations: it
 retries at most one due original `storage-*` journal entry in `pending` or `needs_attention`
-state, retaining the original operation/result. Definitively failed entries are excluded. This
-continues while Controller is unavailable, so an accepted uncertain SMB or other storage action
-can reconcile without a browser or Controller replay.
+state, retaining the original operation/result, and excludes definitive failures. This continues
+while Controller is unavailable.
 
 `POST /api/v1/storage/credentials` is administrator-session and CSRF protected. It accepts a
 credential request ID, target pool/host, at least one of a new registration request ID or
@@ -621,7 +957,7 @@ return `201`. `503` means delivery is uncertain: retry the same request ID. Ordi
 inventory, operations, diagnostics and Controller persistence contain only opaque receipts or
 the redacted `credential_present` state. Older Cores remain protocol v1; an upgraded Core first
 receives the `storage_repositories` v2 acknowledgement in its report response, persists that
-fact, then advertises `storage-repositories-v1`. Upgrade Controller before Core.
+fact, then advertises `storage-repositories-v1`.
 
 After an interrupted credential request, `GET /api/v1/storage/credentials/{request_id}` with
 the same pool/host and repository or registration-request scope returns Core-reported redacted
@@ -702,10 +1038,18 @@ under ID `<operation-id>:start` with kind `vm-power` and status `failed`, and re
 work from the Core command journal. A non-executing orphaned **non-storage** pending entry is
 reported as `needs_attention` with `interrupted before completion; retry from a new request`.
 Storage originals are different: Core's periodic recovery lane retries at most one due
-`storage-*` entry in `pending` or `needs_attention` state each minute, retaining the original
-operation ID and result; definitive storage failures are not retried. The host re-observes a
-`vm-create` or `vm-update` entry interrupted after its definition step at most once a minute
-and promotes it to `succeeded` when the persistent domain matches. The exact Core engine
+`storage-*` entry per minute (see `ReconcileStorage` above). The host re-observes a
+`vm-update` entry interrupted after its definition step at most once a minute and promotes it
+to `succeeded` when the persistent domain matches. A remote-storage `vm-create` is deliberately
+excluded from that generic promotion: the serialized Core recovery worker can only settle an
+already-defined, observed **stopped** VM after current pool-owner, execution-admission and
+storage checks. Its authenticated `define` peer check is read-only and compares the complete
+original immutable VM specification (including pool, host, ID, revision and disks) with the
+master's durable record. Recovery requires the explicit `spec_match:true` receipt: a mismatch,
+invalid record, or missing receipt from an older master is refused before native observation and
+remains `needs_attention`. It never recreates disks or a definition, replays the create, starts
+the guest, deletes it, or changes a permit. A failed or unavailable revalidation remains
+`needs_attention`; the Controller neither retries nor drives this recovery. The exact Core engine
 outcome overrides stale transport-journal results; Controller updates its matching operation
 from that raw outcome, while a replacement Controller records an unknown operation as passive
 `adopt-outcome:<host>:<operation_id>` history) and `missing_vms` (IDs of `vms` entries whose persistent domain
@@ -731,19 +1075,11 @@ actor `system`, error prefixed `not adopted from host report:`; appliance record
 `vm-create` with a `Controller appliance:` prefix) and an audit entry `adopt.attention` naming
 the reason. That record is marked `succeeded` once the entry is adopted on a later report.
 Compatibility: an upgraded Core that reports `managed.appliances`, `outcomes` or
-`missing_vms` to an older Controller is rejected with 400 on every report, not only at
-enrollment, because the Controller decodes reports with unknown fields disallowed; upgrade
-the Controller before the hosts.
-Checks: `go test ./internal/vmhost ./internal/controller` (`TestAppliedSurvivesCorruptJournalEntry`,
-`TestAppliedReportsOutcomes`, `TestAppliedPromotesInterruptedCreation`,
-`TestAppliedFlagsVMsMissingFromLibvirt`, `TestDeploymentsListsApplianceOwnership`,
-`TestAdoptionRebuildsApplianceOutcomesAndAttention`) and
-`tests/integration/controller_replacement.py`. Result: replacing a Controller means installing a new one and connecting each
-pool master (token, or address plus root password); storage, networks, ISO records and VM
-definitions return with their IDs and names. Not recovered, because it is Controller-scoped:
-sites, administrator accounts and roles, audit history, enrollment tokens and the Controller
-CA. Each pool master lands in a newly created pool named after its hostname on the new
-Controller, as enrollment already does.
+`missing_vms` to an older Controller is rejected with 400 on every report (shared upgrade rule).
+Replacing a Controller means installing a new one and connecting each pool master (token, or
+address plus root password); storage, networks, ISO records and VM definitions return with their
+IDs and names. Controller-scoped data is not recovered: sites, administrator accounts and roles,
+audit history, enrollment tokens and the Controller CA.
 `iso-import` without `media.url` fetches only assigned media from the enrolled Controller over host mTLS;
 redirects and another host's media are refused. Controller stages a raw upload bounded by available staging free space minus a 256 MiB
 reserve, computes its size/SHA-256 and checks its ISO descriptor. There is no fixed
@@ -805,8 +1141,7 @@ MAC uniqueness and host capacity stay with their owners.
   obtains that list from libvirt domain capabilities (`usable=yes` named models on the
   host's default q35 machine), rechecks the selected named model immediately before
   defining the VM, and writes it as an exact custom model with partial feature checking
-  and fallback forbidden. `check=full` is not used: KVM always exposes extras beyond a
-  named baseline, which made even usable models refuse to start. `max` uses libvirt's
+  and fallback forbidden (not `check=full`, which refuses usable models under KVM). `max` uses libvirt's
   maximum CPU mode. Host passthrough is tied to that host's CPU; use a common baseline
   reported by every destination before planning a migration.
 - **`memory`.** `size_mib` at least 512, capped by Controller at 262144, is the ceiling in both
@@ -831,14 +1166,9 @@ MAC uniqueness and host capacity stay with their owners.
   created inside the VM's exclusive directory on their storage target; Core checks exclusive
   ownership for every disk and free space per target, summing the disks that share one.
 - **`nics`.** Zero to eight. Each carries `network_id`, `model`, `mac` and an optional `mtu`.
-  `model` is `virtio|e1000|e1000e|rtl8139|vmxnet3`: `virtio` is paravirtualised and needs a guest
-  driver; `e1000`/`e1000e` emulate Intel gigabit cards for guests and installers that cannot see
-  a virtio adapter; `rtl8139` emulates a 100 Mbit card for guests too old for a gigabit driver;
-  `vmxnet3` is VMware's paravirtualised adapter for guests carrying VMware drivers. `mtu` is
-  `0` for the network's own MTU and is **accepted only on `virtio`** — QEMU communicates an MTU
-  to the guest through virtio's `host_mtu`, and the emulated models have no equivalent, so a
-  value on them is refused rather than applied to the host side while the guest keeps 1500.
-  A set `mtu` is between 1280 (the IPv6 minimum) and 9216. An
+  `model` is `virtio|e1000|e1000e|rtl8139|vmxnet3` (`virtio` needs a guest driver). `mtu` is
+  `0` for the network's own MTU and is **accepted only on `virtio`** (via `host_mtu`; other models
+  refuse a value). A set `mtu` is between 1280 and 9216. An
   empty `mac` means the derived address (`protocol.DerivedMAC`: the `52:54:00` locally
   administered unicast prefix, two octets of `sha256(vm id)` and the interface index), which is
   stable per VM and interface and cannot collide within a VM. A manual `mac` must be six octets
@@ -852,8 +1182,15 @@ MAC uniqueness and host capacity stay with their owners.
 - **`boot`.** `firmware` `uefi` (the default; requires EFI firmware advertised by the host's
   `domcapabilities`) or `bios`. `machine` is empty for Core's default (q35) or a plain machine
   name (`^[a-z0-9][a-z0-9._-]{0,31}$`).
-- **Lifecycle.** `autostart` is the libvirt property (`virsh autostart`) set while the stopped
-  guest is defined, so the host starts the VM on boot; it is not a start. `start_after_create` is
+- **Lifecycle.** For storage that is not pool-shared, `autostart` is the libvirt property
+  (`virsh autostart`) set while the stopped guest is defined, so the host starts the VM on boot;
+  it is not a start. A pool-shared VM has libvirt autostart disabled. Instead, its serialized
+  Core worker makes at most one durable autostart attempt per VM per OS boot, recorded in the
+  private Core state before observation or admission. It can start only a currently shut-off,
+  already-recorded owner after fresh master admission, current storage/execution checks and a
+  one-use Core permit. Agent restart, a later manual stop, master outage, failed validation or a
+  failed start cannot create another attempt in that boot; this is neither HA nor failover.
+  `start_after_create` is
   honoured by the host inside the same creation (changed contract, 2026-09-10): after every disk
   is created and the persistent definition is verified, the creation has **succeeded** whether
   or not the flag is set. Core then persists stage `starting`, issues the same single libvirt
@@ -915,7 +1252,7 @@ version and capabilities are unchanged.
   name, a used MAC and the dedicated-memory promise are gone); it records the host's result on
   the operation, and the existing operation views show it. Uniqueness is checked on the VM's
   host; a pool has one host until member joins exist, so this is the pool today.
-- *Compatibility.* Core and Controller ship together. A Core older than this change does not
+- *Compatibility.* A Core older than this change does not
   self-register defaults, so a new Controller managing it would show no **ISO** storage or
   untagged network until the host is upgraded; and it does not honour `start_after_create`
   itself, so a VM created with that flag through such a host stays stopped. Both are accepted
@@ -928,8 +1265,8 @@ specification. Authentication, authorization, CSRF and origin checks, durable op
 by `request_id`, result acknowledgement and audit attribution are the **existing contract** and
 do not change; protocol version stays `1` and the capability stays `managed-vm-v1`. There is
 **no compatibility shim**, because Nex is unreleased: no decode-only legacy fields, no
-`managed-vm-v2` capability gate and no journal normalisation. Upgrade Controller and Core
-together and recreate lab VMs and managed journal entries written in the earlier flat shape. The
+`managed-vm-v2` capability gate and no journal normalisation. Recreate VMs and managed journal
+entries written in the earlier flat shape. The
 Controller appliance is unaffected — it is built from `DeploySpec` through `makeDomain`, a
 separate path from `VMCreateSpec`.
 
@@ -940,6 +1277,13 @@ the generated domain XML and the path of every disk it created. Cores report suc
 `request_id adopt-vm:<host>:<id>`) with the VM's identity, name and shape intact and no
 command redelivered; storage, network and media references resolve by resource ID on the host for
 the same reason. No part of a VM definition exists only in the Controller database.
+
+Core-reported historical outcomes are also adopted through the existing operation list, with
+`request_id` exactly `adopt-outcome:<host-id>:<operation-id>`. They are passive history, never
+redelivered commands. The Controller records its re-observation time because Core does not report
+the original outcome time; task history labels those rows **Reobserved from Core history** rather
+than presenting that timestamp as when the outcome occurred. This is an existing request-ID
+contract and changes no Core report field or durable state.
 
 Clients retain a stable `request_id` and exact payload. Replays return the original identity
 and operation; changed payloads return 409. Upload replay rehashes the supplied bytes and
@@ -1001,12 +1345,23 @@ Paused or transitional states are refused as task errors. Interrupted requests r
 by observation only, never by blindly issuing another power effect; ambiguous outcomes
 remain `needs_attention`. A libvirt power-call error or timeout after the request could have
 taken effect is also uncertain, including when resuming a command before its first effect.
+
+API impact: **existing power contract** — for an exact locally managed, journal-owned pool VM,
+`shutdown` and `force-stop` may proceed when live clustered-storage readiness or pool-peer
+admission is unavailable. The reducing-only exception still requires the normal authenticated,
+authorized power request, `ValidateManagedCommand`, and exact VM ID, pool ID and host ID matching
+the local Core record. It retains the local journal, native validation and native observation; it
+does not create a start permit or modify master ownership/placement state. It never applies to
+start, reboot, autostart, create, update or media changes, all of which remain fail-closed.
+No successful result is a claim that the guest is stopped: a frozen GFS2 path can still make the
+native shutdown or destroy block or fail. On error or ambiguous outcome, Core retains the journal
+result and a fresh reconnect inventory is authoritative; it must not infer a stop, transfer
+ownership or retry a power-on action.
 Preflight refusals remain failed. Same-command Core reconciliation observes state without
 issuing the effect again; Controller request-ID replay alone does not schedule that reconciliation.
 Genuine task failures require inspection before a new request.
 
-Checks and limits: [power queue QA](qa/power-queue/checks.md). Existing native power behavior
-is recorded separately in the [console QA report](qa/console/checks.md).
+Evidence: [power queue QA](qa/power-queue/checks.md), [console QA](qa/console/checks.md).
 
 ## VM editing
 
@@ -1042,12 +1397,7 @@ one as the current definition; Controller refreshes its mirror from each report,
 result is the host's word and a replaced Controller adopts the current definition and
 revision. Older Core without `vm-update-v1` is refused with 409 at request time.
 
-Checks: `internal/protocol` (classification), `internal/vmhost` (layout keeps existing
-disks and targets, revisions, live reconciliation argv, interrupted-edit reconciliation) and
-`internal/controller` (404/400/409 refusals, capability gate, immutable fields, MAC freezing,
-pending edit/power exclusion in both directions, replay, dispatch payload, mirror refresh and
-a failed edit leaving the mirror alone); the [edit QA report](qa/vm-edit/checks.md) records
-what ran in a browser and on a host.
+Evidence: [edit QA report](qa/vm-edit/checks.md).
 
 ## Browser VM console
 
@@ -1078,10 +1428,7 @@ reports `console-v1`, so Controller answers 409 for its VMs; an older Controller
 console requests. The host-local stream needs the local session cookie and matching `Origin`,
 bridges any running local VM with a local VNC socket, and works without Controller.
 
-Checks: `go test ./internal/wsock ./internal/vmhost ./internal/controller ./internal/agent ./internal/localcore`
-cover framing, socket resolution, ticket authorization (unknown VM, stale host, missing
-capability, stopped VM, wrong origin, wrong host, reuse, timeout) and end-to-end relay;
-the [console QA report](qa/console/checks.md) records the disposable-lab walkthrough.
+Evidence: [console QA report](qa/console/checks.md).
 
 Console features (2026-09-09, [plan](plans/2026-09-09-console-features.md)) use the
 **existing contract**: clipboard text, key events, display resize requests and quality
@@ -1108,22 +1455,13 @@ in-process host console session (a root shell rendered as RFB so the same noVNC 
 works — no socket is opened for it, since only this same agent process ever dials it) and
 opens the outbound `nex-console` upgrade. No pool-scoped setting is introduced.
 
-`host-console-v1` is a capability distinct from `console-v1`: every agent old enough to
-support VM consoles already reports `console-v1`, so gating the host console on it would let
-a new Controller enable the host console tab against an old Core that never implemented the
-host shell, issue a ticket, and leave the browser to hang until the 504 timeout. An old Core
-without `host-console-v1` instead gets the immediate 409 "upgrade Nex Core" refusal, matching
-the VM console's compatibility behaviour.
+`host-console-v1` is distinct from `console-v1` (which older Cores without a host shell also
+report); a Core without it gets an immediate 409 "upgrade Nex Core" refusal.
 
-Hardening (2026-09-10, [change record](changes/2026-09-10-host-console-hardening.json)): the
-host console session has RFB security None but no reachable listener (an in-process
-`net.Pipe`, not a socket, so no other local process — including a QEMU guest — can dial it);
-`FramebufferUpdateRequest` honours the incremental flag and answers only when terminal
-content actually changed since the last frame sent; `KeyEvent` tracks Control up/down and
-maps Ctrl+letter to its control byte and arrow/Home/End keys to their escape sequences.
-
-Checks: `go test ./internal/controller -run HostConsole` and
-`go test ./internal/vmhost -run HostConsole`.
+The session uses RFB security None over an in-process `net.Pipe` with no reachable listener, so
+no other local process (including a QEMU guest) can dial it. `FramebufferUpdateRequest` honours
+the incremental flag and answers only when terminal content changed; `KeyEvent` tracks Control
+and maps Ctrl+letter to its control byte and arrow/Home/End keys to escape sequences.
 
 ## VM media change (CD/DVD)
 
@@ -1146,11 +1484,8 @@ inserting does not give the CD drive a `bootindex`, and ejecting leaves every de
 `bootindex` as it was. The journal and the Controller mirror therefore record only `media_id`,
 and an eject clears `media_id` with `media_boot_order` while leaving the disks' `boot_order`
 values exactly as the domain still holds them. `ValidateVMSpec` accordingly requires boot
-order values to be unique and positive but not contiguous: libvirt orders devices by
-`bootindex` and tolerates gaps, and the gap an eject leaves must not make a re-adopting
-Controller reject — and so silently skip — a VM still running on the host. (Relaxing that
-rule is a product decision recorded for confirmation; nothing in the UI or the guide promises
-1..N numbering, and the create form still submits contiguous orders.)
+order values to be unique and positive but not contiguous, so a re-adopting Controller does not
+reject a VM whose eject left a gap.
 
 An interrupted media change reconciles by observation. Core journals stage `changing-media`
 together with the resolved media path in a single write immediately before the `virsh` call,
@@ -1159,10 +1494,7 @@ one with it is compared against the observed CD drive: media equal to the record
 empty tray for an eject) is reported succeeded, anything else keeps the operation for the
 operator to inspect. A media change is never replayed blindly.
 
-Compatibility: older Core without `vm-media-v1` is refused with 409. Upgrade Core on the
-assigned host before using console CD/DVD controls.
-
-Checks: `go test ./internal/vmhost -run Media` and `go test ./internal/controller -run Media`.
+Compatibility: older Core without `vm-media-v1` is refused with 409.
 
 ## Guest tools observation
 
@@ -1186,16 +1518,9 @@ VirtIO display. The probe is separate from the libvirt state probe, so a slow gu
 delays VM power states, and facts are dropped when the VM leaves the running list. This is
 observation, not health: a connected agent proves nothing about guest applications.
 
-Compatibility: upgrade Controller before Core. An older Controller rejects the new report
-member through strict JSON decoding (the managed-VM rule); an older Core never sends it and
-the UI shows guest tools as unknown. No pool-scoped setting is introduced.
-
-Checks: `go test ./internal/vmhost` (definition devices, observation parsing, invalid IDs and
-definitions, address filtering), `./internal/agent` (snapshot attaches facts to running VMs
-only), `./internal/controller` (VM list passes `guest` through and omits it for stopped VMs);
-`tests/test_api_contract.py` (schema parity); the
-[console features QA report](qa/console-features/checks.md) records the disposable-lab
-walkthrough with a Debian 13 guest.
+Compatibility: shared upgrade rule; an older Core never sends the member and the UI shows guest
+tools as unknown. No pool-scoped setting is introduced.
+Evidence: [console features QA report](qa/console-features/checks.md).
 
 ## Software updates
 
@@ -1204,13 +1529,10 @@ API impact: **new contract** — Controller `GET /api/v1/updates` and
 `POST /api/local/v1/updates/apply`. Schemas `UpdateStatus` and `UpdateApplyResult`
 are in the generated references.
 
-Updates are apt operations against the signed Nex archive, not bare `.deb`
-installs. Nex Core is a distribution: apt owns download, GPG verification and
-dependency resolution, so a release that adds a dependency installs cleanly instead
-of leaving dpkg half-configured. Clients read the archive's signed `Release`/`Packages`
-index and no longer fetch `{repo}/updates.json`. The publisher still writes that file
-for hosts released before this change, which poll it to discover releases; it is a
-compatibility shim, not a contract current clients depend on.
+Updates are apt operations against the signed Nex archive, never bare `.deb` installs; apt owns
+download, GPG verification and dependency resolution. Clients read the archive's signed
+`Release`/`Packages` index. The publisher still writes `{repo}/updates.json` only for older
+hosts that poll it; current clients do not depend on it.
 
 Both sides read a package repo URL from `NEX_UPDATE_REPO`, else `/etc/nex/updates.conf`
 (`repo_url=`), else `https://nexvirtualization.com/apt`. Plain HTTP repo URLs that
@@ -1230,19 +1552,15 @@ the JSON `error` field with HTTP 200. While an apply runs, GET also returns `pha
 Controller apply writes `pending-update.json` under the state directory and returns
 202; the root `nex-controller-update` path unit runs `/usr/local/lib/nex/apply-update`,
 which runs `apt-get update` then `apt-get install --only-upgrade nex-controller` and
-restarts the service. Running outside `nex-controller.service` keeps apt from being
-killed mid-transaction by the restart its own postinst triggers, and a failed upgrade
-restarts the service before reporting. If the helper or path unit is missing, apply
+restarts the service; running outside `nex-controller.service` keeps apt from being killed by
+that restart, and a failed upgrade restarts the service before reporting. If the helper or path unit is missing, apply
 returns **503** instead of scheduling. Core apply starts the same work in the
 background and returns 202; the UI polls GET until `phase` is `done` or `failed`.
 Both sides re-read the installed version afterwards and fail the apply if it did not
 advance, because apt exits 0 when nothing needed upgrading.
 
-Checks: `go test ./internal/nexupdate ./internal/controller ./internal/localcore`
-(update-focused cases, including that apply invokes apt and never `dpkg -i`).
-Operator UI is under Updates on Controller and the host-local page. Packaged installs
-and current appliance images include the update helper so Controller VMs can upgrade
-in place.
+Packaged installs and current appliance images include the update helper so Controller VMs can
+upgrade in place.
 
 ## Source access and availability
 
@@ -1251,9 +1569,7 @@ returns an explicit unavailable response if no archive is configured. This is no
 ISO source-delivery claim: Debian, firmware, and other redistributed components retain their
 own source/notice obligations under [licensing requirements](LICENSING.md).
 
-API impact: **new contract** — client administration and Core enrollment/report/rotation
-are implemented together, with generated reference and focused coverage checks.
-Guide impact: **updated** — operator instructions belong in the [user guide](guide/README.md).
+Operator instructions belong in the [user guide](guide/README.md).
 
 ## Planned coverage by phase
 

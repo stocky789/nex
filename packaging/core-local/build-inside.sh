@@ -20,8 +20,11 @@ printf '/etc/pam.d/nex-core-local\n/etc/nex/updates.conf\n' > "$pkg/DEBIAN/conff
 install -m755 /build/nex-root-auth "$pkg/usr/lib/nex/"
 install -m755 /build/nex-core-local "$pkg/usr/lib/nex/"
 install -m755 packaging/core-local/core-local-setup "$pkg/usr/lib/nex/"
+install -m755 packaging/core-local/corosync-pristine "$pkg/usr/lib/nex/"
 install -m755 packaging/core-local/libvirtd-apparmor-policy.py "$pkg/usr/lib/nex/libvirtd-apparmor-policy"
 install -m755 packaging/core-local/storage-downgrade-guard.py "$pkg/usr/lib/nex/storage-downgrade-guard"
+install -d "$pkg/usr/lib/ocf/resource.d/nex"
+install -m755 packaging/cluster-storage/cluster-iscsi-session "$pkg/usr/lib/ocf/resource.d/nex/cluster-iscsi-session"
 printf '2\n' > "$pkg/usr/share/nex/core-local/storage-format-v2"
 install -m755 packaging/core-local/nex-storage-guard.sh "$pkg/etc/libvirt/hooks/qemu.d/nex-storage-guard"
 # Retain the wrapper for existing domain definitions; new VMs use libvirt's emulator.
@@ -52,7 +55,7 @@ Package: nex-core-local
 Version: ${NEX_VERSION}
 Architecture: amd64
 Maintainer: Nex contributors
-Depends: init-system-helpers, libc6 (>= 2.41), python3, openssl, libpam0g, libpam-modules, iproute2, libvirt-clients, libvirt-daemon-system, qemu-system-x86, qemu-utils, genisoimage, nfs-common, libnfs-utils, cifs-utils, smbclient, open-iscsi
+Depends: init-system-helpers, libc6 (>= 2.41), python3, openssl, libpam0g, libpam-modules, iproute2, libvirt-clients, libvirt-daemon-system, qemu-system-x86, qemu-utils, genisoimage, nfs-common, libnfs-utils, cifs-utils, smbclient, open-iscsi, corosync, dlm-controld, gfs2-utils, pacemaker, pacemaker-cli-utils, pcs, fence-agents-redfish, fence-agents-ipmilan, fence-agents-virsh
 Section: admin
 Priority: optional
 Description: Nex Core local management and Controller virtual appliance

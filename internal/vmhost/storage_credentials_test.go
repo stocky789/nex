@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -96,5 +97,198 @@ func TestStorageCredentialRejectsInvalidScope(t *testing.T) {
 	handoff.Offer.HostID = ""
 	if _, err := SaveStorageCredential(t.TempDir(), handoff); err == nil {
 		t.Fatal("hostless handoff accepted")
+	}
+}
+
+// This fails before BUG-0170 because an identical replay always atomically
+// rewrites the already-correct mount credential.
+func TestStorageCredentialReplayDoesNotRewriteVerifiedMountCredential(t *testing.T) {
+	state := t.TempDir()
+	handoff := testCredentialHandoff()
+	first, err := SaveStorageCredential(state, handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(state, credentialDirectory, first.Receipt)
+	before, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := SaveStorageCredential(state, handoff)
+	if err != nil || second.Receipt != first.Receipt {
+		t.Fatalf("replay receipt = %#v, %v", second, err)
+	}
+	after, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeStat, beforeOK := before.Sys().(*syscall.Stat_t)
+	afterStat, afterOK := after.Sys().(*syscall.Stat_t)
+	if !beforeOK || !afterOK || beforeStat.Ino != afterStat.Ino {
+		t.Fatal("matching replay rewrote the mount credential")
+	}
+}
+
+func TestStorageCredentialReplayRepairsMountCredentialArtifacts(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(*testing.T, string, []byte)
+		fails bool
+	}{
+		{
+			name: "missing",
+			setup: func(t *testing.T, path string, _ []byte) {
+				t.Helper()
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "corrupt",
+			setup: func(t *testing.T, path string, _ []byte) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte("corrupt\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "same-length-corrupt",
+			setup: func(t *testing.T, path string, want []byte) {
+				t.Helper()
+				corrupt := append([]byte(nil), want...)
+				corrupt[0] ^= 1
+				if err := os.WriteFile(path, corrupt, 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "mode",
+			setup: func(t *testing.T, path string, _ []byte) {
+				t.Helper()
+				if err := os.Chmod(path, 0640); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "special-mode",
+			setup: func(t *testing.T, path string, _ []byte) {
+				t.Helper()
+				if err := os.Chmod(path, 04600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "symlink",
+			setup: func(t *testing.T, path string, _ []byte) {
+				t.Helper()
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				target := filepath.Join(t.TempDir(), "target")
+				if err := os.WriteFile(target, []byte("outside\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatal(err)
+				}
+				if got, err := os.ReadFile(target); err != nil || string(got) != "outside\n" {
+					t.Fatalf("symlink target changed before replay: %q, %v", got, err)
+				}
+			},
+		},
+		{
+			name: "hardlink",
+			setup: func(t *testing.T, path string, want []byte) {
+				t.Helper()
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				outside := filepath.Join(t.TempDir(), "outside")
+				if err := os.WriteFile(outside, want, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Link(outside, path); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "directory-error",
+			setup: func(t *testing.T, path string, _ []byte) {
+				t.Helper()
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+			},
+			fails: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state := t.TempDir()
+			handoff := testCredentialHandoff()
+			receipt, err := SaveStorageCredential(state, handoff)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(state, credentialDirectory, receipt.Receipt)
+			want, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.setup(t, path, want)
+			_, err = SaveStorageCredential(state, handoff)
+			if test.fails {
+				if err == nil {
+					t.Fatal("unsafe directory was accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Lstat(path)
+			if err != nil || !info.Mode().IsRegular() || info.Mode() != 0600 {
+				t.Fatalf("repaired credential = %v, %v", info, err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != string(want) {
+				t.Fatalf("repaired bytes = %q, %v", got, err)
+			}
+		})
+	}
+}
+
+func TestStorageCredentialReplayRepairsWrongOwner(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("changing credential ownership requires root")
+	}
+	state := t.TempDir()
+	handoff := testCredentialHandoff()
+	receipt, err := SaveStorageCredential(state, handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(state, credentialDirectory, receipt.Receipt)
+	if err := os.Chown(path, 1, -1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SaveStorageCredential(state, handoff); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || st.Uid != uint32(os.Geteuid()) || info.Mode() != 0600 {
+		t.Fatalf("repaired owner/mode = %#v", info)
 	}
 }

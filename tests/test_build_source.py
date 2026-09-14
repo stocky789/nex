@@ -4,6 +4,9 @@ import hashlib
 import importlib.util
 import os
 from pathlib import Path
+import subprocess
+import sys
+import tarfile
 import tempfile
 import unittest
 from unittest import mock
@@ -14,6 +17,27 @@ spec.loader.exec_module(source)
 
 
 class SourceArchiveTests(unittest.TestCase):
+    def test_archive_metadata_does_not_retain_builder_identity(self):
+        original = tarfile.TarFile.gettarinfo
+        def private_metadata(archive, *args, **kwargs):
+            info = original(archive, *args, **kwargs)
+            info.uid, info.gid = 12345, 23456
+            info.uname, info.gname = 'private-builder', 'private-group'
+            info.pax_headers = {'uname': 'private-builder', 'gid': '23456'}
+            return info
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'tree'
+            target.mkdir()
+            (target / 'LICENSE').write_text('retained notice')
+            output = Path(directory) / 'source.tar.gz'
+            with mock.patch.object(tarfile.TarFile, 'gettarinfo', private_metadata):
+                source.write_archive(target, output)
+            with tarfile.open(output) as archive:
+                self.assertEqual(archive.extractfile('nex-source/LICENSE').read(), b'retained notice')
+                for info in archive.getmembers():
+                    self.assertEqual((info.uid, info.gid, info.uname, info.gname), (0, 0, '', ''))
+                    self.assertFalse({'uid', 'gid', 'uname', 'gname'} & info.pax_headers.keys())
+
     def test_allowlist_excludes_runtime_installer_and_symlinks(self):
         with tempfile.TemporaryDirectory() as directory:
             root, target = Path(directory) / 'root', Path(directory) / 'out'
@@ -46,6 +70,18 @@ class SourceArchiveTests(unittest.TestCase):
         source.verify(b'package', integrity)
         with self.assertRaises(ValueError):
             source.verify(b'changed', integrity)
+
+    def test_cluster_workload_runner_is_retained(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'source'
+            source.copy_sources(Path(__file__).parents[1], target)
+            result = subprocess.run(
+                [sys.executable, str(target / 'tests/integration/cluster_storage_workloads.py'), '--help'],
+                cwd=target, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('--execute', result.stdout)
+            for name in ('test_cluster_storage_workloads.py', 'test_cluster_ha_lab.py'):
+                self.assertTrue((target / 'tests' / name).is_file())
 
     def test_go_license_falls_back_when_goroot_lacks_one(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -86,6 +122,16 @@ class MaintainerScriptRetentionTests(unittest.TestCase):
         self.assertTrue(referenced, 'no packaging paths found; the builders or this check moved')
         missing = sorted(p for p in referenced if p not in source.FILES and not self.covered_by_tree(p))
         self.assertEqual(missing, [], f'referenced by a package builder but absent from the source archive: {missing}')
+
+    def test_cluster_storage_delivery_sources_are_retained(self):
+        root = Path(__file__).parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'source'
+            source.copy_sources(root, target)
+            for path in ('packaging/cluster-storage/Dockerfile',
+                         'packaging/cluster-storage/build-matched-dlm.sh',
+                         'packaging/cluster-storage/cluster-iscsi-session'):
+                self.assertEqual((target / path).read_bytes(), (root / path).read_bytes())
 
     @staticmethod
     def covered_by_tree(path):

@@ -1,84 +1,48 @@
 # Installer progress, completion and failure verification
 
-Date: 2026-09-08. Nex Core 0.1.0-alpha1.
-
-API impact: none; local cdebconf GTK presentation and completion-note preseed only.
-No Controller operation, agent command/result or client-facing API changes. Guide impact: updated.
+2026-09-08, Nex Core 0.1.0-alpha1. Bug: BUG-0022 ([ledger](../../BUG_LEDGER.md)).
 
 ## Artifact and source checks
 
-Final ISO SHA256: `e4ab0825ccec83adecaf9a2e9877bc77610c23bb2d03ac9ed69eb02677f22a3a`.
-Build, checksum, retained shell source comparison and complete-initrd checks passed.
-Pinned frontend and strict config compilation passed. Existing shell/phase, handoff,
-hostname/preseed and installer mode/syntax checks passed. The preseed test requires the
-final note to remain unseen, preventing automatic acknowledgement.
+Final ISO SHA256 `e4ab0825ccec83adecaf9a2e9877bc77610c23bb2d03ac9ed69eb02677f22a3a`.
 
-The actual log reader is covered by `installer-shell.py`: missing files, empty files,
-bounded 128 KiB tails and invalid UTF-8 conversion passed. No new log sink or credentials
-logging was introduced. Logs are existing local diagnostics and are not redacted by
-the viewer. Both installer CI workflows run the source checks and native protocol test.
-Hosted CI was not run.
+| Check | Result |
+|---|---|
+| Build, checksum, retained shell source, complete initrd | Passed |
+| Pinned frontend and strict config compile; shell/phase, handoff, hostname/preseed, installer mode/syntax | Passed; preseed test requires the final note to stay unseen (no automatic acknowledgement) |
+| Log reader in `installer-shell.py` | Passed: missing/empty files, bounded 128 KiB tail, invalid UTF-8. No new log sink or credential logging; existing local logs are not redacted by the viewer |
+
+Both installer CI workflows run the source checks and native protocol test; hosted CI not run.
 
 ## Native protocol reproduction and regression
 
-A diskless QEMU/KVM guest used the shipping GTK frontend and test-only scripted debconf
-commands. The old initrd reproduced the blank body after PROGRESS STOP: only 54 dark
-pixels from the pointer in the tested body region, versus 2100 during active progress.
-The original regression failed on that blank interval. It also exercised a genuine
-cdebconf error question and progress resumption.
+Diskless QEMU/KVM, shipping GTK frontend, test-only scripted debconf commands.
 
-The final native run passed at 1024×768 with no disk attached. Waiting content appeared
-after component STOP and after the last progress task. The error reason remained visible;
-Alt+V opened the read-only log at the latest entries, including the synthetic preparation
-error marker. Ctrl+Home changed the view and Ctrl+End restored the initially shown tail.
-Escape returned to the unchanged error; Continue acknowledged it and real progress resumed.
-The custom Nex completion page remained blocking until restart acknowledgement.
-All captures below were inspected. The guest was terminated after the test.
+| Run | Result |
+|---|---|
+| Old initrd | Reproduced blank body after PROGRESS STOP (54 dark pointer pixels in the body region vs 2100 during progress); original regression failed on it |
+| Earlier log-viewer capture | Showed startup entries, not latest; one-shot GTK idle callback now waits for layout before focus/scroll |
+| Final, 1024×768, no disk | Passed: waiting content after component STOP and last task; error reason visible; Alt+V opened read-only log at latest entries incl. synthetic error marker; Ctrl+Home/Ctrl+End moved and restored the tail; Escape returned to unchanged error; Continue resumed real progress; completion page blocked until restart acknowledged; guest terminated |
 
-An earlier log-viewer capture exposed startup entries instead of the latest entries.
-A one-shot GTK idle callback now waits for layout before focusing and scrolling; the
-strengthened native keyboard/initial-tail assertions passed on the final ISO.
-
-![Original blank interval](progress/baseline-blank.png)
-![Waiting between components](progress/between-components.png)
-![Error reason and log access](progress/error-prompt.png)
-![Latest diagnostic entries](progress/error-log.png)
-![Error remains after closing the log](progress/error-log-closed.png)
-![Progress resumes](progress/resumed-progress.png)
-![Custom Nex completion](progress/installation-complete.png)
+Captures (not committed): `progress/baseline-blank.png`, `between-components.png`, `error-prompt.png`,
+`error-log.png`, `error-log-closed.png`, `resumed-progress.png`, `installation-complete.png`.
 
 ## Actual installation and explicit restart
 
-The preceding custom-completion ISO, SHA256
-`dd6ac0344213e447a9cdf17cff1377e5a5f679208c40d97f0c046e7052015cd9`,
-passed `wizard-review.py --resolution 1024x768 --nics 2 --capture-completion` using
-QEMU/KVM, 4 GiB RAM and a fresh 24 GiB raw-file disk. It performed the real installation,
-reached the native final stage, stayed running for 3 seconds without acknowledgement,
-then exited naturally with status 0 under QEMU's no-reboot setting after clicking
-Restart now. The test-only hook emitted a marker before the native final prompt; it
-did not manufacture success or replace the installer. Final cleanup/unmount/reboot
-follow acknowledgement. `completion-result.json` recorded all three assertions true.
+Preceding custom-completion ISO, SHA256 `dd6ac0344213e447a9cdf17cff1377e5a5f679208c40d97f0c046e7052015cd9`,
+passed `wizard-review.py --resolution 1024x768 --nics 2 --capture-completion` (QEMU/KVM, 4 GiB, fresh
+24 GiB raw disk): real installation reached the native final stage, stayed 3 s without acknowledgement,
+then exited 0 under QEMU no-reboot after Restart now. The test hook only emitted a marker before the
+final prompt. `completion-result.json` recorded all three assertions true. Capture
+`progress/installed-complete.png` (not committed).
 
-![Actual completed installation](progress/installed-complete.png)
-
-The final ISO adds error diagnostics; its completion implementation is unchanged.
-The custom completion and final restart were not reinstalled after that diagnostics-only
-addition. An earlier intermediate ISO also completed with no NICs after manually
-acknowledging Debian's no-Ethernet prompt; the two-NIC run needed no manual intervention.
+The final ISO adds diagnostics only; completion was not reinstalled on it. An intermediate ISO also
+completed with no NICs after manually acknowledging the no-Ethernet prompt; the two-NIC run needed none.
 
 ## Limits
 
-The final controlled protocol test simulates component commands, not a real failing
-disk/install or complete installation. Log test entries are synthetic. The separate
-full installation above proves the ordinary final gate and restart, not every hardware
-or failure scenario. This is Debian's existing completion gate, not independent installed
-host certification; some final hooks log failures without aborting. Native recovery
-controls remain; cancellation was source-reviewed, not exercised here.
-
-The GUI displays failures reported through installer error questions and main-menu
-component-failure handling. It cannot display a new error after power loss, a kernel
-crash, or a dead graphical server. Logs are local and bounded in the viewer; missing
-files report unavailable. Physical hardware, installed-host boot after restart and
-hosted CI were not verified in this slice. No real disks or live infrastructure were touched.
-
-Documentation structure and whitespace checks passed. Independent source, native capture, test and documentation review completed with no blocking findings.
+- Protocol test simulates component commands and synthetic log entries; no real failing disk or full install.
+- Full install proves the ordinary final gate and restart only; Debian's completion gate is not host certification, and some final hooks log failures without aborting. Cancellation source-reviewed only.
+- Cannot show errors after power loss, kernel crash or a dead graphical server. Missing log files report unavailable.
+- Not verified: physical hardware, installed-host boot after restart, hosted CI.
+- Docs structure/whitespace passed; independent source, capture, test and docs review found no blockers.

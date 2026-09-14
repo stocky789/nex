@@ -1,0 +1,36 @@
+{
+  "summary": "BUG-0171: Avoid changing an already exact QEMU access-probe mode. API impact: existing contract.",
+  "paths": [
+    "internal/vmhost/storage_native.go",
+    "internal/vmhost/storage_native_test.go",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-14-cluster-storage-reliability.md",
+    "docs/plans/2026-09-12-concurrent-pool-storage.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Internal proof optimization preserves the required QEMU file ownership, mode, fsync, access checks, cleanup, errors and operator workflows.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: existing contract. Controller storage operations still call Core prepare/validate and consume existing access and reconciliation results; no request, response, authentication or retry contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Existing network storage acceptance scope; no additional feature.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable state, setting or completed proof cache. The held ephemeral probe is removed; Core master registrations and existing inventory/adoption remain authoritative."
+  },
+  "verification": {
+    "method": "Nine paired native measurements on the original proof found exact0600 and descriptor stat3\u20136\u00b5s versus Chmod4.055\u20136.424ms while idle. Behavioral old-red replay preserved the original unconditional decision with an observational counter and failed oneChmod/expectedzero; fixed regression and exact-overlay vmhost/agent count1 normal/race suites passed. Independent source review passed. Clean native candidate acceptance and hosted CI remain pending; no deadline repair claimed.",
+    "evidence": [
+      "docs/qa/2026-09-14-cluster-storage-reliability.md"
+    ]
+  }
+}

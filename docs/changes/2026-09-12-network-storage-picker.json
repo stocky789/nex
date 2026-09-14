@@ -1,0 +1,26 @@
+{
+  "summary": "Correct BUG-0095 with live SMB/NFS folder picking and iSCSI target selection. API impact: existing contract for the picker; compatible source-name validation expansion uses the existing storage discovery and registration contracts.",
+  "paths": [
+    "web/src/storage.tsx",
+    "web/src/style.css",
+    "tests/integration/storage_repositories_browser.py",
+    "internal/protocol/storage.go",
+    "internal/protocol/storage_test.go",
+    "internal/vmhost/storage_discovery.go",
+    "internal/vmhost/storage_discovery_test.go",
+    "internal/vmhost/storage_mounts_test.go",
+    "docs/guide/storage-repositories.md",
+    "docs/plans/2026-09-11-vm-storage-repositories.md",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-12-network-storage-picker.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {"impact": "updated", "reason": "Document destination browsing, confirmation, cancellation and manual fallback with the actual picker labels.", "pages": ["docs/guide/storage-repositories.md"]},
+  "api": {"impact": "updated", "reason": "Describe root versus directory requests, original NFS export ownership and supported source-name semantics without new endpoints or durable relay state.", "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/index.html"]},
+  "roadmap": {"impact": "none", "reason": "Corrects the existing storage discovery workflow; does not complete an additional milestone or change pool/migration/HA acceptance.", "pages": []},
+  "state": {"owner": "none", "reason": "Picker navigation and discovery results are transient. Existing accepted storage registrations and credentials remain Core-owned with unchanged inventory/adoption."},
+  "verification": {"method": "Run focused backend and built-UI browser regressions, exercise the actual SMB/NFS/iSCSI disposable Core lab, and inspect screenshots; exact results and limitations are recorded in the QA report.", "evidence": ["docs/qa/2026-09-12-network-storage-picker.md", "tests/integration/storage_repositories_browser.py", "internal/vmhost/storage_discovery_test.go"]}
+}

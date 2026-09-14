@@ -236,6 +236,65 @@ func TestStorageCorePathsAllocatesISCSIMount(t *testing.T) {
 	}
 }
 
+func TestStorageProjectionUpgradesLegacyClusteredISCSICapabilities(t *testing.T) {
+	storage := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: "host-1", Generation: 1, Kind: protocol.StorageKindISCSI, Source: protocol.StorageSource{ISCSI: &protocol.ISCSIStorageSource{Mode: "clustered_gfs2", EligibleHostIDs: []string{"host-1", "host-2", "host-3"}}}}
+	got := storageProjection([]managedJournal{{Command: protocol.Command{Kind: "storage-register", Storage: &storage}, Result: protocol.Result{Status: "succeeded"}, AppliedStorage: &storage}})[storage.ID]
+	if !got.Capabilities.VMDisk || !got.Capabilities.Shared || !reflect.DeepEqual(got.Capabilities.EligibleHostIDs, storage.Source.ISCSI.EligibleHostIDs) {
+		t.Fatalf("legacy clustered iSCSI capabilities = %#v", got.Capabilities)
+	}
+}
+
+func TestClusteredISCSIUpdateRefusesBeforeNativePreparation(t *testing.T) {
+	oldRun := nativeRun
+	t.Cleanup(func() { nativeRun = oldRun })
+	nativeRun = func(context.Context, string, ...string) ([]byte, error) {
+		t.Fatal("clustered update issued a native command")
+		return nil, nil
+	}
+	current := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: "host-1", Generation: 1, Kind: protocol.StorageKindISCSI, Source: protocol.StorageSource{ISCSI: &protocol.ISCSIStorageSource{Mode: "clustered_gfs2"}}}
+	command := protocol.Command{Kind: "storage-update", StorageLifecycle: &protocol.StorageLifecycleRequest{Action: "update", RepositoryID: current.ID, PoolID: current.PoolID, HostID: current.HostID, ExpectedGeneration: 1, Registration: &protocol.StorageRegistration{Name: "renamed"}}}
+	e := NewManaged(filepath.Join(t.TempDir(), "managed"))
+	err := e.apply(context.Background(), &managedJournal{Command: command}, []managedJournal{{Command: protocol.Command{Kind: "storage-register", Storage: &current}, Result: protocol.Result{Status: "succeeded"}, AppliedStorage: &current}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "coordinated") {
+		t.Fatalf("clustered update = %v", err)
+	}
+}
+
+func TestClusteredISCSIDetachRefusesBeforeNativePreparation(t *testing.T) {
+	oldRun := nativeRun
+	t.Cleanup(func() { nativeRun = oldRun })
+	nativeRun = func(context.Context, string, ...string) ([]byte, error) {
+		t.Fatal("clustered detach issued a native command")
+		return nil, nil
+	}
+	current := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: "host-1", Generation: 1, Kind: protocol.StorageKindISCSI, Source: protocol.StorageSource{ISCSI: &protocol.ISCSIStorageSource{Mode: "clustered_gfs2"}}}
+	command := protocol.Command{Kind: "storage-detach", StorageLifecycle: &protocol.StorageLifecycleRequest{Action: "detach", RepositoryID: current.ID, PoolID: current.PoolID, HostID: current.HostID, ExpectedGeneration: 1}}
+	e := NewManaged(filepath.Join(t.TempDir(), "managed"))
+	err := e.apply(context.Background(), &managedJournal{Command: command}, []managedJournal{{Command: protocol.Command{Kind: "storage-register", Storage: &current}, Result: protocol.Result{Status: "succeeded"}, AppliedStorage: &current}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "coordinated") {
+		t.Fatalf("clustered detach = %v", err)
+	}
+}
+
+func TestClusteredISCSIRegistrationRestoresOnlyTrustedConfigMountPath(t *testing.T) {
+	config := clusterTestConfig()
+	storage := protocol.StorageRegistration{ID: config.RepositoryID, PoolID: config.PoolID, HostID: "host-1", Generation: config.Generation, Kind: protocol.StorageKindISCSI, Source: protocol.StorageSource{ISCSI: &protocol.ISCSIStorageSource{
+		Mode: "clustered_gfs2", ClusterID: config.ClusterID, LockTable: config.LockTable, MountPath: config.MountPath,
+		EligibleHostIDs: []string{"host-1", "host-2", "host-3"}, TargetIQN: "iqn.2026-09.example.test:nex", WWID: "3600140509f6f9e020ef432c841051db1", FilesystemUUID: "11111111-2222-3333-4444-555555555555",
+	}}}
+	if err := restoreClusteredRegistrationPath(WithStorageClusterConfig(context.Background(), config), &storage); err != nil {
+		t.Fatal(err)
+	}
+	if storage.Path != config.MountPath {
+		t.Fatalf("trusted clustered mount path = %q, want %q", storage.Path, config.MountPath)
+	}
+	storage.Path = ""
+	storage.Source.ISCSI.MountPath = "/untrusted"
+	if err := restoreClusteredRegistrationPath(WithStorageClusterConfig(context.Background(), config), &storage); err == nil {
+		t.Fatal("untrusted clustered mount path was accepted")
+	}
+}
+
 func TestISCSIRegistrationConflictPreventsSecondSessionPreparation(t *testing.T) {
 	oldRun := nativeRun
 	t.Cleanup(func() { nativeRun = oldRun })
@@ -510,6 +569,143 @@ func TestNextStorageReconcileOldestDue(t *testing.T) {
 	}
 }
 
+func TestReconcileRemoteVMCreateStoppedObservesOnly(t *testing.T) {
+	e := startEngine(t)
+	v := managedTestVM()
+	v.StartAfterCreate = true
+	request := protocol.StorageRegistration{ID: v.Disks[0].StorageID, PoolID: v.PoolID, HostID: v.HostID, Name: "shared", Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/vms"}}}
+	remote := request
+	remote.Path, remote.Generation = "/remote", 1
+	if err := e.save(managedJournal{Command: protocol.Command{OperationID: "storage", Kind: "storage-register", Storage: &request}, AppliedStorage: &remote, Result: protocol.Result{OperationID: "storage", Status: "succeeded", ObservedAt: time.Now().UTC()}, Stage: "registered"}); err != nil {
+		t.Fatal(err)
+	}
+	j := managedJournal{Command: protocol.Command{OperationID: "remote-create", Kind: "vm-create", VM: &v}, Result: protocol.Result{OperationID: "remote-create", Status: "needs_attention", Error: "interrupted", ObservedAt: time.Now().Add(-2 * time.Minute)}, Stage: "defining", Domain: []byte("<domain/>")}
+	if err := e.save(j); err != nil {
+		t.Fatal(err)
+	}
+	observed, claimed := 0, 0
+	e.observe = func(_ context.Context, got managedJournal, state string) error {
+		observed++
+		if got.Command.OperationID != j.Command.OperationID || state != "shut off" {
+			t.Fatalf("unexpected observation %+v state=%q", got, state)
+		}
+		return nil
+	}
+	if err := e.ReconcileRemoteVMCreateStopped(context.Background(), func(_ context.Context, got protocol.VMCreateSpec) error {
+		if got.ID != v.ID || got.PoolID != v.PoolID || got.HostID != v.HostID || len(got.Disks) != 1 {
+			t.Fatalf("unexpected validation input %+v", got)
+		}
+		return nil
+	}, func(got protocol.VMCreateSpec) error {
+		claimed++
+		if got.ID != v.ID {
+			t.Fatalf("claim VM %q", got.ID)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.readJournal("remote-create.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed != 1 || claimed != 1 || got.Result.Status != "succeeded" || got.Stage != "defined" || got.Start != startInterrupted {
+		t.Fatalf("remote stopped recovery = observed %d claimed %d journal %+v", observed, claimed, got)
+	}
+	// The only native seam was the observer. In particular this path never calls
+	// the vm-create replay path that can allocate disks or start the guest.
+	if err = e.ReconcileRemoteVMCreateStopped(context.Background(), func(context.Context, protocol.VMCreateSpec) error {
+		t.Fatal("settled operation revalidated")
+		return nil
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReconcileRemoteVMCreateStoppedRefusesInvalidAdmission(t *testing.T) {
+	e := startEngine(t)
+	v := managedTestVM()
+	request := protocol.StorageRegistration{ID: v.Disks[0].StorageID, PoolID: v.PoolID, HostID: v.HostID, Name: "shared", Kind: protocol.StorageKindSMB, Source: protocol.StorageSource{SMB: &protocol.SMBStorageSource{Server: "smb.example.test", Share: "vms"}}}
+	remote := request
+	remote.Path, remote.Generation = "/remote", 1
+	for _, entry := range []managedJournal{
+		{Command: protocol.Command{OperationID: "storage", Kind: "storage-register", Storage: &request}, AppliedStorage: &remote, Result: protocol.Result{OperationID: "storage", Status: "succeeded", ObservedAt: time.Now().UTC()}, Stage: "registered"},
+		{Command: protocol.Command{OperationID: "remote-create", Kind: "vm-create", VM: &v}, Result: protocol.Result{OperationID: "remote-create", Status: "needs_attention", Error: "interrupted", ObservedAt: time.Now().Add(-2 * time.Minute)}, Stage: "defining", Domain: []byte("<domain/>")},
+	} {
+		if err := e.save(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.observe = func(context.Context, managedJournal, string) error {
+		t.Fatal("invalid admission observed native VM")
+		return nil
+	}
+	if err := e.ReconcileRemoteVMCreateStopped(context.Background(), func(context.Context, protocol.VMCreateSpec) error {
+		return errors.New("pool owner or storage is not currently eligible")
+	}, func(protocol.VMCreateSpec) error { t.Fatal("invalid admission claimed autostart"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.readJournal("remote-create.json")
+	if err != nil || got.Result.Status != "needs_attention" || got.Stage != "defining" || !strings.Contains(got.Result.Error, "not currently eligible") {
+		t.Fatalf("invalid admission journal %+v err=%v", got, err)
+	}
+}
+
+func TestReconcileRemoteVMCreateStoppedDeadlineCannotSettle(t *testing.T) {
+	e := startEngine(t)
+	v := managedTestVM()
+	request := protocol.StorageRegistration{ID: v.Disks[0].StorageID, PoolID: v.PoolID, HostID: v.HostID, Name: "shared", Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/vms"}}}
+	remote := request
+	remote.Path, remote.Generation = "/remote", 1
+	for _, entry := range []managedJournal{
+		{Command: protocol.Command{OperationID: "storage", Kind: "storage-register", Storage: &request}, AppliedStorage: &remote, Result: protocol.Result{OperationID: "storage", Status: "succeeded", ObservedAt: time.Now().UTC()}, Stage: "registered"},
+		{Command: protocol.Command{OperationID: "remote-create", Kind: "vm-create", VM: &v}, Result: protocol.Result{OperationID: "remote-create", Status: "needs_attention", Error: "interrupted", ObservedAt: time.Now().Add(-2 * time.Minute)}, Stage: "defined", Domain: []byte("<domain/>")},
+	} {
+		if err := e.save(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	observed := 0
+	e.observe = func(context.Context, managedJournal, string) error { observed++; return nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := e.ReconcileRemoteVMCreateStopped(ctx, func(context.Context, protocol.VMCreateSpec) error { return nil }, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("deadline reconciliation error = %v", err)
+	}
+	if observed != 0 {
+		t.Fatal("expired context observed native VM")
+	}
+	got, err := e.readJournal("remote-create.json")
+	if err != nil || got.Result.Status != "needs_attention" || got.Stage != "defined" {
+		t.Fatalf("expired context settled journal %+v err=%v", got, err)
+	}
+}
+
+func TestReconcileRemoteVMCreateStoppedCanceledClaimCannotSettle(t *testing.T) {
+	e := startEngine(t)
+	v := managedTestVM()
+	request := protocol.StorageRegistration{ID: v.Disks[0].StorageID, PoolID: v.PoolID, HostID: v.HostID, Name: "shared", Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/vms"}}}
+	remote := request
+	remote.Path, remote.Generation = "/remote", 1
+	for _, entry := range []managedJournal{
+		{Command: protocol.Command{OperationID: "storage", Kind: "storage-register", Storage: &request}, AppliedStorage: &remote, Result: protocol.Result{OperationID: "storage", Status: "succeeded", ObservedAt: time.Now().UTC()}, Stage: "registered"},
+		{Command: protocol.Command{OperationID: "remote-create", Kind: "vm-create", VM: &v}, Result: protocol.Result{OperationID: "remote-create", Status: "needs_attention", Error: "interrupted", ObservedAt: time.Now().Add(-2 * time.Minute)}, Stage: "defined", Domain: []byte("<domain/>")},
+	} {
+		if err := e.save(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.observe = func(context.Context, managedJournal, string) error { return nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := e.ReconcileRemoteVMCreateStopped(ctx, func(context.Context, protocol.VMCreateSpec) error { return nil }, func(protocol.VMCreateSpec) error { cancel(); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.readJournal("remote-create.json")
+	if err != nil || got.Result.Status != "needs_attention" || got.Stage != "defined" || !strings.Contains(got.Result.Error, context.Canceled.Error()) {
+		t.Fatalf("canceled claim settled journal %+v err=%v", got, err)
+	}
+}
+
 func TestReconcileStoragePersistsOldestOriginalCommand(t *testing.T) {
 	e := NewManaged(t.TempDir())
 	now := time.Now().UTC()
@@ -737,6 +933,207 @@ func TestManagedCorruptJournalFailsClosed(t *testing.T) {
 	c := protocol.Command{OperationID: "good", Kind: "network-register", Network: &protocol.NetworkRegistration{ID: "n", PoolID: "p", HostID: "h", Kind: "network", Source: "default"}}
 	if _, err := e.Execute(context.Background(), c, nil); err == nil {
 		t.Fatal("corrupt journal accepted")
+	}
+}
+
+func TestSuccessfulVMUpdateEvidenceRequiresExactSucceededHistory(t *testing.T) {
+	write := func(t *testing.T, e *ManagedEngine, j managedJournal) {
+		t.Helper()
+		if err := e.save(j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	newEngine := func(t *testing.T) (*ManagedEngine, protocol.VMCreateSpec, protocol.VMCreateSpec) {
+		t.Helper()
+		e := NewManaged(t.TempDir())
+		if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		previous := managedTestVM()
+		current := previous
+		current.Revision, current.Autostart = 1, true
+		return e, previous, current
+	}
+	t.Run("exact predecessor and successor", func(t *testing.T) {
+		e, previous, current := newEngine(t)
+		write(t, e, managedJournal{Command: protocol.Command{OperationID: "create", Kind: "vm-create", VM: &previous}, Result: protocol.Result{OperationID: "create", Status: "succeeded"}})
+		write(t, e, managedJournal{Command: protocol.Command{OperationID: "update", Kind: "vm-update", VM: &current}, Result: protocol.Result{OperationID: "update", Status: "succeeded"}})
+		got, err := e.SuccessfulVMUpdateEvidence(context.Background(), current.ID)
+		if err != nil || got.OperationID != "update" || got.Status != "succeeded" || !reflect.DeepEqual(got.Previous, previous) || !reflect.DeepEqual(got.Current, current) {
+			t.Fatalf("evidence %#v, %v", got, err)
+		}
+	})
+	t.Run("duplicate current revision", func(t *testing.T) {
+		e, previous, current := newEngine(t)
+		write(t, e, managedJournal{Command: protocol.Command{OperationID: "create", Kind: "vm-create", VM: &previous}, Result: protocol.Result{OperationID: "create", Status: "succeeded"}})
+		write(t, e, managedJournal{Command: protocol.Command{OperationID: "update-one", Kind: "vm-update", VM: &current}, Result: protocol.Result{OperationID: "update-one", Status: "succeeded"}})
+		write(t, e, managedJournal{Command: protocol.Command{OperationID: "update-two", Kind: "vm-update", VM: &current}, Result: protocol.Result{OperationID: "update-two", Status: "succeeded"}})
+		if _, err := e.SuccessfulVMUpdateEvidence(context.Background(), current.ID); err == nil {
+			t.Fatal("duplicate revision accepted")
+		}
+	})
+	t.Run("missing predecessor", func(t *testing.T) {
+		e, _, current := newEngine(t)
+		write(t, e, managedJournal{Command: protocol.Command{OperationID: "update", Kind: "vm-update", VM: &current}, Result: protocol.Result{OperationID: "update", Status: "succeeded"}})
+		if _, err := e.SuccessfulVMUpdateEvidence(context.Background(), current.ID); err == nil {
+			t.Fatal("missing predecessor accepted")
+		}
+	})
+	for _, tc := range []struct {
+		status   string
+		revision int
+	}{
+		{status: "pending", revision: 1},
+		{status: "needs_attention", revision: 2},
+	} {
+		t.Run("unresolved "+tc.status+" update", func(t *testing.T) {
+			e, previous, current := newEngine(t)
+			newer := current
+			newer.Revision = tc.revision
+			write(t, e, managedJournal{Command: protocol.Command{OperationID: "create", Kind: "vm-create", VM: &previous}, Result: protocol.Result{OperationID: "create", Status: "succeeded"}})
+			write(t, e, managedJournal{Command: protocol.Command{OperationID: "update", Kind: "vm-update", VM: &current}, Result: protocol.Result{OperationID: "update", Status: "succeeded"}})
+			write(t, e, managedJournal{Command: protocol.Command{OperationID: "unresolved-" + tc.status, Kind: "vm-update", VM: &newer}, Result: protocol.Result{OperationID: "unresolved-" + tc.status, Status: tc.status}})
+			if _, err := e.SuccessfulVMUpdateEvidence(context.Background(), current.ID); err == nil {
+				t.Fatalf("unresolved %s update accepted", tc.status)
+			}
+		})
+	}
+	t.Run("failed later update does not supersede", func(t *testing.T) {
+		e, previous, current := newEngine(t)
+		failed := current
+		failed.Revision = 2
+		write(t, e, managedJournal{Command: protocol.Command{OperationID: "create", Kind: "vm-create", VM: &previous}, Result: protocol.Result{OperationID: "create", Status: "succeeded"}})
+		write(t, e, managedJournal{Command: protocol.Command{OperationID: "update", Kind: "vm-update", VM: &current}, Result: protocol.Result{OperationID: "update", Status: "succeeded"}})
+		write(t, e, managedJournal{Command: protocol.Command{OperationID: "failed", Kind: "vm-update", VM: &failed}, Result: protocol.Result{OperationID: "failed", Status: "failed"}})
+		if got, err := e.SuccessfulVMUpdateEvidence(context.Background(), current.ID); err != nil || !reflect.DeepEqual(got.Current, current) {
+			t.Fatalf("failed update changed evidence %#v, %v", got, err)
+		}
+	})
+	t.Run("unreadable journal", func(t *testing.T) {
+		e, _, current := newEngine(t)
+		if err := os.WriteFile(filepath.Join(e.stateDir, "bad.json"), []byte("{"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.SuccessfulVMUpdateEvidence(context.Background(), current.ID); err == nil {
+			t.Fatal("unreadable journal accepted")
+		}
+	})
+	t.Run("cancelled context", func(t *testing.T) {
+		e, _, current := newEngine(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := e.SuccessfulVMUpdateEvidence(ctx, current.ID); !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled evidence = %v", err)
+		}
+	})
+}
+
+func TestFailedVMUpdateEvidenceRequiresExactFailedCurrentHistory(t *testing.T) {
+	write := func(t *testing.T, e *ManagedEngine, j managedJournal) {
+		t.Helper()
+		if err := e.save(j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	newEngine := func(t *testing.T) (*ManagedEngine, protocol.VMCreateSpec, protocol.VMCreateSpec) {
+		t.Helper()
+		e := NewManaged(t.TempDir())
+		if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		previous := managedTestVM()
+		attempted := previous
+		attempted.Revision, attempted.Autostart = 1, true
+		return e, previous, attempted
+	}
+	valid := func(t *testing.T, e *ManagedEngine, previous, attempted protocol.VMCreateSpec) {
+		t.Helper()
+		write(t, e, managedJournal{Command: protocol.Command{OperationID: "create", Kind: "vm-create", VM: &previous}, Result: protocol.Result{OperationID: "create", Status: "succeeded"}})
+		write(t, e, managedJournal{Command: protocol.Command{OperationID: "failed", Kind: "vm-update", VM: &attempted}, Result: protocol.Result{OperationID: "failed", Status: "failed"}, Stage: "validating"})
+	}
+	t.Run("exact failed update retains predecessor", func(t *testing.T) {
+		e, previous, attempted := newEngine(t)
+		valid(t, e, previous, attempted)
+		got, err := e.FailedVMUpdateEvidence(context.Background(), attempted.ID, "failed", attempted)
+		if err != nil || got.OperationID != "failed" || got.Status != "failed" || !reflect.DeepEqual(got.Previous, previous) || !reflect.DeepEqual(got.Current, attempted) {
+			t.Fatalf("evidence %#v, %v", got, err)
+		}
+	})
+	for _, status := range []string{"pending", "needs_attention"} {
+		t.Run("target "+status+" is not failed evidence", func(t *testing.T) {
+			e, previous, attempted := newEngine(t)
+			write(t, e, managedJournal{Command: protocol.Command{OperationID: "create", Kind: "vm-create", VM: &previous}, Result: protocol.Result{OperationID: "create", Status: "succeeded"}})
+			write(t, e, managedJournal{Command: protocol.Command{OperationID: "failed", Kind: "vm-update", VM: &attempted}, Result: protocol.Result{OperationID: "failed", Status: status}, Stage: "validating"})
+			if _, err := e.FailedVMUpdateEvidence(context.Background(), attempted.ID, "failed", attempted); err == nil {
+				t.Fatalf("%s target accepted as failed evidence", status)
+			}
+		})
+	}
+	t.Run("post-native stage is not failed evidence", func(t *testing.T) {
+		e, previous, attempted := newEngine(t)
+		write(t, e, managedJournal{Command: protocol.Command{OperationID: "create", Kind: "vm-create", VM: &previous}, Result: protocol.Result{OperationID: "create", Status: "succeeded"}})
+		write(t, e, managedJournal{Command: protocol.Command{OperationID: "failed", Kind: "vm-update", VM: &attempted}, Result: protocol.Result{OperationID: "failed", Status: "failed"}, Stage: "defining"})
+		if _, err := e.FailedVMUpdateEvidence(context.Background(), attempted.ID, "failed", attempted); err == nil {
+			t.Fatal("post-native failure accepted")
+		}
+	})
+	t.Run("operation and attempted definition must match", func(t *testing.T) {
+		e, previous, attempted := newEngine(t)
+		valid(t, e, previous, attempted)
+		if _, err := e.FailedVMUpdateEvidence(context.Background(), attempted.ID, "other", attempted); err == nil {
+			t.Fatal("wrong operation accepted")
+		}
+		mismatch := attempted
+		mismatch.Autostart = false
+		if _, err := e.FailedVMUpdateEvidence(context.Background(), attempted.ID, "failed", mismatch); err == nil {
+			t.Fatal("wrong attempted definition accepted")
+		}
+	})
+	t.Run("missing predecessor is rejected", func(t *testing.T) {
+		e, _, attempted := newEngine(t)
+		write(t, e, managedJournal{Command: protocol.Command{OperationID: "failed", Kind: "vm-update", VM: &attempted}, Result: protocol.Result{OperationID: "failed", Status: "failed"}, Stage: "validating"})
+		if _, err := e.FailedVMUpdateEvidence(context.Background(), attempted.ID, "failed", attempted); err == nil {
+			t.Fatal("missing predecessor accepted")
+		}
+	})
+	t.Run("newer successful or unresolved mutation is rejected", func(t *testing.T) {
+		for _, status := range []string{"succeeded", "pending", "needs_attention"} {
+			t.Run(status, func(t *testing.T) {
+				e, previous, attempted := newEngine(t)
+				valid(t, e, previous, attempted)
+				newer := attempted
+				newer.Revision = 2
+				write(t, e, managedJournal{Command: protocol.Command{OperationID: "newer-" + status, Kind: "vm-update", VM: &newer}, Result: protocol.Result{OperationID: "newer-" + status, Status: status}})
+				if _, err := e.FailedVMUpdateEvidence(context.Background(), attempted.ID, "failed", attempted); err == nil {
+					t.Fatalf("newer %s update accepted", status)
+				}
+			})
+		}
+	})
+}
+
+func TestVMHasPoolSharedStorageHistorySurvivesLaterLocalUpdate(t *testing.T) {
+	e := NewManaged(t.TempDir())
+	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	v := managedTestVM()
+	storage := protocol.StorageRegistration{ID: v.Disks[0].StorageID, PoolID: v.PoolID, HostID: v.HostID, Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/guests", Directory: "vm"}}}
+	if err := e.save(managedJournal{Command: protocol.Command{OperationID: "storage", Kind: "storage-register", Storage: &storage}, Result: protocol.Result{OperationID: "storage", Status: "succeeded"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.save(managedJournal{Command: protocol.Command{OperationID: "create", Kind: "vm-create", VM: &v}, Result: protocol.Result{OperationID: "create", Status: "succeeded"}}); err != nil {
+		t.Fatal(err)
+	}
+	local := v
+	local.Revision = 1
+	local.Disks = append([]protocol.VMDisk(nil), v.Disks...)
+	local.Disks[0].StorageID = "local-repo"
+	if err := e.save(managedJournal{Command: protocol.Command{OperationID: "local", Kind: "vm-update", VM: &local}, Result: protocol.Result{OperationID: "local", Status: "succeeded"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.VMHasPoolSharedStorageHistory(context.Background(), v.ID); err != nil || !got {
+		t.Fatalf("shared history after local successor = %v, %v", got, err)
 	}
 }
 
@@ -1186,6 +1583,46 @@ func TestAppliedSurvivesCorruptJournalEntry(t *testing.T) {
 	// A journal directory that does not exist yet is an empty state, not a failure.
 	if got, checks = NewManaged(filepath.Join(t.TempDir(), "absent")).Applied(context.Background()); len(got.Storage) != 0 || checks[0].Status != "healthy" {
 		t.Fatalf("absent journal: %+v %+v", got, checks)
+	}
+}
+
+func TestAppliedStorageProjectsDurableStorageWithoutPendingEntries(t *testing.T) {
+	e := NewManaged(t.TempDir())
+	base := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: "host-1", Name: "before", Path: "/srv/before", Generation: 1}
+	next := base
+	next.Name, next.Path, next.Generation = "after", "/srv/after", 2
+	tombstoned := protocol.StorageRegistration{ID: "gone", PoolID: "pool-1", HostID: "host-1", Name: "gone", Path: "/srv/gone", Generation: 1}
+	pending := protocol.StorageRegistration{ID: "pending", PoolID: "pool-1", HostID: "host-1", Name: "pending", Path: "/srv/pending", Generation: 1}
+	for _, j := range []managedJournal{
+		{Command: protocol.Command{OperationID: "register", Kind: "storage-register", Storage: &base}, Result: protocol.Result{OperationID: "register", Status: "succeeded"}},
+		{Command: protocol.Command{OperationID: "update", Kind: "storage-update", StorageLifecycle: &protocol.StorageLifecycleRequest{Action: "update", RepositoryID: base.ID, PoolID: base.PoolID, HostID: base.HostID, ExpectedGeneration: 1, Registration: &next}}, AppliedStorage: &next, Result: protocol.Result{OperationID: "update", Status: "succeeded"}},
+		{Command: protocol.Command{OperationID: "old", Kind: "storage-register", Storage: &tombstoned}, Result: protocol.Result{OperationID: "old", Status: "succeeded"}},
+		{Command: protocol.Command{OperationID: "detach", Kind: "storage-detach", StorageLifecycle: &protocol.StorageLifecycleRequest{Action: "detach", RepositoryID: tombstoned.ID, PoolID: tombstoned.PoolID, HostID: tombstoned.HostID, ExpectedGeneration: 1}}, Result: protocol.Result{OperationID: "detach", Status: "succeeded"}},
+		{Command: protocol.Command{OperationID: "pending", Kind: "storage-register", Storage: &pending}, Result: protocol.Result{OperationID: "pending", Status: "pending"}},
+	} {
+		if err := e.save(j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(e.stateDir, "bad.json"), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	storage, checks := e.AppliedStorage()
+	byID := map[string]protocol.StorageRegistration{}
+	for _, s := range storage {
+		byID[s.ID] = s
+	}
+	if got := byID[base.ID]; got.Generation != 2 || got.Name != "after" || got.Path != "/srv/after" || got.OperationID != "" || got.Status != "" || got.Error != "" {
+		t.Fatalf("updated storage projection = %#v", got)
+	}
+	if got, ok := byID[tombstoned.ID]; !ok || !got.Tombstone || got.Generation != 2 {
+		t.Fatalf("detach tombstone = %#v", got)
+	}
+	if _, ok := byID[pending.ID]; ok {
+		t.Fatalf("pending storage entered applied projection: %#v", storage)
+	}
+	if len(checks) != 1 || checks[0].Name != "managed-journal" || checks[0].Status != "failed" || !strings.Contains(checks[0].Error, "bad.json") {
+		t.Fatalf("storage journal check = %#v", checks)
 	}
 }
 

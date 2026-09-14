@@ -168,6 +168,8 @@ func (s *Service) Handler() http.Handler {
 	m.HandleFunc("POST /api/local/v1/pool/join", s.auth(s.joinPool))
 	m.HandleFunc("POST /api/local/v1/pool/join-csr", s.auth(s.poolJoinCSR))
 	m.HandleFunc("POST /api/local/v1/pool/join-offer", s.auth(s.poolJoinOffer))
+	m.HandleFunc("POST /api/local/v1/pool/storage-cluster/apply", s.auth(s.storageClusterApply))
+	m.HandleFunc("GET /api/local/v1/pool/storage-cluster", s.auth(s.storageClusterStatus))
 	m.HandleFunc("GET /api/local/v1/vms", s.auth(s.vms))
 	m.HandleFunc("POST /api/local/v1/vms/{id}/actions", s.auth(s.power))
 	m.HandleFunc("GET /api/local/v1/vms/{id}/console", s.auth(s.console))

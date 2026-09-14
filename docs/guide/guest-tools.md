@@ -10,8 +10,7 @@ guest reports, and the [console](vm-console.md) clipboard works in both directio
 
 The guest tools are standard packages, not Nex-specific software. VMs created before this
 feature keep their original definitions: their page shows **Channel missing** for the
-clipboard and no display resize until they are recreated. Windows guests have not been
-walked through yet; see [Verification](#verification).
+clipboard and no display resize until they are recreated.
 
 On Windows the same virtio-win package carries the memory balloon driver, so a VM created
 with the **Maximum** [memory mode](create-virtual-machine.md#memory-modes) returns no freed
@@ -118,11 +117,7 @@ guest hand back pages it has already freed; it does not make Nex rebalance memor
 
 ## Verification
 
-Executed checks are recorded in the [console features QA report](../qa/console-features/checks.md):
-Go tests for the VM definition devices, guest observation parsing and the VM list; contract
-checks for the new schema; and a browser walkthrough in a disposable nested-KVM lab with a
-Debian 13 guest where the guest tools were installed through cloud-init, the **Guest tools**
-panel was inspected, and the clipboard was verified inside the guest with `xclip` through the
-guest agent. The install advisory shown when tools are absent (Linux and Windows) was verified
-by rendering the panel in the three guest states. Windows guests, physical hardware and hosted
-CI have not been exercised.
+Linux guest tools, the **Guest tools** panel and clipboard were walked through in a disposable
+nested-KVM lab; Windows guests and physical hardware were not. See the
+[console features QA report](../qa/console-features/checks.md).
+

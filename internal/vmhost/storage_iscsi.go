@@ -20,6 +20,7 @@ import (
 
 var iscsiUUID = regexp.MustCompile(`^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$`)
 var iscsiWWID = regexp.MustCompile(`^[A-Za-z0-9._:-]+$`)
+var inspectISCSIPathAccess = storagePathAccess
 
 func canonicalWWID(value string) string {
 	return strings.TrimPrefix(strings.ToLower(value), "0x")
@@ -57,12 +58,12 @@ func validISCSI(s protocol.StorageRegistration) (*protocol.ISCSIStorageSource, e
 	if s.StorageKind() != protocol.StorageKindISCSI || v == nil || s.Source.NFS != nil || s.Source.ZFS != nil || s.Source.SMB != nil || (s.Path != "" && s.Path != v.MountPath) || v.MountPath != remoteMountPath(s) ||
 		v.Portal == "" || len(v.Portal) > 253 || strings.Count(v.Portal, ":") > 1 || strings.ContainsAny(v.Portal, "/\\\x00 \t\r\n") ||
 		!(strings.HasPrefix(v.TargetIQN, "iqn.") || strings.HasPrefix(v.TargetIQN, "eui.") || strings.HasPrefix(v.TargetIQN, "naa.")) || len(v.TargetIQN) > 223 || strings.ContainsAny(v.TargetIQN, "\x00 \t\r\n") ||
-		!iscsiWWID.MatchString(v.WWID) || !iscsiUUID.MatchString(v.FilesystemUUID) || !v.ExclusiveTarget || !filepath.IsAbs(v.MountPath) || filepath.Clean(v.MountPath) != v.MountPath || v.MountPath == "/" || strings.ContainsAny(v.MountPath, "\x00\r\n") {
+		!iscsiWWID.MatchString(v.WWID) || !iscsiUUID.MatchString(v.FilesystemUUID) || (!protocol.IsClusteredISCSI(s) && !v.ExclusiveTarget) || (protocol.IsClusteredISCSI(s) && (v.ExclusiveTarget || v.ClusterID == "" || v.LockTable == "" || len(v.EligibleHostIDs) < 3 || len(v.EligibleHostIDs) > 5)) || !filepath.IsAbs(v.MountPath) || filepath.Clean(v.MountPath) != v.MountPath || v.MountPath == "/" || strings.ContainsAny(v.MountPath, "\x00\r\n") {
 		return nil, errors.New("invalid iSCSI storage source")
 	}
 	if s.Identity.ISCSI != nil {
 		i := s.Identity.ISCSI
-		if i.TargetIQN != v.TargetIQN || i.LUN != v.LUN || canonicalWWID(i.WWID) != canonicalWWID(v.WWID) || i.FilesystemUUID != v.FilesystemUUID {
+		if i.TargetIQN != v.TargetIQN || i.LUN != v.LUN || canonicalWWID(i.WWID) != canonicalWWID(v.WWID) || i.FilesystemUUID != v.FilesystemUUID || (protocol.IsClusteredISCSI(s) && (i.FilesystemType != "gfs2" || i.GFS2LockTable != v.LockTable || i.GFS2Journals < uint32(len(v.EligibleHostIDs)))) {
 			return nil, errors.New("iSCSI storage identity does not match source")
 		}
 	}
@@ -248,21 +249,42 @@ func restoreISCSIReconnect(ctx context.Context, s protocol.StorageRegistration, 
 	return fmt.Errorf("%w: %w", ErrISCSIRollbackUncertain, errors.Join(errs...))
 }
 
+type iscsiFilesystemLookup func([]byte, string, uint64) (iscsiFilesystemInfo, error)
+
 // waitISCSIFilesystem gives udev a bounded chance to publish the stable by-UUID path after
 // login, then still requires the unique expected UUID/WWID/HCTL tuple before mounting.
 func waitISCSIFilesystem(ctx context.Context, v *protocol.ISCSIStorageSource) (iscsiFilesystemInfo, error) {
+	return waitISCSIFilesystemWith(ctx, v, iscsiFilesystemForLUNInfo)
+}
+
+// waitISCSIFilesystemWith shares the bounded, observational udev/lsblk wait
+// between ordinary and clustered iSCSI. lookup remains filesystem-specific;
+// callers must still verify the returned WWID against their durable identity.
+func waitISCSIFilesystemWith(ctx context.Context, v *protocol.ISCSIStorageSource, lookup iscsiFilesystemLookup) (iscsiFilesystemInfo, error) {
 	var last error
 	for attempt := 0; attempt < 12; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return iscsiFilesystemInfo{}, err
+		}
 		if _, err := nativeRun(ctx, "udevadm", "settle", "--timeout=2"); err != nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return iscsiFilesystemInfo{}, contextErr
+			}
 			last = fmt.Errorf("iSCSI device discovery did not settle: %w", err)
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			return iscsiFilesystemInfo{}, err
+		}
 		out, err := nativeRun(ctx, "lsblk", "--json", "--output", "PATH,TYPE,UUID,WWN,FSTYPE,HCTL")
+		if contextErr := ctx.Err(); contextErr != nil {
+			return iscsiFilesystemInfo{}, contextErr
+		}
 		if err != nil {
 			last = err
 			continue
 		}
-		filesystem, err := iscsiFilesystemForLUNInfo(out, v.FilesystemUUID, v.LUN)
+		filesystem, err := lookup(out, v.FilesystemUUID, v.LUN)
 		if err == nil {
 			return filesystem, nil
 		}
@@ -336,6 +358,14 @@ func configureISCSICHAP(ctx context.Context, s protocol.StorageRegistration, v *
 		if string(updated) == string(config) && !rotating {
 			return iscsiNodeChange{}, nil
 		}
+		// Older Nex renderers accumulated blank lines immediately before their
+		// marker. That has no iSCSI authentication effect and must not be
+		// mistaken for a live credential rotation: changing an active session
+		// on that basis would require an unnecessary reconnect. Leave the legacy
+		// bytes in place until a real credential/lifecycle update occurs.
+		if !rotating && ownedISCSINodeAuthMatches(config, username, secret) {
+			return iscsiNodeChange{}, nil
+		}
 		if rotating && string(updated) == string(config) {
 			oldCredential, oldErr := credentialFile(ctx, previous)
 			if oldErr != nil {
@@ -394,13 +424,36 @@ func configureISCSICHAP(ctx context.Context, s protocol.StorageRegistration, v *
 	return iscsiNodeChange{nodeCreated: true}, nil
 }
 
+func ownedISCSINodeAuthMatches(config []byte, username, secret string) bool {
+	values := map[string]string{}
+	for _, line := range strings.Split(string(config), "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
+		switch key {
+		case "node.session.auth.authmethod", "node.session.auth.username", "node.session.auth.password", "node.session.auth.username_in", "node.session.auth.password_in":
+			values[key] = value // open-iscsi uses the last repeated key.
+		}
+	}
+	if values["node.session.auth.username_in"] != "" || values["node.session.auth.password_in"] != "" {
+		return false
+	}
+	if username == "" {
+		method := values["node.session.auth.authmethod"]
+		return (method == "" || method == "None") && values["node.session.auth.username"] == "" && values["node.session.auth.password"] == ""
+	}
+	return values["node.session.auth.authmethod"] == "CHAP" && values["node.session.auth.username"] == username && values["node.session.auth.password"] == secret
+}
+
 func nexISCSINodeConfig(config []byte, username, secret string) []byte {
 	if i := strings.Index(string(config), nexISCSINodeMarker); i >= 0 {
 		config = config[:i]
 	}
 	// Keep the caller's bytes intact: credential rotation needs them to restore a node
 	// after login validation fails.
-	config = append([]byte(nil), config...)
+	config = []byte(strings.TrimRight(string(config), "\n"))
 	config = append(config, '\n')
 	config = append(config, nexISCSINodeMarker...)
 	if username != "" {
@@ -421,6 +474,182 @@ func iscsiSessionActive(ctx context.Context, v *protocol.ISCSIStorageSource) (bo
 		return false, fmt.Errorf("query iSCSI sessions: %w", err)
 	}
 	return iscsiSessionListed(out, v), nil
+}
+
+// StorageISCSISessionID returns the stable CIB identity for one Nex-owned
+// iSCSI transport. It deliberately identifies a target/portal session, not a
+// LUN: open-iscsi sessions are shared by LUNs exposed from one target.
+func StorageISCSISessionID(portal, target string) (string, error) {
+	_, sessionID, err := StorageISCSISessionParameters(portal, target)
+	return sessionID, err
+}
+
+// StorageISCSISessionParameters returns the canonical portal and stable CIB
+// identity that must be passed together to the strict monitor.
+func StorageISCSISessionParameters(portal, target string) (canonicalPortal, sessionID string, err error) {
+	portal, err = canonicalISCSIPortal(portal)
+	if err != nil {
+		return "", "", err
+	}
+	if !validISCSITarget(target) {
+		return "", "", errors.New("invalid iSCSI target")
+	}
+	sum := sha256.Sum256([]byte(portal + "\x00" + target))
+	return portal, "nex-iscsi-" + fmt.Sprintf("%x", sum[:]), nil
+}
+
+// ValidateStorageISCSISession performs the narrow, read-only iSCSI transport
+// health check used by Pacemaker's Nex-owned monitor. It does not log in,
+// discover a target, alter a node record, or expose native command output.
+func ValidateStorageISCSISession(ctx context.Context, portal, target, sessionID string) error {
+	canonicalPortal, wantID, err := StorageISCSISessionParameters(portal, target)
+	if err != nil {
+		return err
+	}
+	if sessionID != wantID {
+		return errors.New("iSCSI session identity does not match target and portal")
+	}
+	out, err := nativeRun(ctx, "iscsiadm", "-m", "session", "-P", "1")
+	if err != nil {
+		return errors.New("cannot inspect iSCSI session")
+	}
+	if err := strictISCSISession(out, canonicalPortal, target); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validISCSITarget(target string) bool {
+	return (strings.HasPrefix(target, "iqn.") || strings.HasPrefix(target, "eui.") || strings.HasPrefix(target, "naa.")) && len(target) <= 223 && !strings.ContainsAny(target, "\x00 \t\r\n")
+}
+
+func canonicalISCSIPortal(portal string) (string, error) {
+	if portal == "" || len(portal) > 253 || strings.Count(portal, ":") > 1 || strings.ContainsAny(portal, "/\\\x00 \t\r\n") {
+		return "", errors.New("invalid iSCSI portal")
+	}
+	portal = iscsiPortalAddress(portal)
+	host, port, ok := strings.Cut(portal, ":")
+	if !ok || host == "" || !iscsiPort(port) {
+		return "", errors.New("invalid iSCSI portal")
+	}
+	for _, c := range host {
+		if !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') && !(c >= '0' && c <= '9') && c != '.' && c != '-' {
+			return "", errors.New("invalid iSCSI portal")
+		}
+	}
+	p, _ := strconv.ParseUint(port, 10, 16)
+	return strings.ToLower(host) + ":" + strconv.FormatUint(p, 10), nil
+}
+
+type strictISCSISessionInfo struct {
+	target, currentPortal, persistentPortal       string
+	transport, sid, connectionState, sessionState string
+	daemonState                                   string
+	duplicate                                     bool
+}
+
+func strictISCSISession(out []byte, portal, target string) error {
+	var sessions []strictISCSISessionInfo
+	var current *strictISCSISessionInfo
+	finish := func() {
+		if current != nil {
+			sessions = append(sessions, *current)
+			current = nil
+		}
+	}
+	for _, raw := range strings.Split(string(out), "\n") {
+		line := strings.TrimSpace(raw)
+		if value, ok := strings.CutPrefix(line, "Target:"); ok {
+			finish()
+			target, valid := iscsiMonitorTarget(strings.TrimSpace(value))
+			if !valid {
+				// Do not allow a malformed record to lend fields to the next one.
+				current = &strictISCSISessionInfo{duplicate: true}
+				continue
+			}
+			current = &strictISCSISessionInfo{target: target}
+			continue
+		}
+		if current == nil {
+			continue
+		}
+		key, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		switch key {
+		case "Current Portal":
+			current.duplicate = current.duplicate || current.currentPortal != ""
+			current.currentPortal = value
+		case "Persistent Portal":
+			current.duplicate = current.duplicate || current.persistentPortal != ""
+			current.persistentPortal = value
+		case "Iface Transport":
+			current.duplicate = current.duplicate || current.transport != ""
+			current.transport = value
+		case "SID":
+			current.duplicate = current.duplicate || current.sid != ""
+			current.sid = value
+		case "iSCSI Connection State":
+			current.duplicate = current.duplicate || current.connectionState != ""
+			current.connectionState = value
+		case "iSCSI Session State":
+			current.duplicate = current.duplicate || current.sessionState != ""
+			current.sessionState = value
+		case "Internal iscsid Session State":
+			current.duplicate = current.duplicate || current.daemonState != ""
+			current.daemonState = value
+		}
+	}
+	finish()
+
+	matches := 0
+	seenSID := make(map[string]struct{})
+	for _, session := range sessions {
+		if session.target != target {
+			continue
+		}
+		currentPortal, currentErr := canonicalSessionPortal(session.currentPortal)
+		persistentPortal, persistentErr := canonicalSessionPortal(session.persistentPortal)
+		// Every record for the requested IQN is accountable: an incomplete
+		// alternate portal cannot be ignored and then hidden by one healthy
+		// selected-pair record. A different well-formed portal is allowed as a
+		// separate transport identity, but never counted as this monitor's pair.
+		if session.duplicate || currentErr != nil || persistentErr != nil || currentPortal != persistentPortal || session.transport == "" || !iscsiDecimal(session.sid) || session.connectionState == "" || session.sessionState == "" || session.daemonState == "" {
+			return errors.New("iSCSI requested-target session is malformed")
+		}
+		if _, duplicateSID := seenSID[session.sid]; duplicateSID {
+			return errors.New("iSCSI requested-target session ID is ambiguous")
+		}
+		seenSID[session.sid] = struct{}{}
+		if currentPortal != portal {
+			continue
+		}
+		matches++
+		if session.transport != "tcp" || session.connectionState != "LOGGED IN" || session.sessionState != "LOGGED_IN" || session.daemonState != "NO CHANGE" {
+			return errors.New("iSCSI session is not an exact active software TCP session")
+		}
+	}
+	if matches != 1 {
+		return errors.New("iSCSI session is missing or ambiguous")
+	}
+	return nil
+}
+
+// iscsiadm -m session -P 1 emits the target at the start of each record and
+// appends this known qualifier on Debian's non-flash initiator.
+func iscsiMonitorTarget(value string) (string, bool) {
+	if strings.HasSuffix(value, " (non-flash)") {
+		value = strings.TrimSuffix(value, " (non-flash)")
+	} else if strings.HasSuffix(value, " (flash)") {
+		value = strings.TrimSuffix(value, " (flash)")
+	}
+	return value, validISCSITarget(value)
+}
+
+func canonicalSessionPortal(value string) (string, error) {
+	return canonicalISCSIPortal(iscsiSessionPortal(value))
 }
 
 func iscsiNoActiveSessionsError(err error) bool {
@@ -698,7 +927,12 @@ func inspectISCSI(ctx context.Context, s protocol.StorageRegistration) (storageA
 	if err != nil {
 		return storageAccess{}, err
 	}
-	filesystem, err := iscsiFilesystemForLUNInfo(out, v.FilesystemUUID, v.LUN)
+	var filesystem iscsiFilesystemInfo
+	if protocol.IsClusteredISCSI(s) {
+		filesystem, err = iscsiGFS2ForLUN(out, v.FilesystemUUID, v.LUN)
+	} else {
+		filesystem, err = iscsiFilesystemForLUNInfo(out, v.FilesystemUUID, v.LUN)
+	}
 	if err != nil {
 		return storageAccess{}, err
 	}
@@ -715,9 +949,20 @@ func inspectISCSI(ctx context.Context, s protocol.StorageRegistration) (storageA
 	if len(parts) != 5 || parts[0] != filesystem.Path || !strings.EqualFold(parts[1], v.FilesystemUUID) || parts[2] != filesystem.FSType || strings.Contains(","+parts[3]+",", ",ro,") || parts[4] != v.MountPath {
 		return storageAccess{}, errors.New("iSCSI filesystem mount does not match its registered LUN")
 	}
-	a, err := storagePathAccess(v.MountPath, "iscsi:"+v.TargetIQN+":"+fmt.Sprint(v.LUN)+":"+filesystem.WWID, false)
+	lockTable, journals := "", 0
+	if protocol.IsClusteredISCSI(s) {
+		lockTable, journals, err = gfs2Metadata(ctx, filesystem.Path)
+		if err != nil || lockTable != v.LockTable || journals < len(v.EligibleHostIDs) {
+			return storageAccess{}, errors.New("GFS2 lock protocol, lock table or journals do not match registration")
+		}
+	}
+	a, err := inspectISCSIPathAccess(v.MountPath, "iscsi:"+v.TargetIQN+":"+fmt.Sprint(v.LUN)+":"+filesystem.WWID, false)
 	if err == nil {
-		a.Observed.ISCSI = &protocol.ISCSIStorageIdentity{TargetIQN: v.TargetIQN, LUN: v.LUN, WWID: filesystem.WWID, FilesystemUUID: v.FilesystemUUID}
+		identity := &protocol.ISCSIStorageIdentity{TargetIQN: v.TargetIQN, LUN: v.LUN, WWID: filesystem.WWID, FilesystemUUID: v.FilesystemUUID}
+		if protocol.IsClusteredISCSI(s) {
+			identity.FilesystemType, identity.GFS2LockTable, identity.GFS2Journals = "gfs2", lockTable, uint32(journals)
+		}
+		a.Observed.ISCSI = identity
 	}
 	return a, err
 }
@@ -809,6 +1054,9 @@ func iscsiHCTLMatches(hctl string, lun uint64) bool {
 }
 
 func detachISCSI(ctx context.Context, s protocol.StorageRegistration) error {
+	if protocol.IsClusteredISCSI(s) {
+		return errors.New("clustered iSCSI detach requires a coordinated Core cluster teardown")
+	}
 	v, err := validISCSI(s)
 	if err != nil {
 		return err

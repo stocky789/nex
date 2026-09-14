@@ -31,6 +31,9 @@ func TestCredentialBrokerScopesAndAcknowledgesCoreReceipt(t *testing.T) {
 	if err != nil || handoff.Offer != offer || handoff.Credentials != v.Credentials {
 		t.Fatalf("handoff %#v: %v", handoff.Offer, err)
 	}
+	if _, err = b.redeem(offer.Handle, v.HostID); err == nil {
+		t.Fatal("delivered offer still exposed credentials before acknowledgement")
+	}
 	bad := protocol.StorageCredentialReceipt{Receipt: "receipt-1", RequestID: v.RequestID, RegistrationRequestID: "other", PoolID: v.PoolID, HostID: v.HostID, Status: "ready"}
 	if err = b.acknowledge(offer.Handle, v.HostID, bad); err == nil {
 		t.Fatal("receipt with a different registration request accepted")

@@ -31,6 +31,7 @@ type poolPeerState struct {
 	CAPEM, CAKeyPEM, CertificatePEM, KeyPEM string
 	PendingKeyPEM, PendingCSRPEM            string
 	MasterURL                               string
+	PendingPeerOrigin                       string
 	PendingRehome                           *poolRehome
 	Membership                              protocol.PoolMembership
 	Offers                                  map[string]poolJoinOffer

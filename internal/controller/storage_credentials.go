@@ -34,6 +34,7 @@ type credentialBrokerEntry struct {
 	receipt     protocol.StorageCredentialReceipt
 	proof       []byte
 	done        chan struct{}
+	delivered   bool
 }
 
 // credentialBroker deliberately has no persistence: it transports an encrypted request once
@@ -163,10 +164,15 @@ func (b *credentialBroker) redeem(handle, host string) (protocol.StorageCredenti
 		if entry.offer.Handle != handle {
 			continue
 		}
-		if entry.offer.HostID != host || entry.receipt.Receipt != "" || time.Now().After(entry.offer.ExpiresAt) {
+		if entry.offer.HostID != host || entry.receipt.Receipt != "" || entry.delivered || time.Now().After(entry.offer.ExpiresAt) {
 			return protocol.StorageCredentialHandoff{}, errors.New("credential offer is unavailable")
 		}
-		return protocol.StorageCredentialHandoff{Offer: entry.offer, Credentials: entry.credentials}, nil
+		handoff := protocol.StorageCredentialHandoff{Offer: entry.offer, Credentials: entry.credentials}
+		// Credential bytes are one-shot transport data, not retryable Controller
+		// state. Core acknowledgement retains only the opaque receipt.
+		entry.credentials = protocol.StorageCredentials{}
+		entry.delivered = true
+		return handoff, nil
 	}
 	return protocol.StorageCredentialHandoff{}, errors.New("credential offer is unavailable")
 }
@@ -229,7 +235,7 @@ func (c *Controller) storageCredentials(w http.ResponseWriter, r *http.Request, 
 	if !decodeLimit(w, r, &v, 1<<20) {
 		return
 	}
-	if !nameValid(v.RequestID) || !nameValid(v.PoolID) || !nameValid(v.HostID) || (v.RepositoryID != "" && !nameValid(v.RepositoryID)) || (v.RegistrationRequestID != "" && !nameValid(v.RegistrationRequestID)) || (v.RepositoryID == "" && v.RegistrationRequestID == "") || len(v.Credentials.Username) > 4096 || len(v.Credentials.Secret) == 0 || len(v.Credentials.Secret) > 65536 || strings.ContainsAny(v.Credentials.Username+v.Credentials.Secret, "\x00\r\n") {
+	if !nameValid(v.RequestID) || !nameValid(v.PoolID) || !nameValid(v.HostID) || (v.RepositoryID != "" && !nameValid(v.RepositoryID)) || (v.RegistrationRequestID != "" && !nameValid(v.RegistrationRequestID)) || (v.RepositoryID == "" && v.RegistrationRequestID == "") || len(v.Credentials.Username) > 4096 || len(v.Credentials.Secret) == 0 || len(v.Credentials.Secret) > 65536 || v.Credentials.SSHPrivateKey != "" || v.Credentials.SSHKnownHosts != "" || strings.ContainsAny(v.Credentials.Username+v.Credentials.Secret, "\x00\r\n") {
 		fail(w, 400, "valid request, pool, host and bounded credential required")
 		return
 	}

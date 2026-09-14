@@ -1,0 +1,41 @@
+{
+  "summary": "Remove duplicated periodic clustered-storage setup and prepare scoped native acceptance checks (BUG-0156). API impact: existing contract; internal scheduling changes preserve peer operations and reported health semantics.",
+  "paths": [
+    "internal/agent/pool_storage.go",
+    "internal/agent/pool_storage_test.go",
+    "internal/agent/run.go",
+    "tests/integration/cluster_storage_workloads.py",
+    "tests/test_cluster_storage_workloads.py",
+    "docs/qa/2026-09-14-cluster-storage-reliability.md",
+    "docs/BUG_LEDGER.md",
+    "docs/plans/2026-09-12-concurrent-pool-storage.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No operator controls, configuration or recovery instructions change; corrected internal scheduling retains current health/error behavior. New runners are contributor-only disposable-lab tools.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: existing contract. Authenticated peer repository fetch/access reporting, explicit reconciliation and Controller health inventory retain their existing schemas and authorization; no reference contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The storage milestone remains in testing; no phase or native acceptance gate is declared complete.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable state. Periodic validation reads the existing Core cluster projection; pool-master repository/configuration records and adoption remain unchanged. Lab receipts are private test evidence."
+  },
+  "verification": {
+    "method": "Native timing rollouts isolated duplicated setup; original-dispatch regression fails and corrected periodic race tests pass. Reviewed correction deployed with protected rollout invariants, but the subsequent five-minute idle capture still has three fresh deadline episodes. Reliability and workload acceptance remain open; see current evidence report.",
+    "evidence": [
+      "docs/qa/2026-09-14-cluster-storage-reliability.md",
+      "internal/agent/pool_storage_test.go",
+      "tests/test_cluster_storage_workloads.py"
+    ]
+  }
+}

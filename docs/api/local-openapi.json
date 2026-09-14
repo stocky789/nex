@@ -297,6 +297,18 @@
    "/api/local/v1/pool/join-offer": {
     "post": {"operationId": "createPoolJoinOffer", "summary": "Create a bound pool-join offer", "description": "Authenticated selected-master local Core session and same Origin/CSRF boundary. Validates the member host/CSR and master HTTPS origin, then returns a 15-minute one-use offer bound to that CSR plus the pool CA. The Controller may relay this response but cannot redeem it. 409 if the Core is not a usable master or peer state cannot be persisted.", "security": [{"LocalSession": []}], "x-introduced-version": "0.1.0", "x-audience": "host-local client", "parameters": [{"name": "X-CSRF-Token", "in": "header", "required": true, "schema": {"type": "string"}}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PoolJoinOfferRequest"}}}}, "responses": {"200": {"description": "Pinned CA and one-use offer", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PoolJoinOfferResponse"}}}}, "400": {"description": "Malformed JSON or invalid member/CSR/master origin."}, "401": {"description": "Local root session required."}, "403": {"description": "Origin or CSRF rejected."}, "409": {"description": "Master Core peer state is unavailable or rejects the request."}}}
    },
+   "/api/local/v1/pool/storage-cluster": {
+    "get": {
+     "operationId": "getLocalStorageCluster", "summary": "Read this Core's clustered-storage operations", "description": "Authenticated local root session. Returns the Core-owned persisted clustered-storage operation projections. A 409 means this Core is not enrolled or its agent state cannot be opened. This read never creates a cluster, fence proof, mount or credential.", "security": [{"LocalSession": []}], "x-introduced-version": "0.1.0", "x-audience": "host-local client",
+     "responses": {"200": {"description": "Core operation projections.", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/LocalStorageClusterOperation"}}}}}, "401": {"description": "Local root session required."}, "409": {"description": "Core cluster state unavailable."}}
+    }
+   },
+   "/api/local/v1/pool/storage-cluster/apply": {
+    "post": {
+     "operationId": "applyLocalStorageCluster", "summary": "Start Core-owned clustered GFS2 iSCSI setup locally", "description": "Authenticated enrolled local root session, same HTTPS Origin and X-CSRF-Token required. Starts the same Core-owned durable operation as the Controller relay; it is not a Controller job. Core forces its own pool and host scope, derives native mount/device data from verified iSCSI identity, and accepts no credential bytes or claimed fence proof. 202 means the Core accepted/reported the operation, not that a healthy cluster is ready. Same request ID with changed input conflicts in Core state.", "security": [{"LocalSession": []}], "x-introduced-version": "0.1.0", "x-audience": "host-local client", "parameters": [{"name": "X-CSRF-Token", "in": "header", "required": true, "schema": {"type": "string"}}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/LocalStorageClusterApplyRequest"}}}},
+     "responses": {"202": {"description": "Core result.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/LocalStorageClusterResult"}}}}, "400": {"description": "Malformed or unknown request fields."}, "401": {"description": "Local root session required."}, "403": {"description": "Origin or CSRF rejected."}, "409": {"description": "Core is not enrolled or refuses the request."}}
+    }
+   },
    "/api/local/v1/vms": {
    "get": {
     "operationId": "localVMs",
@@ -1559,6 +1571,24 @@
      }
     ]
    },
+   "LocalStorageClusterApplyRequest": {
+    "type": "object",
+    "properties": {"request_id": {"type": "string"}, "expected_generation": {"type": "integer", "minimum": 0, "description": "Optional; zero is valid while Core allocates a candidate repository."}, "registration": {"type": "object"}, "config": {"type": "object"}, "credential_requests": {"type": ["array", "null"], "items": {"type": "object"}}},
+    "required": ["request_id", "registration", "config"],
+    "additionalProperties": false
+   },
+   "LocalStorageClusterResult": {
+    "type": "object",
+    "properties": {"request_id": {"type": "string"}, "pool_id": {"type": "string"}, "host_id": {"type": "string"}, "status": {"type": "string", "enum": ["accepted", "queued", "succeeded", "failed", "needs_attention"]}, "error": {"type": "string"}, "observed_at": {"type": "string", "format": "date-time"}, "operations": {"type": ["array", "null"], "items": {"type": "object"}}},
+    "required": ["request_id", "pool_id", "host_id", "status", "observed_at"],
+    "additionalProperties": false
+   },
+   "LocalStorageClusterOperation": {
+    "type": "object",
+    "properties": {"request_id": {"type": "string"}, "membership_generation": {"type": "integer", "minimum": 0}, "config": {"type": "object"}, "registration": {"type": "object"}, "status": {"type": "string", "enum": ["queued", "awaiting_fencing", "verifying_fence", "applying", "healthy", "degraded", "succeeded", "failed", "needs_attention"]}, "error": {"type": "string"}, "updated_at": {"type": "string", "format": "date-time"}, "members": {"type": ["array", "null"], "items": {"type": "object"}}},
+    "required": ["request_id", "membership_generation", "config", "registration", "status", "updated_at"],
+    "additionalProperties": false
+   },
    "Error": {
     "type": "object",
     "properties": {
@@ -1917,7 +1947,8 @@
     "properties": {
      "master_url": {"type": "string", "description": "Bare HTTPS pool-master origin."},
      "pool_ca_pem": {"type": "string", "writeOnly": true, "description": "Pinned pool CA PEM from the one-use offer."},
-     "offer": {"type": "string", "writeOnly": true, "description": "Opaque one-use pool join offer."}
+     "offer": {"type": "string", "writeOnly": true, "description": "Opaque one-use pool join offer."},
+     "peer_origin": {"type": "string", "description": "Optional bare HTTPS peer origin advertised by this admitted member for durable master-side peer recovery."}
     },
     "required": ["master_url", "pool_ca_pem", "offer"],
     "additionalProperties": false

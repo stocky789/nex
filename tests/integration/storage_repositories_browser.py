@@ -43,7 +43,26 @@ def main():
             "storage": [], "vms": [], "networks": [], "media": [], "operations": [], "audit": []}
     receipts = [{"receipt": "core-unused-receipt", "host_id": "core-qa", "status": "ready", "created_at": "2026-09-11T00:00:00Z", "retire_eligible": True}]
     submissions, errors, checks = [], [], []
-    mode = {"fail_recheck": True, "unauthorized": False, "fail_retire": True, "fail_discovery": False}
+    mode = {"fail_recheck": True, "unauthorized": False, "fail_retire": True, "fail_discovery": False,
+            "browser_empty": False, "browser_error": False, "browser_failed": False, "browser_deferred": False}
+    deferred_browser_replies = []
+
+    def browser_candidates(kind, path):
+        if kind == "nfs":
+            if path == "":
+                return [{"kind": "nfs", "source": {"nfs": {"server": "nfs.example.test", "export": "/exports"}}, "path": "/exports", "browsable": True}]
+            if path == "/exports/vms":
+                return [{"kind": "nfs", "source": {"nfs": {"server": "nfs.example.test", "export": "/exports/vms"}}, "path": "/exports/vms", "browsable": True}]
+            if path == "/exports":
+                return [{"kind": "nfs", "source": {"nfs": {"server": "nfs.example.test", "export": "/exports"}}, "path": "/exports/team", "browsable": True}]
+            if path == "/exports/team":
+                return [{"kind": "nfs", "source": {"nfs": {"server": "nfs.example.test", "export": "/exports"}}, "path": "/exports/team/vms", "browsable": True}]
+        if kind == "smb":
+            if path == "":
+                return [{"kind": "smb", "source": {"smb": {"server": "files.example.test", "share": "team-share"}}, "path": "/team-share", "browsable": True}]
+            if path == "/team-share":
+                return [{"kind": "smb", "source": {"smb": {"server": "files.example.test", "share": "team-share"}}, "path": "/team-share/vms", "browsable": True}]
+        return []
 
     def api(route):
         request = route.request
@@ -62,6 +81,19 @@ def main():
         if path == "storage/discover":
             if mode["fail_discovery"]:
                 route.fulfill(status=504, json={"error": "Core discovery became stale"})
+            elif body["kind"] in ("nfs", "smb") and mode["browser_deferred"]:
+                deferred_browser_replies.append((route, {"request_id": body["request_id"], "pool_id": "pool-qa", "host_id": "core-qa", "status": "succeeded", "candidates": browser_candidates(body["kind"], body.get("path", ""))}))
+            elif body["kind"] in ("nfs", "smb") and mode["browser_failed"]:
+                route.fulfill(json={"request_id": body["request_id"], "pool_id": "pool-qa", "host_id": "core-qa", "status": "failed", "error": "Core refused this folder listing", "candidates": []})
+            elif body["kind"] in ("nfs", "smb") and (mode["browser_empty"] or mode["browser_error"]):
+                if mode["browser_error"]:
+                    route.fulfill(status=504, json={"error": "Core folder listing became stale"})
+                else:
+                    route.fulfill(json={"request_id": body["request_id"], "pool_id": "pool-qa", "host_id": "core-qa", "status": "succeeded", "candidates": []})
+            elif body["kind"] in ("nfs", "smb"):
+                route.fulfill(json={"request_id": body["request_id"], "pool_id": "pool-qa", "host_id": "core-qa", "status": "succeeded", "candidates": browser_candidates(body["kind"], body.get("path", ""))})
+            elif body["kind"] == "iscsi":
+                route.fulfill(json={"request_id": body["request_id"], "pool_id": "pool-qa", "host_id": "core-qa", "status": "succeeded", "candidates": [{"kind": "iscsi", "source": {"iscsi": {"portal": "storage.example.test:3260", "target_iqn": "iqn.2026-01.example.test:vm-storage"}}, "path": "iqn.2026-01.example.test:vm-storage", "browsable": False}]})
             else:
                 route.fulfill(json={"request_id": body["request_id"], "pool_id": "pool-qa", "host_id": "core-qa", "status": "succeeded", "candidates": [{"kind": "nfs", "source": {"nfs": {"server": "nfs.example.test", "export": "/exports/vms"}}, "path": "/exports/vms", "browsable": True}]})
         elif path == "storage/credentials":
@@ -132,16 +164,70 @@ def main():
             page.keyboard.press("Enter")
             assert not submissions, submissions
             form.get_by_label("NFS server").fill("nfs.example.test")
-            form.get_by_label("Export path").fill("/exports/vms")
-            form.get_by_role("button", name="Discover safe existing sources", exact=True).click()
-            expect(form.get_by_role("button", name="Use /exports/vms", exact=True)).to_be_visible()
-            form.get_by_role("button", name="Use /exports/vms", exact=True).click()
-            expect(form.get_by_label("Export path")).to_have_value("/exports/vms")
-            mode["fail_discovery"] = True
-            form.get_by_role("button", name="Discover safe existing sources", exact=True).click()
-            expect(page.get_by_role("alert")).to_contain_text("Core discovery became stale")
-            mode["fail_discovery"] = False
-            checks.append("Core-guided source discovery selects a sanitized source and keeps stale discovery failures actionable")
+            # Folder browsing is a transient Core observation: it begins at root, even when a
+            # manual draft already names a source, and only Select folder changes that draft.
+            form.get_by_label("Export path").fill("/ignored/draft")
+            form.get_by_label("Existing directory within export").fill("old/draft")
+            mode["browser_deferred"] = True
+            form.get_by_role("button", name="Browse exports", exact=True).click()
+            nfs_browser = page.get_by_role("dialog", name="Browse exports", exact=True)
+            expect(nfs_browser.get_by_role("status")).to_contain_text("Loading folders")
+            expect(nfs_browser.get_by_role("button", name="Select folder", exact=True)).to_be_disabled()
+            nfs_browser.get_by_role("button", name="Cancel", exact=True).click()
+            expect(nfs_browser).to_be_hidden()
+            delayed_route, delayed_reply = deferred_browser_replies.pop()
+            mode["browser_deferred"] = False
+            delayed_route.fulfill(json=delayed_reply)
+            page.wait_for_timeout(100)
+            expect(nfs_browser).to_be_hidden()
+            expect(form.get_by_label("Export path")).to_have_value("/ignored/draft")
+            expect(form.get_by_label("Existing directory within export")).to_have_value("old/draft")
+            form.get_by_role("button", name="Browse exports", exact=True).click()
+            nfs_browser = page.get_by_role("dialog", name="Browse exports", exact=True)
+            expect(nfs_browser).to_be_visible()
+            nfs_root = submissions[-1][1]
+            assert nfs_root["kind"] == "nfs" and nfs_root["server"] == "nfs.example.test" and "path" not in nfs_root, nfs_root
+            expect(nfs_browser.get_by_role("button", name="Up", exact=True)).to_be_disabled()
+            nfs_browser.get_by_role("button", name="Cancel", exact=True).click()
+            expect(form.get_by_label("Export path")).to_have_value("/ignored/draft")
+            expect(form.get_by_label("Existing directory within export")).to_have_value("old/draft")
+            form.get_by_role("button", name="Browse exports", exact=True).click()
+            page.keyboard.press("Escape")
+            expect(nfs_browser).to_be_hidden()
+            expect(form.get_by_label("Export path")).to_have_value("/ignored/draft")
+            form.get_by_role("button", name="Browse exports", exact=True).click()
+            nfs_browser.get_by_role("button", name="Open /exports", exact=True).dblclick()
+            expect(nfs_browser.get_by_role("button", name="Up", exact=True)).to_be_enabled()
+            nfs_browser.get_by_role("button", name="Refresh", exact=True).click()
+            assert submissions[-1][1]["path"] == "/exports", submissions[-1]
+            nfs_browser.get_by_role("button", name="Open /exports/team", exact=True).dblclick()
+            nfs_browser.get_by_role("button", name="Up", exact=True).click()
+            assert submissions[-1][1]["path"] == "/exports", submissions[-1]
+            nfs_browser.get_by_role("button", name="Open /exports/team", exact=True).dblclick()
+            team_folder = nfs_browser.get_by_role("button", name="Open /exports/team/vms", exact=True)
+            team_folder.focus()
+            page.keyboard.press("Space")
+            expect(team_folder).to_have_attribute("aria-pressed", "true")
+            page.screenshot(path=str(args.evidence / "nfs-browser.png"), full_page=True)
+            nfs_browser.get_by_role("button", name="Select folder", exact=True).click()
+            expect(form.get_by_label("Export path")).to_have_value("/exports")
+            expect(form.get_by_label("Existing directory within export")).to_have_value("team/vms")
+            mode["browser_empty"] = True
+            form.get_by_role("button", name="Browse exports", exact=True).click()
+            expect(nfs_browser.get_by_text("No folders were found.", exact=False)).to_be_visible()
+            nfs_browser.get_by_role("button", name="Cancel", exact=True).click()
+            mode["browser_empty"] = False
+            mode["browser_error"] = True
+            form.get_by_role("button", name="Browse exports", exact=True).click()
+            expect(nfs_browser.get_by_role("alert")).to_contain_text("Core folder listing became stale")
+            nfs_browser.get_by_role("button", name="Cancel", exact=True).click()
+            mode["browser_error"] = False
+            mode["browser_failed"] = True
+            form.get_by_role("button", name="Browse exports", exact=True).click()
+            expect(nfs_browser.get_by_role("alert")).to_contain_text("Core refused this folder listing")
+            nfs_browser.get_by_role("button", name="Cancel", exact=True).click()
+            mode["browser_failed"] = False
+            checks.append("NFS root browsing omits stale draft paths; loading, cancellation and late replies preserve form fields; keyboard navigation, refresh, empty and Core-error states stay actionable until a selected folder is applied")
             # All backend field sets exist and use native constraints before a request leaves the browser.
             for kind, labels in [("zfs", ("Imported pool", "Existing dataset", "Reported mount point")),
                                  ("smb", ("SMB server", "Share", "Account", "Password")),
@@ -151,15 +237,39 @@ def main():
                     expect(form.get_by_label(label, exact=True)).to_be_visible()
                 if kind == "iscsi":
                     expect(form.get_by_label("This LUN is restricted to this Core initiator only", exact=True)).to_be_visible()
+            form.get_by_label("Target portal", exact=True).fill("storage.example.test:3260")
+            discover_targets = form.get_by_role("button", name="Discover targets", exact=True)
+            expect(discover_targets).to_be_enabled()
+            discover_targets.click()
+            form.get_by_role("button", name="Use iqn.2026-01.example.test:vm-storage", exact=True).click()
+            expect(form.get_by_label("Target IQN", exact=True)).to_have_value("iqn.2026-01.example.test:vm-storage")
             form.get_by_label("Repository type").select_option("smb")
             form.get_by_label("Name", exact=True).fill("VM share")
             form.get_by_label("SMB server").fill("files.example.test")
-            form.get_by_label("Share", exact=True).fill("vms")
             form.get_by_label("Account", exact=True).fill("nex-vm")
             secret = "not-for-display-qa-secret"
             password = form.get_by_label("Password", exact=True)
             expect(password).to_have_attribute("type", "password")
             password.fill(secret)
+            # SMB browsing needs only the Core, server and transient credentials; a manual
+            # share is optional until selection and is never smuggled into the root request.
+            expect(form.get_by_role("button", name="Browse shared folders", exact=True)).to_be_enabled()
+            form.get_by_label("Share", exact=True).fill("old-share")
+            form.get_by_label("Existing directory within share").fill("old/draft")
+            form.get_by_role("button", name="Browse shared folders", exact=True).click()
+            smb_browser = page.get_by_role("dialog", name="Browse shared folders", exact=True)
+            expect(smb_browser).to_be_visible()
+            smb_root = submissions[-1][1]
+            assert smb_root["kind"] == "smb" and smb_root["credentials"] == {"username": "nex-vm", "secret": secret} and "path" not in smb_root, smb_root
+            smb_browser.get_by_role("button", name="Open /team-share", exact=True).dblclick()
+            share_folder = smb_browser.get_by_role("button", name="Open /team-share/vms", exact=True)
+            share_folder.click()
+            expect(share_folder).to_have_attribute("aria-pressed", "true")
+            page.screenshot(path=str(args.evidence / "smb-browser.png"), full_page=True)
+            smb_browser.get_by_role("button", name="Select folder", exact=True).click()
+            expect(form.get_by_label("Share", exact=True)).to_have_value("team-share")
+            expect(form.get_by_label("Existing directory within share")).to_have_value("vms")
+            checks.append("SMB browsing works before a manual share exists and applies the selected share plus relative directory only after confirmation")
             page.get_by_role("button", name="Register and check access", exact=True).click()
             expect(page.get_by_text("Storage registration queued", exact=False)).to_be_visible()
             expect(page.get_by_text("core-assigned-repository", exact=True)).to_have_count(0)
@@ -167,7 +277,7 @@ def main():
             credential = next(body for path, body in submissions if path == "storage/credentials")
             register = next(body for path, body in submissions if path == "storage")
             assert credential["credentials"] == {"username": "nex-vm", "secret": secret}, credential
-            assert register["source"] == {"smb": {"server": "files.example.test", "share": "vms"}}, register
+            assert register["source"] == {"smb": {"server": "files.example.test", "share": "team-share", "directory": "vms"}}, register
             assert register["credential_receipt"] == "core-only-receipt" and secret not in json.dumps(register), register
             assert credential["registration_request_id"] == register["request_id"] == register["credential_request_id"], (credential, register)
             assert secret not in page.content() and secret not in page.evaluate("Object.values(sessionStorage).join(' ')")

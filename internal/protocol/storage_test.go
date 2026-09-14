@@ -104,7 +104,7 @@ func TestValidateStorageRegistration(t *testing.T) {
 }
 
 func TestStorageSubdirectoryValidationAllowsNamesAndRejectsTraversalControls(t *testing.T) {
-	for _, directory := range []string{"discovered", "team/vms", "r-n-x-0"} {
+	for _, directory := range []string{"discovered", "team/vms", "Team VMs/2026", "r-n-x-0"} {
 		if !storageSubdirectory(directory) {
 			t.Fatalf("safe directory %q rejected", directory)
 		}
@@ -112,6 +112,32 @@ func TestStorageSubdirectoryValidationAllowsNamesAndRejectsTraversalControls(t *
 	for _, directory := range []string{".", "..", "../x", "x/../y", "/x", "x\\y", "x\x00y", "x\ny", "x\ry", "x\ty"} {
 		if storageSubdirectory(directory) {
 			t.Fatalf("unsafe directory %q accepted", directory)
+		}
+	}
+}
+
+func TestStorageRegistrationAllowsSMBNamesWithSpacesAndHiddenSuffix(t *testing.T) {
+	s := storageRegistration(StorageKindSMB)
+	s.Source.SMB.Share = "VM Files$"
+	s.Source.SMB.Directory = "Team VMs/2026"
+	if err := ValidateStorageRegistration(s, false); err != nil {
+		t.Fatalf("safe SMB name rejected: %v", err)
+	}
+	for _, share := range []string{"../vms", "vms/share", "vms\\share", "vms%share", "vms\nshare", " VM Files$", "VM Files$ ", `VM "Files$"`} {
+		s.Source.SMB.Share = share
+		if err := ValidateStorageRegistration(s, false); err == nil {
+			t.Fatalf("unsafe SMB share accepted: %q", share)
+		}
+	}
+}
+
+func TestValidateStorageDiscoveryAllowsSelectedNamesWithSpaces(t *testing.T) {
+	for _, v := range []StorageDiscoveryRequest{
+		{RequestID: "discover-1", PoolID: "pool-1", HostID: "host-1", Kind: StorageKindNFS, Server: "nfs.example.test", Path: "/Team Shares/VM Disks"},
+		{RequestID: "discover-1", PoolID: "pool-1", HostID: "host-1", Kind: StorageKindSMB, Server: "files.example.test", Path: "/Team Shares$/VM Disks"},
+	} {
+		if err := ValidateStorageDiscovery(v); err != nil {
+			t.Fatalf("safe selected path rejected: %v", err)
 		}
 	}
 }

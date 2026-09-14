@@ -12,10 +12,7 @@ entries, gives the title bar the brand navy, and brightens the status, badge,
 selection, tab, alert and form tokens in `web/src/style.css`. All dimensions,
 padding, grid columns and breakpoints are unchanged.
 
-API impact: **none** — presentation only; no client request, Controller operation,
-Core command or observed-state contract changes.
-Guide impact: **none** — the guide describes workflows and labels, not icon shapes
-or colors; no documented step changes.
+API impact: none (presentation only). Guide impact: none (no workflow or label change).
 
 ## Verification
 
@@ -31,18 +28,18 @@ NEX_QA_CAPTURES="$PWD/docs/qa/controller-ui-colors/captures" \
 All passed with all 16 result groups completed on the rebuilt bundle. The suite runs
 the real Controller and agent in a disposable lab and drives headless Chromium at
 1440x1000 and 360x800; [results.json](results.json) records the executed checks and
-[captures/](captures/) holds the 23 full-page views it produced, replacing the
+`captures/` (not committed) holds the 23 full-page views it produced, replacing the
 partial gallery-script set used for the first inspection. Inspected captures:
 
 | View/state | Capture |
 | --- | --- |
-| Desktop shell, brand mark, toolbar and tree icons | [General](captures/desktop-shell.png) |
-| Networking, Storage, Activity tabs | [Networking](captures/networking-desktop.png), [Storage](captures/storage-desktop.png), [Activity](captures/activity-desktop.png) |
-| Failed libvirt and timed-out probe badges | [Failed](captures/libvirt-failed-desktop.png), [Timeout](captures/probe-timeout-desktop.png) |
-| Stale host warning and amber dots at 360px | [Stale](captures/stale-host-360.png) |
-| Revoke confirmation and dispatched badge | [Revoke](captures/revoke-confirmation.png) |
-| Revoked host and network error at 360px | [Revoked](captures/revoked-host-360.png), [Error](captures/network-error-360.png) |
-| Task dock, loading and sign-in states | [Tasks](captures/tasks-desktop.png), [Loading](captures/loading.png), [Expired](captures/idle-expired-login.png) |
+| Desktop shell, brand mark, toolbar and tree icons | `captures/desktop-shell.png` (not committed) |
+| Networking, Storage, Activity tabs | `captures/networking-desktop.png` (not committed), `captures/storage-desktop.png` (not committed), `captures/activity-desktop.png` (not committed) |
+| Failed libvirt and timed-out probe badges | `captures/libvirt-failed-desktop.png` (not committed), `captures/probe-timeout-desktop.png` (not committed) |
+| Stale host warning and amber dots at 360px | `captures/stale-host-360.png` (not committed) |
+| Revoke confirmation and dispatched badge | `captures/revoke-confirmation.png` (not committed) |
+| Revoked host and network error at 360px | `captures/revoked-host-360.png` (not committed), `captures/network-error-360.png` (not committed) |
+| Task dock, loading and sign-in states | `captures/tasks-desktop.png` (not committed), `captures/loading.png` (not committed), `captures/idle-expired-login.png` (not committed) |
 
 A 3x point-scaled crop of the title bar, toolbar and tree confirmed icon legibility
 at 16px and 20px. The badge and alert palettes were chosen for text contrast at or

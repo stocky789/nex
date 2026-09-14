@@ -1,0 +1,9 @@
+{
+  "summary": "Make adopted Core outcome timestamps truthful in task history (BUG-0152). API impact: existing contract; the UI recognizes the existing exact adopt-outcome request ID and does not add a Core protocol field. Reviewed browser captures passed the full adopted-history view (688 adopted outcomes) and the actual recent-five view.",
+  "paths": ["web/src/main.tsx", "web/src/managed.test.mjs", "docs/API.md", "docs/guide/manage-controller.md", "docs/BUG_LEDGER.md", "CHANGELOG.md", "docs/changes/2026-09-13-adopted-outcome-timestamps.json"],
+  "guide": {"impact": "updated", "reason": "Task history now distinguishes re-observation time from an unavailable original Core outcome time.", "pages": ["docs/guide/manage-controller.md"]},
+  "api": {"impact": "updated", "reason": "API impact: existing contract. The existing request_id identifies adopted outcomes; no endpoint, request, response, Core protocol field or authorization changes.", "pages": ["docs/API.md"]},
+  "roadmap": {"impact": "none", "reason": "This UI truthfulness correction does not complete an acceptance milestone.", "pages": []},
+  "state": {"owner": "none", "reason": "The UI adds no durable state. Existing Core-managed outcomes remain re-adoptable by Controller through inventory/reporting."},
+  "verification": {"method": "Independent review accepted exact-ID UI regression coverage, typecheck, tests, build, privacy and diff checks. Reviewed browser captures passed the full adopted-history view (688 adopted outcomes) and the actual recent-five view. An earlier ordinary locator failure remains retained.", "evidence": ["web/src/managed.test.mjs"]}
+}

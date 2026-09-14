@@ -5,2172 +5,1833 @@ Append resolved defects with their evidence and the approach to avoid.
 ## BUG-0001 — Incomplete isolated ISO build dependencies
 
 - Date: 2026-09-08
-- Symptom: the first build exited 127 at `gpgv`; review also found that the target's HTTPS APT configuration needed an explicit CA-certificate dependency.
+- Symptom: first build exited 127 at `gpgv`; target HTTPS APT also needed an explicit CA-certificate dependency.
 - Root cause: relying on recommended/transitive tools while installing with `--no-install-recommends`.
-- Fix: explicitly include `gpgv` in `installer/Dockerfile` and `ca-certificates` in `installer/packages.txt`.
-- Regression evidence: `./installer/build.sh` completed Debian signature verification and the final ISO build; the embedded manifest contains `ca-certificates`. The offline install smoke additionally exercises the resulting dependency closure.
-- Avoid: assuming a developer machine or build container's installed tools will also exist in a minimal installer target.
+- Fix: add `gpgv` to `installer/Dockerfile` and `ca-certificates` to `installer/packages.txt`.
+- Regression: `./installer/build.sh` completed signature verification and ISO build (alpha1 ISO SHA256 `b2862b1e31f8c784b54efd67a3496dcf66bc8252ce910109d59ea043853eb734`); manifest contains `ca-certificates`; offline install smoke exercises the closure. No physical-hardware or Secure Boot verification claimed.
+- Avoid: assuming build-machine tools exist in a minimal installer target.
 
 ## BUG-0002 — Hybrid boot objects lost during ISO remaster
 
 - Date: 2026-09-08
-- Symptom: xorriso rejected the initial image with `Cannot refer by isohybrid MBR to data outside of ISO 9660 filesystem`.
-- Root cause: replacing the imported ISO's entire root with `-map` invalidated boot-object references; boot replay can also modify the boot-information bytes in `isolinux.bin` after media hashes are prepared.
-- Fix: replay boot settings before `-update_r` to preserve imported objects, and exclude the regenerated boot catalog and patched `isolinux.bin` from media MD5 lists (`installer/build.sh`).
-- Regression evidence: final build succeeded; independent artifact review verified BIOS/UEFI hybrid metadata and every listed media checksum. `tests/integration/iso-smoke.py` boots the actual ISO in both firmware modes.
-- Avoid: rebuilding a hybrid ISO's boot layout from copied filenames alone, or hashing bytes that the ISO writer will subsequently patch.
+- Symptom: xorriso: `Cannot refer by isohybrid MBR to data outside of ISO 9660 filesystem`.
+- Root cause: `-map` of the whole root invalidated boot-object references; boot replay patches `isolinux.bin` after media hashes are prepared.
+- Fix: replay boot settings before `-update_r`; exclude boot catalog and patched `isolinux.bin` from media MD5 lists (`installer/build.sh`).
+- Regression: independent review verified BIOS/UEFI hybrid metadata and checksums; `tests/integration/iso-smoke.py` boots both firmware modes.
+- Avoid: rebuilding hybrid boot layout from copied filenames, or hashing bytes the ISO writer later patches.
 
 ## BUG-0003 — Package manifest used the wrong dpkg-deb operation
 
 - Date: 2026-09-08
-- Symptom: the draft manifest command treated its formatting expression as a field name rather than producing TSV rows.
-- Root cause: `dpkg-deb -f` reads named control fields; it is not the formatted listing operation.
-- Fix: use `dpkg-deb --show --showformat` in `installer/build.sh`.
-- Regression evidence: independent final-image review checked a populated TSV manifest with package versions/architectures and the explicit CA-certificate package.
-- Avoid: treating an output file's existence as proof its contents are valid inventory.
-
-Build evidence above refers to Nex Core 0.1.0-alpha1 ISO SHA256
-`b2862b1e31f8c784b54efd67a3496dcf66bc8252ce910109d59ea043853eb734`.
-Runtime results are recorded separately with the ISO QA report; this ledger does
-not claim physical-hardware or Secure Boot verification.
+- Symptom: draft manifest treated its format expression as a field name instead of producing TSV rows.
+- Root cause: `dpkg-deb -f` reads named control fields; it is not a formatted listing.
+- Fix: `dpkg-deb --show --showformat` in `installer/build.sh`.
+- Regression: independent final-image review checked populated TSV manifest with versions/architectures.
+- Avoid: treating an output file's existence as proof of valid inventory.
 
 ## BUG-0004 — Installer debconf environment leaked into target package setup
 
 - Date: 2026-09-08
-- Symptom: the first offline installation failed during CA-certificate configuration with bad debconf descriptors and later hung in PAM configuration.
-- Root cause: invoking target package setup through raw `chroot` inherited Debian Installer frontend state without the target environment setup its packages need.
-- Fix: use Debian Installer's `in-target /bin/sh` for the shared target configuration script (`installer/late-install.sh`).
-- Regression evidence: run 1 reproduced the failure; `installer/check.sh` guards use of `in-target`. Fresh unattended run 3 passed offline installation, installed services, nested KVM and both installed boots against SHA256 `b02044bcac4205af247d52a30ff158ad4d73e7580382f666b37baf394538015f`; see [QA evidence](qa/iso/2026-09-08-alpha1.md).
-- Avoid: substituting a raw chroot for the installer's environment-aware target helper, or treating successful ISO creation as proof of successful installation.
+- Symptom: offline install failed in CA-certificate configuration (bad debconf descriptors), later hung in PAM configuration.
+- Root cause: raw `chroot` inherited Debian Installer frontend state without target environment setup.
+- Fix: use `in-target /bin/sh` for the target configuration script (`installer/late-install.sh`).
+- Regression: `installer/check.sh` guards `in-target`; fresh unattended run passed install, services, nested KVM and both boots (ISO SHA256 `b02044bcac4205af247d52a30ff158ad4d73e7580382f666b37baf394538015f`). Evidence: [QA evidence](qa/iso/2026-09-08-alpha1.md).
+- Avoid: raw chroot instead of the installer's target helper; treating ISO creation as proof of installation.
 
 ## BUG-0005 — Root-account hook ran before installer component initialization
 
 - Date: 2026-09-08
-- Symptom: the root-only installer draft failed its early command because `/usr/bin/user-setup-ask` was missing.
-- Root cause: before component loading, `anna-install` queues packages instead of installing them. Setting its retriever alone still leaves the package index missing.
-- Fix: initialize through the native `anna cdrom-retriever default` command before installing the account component when its dialog is absent.
-- Regression evidence: disposable VM runs reproduced both failures; `tests/integration/root-account.py` checks initialization order as well as root-only password handling. See the [root-only installer QA report](qa/iso/2026-09-08-root-account.md) for the exact rebuilt artifact and runtime results.
-- Avoid: mocking package installation as an unconditional success, or assuming a preseed early command runs after installer components are loaded.
+- Symptom: root-only draft early command failed: `/usr/bin/user-setup-ask` missing.
+- Root cause: before component loading, `anna-install` only queues packages; setting the retriever alone leaves the index missing.
+- Fix: run native `anna cdrom-retriever default` before installing the account component when its dialog is absent.
+- Regression: `tests/integration/root-account.py` checks init order and root-only password handling. Evidence: [root-only installer QA report](qa/iso/2026-09-08-root-account.md).
+- Avoid: mocking package install as unconditional success; assuming early commands run after component load.
 
 ## BUG-0006 — Root-only smoke check counted a Debian service account
 
 - Date: 2026-09-08
-- Symptom: offline installation succeeded, but the new ordinary-user assertion failed on first boot.
-- Root cause: its UID range included Debian's `libvirt-qemu` service account (64055).
-- Fix: check Debian's ordinary-user range (1000–60000), preserving its higher reserved service UIDs.
-- Regression evidence: inspection showed root password status `P` and only `libvirt-qemu` in the old range. The corrected installed-host check runs on the same disposable installation; results are recorded in the [root-only QA report](qa/iso/2026-09-08-root-account.md).
-- Avoid: interpreting every UID above 1000 as an installer-created login account; Debian service accounts remain necessary on a root-only host.
+- Symptom: install succeeded but ordinary-user assertion failed on first boot.
+- Root cause: UID range included `libvirt-qemu` (64055).
+- Fix: check Debian ordinary-user range 1000–60000.
+- Regression: corrected installed-host check on the disposable install. Evidence: [root-only QA report](qa/iso/2026-09-08-root-account.md).
+- Avoid: treating every UID above 1000 as an installer-created login.
 
 ## BUG-0007 — Installer header used placeholder branding
 
 - Date: 2026-09-08
-- Symptom: custom installer showed a generic blue letter tile and system-font product name.
-- Root cause: the header recreated branding as text instead of using the approved artwork.
-- Fix: crop and scale the approved Core lockup with existing GTK image support; retain original artwork in the frontend source archive.
-- Regression evidence: [actual 800×600 VM capture](qa/iso/2026-09-08-installer-logo.md) shows the complete approved logo; the initrd regression compares exact artwork bytes.
-- Avoid: substituting typed text for an existing approved product lockup.
+- Symptom: installer showed a generic blue letter tile and system-font name.
+- Root cause: header recreated branding as text instead of approved artwork.
+- Fix: crop/scale approved Core lockup with GTK image support; keep original artwork in the frontend source archive.
+- Regression: initrd regression compares exact artwork bytes. Evidence: [actual 800×600 VM capture](qa/iso/2026-09-08-installer-logo.md).
+- Avoid: typed text in place of an approved lockup.
 
 ## BUG-0008 — Initrd overlay omitted directories needed by new assets
 
 - Date: 2026-09-08
-- Symptom: first logo rebuild booted into the plain-text fallback despite the PNG appearing in the cpio file list.
-- Root cause: the overlay archived files only; the kernel could not extract artwork into a missing parent directory. The previous frontend library reused an existing directory.
-- Fix: include directory entries in the shared overlay archive before their files.
-- Regression evidence: `tests/integration/installer-logo.py` passes against the complete concatenated initrd and verifies parent-before-file ordering and artwork contents; [final VM capture](qa/iso/2026-09-08-installer-logo.md) confirms successful rendering.
-- Avoid: treating an archive member listing as proof the kernel can extract its files.
+- Symptom: logo rebuild booted to the plain-text fallback though the PNG was in the cpio listing.
+- Root cause: overlay archived files only; kernel cannot extract into a missing parent directory.
+- Fix: include directory entries before their files in the overlay archive.
+- Regression: `tests/integration/installer-logo.py` checks parent-before-file ordering and artwork on the complete initrd. Evidence: [final VM capture](qa/iso/2026-09-08-installer-logo.md).
+- Avoid: treating an archive listing as proof the kernel can extract it.
 
 ## BUG-P1-0001 — Controller startup and credential lifecycle regressions
 
 - Date: 2026-09-08
-- Symptom: the initial Phase 1 Controller panicked before listening; review also found that in-flight old credentials or a second replacement token could bypass a completed host revocation/re-enrollment.
-- Root cause: ambiguous Go ServeMux patterns and certificate checks outside the state-changing transaction.
-- Fix: use non-conflicting routes; revalidate the exact certificate inside each transaction and consume replacement tokens only for a still-revoked host.
-- Regression evidence: `go test -race -count=1 ./...` passed; `python3 tests/integration/phase1.py --browser` exercises actual startup and credential lifecycle. Dedicated stale-auth and replacement-token checks detect the race. See [independent review](qa/phase1/review.md) and [process/browser results](qa/phase1/acceptance.md).
-- CI: `.github/workflows/phase1.yml` and `.gitea/workflows/phase1.yml` run the Go checks and process/browser suite on pushes and pull requests; hosted execution is not claimed.
-- Avoid: treating successful compilation or pre-transaction authorization as proof a later operation remains authorized.
+- Symptom: Controller panicked before listening; in-flight old credentials or a second replacement token could bypass revocation/re-enrollment.
+- Root cause: ambiguous ServeMux patterns; certificate checks outside the state-changing transaction.
+- Fix: non-conflicting routes; revalidate exact certificate inside each transaction; consume replacement tokens only for a still-revoked host.
+- Regression: `go test -race -count=1 ./...` and `python3 tests/integration/phase1.py --browser` (stale-auth, replacement-token checks). Both phase1 workflows; hosted execution not claimed. Evidence: [independent review](qa/phase1/review.md), [process/browser results](qa/phase1/acceptance.md).
+- Avoid: treating compilation or pre-transaction authorization as proof a later operation is authorized.
 
 ## BUG-P1-0002 — Native inventory rejection and misleading probe freshness
 
 - Date: 2026-09-08
-- Symptom: real hosts reported HTTP 400 because their CPU flag list exceeded an assumed limit; stalled probes could retain a healthy appearance, suppress independent observations or discard samples after a clock correction.
-- Root cause: an unrealistically small CPU-feature bound and aggregate/wall-clock-only observation merging. The agent also labeled unrelated CPU flags as virtualization features.
-- Fix: validate realistic bounded reports, publish virtualization-specific flags, merge probes independently using ordered reports and sample identity, and preserve timeout/stale state without renewing old successful observations.
-- Regression evidence: controller merge/freshness and agent virtualization-filter tests pass under `go test -race -count=1 ./...`; the filter regression failed before correction. Process/browser and `bash tests/integration/phase1-debian.sh` checks exercise real reporting and stalled/failed libvirt recovery. See [Debian evidence](qa/phase1/debian.md) and [process/browser results](qa/phase1/acceptance.md) for exact tested builds and limits.
-- CI: both Phase 1 workflows run these Go, browser/process and Debian checks on pushes and pull requests; actual hosted results remain unverified.
-- Avoid: treating a heartbeat as a fresh successful service check, ordering hosts by their wall clocks, or assuming development-machine CPU metadata bounds.
+- Symptom: real hosts got HTTP 400 (CPU flag list over assumed limit); stalled probes looked healthy, suppressed observations or lost samples after clock correction.
+- Root cause: too-small CPU-feature bound; aggregate/wall-clock-only merging; unrelated CPU flags labeled virtualization.
+- Fix: realistic bounds, virtualization-specific flags, per-probe merge by ordered reports and sample identity, preserve timeout/stale state.
+- Regression: merge/freshness and virtualization-filter Go tests (filter failed before fix); `bash tests/integration/phase1-debian.sh` covers stalled/failed libvirt. Both phase1 workflows; hosted results unverified. Evidence: [Debian evidence](qa/phase1/debian.md).
+- Avoid: heartbeat as fresh service check, ordering by host wall clocks, dev-machine CPU metadata bounds.
 
 ## BUG-P1-0003 — UI health and asynchronous scope races
 
 - Date: 2026-09-08
-- Symptom: healthy checks initially rendered degraded; an older read could overwrite revoked state, a delayed enrollment token could appear under another pool, and the skip link changed the resource route.
-- Root cause: a mismatched status enum and asynchronous responses unguarded by request/session/scope identity; the navigation hash was reused for focus movement.
-- Fix: render contract status/freshness, reject superseded reads, guard workflow changes while mutations are pending, and move focus without changing the object URL.
-- Regression evidence: `python3 tests/integration/phase1.py --browser` passes keyboard, health, delayed-token, delayed-read/revocation and narrow-screen checks with inspected captures in [browser evidence](qa/phase1/acceptance.md).
-- CI: both Phase 1 workflows run the browser regression suite on pushes and pull requests; workflow configuration alone is not hosted CI proof.
-- Avoid: trusting promise completion order as user intent, or using an object-navigation fragment for a skip link.
+- Symptom: healthy checks rendered degraded; stale reads overwrote revoked state; delayed token appeared under another pool; skip link changed the route.
+- Root cause: mismatched status enum; async responses unguarded by request/session/scope; navigation hash reused for focus.
+- Fix: render contract status/freshness, reject superseded reads, guard workflow changes during mutations, move focus without changing URL.
+- Regression: `python3 tests/integration/phase1.py --browser` (keyboard, health, delayed-token, delayed-read/revocation, narrow screen). Both phase1 workflows; hosted CI not proven. Evidence: [browser evidence](qa/phase1/acceptance.md).
+- Avoid: trusting promise completion order as intent; object-navigation fragment as skip link.
 
 ## BUG-0009 — Initrd overlay replaced the merged-usr library symlink
 
 - Date: 2026-09-08
-- Symptom: The first standalone-wizard image panicked during init.
-- Root cause: Archiving a new /lib directory replaced Debian’s /lib → usr/lib symlink, hiding required startup files.
-- Fix: Install new hooks under usr/lib while preserving the base symlink.
-- Regression evidence: installer-logo.py failed on the broken complete initrd with “Overlay directory replaces base symlink: lib”; the corrected artifact passes and boots the native wizard. See [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
-- Avoid: Creating overlay directories without checking whether the base path is a symlink.
+- Symptom: first standalone-wizard image panicked during init.
+- Root cause: archiving a new /lib directory replaced Debian's /lib → usr/lib symlink.
+- Fix: install hooks under usr/lib.
+- Regression: installer-logo.py fails the broken initrd with "Overlay directory replaces base symlink: lib"; fixed artifact boots. Evidence: [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
+- Avoid: creating overlay directories without checking whether the base path is a symlink.
 
 ## BUG-0010 — Preseed command failure did not stop automatic partitioning
 
 - Date: 2026-09-08
-- Symptom: Review found that acknowledging a failed disk recheck could allow partitioning to continue.
-- Root cause: The upstream preseed_command helper reports failure but returns success after its error dialog.
-- Fix: Use a direct partman init hook whose nonzero exit aborts initialization.
-- Regression evidence: installer-handoff.py simulates a failed recheck and observes nonzero hook exit; minimal mode remains unaffected. The final disposable install exercised the successful hook. See [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
-- Avoid: Using a diagnostic preseed early command as a fail-closed destructive-operation guard.
+- Symptom: acknowledging a failed disk recheck could let partitioning continue.
+- Root cause: upstream preseed_command reports failure but returns success after its dialog.
+- Fix: direct partman init hook whose nonzero exit aborts.
+- Regression: installer-handoff.py simulates a failed recheck and expects nonzero exit. Evidence: [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
+- Avoid: a diagnostic preseed early command as a fail-closed destructive-operation guard.
 
 ## BUG-0011 — Private staging permissions leaked into public host configuration
 
 - Date: 2026-09-08
-- Symptom: Review found that umask 0077 could stage /etc directories as 0700 and resolver files as 0600.
-- Root cause: Requested mkdir/file modes are reduced by umask; copying staged directory attributes would propagate them to the installed system.
-- Fix: Set public target directories to 0755 and files to 0644 explicitly while retaining private staging root and credential files.
-- Regression evidence: installer-network.c runs under umask 0077 and checks public directory/file permissions plus private staging-root preservation; strict compilation and execution pass. See [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
-- Avoid: Assuming a requested mode is the resulting mode under a restrictive process umask.
+- Symptom: umask 0077 could stage /etc directories 0700 and resolver files 0600.
+- Root cause: umask reduces requested modes; copied staged attributes propagate.
+- Fix: explicit 0755 public directories / 0644 files; keep private staging root and credentials.
+- Regression: installer-network.c under umask 0077 checks public/private modes. Evidence: [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
+- Avoid: assuming requested mode is resulting mode under a restrictive umask.
 
 ## BUG-0012 — Selected keyboard did not match credential entry
 
 - Date: 2026-09-08
-- Symptom: Review found that non-US physical keys could produce a different password after reboot; restarting setup also retained an old live layout.
-- Root cause: The original wizard only saved a later keyboard preseed while Xorg continued using its previous layout.
-- Fix: Apply the displayed layout at startup and on selection, clear both credential entries on changes, and reject continuation when layout application fails.
-- Regression evidence: installer-keyboard.py compiles the actual callback with simulated boundaries and covers success, failure, clearing and initialization. Actual VM selection of German made physical Y produce Z and cleared both fields. See [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
-- Avoid: Collecting a password before applying the input layout, or trusting a dropdown’s default to reset Xorg.
+- Symptom: non-US keys could produce a different password after reboot; restarting setup kept the old live layout.
+- Root cause: wizard only saved a later preseed while Xorg kept its previous layout.
+- Fix: apply layout at startup and on selection, clear both credential entries on change, block continuation on failure.
+- Regression: installer-keyboard.py covers success/failure/clearing/init; VM German selection verified. Evidence: [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
+- Avoid: collecting a password before applying layout; trusting dropdown default to reset Xorg.
 
 ## BUG-0013 — Wizard startup changed the installation engine umask
 
 - Date: 2026-09-08
-- Symptom: Review found that native installation would inherit umask 0077.
-- Root cause: The private-handoff script is sourced into the installer shell and did not restore its caller’s mask.
-- Fix: Save and restore the incoming mask around the private handoff.
-- Regression evidence: installer-handoff.py checks the caller remains at 0022 after the real startup script runs with simulated commands. See [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
-- Avoid: Treating a sourced shell script’s process settings as local to that file.
+- Symptom: native installation would inherit umask 0077.
+- Root cause: sourced private-handoff script did not restore caller's mask.
+- Fix: save/restore the mask around the handoff.
+- Regression: installer-handoff.py checks caller stays 0022. Evidence: [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
+- Avoid: treating a sourced script's process settings as file-local.
 
 ## BUG-0014 — Review text and confirmation recovery were not fully visible
 
 - Date: 2026-09-08
-- Symptom: The live review showed only HOST; after a wrong confirmation, the error layout hid the correction field below the visible area.
-- Root cause: The dynamic multiline wrapping label failed to display the complete summary in the shipped GTK runtime; wrapping error-label sizing also shrank the review viewport.
-- Fix: Render the summary in a read-only scrollable text view and keep the concise error line from expanding vertically.
-- Regression evidence: wizard-review.py boots the actual GUI and checks visible network/disk summary regions, an error, visible correction input and an unchanged disposable disk. The earlier error capture has zero text pixels in the required correction region and fails the new assertion; final KVM check passes. See [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
-- Avoid: Accepting successful string construction as proof the operator can see the review, or checking only the happy-path layout.
+- Symptom: review showed only HOST; after wrong confirmation the correction field was hidden.
+- Root cause: dynamic wrapping label failed in shipped GTK; wrapping error label shrank the viewport.
+- Fix: read-only scrollable text view for summary; single-line error.
+- Regression: wizard-review.py checks visible summary, error and correction input, disk unchanged; old capture fails. Evidence: [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
+- Avoid: string construction as proof of visibility; checking only happy-path layout.
 
 ## BUG-0015 — Hardware preparation lacked a debconf protocol channel
 
 - Date: 2026-09-08
-- Symptom: The preparation log contained raw PROGRESS protocol commands.
-- Root cause: Native anna was invoked outside an established debconf frontend after its protocol descriptors had been cleared.
-- Fix: Initialize the native noninteractive confmodule before redirecting diagnostic output or calling anna.
-- Regression evidence: wizard-review.py adds a test-only success marker only after rejecting raw PROGRESS lines; complete-initrd checks require the shipped preparation script to match the tested source. See [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
-- Avoid: Redirecting native installer protocol output into a log instead of establishing its frontend channel.
-
-These regressions run through both `.github/workflows/installer.yml` and
-`.gitea/workflows/installer.yml` on pushes and pull requests: `bash installer/check.sh`,
-`python3 tests/integration/installer-shell.py`, the compiled `installer-network.c` check,
-`python3 tests/integration/installer-handoff.py`, `python3 tests/integration/installer-keyboard.py`,
-the complete-initrd `installer-logo.py` check and the native `wizard-review.py` check.
-Local results and artifact limits are in the QA report; hosted runs remain unexecuted.
+- Symptom: preparation log contained raw PROGRESS commands.
+- Root cause: anna invoked outside a debconf frontend after protocol descriptors were cleared.
+- Fix: initialize noninteractive confmodule before redirecting output or calling anna.
+- Regression: wizard-review.py rejects raw PROGRESS lines; complete-initrd check matches shipped script. Installer checks (`installer/check.sh`, installer-shell/handoff/keyboard.py, installer-network.c, installer-logo.py, wizard-review.py) run in both installer workflows; hosted runs unexecuted. Evidence: [wizard QA](qa/iso/2026-09-08-nex-wizard.md).
+- Avoid: redirecting installer protocol output to a log instead of establishing its channel.
 
 ## BUG-0016 — Wizard stayed at 800×600 on larger displays
 
 - Date: 2026-09-08.
-- Symptom: Black margins surrounded the installer at 1024×768.
-- Root cause: A fixed 800×600 default relied on a maximize request, but Debian Installer runs X without a window manager to honor it.
-- Fix: Size and position the undecorated native window against the actual GDK screen and handle screen size changes.
-- Regression evidence: The old ISO reproduced the black margins in QEMU at 1024×768. `wizard-review.py --resolution 1024x768` checks all display corners; both CI providers also retain the 800×600 walkthrough. Final results are recorded in [QoL QA](qa/iso/2026-09-08-installer-qol.md).
-- Avoid: Assuming a window-manager maximize/fullscreen hint resizes a window in the installer environment.
+- Symptom: black margins at 1024×768.
+- Root cause: fixed 800×600 relied on maximize; installer X has no window manager.
+- Fix: size/position the undecorated window to the GDK screen and track size changes.
+- Regression: `wizard-review.py --resolution 1024x768` checks corners (old ISO reproduced); both CI providers. Evidence: [QoL QA](qa/iso/2026-09-08-installer-qol.md).
+- Avoid: relying on WM maximize/fullscreen hints in the installer.
 
 ## BUG-0017 — Timezone completion did not open in the native installer
 
 - Date: 2026-09-08.
-- Symptom: A city matched the timezone data, but typing it produced no selectable popup in the actual installer.
-- Root cause: The window had not been explicitly presented/focused in the installer’s window-manager-free X session; callback-only matching tests did not exercise GTK popup activation.
-- Fix: Present the native wizard after showing and sizing it; retain canonical timezone validation after selecting a match.
-- Regression evidence: Native QEMU reproduced the absent popup, then selected America/New_York and Australia/Sydney after the fix. `installer-qol.py` checks case-insensitive and space/underscore matching; `wizard-review.py` exercises actual popup selection and review at both resolutions in GitHub and Gitea CI. See [QoL QA](qa/iso/2026-09-08-installer-qol.md).
-- Avoid: Treating a successful string-matching unit check as proof that a native GTK popup can be opened and selected.
+- Symptom: matching city typed but no popup in the real installer.
+- Root cause: window not presented/focused in WM-free X; callback-only tests missed GTK popup activation.
+- Fix: present the window after sizing; keep canonical timezone validation.
+- Regression: `installer-qol.py` matching; `wizard-review.py` real popup selection at both resolutions, GitHub and Gitea. Evidence: [QoL QA](qa/iso/2026-09-08-installer-qol.md).
+- Avoid: string-matching unit check as proof a GTK popup opens.
 
 ## BUG-AP-0001 — Appliance ownership must survive management revocation
 
 - Date: 2026-09-08.
-- Symptom: Independent review found that revoking another host could remove its observed VM UUID from appliance-adoption conflict checks.
-- Root cause: The conflict query filtered revoked hosts, confusing loss of management permission with exclusion of a running guest.
-- Fix: Include every other host's conflicting UUID observation; require fresh observations to resolve the conflict. Local power also checks complete domain/disk identity, duplicate writable references and hardlinks.
-- Regression evidence: `.cache/toolchains/go/bin/go test -race -count=1 ./...` passed; `internal/controller/appliance_test.go` covers revoked-host conflicts and restart freshness, and `internal/vmhost/engine_test.go` covers local ownership/duplicate disk rejection. Both GitHub and Gitea Phase 1 workflows run the Go suites on pushes and pull requests.
-- Avoid: Treating revocation, a timeout, or a stopped management service as storage fencing.
+- Symptom: revoking another host could drop its observed VM UUID from adoption conflict checks.
+- Root cause: conflict query filtered revoked hosts.
+- Fix: include every other host's UUID observation; require fresh observations to clear; local power checks domain/disk identity, duplicate writable refs, hardlinks.
+- Regression: `internal/controller/appliance_test.go` (revoked conflicts, restart freshness), `internal/vmhost/engine_test.go`; `go test -race -count=1 ./...` passed; both Phase 1 workflows.
+- Avoid: treating revocation, timeout or stopped management as storage fencing.
 
 ## BUG-AP-0002 — Appliance recovery must preserve complete private identity
 
 - Date: 2026-09-08.
-- Symptom: Review found that a partial recovery archive could omit the host CA, and safe archive extraction could leave private state owned by root rather than the Controller service account.
-- Root cause: Path validation alone did not prove archive completeness, integrity, matching source, or usable restored ownership.
-- Fix: Require the database, CA pair, TLS pair and initialization marker; verify the recorded file set and hashes before mutation, serialize against live Controller state, and restore private service ownership.
-- Regression evidence: `python3 -m unittest discover -s tests -p 'test_*.py'` passed 42 checks at this verification point, including missing-CA, tampered-file, traversal/link, and restored-ownership checks in `tests/test_appliance_build.py`. Both CI providers run this discovery command; real replacement recovery is tracked separately in [appliance lab evidence](qa/appliance/lab.md).
-- Avoid: Reporting a successful file extraction as a working Controller recovery.
+- Symptom: partial recovery archive could omit host CA; extraction left private state root-owned.
+- Root cause: path validation did not prove completeness, integrity, source, or ownership.
+- Fix: require database, CA pair, TLS pair, init marker; verify file set/hashes before mutation; serialize against live state; restore service ownership.
+- Regression: `tests/test_appliance_build.py` (missing-CA, tampered, traversal/link, ownership) via `python3 -m unittest discover -s tests -p 'test_*.py'`; both CI providers. Evidence: [appliance lab evidence](qa/appliance/lab.md).
+- Avoid: reporting file extraction as working Controller recovery.
 
 ## BUG-AP-0003 — Guest package inventory format was expanded by the shell
 
 - Date: 2026-09-08.
-- Symptom: The first appliance image build failed while recording the installed package/source inventory.
-- Root cause: The guest shell expanded dpkg-query's `${source:Package}` format expression and rejected it as shell substitution.
-- Fix: Preserve literal dpkg-query format variables through the guest shell.
-- Regression evidence: `tests/test_appliance_build.py` runs the actual `/bin/sh` quoting boundary with a fake dpkg-query and verifies the exact format argument; the original quoting fails and the corrected command passes. The full Python suite passes and is discovered on pushes and pull requests by both CI providers.
-- Avoid: Assuming nested shell quotation preserves a downstream tool's dollar-prefixed syntax.
+- Symptom: first appliance image build failed recording package/source inventory.
+- Root cause: guest shell expanded dpkg-query's `${source:Package}`.
+- Fix: preserve literal format variables through the guest shell.
+- Regression: `tests/test_appliance_build.py` runs real `/bin/sh` quoting with fake dpkg-query (old fails); both CI providers.
+- Avoid: assuming nested quoting preserves a tool's dollar syntax.
 
 ## BUG-AP-0004 — QEMU could not create the appliance console socket
 
 - Date: 2026-09-08.
-- Symptom: Real nested-KVM deployment retained its defined VM but failed to start when QEMU could not bind `console.sock` in the private disk directory.
-- Root cause: Domain XML placed a QEMU-created socket inside a directory owned by the host service; a simulated virsh success did not exercise QEMU's filesystem permissions.
-- Fix: Let libvirt allocate its native private UNIX socket path using a socket listener with no explicit pathname. Keep restricted disk-directory permissions and no public VNC listener.
-- Regression evidence: `TestConsoleSocketUsesLibvirtRuntimeDirectory` failed before the XML fix and `go test -race ./internal/vmhost` passes afterward. Both GitHub and Gitea run this suite. [Real failure and subsequent lab verification](qa/appliance/lab.md) distinguish actual QEMU behavior from command simulation.
-- Avoid: Making the disk directory generally writable or exposing TCP VNC to work around a private-socket ownership error.
+- Symptom: nested-KVM deploy defined the VM but QEMU could not bind `console.sock` in the private disk directory.
+- Root cause: QEMU-created socket placed in a host-service-owned directory; simulated virsh hid it.
+- Fix: let libvirt allocate its private UNIX socket path; keep restricted disk dir, no public VNC.
+- Regression: `TestConsoleSocketUsesLibvirtRuntimeDirectory` (failed before) in `go test -race ./internal/vmhost`; both CI. Evidence: [Real failure and subsequent lab verification](qa/appliance/lab.md).
+- Avoid: making the disk directory writable or exposing TCP VNC.
 
 ## BUG-AP-0005 — Package builder could not create a nested read-only mountpoint
 
 - Date: 2026-09-08.
-- Symptom: The first real host-package Docker run failed before compilation because `/input/bundle` did not exist under the read-only input mount.
-- Root cause: The builder expected Docker to create a nested mount destination inside an already read-only parent mount.
-- Fix: Create the bundle mountpoint in the staged input before launching Docker.
-- Regression evidence: `tests/test_core_local_package.py` exercises the valid signed-bundle orchestration and checks the staged mountpoint. The corrected package built and passed disposable Debian package installation/removal checks; see [package evidence](qa/appliance/package.md). Both CI providers discover the Python regression suite.
-- Avoid: Treating Dockerfile compilation as proof the actual container mount layout works.
+- Symptom: host-package Docker run failed: `/input/bundle` missing under read-only input mount.
+- Root cause: expected Docker to create a nested mount point inside a read-only parent.
+- Fix: create the bundle mountpoint in staged input before launching Docker.
+- Regression: `tests/test_core_local_package.py` checks the staged mountpoint; both CI. Evidence: [package evidence](qa/appliance/package.md).
+- Avoid: Dockerfile compilation as proof the mount layout works.
 
 ## BUG-AP-0006 — First-boot initialization had a systemd ordering cycle
 
 - Date: 2026-09-08.
-- Symptom: Real Debian boot skipped appliance initialization, although cloud-init configured the VM network.
-- Root cause: The initializer was wanted by `multi-user.target` but ordered after Debian's `cloud-final.service`, which itself runs after that target.
-- Fix: Enable initialization under `cloud-init.target`, retaining the prerequisite ordering without a cycle.
-- Regression evidence: `test_firstboot_has_no_debian_cloud_final_ordering_cycle` runs actual `systemd-analyze verify` against the shipped unit and Debian's relevant target ordering. The old unit fails; the fixed test passes on the workstation and Debian 13 builder. Both CI workflows discover it; real boot evidence is recorded in [the lab report](qa/appliance/lab.md).
-- Avoid: Treating valid unit syntax as proof that a dependency graph can start.
+- Symptom: real Debian boot skipped appliance initialization.
+- Root cause: wanted by `multi-user.target` but ordered after `cloud-final.service`, which runs after that target.
+- Fix: enable under `cloud-init.target`.
+- Regression: `test_firstboot_has_no_debian_cloud_final_ordering_cycle` runs `systemd-analyze verify` (old unit fails); both CI. Evidence: [the lab report](qa/appliance/lab.md).
+- Avoid: valid unit syntax as proof the dependency graph can start.
 
 ## BUG-AP-0007 — Private build permissions made public Controller files unreadable
 
 - Date: 2026-09-08.
-- Symptom: Controller API login worked in the actual guest, but the browser GUI returned 403 and corresponding source was unreadable.
-- Root cause: The build's private umask propagated root-only modes onto public UI/source files served by the unprivileged Controller account.
-- Fix: Apply readable/traversable modes to the public share only; retain private credentials and state permissions.
-- Regression evidence: `test_public_guest_assets_are_readable_by_service_user` executes the shipped chmod boundary on private fixtures and verifies resulting access bits. Real GUI/source checks accompany [package](qa/appliance/package.md) and [guest](qa/appliance/lab.md) evidence. Both CI providers run the Python regression.
-- Avoid: Weakening credential/state permissions to make public assets readable.
+- Symptom: API login worked but GUI returned 403 and corresponding source was unreadable.
+- Root cause: private build umask put root-only modes on public UI/source files.
+- Fix: readable/traversable modes on the public share only.
+- Regression: `test_public_guest_assets_are_readable_by_service_user`; both CI. Evidence: [package](qa/appliance/package.md), [guest](qa/appliance/lab.md).
+- Avoid: weakening credential/state permissions.
 
 ## BUG-AP-0008 — API success was mistaken for completed appliance installation
 
 - Date: 2026-09-08.
-- Symptom: The first real build reported Ready while its GUI returned 403 and first-boot credential cleanup had not finished.
-- Root cause: Handoff proved enrollment/adoption but not the first-boot completion boundary; cleanup failures could also have been ignored.
-- Fix: Publish a per-instance readiness marker only after successful GUI access and verified cleanup of both persistent and runtime cloud-init caches. Handoff requires that versioned marker and GUI HTTP 200 over pinned HTTPS before completion; completed handoff records retain readiness-version evidence.
-- Regression evidence: The handoff integration test failed before the fix when API success completed without the marker/GUI. Focused and combined Go race suites pass afterward. The firstboot test injects cleanup failure, verifies no ready marker, and proves retry succeeds; both CI providers run these suites.
-- Avoid: Treating a booted VM or a successful API call as a finished user workflow, or swallowing credential-cleanup errors.
+- Symptom: build reported Ready while GUI returned 403 and first-boot credential cleanup was unfinished.
+- Root cause: handoff proved enrollment/adoption, not first-boot completion; cleanup failures could be ignored.
+- Fix: per-instance readiness marker only after GUI access and verified cleanup of persistent and runtime cloud-init caches; handoff requires versioned marker and GUI HTTP 200 over pinned HTTPS.
+- Regression: handoff integration test (failed before); firstboot test injects cleanup failure and proves retry; Go race suites; both CI.
+- Avoid: booted VM or API success as finished workflow; swallowing cleanup errors.
 
 ## BUG-AP-0009 — Virsh interactive framing broke recovery transfer parsing
 
 - Date: 2026-09-08.
-- Symptom: Actual host-root recovery export failed while parsing domain XML and guest-agent replies.
-- Root cause: Stdin keeps private recovery payloads out of process arguments, but virsh adds prompts and can truncate or wrap echoed commands; the original parser expected plain output.
-- Fix: Validate short-command framing and require exactly one guest-agent return/error JSON response, withholding ambiguous output and secrets from errors.
-- Regression evidence: `tests/test_host_recovery.py` covers prompt framing, ambiguous replies, transfer and secret transport; six checks pass. Real QGA export then transferred the archive off the host and verified its six required file hashes. Both CI providers discover this test file.
-- Avoid: Exposing archive contents in process arguments or assuming a simulated subprocess returns the same framing as the real tool.
+- Symptom: host-root recovery export failed parsing domain XML and guest-agent replies.
+- Root cause: stdin-fed virsh adds prompts and can truncate/wrap echoed commands; parser expected plain output.
+- Fix: validate short-command framing; require exactly one guest-agent return/error JSON; keep ambiguous output and secrets out of errors.
+- Regression: `tests/test_host_recovery.py` (6 checks); real QGA export verified six file hashes; both CI.
+- Avoid: archive contents in process arguments; assuming simulated subprocess framing matches the real tool.
 
 ## BUG-AP-0010 — The packaged service umask removed QEMU directory traversal
 
 - Date: 2026-09-08.
-- Symptom: A clean deployment through the real systemd package failed because the per-VM directory was 0700, so QEMU could not open its disk.
-- Root cause: `mkdir`'s requested 0711 was reduced by the service's required `UMask=0077`; the earlier directly launched development process did not reproduce that environment.
-- Fix: Exclusively create the owned VM directory, then explicitly set 0711. Keep state/seed directories 0700 and disk, seed ISO, and credential files 0600.
-- Regression evidence: `TestApplianceDirectoryTraversableUnderPrivateUmask` sets the actual process umask to 0077 and failed with mode 0700 before the correction. The full vmhost race suite passes afterward; both CI providers run it. The rejected package and subsequent clean package walkthrough are distinguished in [lab evidence](qa/appliance/lab.md).
-- Avoid: Weakening the service umask, or treating a requested creation mode as the resulting filesystem mode.
+- Symptom: systemd-packaged deploy made the per-VM directory 0700; QEMU could not open its disk.
+- Root cause: `mkdir` 0711 reduced by `UMask=0077`; dev launch lacked that environment.
+- Fix: exclusively create then chmod 0711; state/seed dirs 0700, disk/seed/credential files 0600.
+- Regression: `TestApplianceDirectoryTraversableUnderPrivateUmask` (failed before); both CI. Evidence: [lab evidence](qa/appliance/lab.md).
+- Avoid: weakening service umask; requested mode as resulting mode.
 
 ## BUG-0018 — Installer rejected valid qualified hostnames
 
 - Date: 2026-09-08.
-- Symptom: `nexcore.example.test` was rejected on Host and Network.
-- Root cause: GUI and backend separately enforced a single-label 63-character rule; generated configuration also assumed a short name.
-- Fix: Shared standards-based ASCII hostname validation and root-dot handling; split Debian short hostname/domain and retain full/short hosts aliases.
-- Regression evidence: User screenshot and prior validation reproduced rejection. `installer-network.c`, `installer-hostname.py` and native `wizard-review.py` cover syntax boundaries, generated configuration and qualified-name UI flow, invoked in both GitHub and Gitea installer workflows. Actual results and standards are in [hostname QA](qa/iso/2026-09-08-installer-hostname.md).
-- Avoid: Merely permitting dots in a UI regex while backend validation or installed hostname configuration still assumes one label.
+- Symptom: `nexcore.example.test` rejected on Host and Network.
+- Root cause: GUI and backend separately enforced a single 63-char label; config assumed a short name.
+- Fix: shared standards-based ASCII hostname validation with root-dot handling; split short hostname/domain, keep full/short hosts aliases.
+- Regression: `installer-network.c`, `installer-hostname.py`, `wizard-review.py`; both installer workflows. Evidence: [hostname QA](qa/iso/2026-09-08-installer-hostname.md).
+- Avoid: permitting dots in a UI regex while backend/config still assume one label.
 
 ## BUG-0019 — NIC status confused disabled interfaces with absent link
 
 - Date: 2026-09-08.
-- Symptom: A connected virtual NIC displayed `down` during setup.
-- Root cause: The GUI read raw operstate before administrative activation and only refreshed on selection.
-- Fix: Perform a link-only probe, read carrier with administrative-state checks, and refresh status without reloading form values.
-- Regression evidence: `installer-link.py` covers probe/status behavior; native `wizard-review.py` checks QEMU link disconnect/reconnect and preservation of input. Both GitHub and Gitea installer workflows run them. See [link QA](qa/iso/2026-09-08-installer-link.md) for actual results and limits.
-- Avoid: Renaming every `down` state to “No link” without probing carrier, or refreshing the NIC by reloading its editor.
+- Symptom: connected virtual NIC showed `down` during setup.
+- Root cause: GUI read raw operstate before admin activation, refreshed only on selection.
+- Fix: link-only probe, carrier read with admin-state checks, refresh without reloading form values.
+- Regression: `installer-link.py`; `wizard-review.py` QEMU disconnect/reconnect; both installer workflows. Evidence: [link QA](qa/iso/2026-09-08-installer-link.md).
+- Avoid: renaming `down` to "No link" without probing carrier; reloading the editor to refresh.
 
 ## BUG-0020 — Installer offered Xen disks then rejected them
 
 - Date: 2026-09-08.
-- Symptom: `/dev/xvda` appeared in Disk and Review, but installation failed with “Select a supported physical installation disk.”
-- Root cause: discovery and backend used different disk-name eligibility rules; backend omitted Xen `xvd`.
-- Fix: share the existing name policy and include `xvd`, preserving all subsequent device safety checks.
-- Regression evidence: `tests/integration/installer-disk.py` fails the original validator and passes the fix with simulated device boundaries, including unsafe-target rejection; both installer CI workflows invoke it. See [QA](qa/iso/2026-09-08-installer-xen-disk.md).
-- Avoid: bypassing disk validation or hiding a disk that the supported backend can install onto.
+- Symptom: `/dev/xvda` listed, then install failed "Select a supported physical installation disk."
+- Root cause: discovery and backend used different name rules; backend omitted `xvd`.
+- Fix: share the name policy including `xvd`; keep device safety checks.
+- Regression: `tests/integration/installer-disk.py` (old validator fails, unsafe targets rejected); both installer workflows. Evidence: [QA](qa/iso/2026-09-08-installer-xen-disk.md).
+- Avoid: bypassing disk validation or hiding a supported disk.
 
 ## BUG-SEC-0001 — Unauthenticated requests consumed shared login capacity
 
 - Date: 2026-09-08.
-- Symptom: Two incomplete Controller login bodies caused a separate valid login to receive HTTP 429; both services also coupled clients through one global cooldown.
-- Root cause: Controller reserved password-work slots before reading untrusted bodies; admission state did not distinguish direct network peers.
-- Fix: Finish bounded credential/origin validation before reserving hashing capacity; limit each actual peer to five attempts per minute, bound peer tracking and retain two global hashing slots. Ignore untrusted forwarding headers.
-- Regression evidence: `TestIncompleteLoginDoesNotReserveHashCapacity` failed with 429 before the fix and passes afterward; peer/proxy isolation checks and full Go race suites pass. Both GitHub and Gitea Phase 1 workflows run `go test -race ./...` on push/PR and weekly. See [security checks](qa/security/checks.md).
-- Avoid: Removing expensive-work limits or using a global cooldown that lets one unauthenticated peer block unrelated logins.
+- Symptom: two incomplete login bodies made a valid login get HTTP 429; one global cooldown coupled clients.
+- Root cause: hashing slots reserved before reading untrusted bodies; admission ignored peer identity.
+- Fix: validate bounded credentials/origin before reserving; 5 attempts/min per actual peer, bounded tracking, two global hashing slots; ignore forwarding headers.
+- Regression: `TestIncompleteLoginDoesNotReserveHashCapacity` (429 before) plus peer/proxy isolation, `go test -race ./...`; both Phase 1 workflows push/PR and weekly. Evidence: [security checks](qa/security/checks.md).
+- Avoid: removing expensive-work limits; a global cooldown one peer can trigger.
 
 ## BUG-SEC-0002 — Password byte length did not enforce the displayed character minimum
 
 - Date: 2026-09-08.
-- Symptom: Eight two-byte Unicode characters satisfied the appliance's advertised sixteen-character minimum.
-- Root cause: Backend validation counted UTF-8 bytes instead of Unicode characters; guest firstboot and bootstrap callers also had inconsistent limits.
-- Fix: Shared validation requires at least sixteen Unicode code points and no more than 1024 UTF-8 bytes for newly provisioned passwords; align guest validation and browser feedback while preserving existing password hashes.
-- Regression evidence: `TestPasswordMinimumCountsCharacters` failed before the fix and passes with the full vmhost race suite. Actual browser checks reject eight supplementary characters and oversized UTF-8 input, and accept sixteen characters. Both CI providers execute the Go regression on push/PR and weekly; guest validation is covered by Python discovery.
-- Avoid: Treating byte counts or JavaScript UTF-16 code-unit length as a Unicode character count.
-- Policy supersession (2026-09-08): the project owner explicitly removed the sixteen-character minimum.
-  Current bootstrap accepts nonempty UTF-8 passwords within the transport bound; historical
-  minimum-length evidence above describes the former policy. Shared validation still
-  prevents inconsistent byte/encoding handling. See [deployment usability QA](qa/appliance/deployment-usability.md).
+- Status: minimum superseded 2026-09-08 — project owner removed the 16-character minimum; bootstrap accepts nonempty UTF-8 within the transport bound. Shared byte/encoding validation remains. Evidence: [deployment usability QA](qa/appliance/deployment-usability.md).
+- Symptom: eight two-byte characters satisfied the advertised 16-character minimum.
+- Root cause: backend counted UTF-8 bytes; guest firstboot and bootstrap had inconsistent limits.
+- Fix: shared validation (then ≥16 code points), ≤1024 UTF-8 bytes; aligned guest and browser; existing hashes preserved.
+- Regression: `TestPasswordMinimumCountsCharacters` (failed before) in vmhost race suite; browser checks; both CI push/PR and weekly; guest via Python discovery.
+- Avoid: byte counts or UTF-16 code-unit length as character count.
 
 ## BUG-SEC-0003 — Child processes inherited ownership locks
 
 - Date: 2026-09-08.
-- Symptom: Actual browser restart verification twice found the local service refusing startup after its original process exited; a still-running child retained the ownership lock.
-- Root cause: Three raw `syscall.Open` lock calls in local management, recovery preparation and agent storage omitted close-on-exec. Go's `os.OpenFile` callers already set it.
-- Fix: Set `O_CLOEXEC` atomically on all three raw lock openings; retain the locks' exclusive ownership semantics.
-- Regression evidence: Real subprocess tests in `internal/localcore/lock_test.go` and `internal/agent/lock_test.go` failed before the fix with retained-lock errors. They now prove reacquisition while the child remains alive and after it exits; agent/localcore race suites and actual local browser restart pass. Both CI providers run these regressions through `go test -race ./...` on push/PR and weekly.
-- Avoid: Delaying restart until children happen to finish, removing ownership locks, or setting close-on-exec later through a race-prone separate call.
+- Symptom: local service refused restart; a still-running child held the ownership lock.
+- Root cause: three raw `syscall.Open` lock calls (local management, recovery prep, agent storage) lacked close-on-exec.
+- Fix: atomic `O_CLOEXEC` on all three.
+- Regression: subprocess tests in `internal/localcore/lock_test.go`, `internal/agent/lock_test.go` (failed before); `go test -race ./...` both CI push/PR and weekly.
+- Avoid: waiting for children, removing locks, or setting close-on-exec via a separate racy call.
 
 ## BUG-SEC-0004 — Browser CI referenced a binary it never built
 
 - Date: 2026-09-08.
-- Symptom: Both workflow definitions invoked host-local browser QA with its default binary path but did not build that artifact on a clean runner.
-- Root cause: Controller/agent integration built private temporary binaries; that did not provide `dist/nex-core-local` for the independent local browser suite.
-- Fix: Build the local service explicitly before its browser step in both workflows.
-- Regression evidence: `python3 -m unittest discover -s tests -p test_ci_security.py` failed for both providers before the fix and passes afterward; both workflows run this test through Python discovery on push/PR and weekly. Local actual browser suites pass with explicitly built artifacts. No hosted CI execution is claimed.
-- Avoid: Assuming an ignored workstation build artifact will exist on a clean CI runner.
+- Symptom: workflows ran local browser QA against default binary path never built on a clean runner.
+- Root cause: integration built private temp binaries, not `dist/nex-core-local`.
+- Fix: build the local service before its browser step in both workflows.
+- Regression: `python3 -m unittest discover -s tests -p test_ci_security.py` (failed before for both providers). No hosted CI execution claimed.
+- Avoid: assuming an ignored workstation artifact exists on CI.
 
 ## BUG-0021 — Normal keyboard setup appeared as a startup error
 
 - Date: 2026-09-08.
-- Symptom: initial Welcome page showed a red “Keyboard layout changed” notice.
-- Root cause: successful initial layout application used the shared error-message area.
-- Fix: successful keyboard application clears the message; real application errors and password clearing remain.
-- Regression evidence: `installer-keyboard.py` silent-success assertion failed before the fix and passed afterward. Both installer CI workflows already execute this check.
-- Avoid: removing initial keyboard application or credential clearing to hide the message.
+- Symptom: Welcome page showed red "Keyboard layout changed".
+- Root cause: successful initial layout application used the error area.
+- Fix: success clears the message; real errors and credential clearing remain.
+- Regression: `installer-keyboard.py` silent-success assertion (failed before); both installer workflows.
+- Avoid: removing initial layout application or credential clearing to hide it.
 
 ## BUG-0022 — Progress gaps left the installer panel empty
 
 - Date: 2026-09-08.
-- Symptom: the main panel went blank between backend installation steps.
-- Root cause: cdebconf destroys progress widgets at STOP and clears answered question widgets; the custom shell provided no content during the next-step gap.
-- Fix: present a waiting panel between steps, replaced by real progress or interactive prompts.
-- Regression evidence: `tests/integration/installer-progress.py` failed on the original blank gap and passed on the rebuilt ISO, including error/log recovery and completion acknowledgement. Both GitHub and Gitea installer workflows invoke it. See [native progress QA](qa/iso/2026-09-08-installer-progress.md) for actual checks and limits.
-- Avoid: hiding recovery questions, fabricating completion percentages, or retaining a completed task as live progress.
+- Symptom: main panel went blank between installation steps.
+- Root cause: cdebconf destroys progress widgets at STOP; shell had no gap content.
+- Fix: waiting panel between steps, replaced by real progress or prompts.
+- Regression: `tests/integration/installer-progress.py` (failed on blank gap), includes error/log recovery and completion; both installer workflows. Evidence: [native progress QA](qa/iso/2026-09-08-installer-progress.md).
+- Avoid: hiding recovery questions, fake percentages, showing completed task as live.
 
 ## BUG-0023 — Waiting fallback still swapped with the stock progress layout
 
 - Date: 2026-09-08.
-- Symptom: “Preparing the next installation step” alternated with the differently positioned stock Debian progress bar, still looking like flicker.
-- Root cause: BUG-0022 filled empty intervals but retained two distinct progress presentations and widget lifecycles.
-- Fix: a persistent Nex panel receives actual step updates and remains in place at component boundaries.
-- Regression evidence: native `tests/integration/installer-progress.py` checks active/gap/resumed geometry and failure/log/completion behavior; both installer CI workflows invoke it. Actual results are recorded in [continuous progress QA](qa/iso/2026-09-08-continuous-progress.md).
-- Avoid: treating a nonempty waiting screen as proof of smooth transitions; inspect active and inactive layouts together.
+- Symptom: waiting text alternated with the differently positioned stock progress bar (flicker).
+- Root cause: BUG-0022 kept two progress presentations and lifecycles.
+- Fix: one persistent Nex panel receives step updates across component boundaries.
+- Regression: `tests/integration/installer-progress.py` checks active/gap/resumed geometry; both installer workflows. Evidence: [continuous progress QA](qa/iso/2026-09-08-continuous-progress.md).
+- Avoid: nonempty waiting screen as proof of smooth transitions.
 
 ## BUG-0024 — Installer-selected management NIC lacked a deployment bridge
 
 - Date: 2026-09-08.
-- Symptom: after choosing management networking in the GUI installer, local Controller
-  deployment asked the operator to configure an existing management bridge.
-- Root cause: the installer assigned host addressing directly to the NIC/VLAN while
-  deployment requires a Linux bridge; automatic service discovery cannot invent one.
-- Fix: stage native `br0` with the selected NIC/VLAN as its port and management addressing
-  on the bridge, retaining secondary NIC and offline behavior. Bundle bridge-utils.
-- Regression evidence: the generated-config check failed before the fix and passes now;
-  `bash tests/integration/installer-bridge.sh` runs native bringup/recovery;
-  [bridge QA](qa/iso/2026-09-08-management-bridge.md) records commands, results and limits.
-- Avoid: hiding preflight failure or changing live management networking from deployment;
-  build the selected network during fresh installation and verify actual native bringup.
+- Symptom: after GUI management networking, local Controller deployment demanded an existing management bridge.
+- Root cause: installer addressed the NIC/VLAN directly; deployment requires a Linux bridge.
+- Fix: stage native `br0` with the selected NIC/VLAN as port and addressing on the bridge; bundle bridge-utils.
+- Regression: generated-config check (failed before); `bash tests/integration/installer-bridge.sh` native bringup/recovery. Evidence: [bridge QA](qa/iso/2026-09-08-management-bridge.md).
+- Avoid: hiding preflight failure or changing live management networking from deployment.
 
 ## BUG-0025 — DHCP preview text leaked into static editing during development
 
 - Date: 2026-09-09.
-- Symptom: switching from DHCP preview to static mode retained transient status text.
-- Root cause: mode changes only cleared the address when leaving static mode.
-- Fix: clear transient entries on every mode change, then restore saved static settings
-  only when loading a NIC. Keep DHCP feedback readonly with normal text contrast.
-- Regression evidence: independent source review found the defect before delivery;
-  `tests/integration/wizard-review.py --nics 2` now asserts the static address is blank
-  after a real DHCP preview. [DHCP QA](qa/iso/2026-09-09-installer-dhcp.md) records
-  executed commands/captures; no failing-before runtime run is claimed.
-- Avoid: storing status text in configuration or treating readonly feedback as disabled
-  low-contrast text.
+- Symptom: switching DHCP preview to static kept transient status text.
+- Root cause: mode change cleared address only when leaving static.
+- Fix: clear transient entries on every mode change; restore saved static settings only on NIC load; readonly DHCP feedback with normal contrast.
+- Regression: `tests/integration/wizard-review.py --nics 2` asserts blank static address; found by source review, no failing-before run claimed. Evidence: [DHCP QA](qa/iso/2026-09-09-installer-dhcp.md).
+- Avoid: storing status text in config; readonly feedback as disabled low-contrast text.
 
 ## BUG-0026 — Desktop Help menu clipped on narrow screens during development
 
 - Date: 2026-09-09.
-- Symptom: the Controller's new Help dropdown extended beyond the left edge at 360px.
-- Root cause: a mobile last-menu rule right-aligned a popup wider than the menu's
-  distance from the left viewport edge.
-- Fix: retain the shared left alignment used by the other menus.
-- Regression evidence: the new bounds assertion in `tests/integration/phase1_browser.py`
-  failed with `Help menu outside narrow viewport` before the CSS correction. The same
-  complete browser command and final result are recorded in
-  [desktop layout QA](qa/controller-desktop-layout/checks.md). Both
-  `.github/workflows/phase1.yml` and `.gitea/workflows/phase1.yml` already run
-  `tests/integration/phase1.py --browser` on pushes and pull requests.
-- Avoid: aligning menus by first/last position without checking the actual popup bounds.
+- Symptom: Help dropdown extended past the left edge at 360px.
+- Root cause: mobile last-menu rule right-aligned a popup wider than its left offset.
+- Fix: shared left alignment.
+- Regression: bounds assertion in `tests/integration/phase1_browser.py` failed with `Help menu outside narrow viewport`; both phase1 workflows. Evidence: [desktop layout QA](qa/controller-desktop-layout/checks.md).
+- Avoid: aligning menus by position without checking popup bounds.
 
 ## BUG-0027 — Website wordmark retained a grey raster background
 
 - Date: 2026-09-09.
-- Symptom: the header and footer wordmarks displayed a pale rectangular patch on
-  the website canvas.
-- Root cause: the approved raster brand board has an opaque pale backdrop; CSS
-  multiply blending multiplied that backdrop into the page instead of removing it.
-- Fix: whiten the pale backdrop with a shared CSS brightness filter before blending.
-  Retain the original logo shapes and apply the same rule to header/footer and mobile.
-- Regression evidence: `tests/integration/website_browser.py` now compares rendered
-  logo background pixels with the page canvas at desktop/tablet/mobile sizes. Running
-  it against the original VM build failed with `Logo raster background differs from
-  the page` before the CSS correction. Final command/results and inspected captures
-  are recorded in [website QA](qa/website/checks.md). Both GitHub and Gitea phase1
-  workflows invoke this same browser check on pushes and pull requests.
-- Avoid: assuming multiply blending makes a nonwhite raster background transparent,
-  or fixing only the header while leaving the shared footer/mobile treatment broken.
+- Symptom: header/footer wordmarks showed a pale rectangle.
+- Root cause: opaque pale brand-board backdrop; multiply blending kept it.
+- Fix: shared CSS brightness filter before blending, header/footer/mobile.
+- Regression: `tests/integration/website_browser.py` compares logo background pixels (failed before with `Logo raster background differs from the page`); both phase1 workflows. Evidence: [website QA](qa/website/checks.md).
+- Avoid: assuming multiply makes nonwhite backgrounds transparent; fixing only the header.
 
 ## BUG-0028 — Website gallery reused personal workstation identity
 
 - Date: 2026-09-09.
-- Symptom: gallery screenshots displayed the contributor's workstation name and
-  underlying machine inventory, unsuitable for intended public-facing images.
-- Root cause: reusing internal acceptance captures whose agent collected native
-  workstation telemetry, rather than a dedicated neutral demonstration fixture.
-- Fix: run a fresh disposable Controller, enroll a fictional host through existing
-  TLS/mTLS contracts, report explicit demo inventory and capture its actual browser
-  views. No native probes, personal data, DOM substitutions or image editing are used.
-- Regression evidence: `tests/integration/website_controller_captures.py` checks
-  returned inventory and rendered identity before saving each image, rejects the
-  synthetic private host label/name in negative guard checks, and asserts credentials
-  are absent. Both GitHub and Gitea phase1 workflows run it on pushes and PRs.
-  Original failure was identified by visual inspection, not OCR; see the
-  [fresh-capture evidence](qa/website-controller-captures/results.json) and
-  [website walkthrough](qa/website/checks.md) for executed results and limits.
-- Avoid: publishing general internal QA screenshots without reviewing personal
-  identity and telemetry, or treating absence of passwords as a complete privacy check.
+- Symptom: gallery screenshots showed a contributor workstation name and machine inventory.
+- Root cause: reused internal captures with native telemetry instead of a neutral fixture.
+- Fix: fresh disposable Controller, fictional host enrolled via TLS/mTLS, explicit demo inventory, real browser captures; no DOM substitution or image editing.
+- Regression: `tests/integration/website_controller_captures.py` checks inventory/identity, rejects private label, asserts no credentials; both phase1 workflows. Original found by visual inspection. Evidence: [fresh-capture evidence](qa/website-controller-captures/results.json), [website walkthrough](qa/website/checks.md).
+- Avoid: publishing internal QA screenshots unreviewed; treating no passwords as full privacy check.
 
 ## BUG-0029 — Website source README included private deployment details
 
 - Date: 2026-09-09.
-- Symptom: the website folder's contributor README named a private deployment
-  address, workstation account/home path and environment-specific restart commands.
-- Root cause: keeping an internal deployment handoff in prospective public source.
-- Fix: use generic build/deploy guidance and explain reviewed website contributions;
-  ignore local credentials/configuration and keep generated artifacts out of Git.
-- Regression evidence: `python3 -m unittest discover -s tests -p
-  'test_website_public_files.py'` failed on the original README, then passed both
-  checks after cleanup. It checks Git-visible files (including force-added ignored
-  files), private deployment patterns, credential markers and package download URLs.
-  Both phase1 workflows already run this suite on pushes and PRs via `test_*.py`.
-  See [website source review](qa/website/public-source-review.md) for scope and limits.
-- Avoid: copying real deployment instructions into public contributor documentation
-  or treating `.gitignore` as protection for files already tracked by Git.
+- Symptom: website README named a private deployment address, workstation account/home path, env-specific restart commands.
+- Root cause: internal deployment handoff kept in prospective public source.
+- Fix: generic build/deploy guidance; ignore local credentials/config; generated artifacts out of Git.
+- Regression: `python3 -m unittest discover -s tests -p 'test_website_public_files.py'` (failed before) checks Git-visible files incl. force-added; both phase1 workflows. Evidence: [website source review](qa/website/public-source-review.md).
+- Avoid: real deployment instructions in public docs; `.gitignore` as protection for tracked files.
 
 ## BUG-0030 — Installer logo included the textured reference-board background
 
 - Date: 2026-09-09.
-- Symptom: the installer logo looked distorted with a pale rippled rectangle.
-- Root cause: both native GTK headers cropped the opaque textured brand board.
-- Fix: use one dedicated transparent Nex Core lockup, proportional GDK scaling,
-  and the original widget allocation to preserve the wizard and progress layout.
-- Regression evidence: `tests/integration/wizard-review.py` fails the original
-  initrd's logo-background pixel check and passes the rebuilt native header;
-  `tests/integration/installer-logo.py` checks matching asset/source packaging.
-  Both installer workflows run these tests on pushes and pull requests. See
-  [before/after captures and executed commands](qa/iso/2026-09-09-logo-cleanup.md).
-  No full ISO rebuild or hosted CI execution is claimed.
-- Avoid: shipping a design-reference board crop as a production logo, or reducing
-  the image allocation and shifting unrelated installer controls.
+- Symptom: installer logo distorted with a pale rippled rectangle.
+- Root cause: both GTK headers cropped the opaque textured brand board.
+- Fix: dedicated transparent Nex Core lockup, proportional GDK scaling, original allocation.
+- Regression: `tests/integration/wizard-review.py` logo-background pixel check (fails original); `installer-logo.py` packaging; both installer workflows. No full ISO rebuild or hosted CI claimed. Evidence: [before/after captures and executed commands](qa/iso/2026-09-09-logo-cleanup.md).
+- Avoid: reference-board crop as production logo; shrinking allocation and shifting controls.
 
 ## BUG-0031 — Agent service sandbox blocked Linux network inventory
 
 - Date: 2026-09-09.
-- Symptom: the packaged agent reported `netlinkrib: address family not supported
-  by protocol`; host CPU/memory inventory remained unavailable and valid VM
-  creation failed its capacity check in the disposable native lab.
-- Root cause: `RestrictAddressFamilies` omitted AF_NETLINK, which Go's Linux
-  network-interface discovery requires.
-- Fix: permit AF_NETLINK alongside the existing local/IP socket families.
-- Regression evidence: `python3 -m unittest discover -s tests -p
-  'test_agent_service.py' -v` passes; the same test run with the original HEAD
-  service in an isolated temporary tree fails with `'AF_NETLINK' not found`.
-  Both phase1 workflows run it via `test_*.py` on pushes and pull requests.
-  The [native managed-VM run](qa/managed-vm/checks.md) also passed actual network
-  inventory and VM creation under the corrected packaged systemd unit; the
-  static check alone is not runtime proof.
-- Avoid: weakening placement validation to accept missing inventory, or disabling
-  all socket restrictions instead of allowing the required native family.
+- Symptom: agent reported `netlinkrib: address family not supported by protocol`; inventory missing, VM creation failed capacity check.
+- Root cause: `RestrictAddressFamilies` omitted AF_NETLINK.
+- Fix: allow AF_NETLINK.
+- Regression: `python3 -m unittest discover -s tests -p 'test_agent_service.py' -v` (old unit fails `'AF_NETLINK' not found`); both phase1 workflows; static check is not runtime proof. Evidence: [native managed-VM run](qa/managed-vm/checks.md).
+- Avoid: accepting missing inventory in placement; disabling all socket restrictions.
 
 ## BUG-0032 — Agent result backlog exceeded the Controller report limit
 
 - Date: 2026-09-09.
-- Symptom: a large backlog of completed operations made every reconnect report
-  fail with HTTP 400, preventing acknowledgement and recovery.
-- Root cause: the agent sent all unacknowledged results while Controller accepts
-  at most 100 per report.
-- Fix: send at most 100 durable results per report and continue draining only as
-  Controller acknowledges them; do not discard unacknowledged results.
-- Regression evidence: `go test -race ./internal/agent` passes with
-  `TestResultBacklogDrainsInControllerSizedBatches`, which drains 150 results in
-  100/50 batches and verifies all acknowledgements. The test failed without the
-  batching fix with `controller rejected request (HTTP 400)`. Both phase1
-  workflows run the Go suite on pushes and pull requests; hosted runs were not
-  triggered by this unpushed change.
-- Avoid: dropping old results, clearing the journal, or weakening Controller's
-  bounded-input validation to accommodate an unbounded client report.
+- Symptom: large completed-operation backlog made every reconnect report fail HTTP 400.
+- Root cause: agent sent all unacknowledged results; Controller accepts ≤100.
+- Fix: send ≤100 durable results per report, drain as acknowledged, discard none.
+- Regression: `TestResultBacklogDrainsInControllerSizedBatches` in `go test -race ./internal/agent` (failed before with `controller rejected request (HTTP 400)`); both phase1 workflows; hosted runs not triggered.
+- Avoid: dropping results, clearing the journal, weakening Controller input bounds.
 
 ## BUG-0033 — VM details read configuration from the wrong response shape
 
 - Date: 2026-09-09.
-- Symptom: a newly created guest's details omitted CPU, memory, disk, firmware
-  and its creation task.
-- Root cause: the UI expected flat configuration fields, but the VM API returns
-  the requested configuration in `spec`.
-- Fix: read `vm.spec` and render the creation task independently when an operation
-  ID exists.
-- Regression evidence: `tests/integration/managed_vm_browser.py` checks exact
-  selected resources and the successful creation task in real browser rendering.
-  An isolated reproduction of the original flat-field conditional failed the CPU
-  assertion; the actual current bundle passed all selected values and task state.
-  See [the reproduction and its limits](qa/managed-vm/browser-regression-results.json).
-  Both phase1 workflows invoke the simulated-host browser mode on pushes and PRs;
-  native browser evidence is recorded separately.
-- Avoid: treating a successful create response as proof that its settings and
-  durable task are visible, or guessing a response shape instead of checking it.
+- Symptom: new guest details omitted CPU, memory, disk, firmware, creation task.
+- Root cause: UI expected flat fields; API returns them in `spec`.
+- Fix: read `vm.spec`; render creation task when an operation ID exists.
+- Regression: `tests/integration/managed_vm_browser.py` (isolated reproduction failed CPU assertion); both phase1 workflows (simulated host). Evidence: [the reproduction and its limits](qa/managed-vm/browser-regression-results.json).
+- Avoid: create response as proof settings are visible; guessing response shape.
 
 ## BUG-0034 — Oversized operation errors blocked agent reporting
 
 - Date: 2026-09-09.
-- Symptom: a long filesystem error caused HTTP 400 on every report, preventing
-  acknowledgement and fresh host reporting.
-- Root cause: an accepted long storage path produced an OS error longer than
-  Controller's 4096-byte result-error limit; the agent forwarded it unbounded.
-- Fix: limit the outbound error to a valid UTF-8 prefix within 4096 bytes while
-  retaining the full error in the private durable journal.
-- Regression evidence: `go test ./internal/agent -run
-  TestOversizedResultErrorDoesNotBlockHeartbeat -count=1` failed before the fix
-  with `controller rejected request (HTTP 400)`. The final
-  `go test -race -count=1 ./internal/agent ./internal/vmhost` passed (2.481s/1.406s),
-  including acknowledgement, continued reporting and retained local error detail.
-  Both phase1 workflows run these Go tests on pushes and pull requests.
-  [Native supplemental verification](qa/managed-vm/agent-reconnect.json) also
-  exercised the actual systemd agent: a 4122-byte local error produced an accepted
-  4096-byte report and subsequent fresh heartbeat after restart.
-- Avoid: truncating away local recovery diagnostics, cutting invalid UTF-8 on
-  the wire, or weakening the Controller's bounded-input validation.
+- Symptom: long filesystem error caused HTTP 400 on every report.
+- Root cause: OS error over Controller's 4096-byte result-error limit forwarded unbounded.
+- Fix: valid UTF-8 prefix ≤4096 bytes on the wire; full error kept in the private journal.
+- Regression: `go test ./internal/agent -run TestOversizedResultErrorDoesNotBlockHeartbeat -count=1` (failed before with HTTP 400); both phase1 workflows. Evidence: [Native supplemental verification](qa/managed-vm/agent-reconnect.json).
+- Avoid: dropping local diagnostics, invalid UTF-8 cuts, weakening Controller validation.
 
 ## BUG-0035 — Website preview hosting exposed listings and lacked browser policy
 
 - Date: 2026-09-09.
-- Symptom: the deployed static website listed asset directories and returned pages
-  without CSP, framing, MIME, referrer or HTTPS transport policy headers.
-- Root cause: the temporary Python HTTP preview remained the deployed web server.
-- Fix: use the dedicated unprivileged nginx service, read-only releases, disabled
-  listings and asset symlinks, restrictive headers on success/error responses, and
-  relative directory redirects through the HTTPS proxy.
-- Regression evidence: `python3 -m unittest discover -s tests -p
-  'test_website_*.py' -v` exercises actual nginx and reproduces the prior Python
-  behavior in disposable fixtures. The live pre-cutover CSP assertion failed;
-  post-cutover policy, HTTPS browser and all 11 asset-hash checks passed.
-  Both GitHub and Gitea phase1 push/PR workflows install nginx and run the unit
-  discovery plus `tests/integration/website_hardening_browser.py`.
-  See [hosting evidence](qa/website-security/hardening.md) for exact results and limits.
-- Avoid: treating valid proxy TLS as evidence that origin directory/response policy
-  is hardened, weakening CSP to accommodate test-only injected resources, or using
-  absolute origin redirects that reveal the private HTTP port.
+- Symptom: static site listed asset directories; no CSP, framing, MIME, referrer or HTTPS policy headers.
+- Root cause: temporary Python HTTP preview remained the deployed server.
+- Fix: unprivileged nginx, read-only releases, no listings or asset symlinks, restrictive headers on all responses, relative redirects through the HTTPS proxy.
+- Regression: `python3 -m unittest discover -s tests -p 'test_website_*.py' -v` with real nginx; `tests/integration/website_hardening_browser.py`; both phase1 workflows. Evidence: [hosting evidence](qa/website-security/hardening.md).
+- Avoid: proxy TLS as proof of origin hardening; weakening CSP for tests; absolute redirects revealing the private port.
 
 ## BUG-0036 — Site dropdown retained an unintended keyboard Tab stop
 
 - Date: 2026-09-09.
-- Symptom: Tab from the site dropdown's search field moved focus into its scrolling
-  option container instead of closing the popup and moving to the next control.
-- Root cause: Chromium made the scrollable listbox implicitly keyboard-focusable;
-  the picker already manages option navigation through the search input.
-- Fix: exclude the listbox container from sequential focus with `tabIndex={-1}`;
-  retain arrow-key selection and Escape focus restoration.
-- Regression evidence: [before/after browser record](qa/site-selector/popup-tab-regression.json).
-  `tests/integration/site_selector_browser.py` opens the popup, presses Tab from
-  search and asserts dismissal. Both GitHub and Gitea Phase 1 push/PR workflows
-  run this check in Chromium. The original popup build failed; final execution
-  and exact build identity are recorded in that evidence.
-- Avoid: removing the Tab assertion, trapping keyboard focus, or disabling scrolling
-  to hide browser-native focus behavior.
+- Symptom: Tab from site dropdown search focused the option container instead of closing.
+- Root cause: Chromium made the scrollable listbox implicitly focusable.
+- Fix: `tabIndex={-1}` on the listbox; keep arrow keys and Escape restoration.
+- Regression: `tests/integration/site_selector_browser.py` Tab-dismissal (original failed); both Phase 1 workflows. Evidence: [before/after browser record](qa/site-selector/popup-tab-regression.json).
+- Avoid: removing the Tab assertion, trapping focus, disabling scrolling.
 
 ## BUG-0037 — Host-local enrollment raced the running embedded agent
 
 - Date: 2026-09-09.
-- Symptom: `go test -race` on the new `POST /api/local/v1/enrollment` re-enrollment test
-  reported a data race: `agent.Enroll` mutated a Store whose embedded `agent.Run` loop
-  (started by an earlier enrollment) was reading and writing the same in-memory state.
-- Root cause: `nex-core-local` runs the enrolled agent in-process from the shared
-  handoff registry, and the enrollment handler called `agent.Enroll` without pausing it.
-- Fix: each running agent gets a stoppable per-agent context (`internal/localcore/handoff.go`);
-  the enrollment handler stops it before `agent.Enroll`, restores the pre-attempt
-  controller/trust on failure, and restarts it afterward.
-- Regression evidence: `TestEnrollmentReplaceHostSuccess` (`internal/localcore/enroll_test.go`)
-  and `TestAddSiteHostReEnrollmentSuccess` (`internal/controller/addhost_test.go`) reproduced
-  the race before the fix and pass under `go test -race ./...`, which both GitHub and Gitea
-  Phase 1 push/PR workflows run. The real-lab re-enrollment in
-  [add host lab checks](qa/simple-host-enrollment/lab/checks.md) passed twice.
-- Avoid: calling `agent.Enroll` or otherwise mutating a Store while its `Run` loop is live,
-  or tearing down the registry entry when only pausing the agent.
+- Symptom: `go test -race` on `POST /api/local/v1/enrollment` re-enrollment: `agent.Enroll` mutated a Store the embedded `agent.Run` loop was using.
+- Root cause: `nex-core-local` runs the agent in-process; handler called `agent.Enroll` without pausing it.
+- Fix: per-agent stoppable context (`internal/localcore/handoff.go`); stop before enroll, restore prior controller/trust on failure, restart after.
+- Regression: `TestEnrollmentReplaceHostSuccess`, `TestAddSiteHostReEnrollmentSuccess` (reproduced before) under `go test -race ./...`; both Phase 1 workflows. Evidence: [add host lab checks](qa/simple-host-enrollment/lab/checks.md).
+- Avoid: mutating a Store while its `Run` loop is live; tearing down the registry entry to pause.
 
 ## BUG-0038 — Add host pushed the host-identity CA instead of the served certificate
 
 - Date: 2026-09-09.
-- Symptom: found while preparing the lab: the appliance serves a self-signed HTTPS
-  certificate, but `POST /api/v1/sites/{id}/hosts` pushed the Controller's host-identity CA
-  as the host's trust, so `agent.Enroll` on a real host would fail with
-  `certificate signed by unknown authority`.
-- Root cause: the unit test signed its Controller listener with that CA, masking the
-  mismatch between HTTPS server trust and host-identity issuance.
-- Fix: `cmd/nex-controller/main.go` reads `-tls-cert` into `Config.ServerCertPEM`; the push
-  sends that certificate, and the route answers 503 before any host contact when it is
-  absent. Contract and `docs/API.md` updated.
-- Regression evidence: `TestAddSiteHostSuccess` now serves a self-signed listener and fails
-  on the old value; `TestAddSiteHostRequiresServerCertificate` covers the 503. Both run
-  under `go test -race ./...` in the GitHub and Gitea Phase 1 workflows. Real enrollment
-  through the fixed binary passed in the [lab checks](qa/simple-host-enrollment/lab/checks.md).
-- Avoid: test listeners chained to the host-identity CA, or treating the host CA as the
-  Controller's HTTPS trust anchor.
+- Symptom: `POST /api/v1/sites/{id}/hosts` pushed the host-identity CA as trust, so real `agent.Enroll` against the self-signed HTTPS cert would fail `certificate signed by unknown authority`.
+- Root cause: unit test listener signed with that CA masked the mismatch.
+- Fix: `cmd/nex-controller/main.go` reads `-tls-cert` into `Config.ServerCertPEM` and pushes it; route returns 503 before host contact when absent.
+- Impact: API contract and `docs/API.md` updated (503 when server certificate absent).
+- Regression: `TestAddSiteHostSuccess` (self-signed listener, fails old), `TestAddSiteHostRequiresServerCertificate`; `go test -race ./...` both Phase 1 workflows. Evidence: [lab checks](qa/simple-host-enrollment/lab/checks.md).
+- Avoid: test listeners chained to the host-identity CA; host CA as Controller HTTPS trust anchor.
 
 ## BUG-0039 — libvirt probe blocked on `virsh dominfo` for defined domains
 
-- Date: 2026-09-09.
-- Symptom: found by the Controller-replacement check on Debian 13 (libvirt 11.3.0): once a
-  domain was defined, the agent's libvirt observation reported `unknown` with
-  `probe deadline exceeded; previous observation retained`, so adopted VMs never showed a state.
-- Root cause: the probe called `virsh dominfo` per domain; on that libvirt build `dominfo`
-  prints the first fields and then blocks (read-only and read-write connections alike),
-  exceeding any probe deadline. One blocking call stalled the whole VM observation.
-- Fix: `internal/agent/probes.go` reads `virsh domstate` and `virsh domname` per domain,
-  which answer from the domain object only.
-- Regression evidence: `tests/integration/controller_replacement_debian.sh` (both Phase 1
-  workflows) defines a domain through the real agent in a Debian 13 libvirt container and
-  waits for Controller B to observe it `shut off` with fresh libvirt data; it failed on the
-  old probe and passes with the fix ([evidence](qa/pool-vlan-networks/controller-replacement-debian.json)).
+- Date: 2026-09-09
+- Symptom: on Debian 13 (libvirt 11.3.0) the libvirt observation of any host with a defined domain was `unknown` (`probe deadline exceeded; previous observation retained`), so adopted VMs never showed a state.
+- Root cause: per-domain `virsh dominfo` prints its first fields and then blocks on that libvirt build; one blocking call stalled the whole observation.
+- Fix: `internal/agent/probes.go` uses `virsh domstate` and `virsh domname` per domain.
+- Regression: `tests/integration/controller_replacement_debian.sh` (both Phase 1 workflows) waits for a replacement Controller to observe the domain `shut off`; failed before, passes after. Evidence: [evidence](qa/pool-vlan-networks/controller-replacement-debian.json).
 - Avoid: per-domain `dominfo` in bounded probes; prefer single-purpose queries.
 
 ## BUG-0040 — Update tests reached the public apt repository after the loopback rewrite
 
-- Date: 2026-09-09.
-- Symptom: Gitea Actions `phase1` failed at "Test Go services and recovery" on every push since
-  `aeb32d4`: `TestUpdatesAuthAndApply` and `TestLocalUpdatesAuthAndApply` reported
-  `RepoURL:https://nexvirtualization.com/apt ... Error:updates index HTTP 401`; locally they
-  returned the real published version instead of the test server's `9.9.9`.
-- Root cause: `NormalizeRepoURL` now replaces plain-http private/loopback repository URLs with the
-  public default, so the `httptest.NewServer` URL each test exported through `NEX_UPDATE_REPO`
-  was discarded and the tests depended on network access to the public site. The `nexupdate`
-  package tests were switched to TLS in `8d587e8`, but the Controller and Core local tests were not.
-- Fix: `internal/controller/updates_test.go` and `internal/localcore/updates_test.go` serve the
-  fake index over `httptest.NewTLSServer` and trust it through `nexupdate.HTTPClient`, matching
-  the `nexupdate` tests. The same change regenerated the stale `docs/api/index.html`. The
-  `documentation` workflow failure on `8d587e8` had a separate cause: evidence entries in
-  `docs/changes/2026-09-09-core-update-progress-stuck.json` carried test names after the path,
-  so they were not files; that record is historical and is left unchanged because the checker
-  re-validates edited records against the current diff range.
-- Regression evidence: `go test -race ./...` (both Phase 1 workflows) failed on the old tests
-  whenever the public repository rejected or differed from the fixture and passes with the fix;
-  `python3 scripts/generate_api.py --check` covers the reference.
-- Also fixed in the same change: `tests/test_appliance_build.py` called `firstboot.main()`, which
-  sets a process-wide `077` umask, and never restored it, so `test_apt_publish` failed with
-  `control directory has bad permissions 700` under full discovery; the test now restores the
-  umask. `docs/changes/2026-09-09-iso-fresh-source.json` cited an untracked ISO as evidence,
-  which failed the `documentation` workflow on `76037a5`; it now cites the tracked scripts.
-- Also fixed: `packaging/core-local/core-local-setup` decided whether the local TLS certificate
-  matched the host address from the exit status of `openssl x509 -checkip`, which OpenSSL 3.0
-  (the Ubuntu 24.04 runner image) returns as 0 on both match and mismatch; the script now reads
-  the printed verdict. Nex Core itself runs Debian 13 with OpenSSL 3.5, where the exit status was
-  already meaningful, so this failed `test_core_local_package` only in Actions.
-- Avoid: plain-http loopback fixtures for update checks; tests that change process-wide state
-  without a cleanup; relying on `openssl x509 -check*` exit codes; any `nexupdate` test server must be TLS
-  with `HTTPClient` overridden, and verification evidence entries must be bare repository paths.
+- Date: 2026-09-09
+- Symptom: Gitea `phase1` failed `TestUpdatesAuthAndApply` and `TestLocalUpdatesAuthAndApply` (`RepoURL:https://nexvirtualization.com/apt ... Error:updates index HTTP 401`) on every push since `aeb32d4`; locally they returned the real published version instead of fixture `9.9.9`.
+- Root cause: `NormalizeRepoURL` replaces plain-http loopback repo URLs with the public default, discarding the `httptest.NewServer` URL from `NEX_UPDATE_REPO`; only the `nexupdate` tests had moved to TLS (`8d587e8`).
+- Fix: `internal/controller/updates_test.go` and `internal/localcore/updates_test.go` use `httptest.NewTLSServer` trusted via `nexupdate.HTTPClient`; regenerated stale `docs/api/index.html`. Same change: `tests/test_appliance_build.py` restores the `077` umask set by `firstboot.main()` (had failed `test_apt_publish` with `control directory has bad permissions 700`); `docs/changes/2026-09-09-iso-fresh-source.json` cites tracked scripts instead of an untracked ISO; `packaging/core-local/core-local-setup` reads the printed `openssl x509 -checkip` verdict (OpenSSL 3.0 on the Ubuntu 24.04 runner exits 0 on mismatch). `docs/changes/2026-09-09-core-update-progress-stuck.json` (test names after evidence paths) left unchanged as historical.
+- Regression: `go test -race ./...` (both Phase 1 workflows) fails on the old tests, passes with fix; `python3 scripts/generate_api.py --check` covers the reference.
+- Avoid: plain-http loopback update fixtures (use TLS with `HTTPClient` overridden); tests changing process-wide state without cleanup; relying on `openssl x509 -check*` exit codes; evidence entries that are not bare repository paths.
 
 ## BUG-0041 — Controller capture harness rejected its own fixture addresses
 
-- Date: 2026-09-09.
-- Symptom: `tests/integration/website_controller_captures.py` (Phase 1 workflows, "website
-  controller captures" step) exited before opening a browser with
-  `AssertionError: Private IP in capture content`, so no Controller UI evidence was produced.
-- Root cause: `aeb32d4` added a privacy guard rejecting RFC 1918 addresses in capture content while
-  the simulated inventory fixture still carried `192.168.50.10/24` and `192.168.60.10/24`.
-- Fix: the fixture uses documentation addresses (`198.51.100.10/24`, `203.0.113.10/24`), identifies
-  as `Nex Core 0.1.4`, and asserts the General view shows one `Version` row and no `Agent version`.
-- Regression evidence: the harness itself; it failed at `HEAD` and passes with the fix
-  ([evidence](qa/single-nex-core-version/controller-captures.json)).
-- Avoid: fixtures with private addresses in any capture that is screened for publication.
+- Date: 2026-09-09
+- Symptom: `tests/integration/website_controller_captures.py` exited before opening a browser with `AssertionError: Private IP in capture content`.
+- Root cause: a privacy guard rejecting RFC 1918 addresses was added while the simulated inventory fixture still used private subnets.
+- Fix: fixture uses documentation addresses (`198.51.100.10/24`, `203.0.113.10/24`), identifies as `Nex Core 0.1.4`, and asserts one `Version` row and no `Agent version`.
+- Regression: the harness itself; failed at `HEAD`, passes with fix. Evidence: [evidence](qa/single-nex-core-version/controller-captures.json).
+- Avoid: private addresses in any capture screened for publication.
 
 ## BUG-0042 — Fresh Nex Core install had no Nex package repository
 
-- Date: 2026-09-10.
-- Symptom: after installing from the ISO, `apt update` on a Nex Core host listed only the Debian
-  repositories; the Nex repo (`https://nexvirtualization.com/apt`) never appeared, so `apt` could
-  not see or install Nex packages out of the box.
-- Root cause: the `nex-core-local` package shipped `nex.list.example` only to
-  `/usr/share/nex/core-local/` and never installed an apt source or the archive signing key, so the
-  host had no configured Nex source.
-- Fix: the package now ships the dearmored Nex archive key at
-  `/usr/share/keyrings/nex-archive-keyring.gpg` and the postinst writes
-  `/etc/apt/sources.list.d/nex.sources` (deb822, `Signed-By` the key, `URIs` from `repo_url` in
-  `/etc/nex/updates.conf`); the prerm removes that source on package removal so no source is left
-  without its key. The committed key was verified against the live repo's `InRelease`.
-- Regression evidence: `tests/test_core_local_package.py`
-  (`test_postinst_owns_release_identity_from_package_version`,
-  `test_apt_source_uri_follows_configured_repo_url`,
-  `test_package_ships_archive_keyring_and_builds_the_apt_source`), run by
-  `python3 -m unittest discover -s tests -p 'test_*.py'` in both the GitHub and Gitea `phase1`
-  workflows.
-- Avoid: shipping required out-of-box configuration as an `.example` that must be copied by hand.
+- Date: 2026-09-10
+- Symptom: after an ISO install, `apt update` listed only Debian repositories; `https://nexvirtualization.com/apt` was absent.
+- Root cause: `nex-core-local` shipped only `nex.list.example` under `/usr/share/nex/core-local/`, with no apt source or signing key.
+- Fix: package ships `/usr/share/keyrings/nex-archive-keyring.gpg` (verified against the live `InRelease`); postinst writes deb822 `/etc/apt/sources.list.d/nex.sources` (`URIs` from `repo_url` in `/etc/nex/updates.conf`); prerm removes it.
+- Regression: `tests/test_core_local_package.py` (`test_postinst_owns_release_identity_from_package_version`, `test_apt_source_uri_follows_configured_repo_url`, `test_package_ships_archive_keyring_and_builds_the_apt_source`) via `python3 -m unittest discover -s tests -p 'test_*.py'` in both `phase1` workflows.
+- Avoid: shipping required out-of-box configuration as an `.example` copied by hand.
 
 ## BUG-0043 — CI reported nothing for 18 of 23 checks because one privileged step failed first
 
-- Date: 2026-09-10.
-- Symptom: every `phase1` and `installer` run on the Gitea runner had failed since 2026-09-08;
-  only `documentation` ever passed. `phase1` stopped at *Verify guest VLAN bridge creation in a
-  disposable network namespace* with `unshare: unshare failed: Operation not permitted`, and the
-  18 steps after it — unit tests, `generate_api --check`, the UI typecheck and build, dependency
-  advisories and every browser workflow — were skipped, so the job reported nothing about them.
-  `installer` failed at *Run installer regressions* with `bash: installer/check.sh: No such file
-  or directory`.
-- Root cause: the runner (`act_runner` v1.0.6) executes jobs inside an unprivileged container
-  (`docker.gitea.com/runner-images:ubuntu-latest`). Two consequences. Creating network namespaces
-  needs `CAP_SYS_ADMIN`, which that container does not have. And `docker run -v "$PWD:/work"`
-  names a path that exists only inside the job container, so Docker created it empty on the host
-  and the builder image mounted nothing. Neither is a defect in the checks themselves; both were
-  masked because the privileged step ran sixth, ahead of everything cheap and unconditional.
-- Fix: reordered `phase1` so every unprivileged check runs before the namespace steps, and gated
-  those two steps on a detected capability that emits a loud `::warning::` naming the missing
-  coverage when it is absent. `.gitea/workflows/installer.yml` was then scoped to what this runner
-  can actually do (the project owner's decision, 2026-09-10): `installer/check.sh` and the seven installer
-  regressions now run directly in the job container, which only ever needed a toolchain, plus a
-  `docker build` that still catches a broken Dockerfile. **Four checks were deleted, not fixed** —
-  native bridge verification, DHCP preview, ISO build with initramfs completeness, and the wizard
-  review / disk confirmation / installer progress checks. Nothing in that job now establishes that
-  a bootable, correct ISO can be produced, and it says so in a `::warning::` on every run.
-  `.github/workflows/installer.yml` deliberately keeps the full matrix, since GitHub-hosted runners
-  are VMs with the required privileges.
-- Regression evidence: `bash installer/check.sh` plus all seven `tests/integration/installer-*.py`
-  checks and the `installer-network.c` compile-and-run were executed directly on a workstation,
-  outside any container, exactly as the scoped job invokes them — all pass, confirming they never
-  needed the builder image. All seven workflow files parse; step order and `if` gating confirmed;
-  no `${{ }}` interpolation appears inside any `run:` block. CI configuration otherwise carries no
-  automated regression test: a workflow file establishes no coverage by itself. The real check is
-  the next pushed run.
-- Third pass: with the ordering fixed, phase1 reached 20 of 24 steps and failed at *Verify local
-  host browser authentication and preflight blockers* with
-  `cc1: fatal error: /workspace/Nex/packaging/core-local/nex-root-auth.c: No such file`.
-  That file exists and is tracked; `localcore_browser.py` runs `docker run -v {ROOT}:{ROOT}:ro`,
-  so the same container-only workspace path mounted empty. The two libvirt steps after it need
-  KVM and a running libvirtd, equally unavailable. Rather than discover these one run at a time,
-  the two separate probes were replaced by a single `hostcap` step that tests **both** namespace
-  creation and a Docker bind mount, and all five host-dependent steps are gated on it. Every
-  remaining step passed unaided in run <redacted>, so the job should now complete with those five
-  reported as skipped.
-- Second cause, found after two failed attempts to fix the first: **the configured Gitea instance
-  executes `.github/workflows/`, not `.gitea/workflows/`.** Two pushes that scoped
-  `.gitea/workflows/installer.yml` changed nothing, because the job kept running the `.github`
-  copy; the executed step names matched that file exactly, in order. `.gitea/workflows/release.yml`
-  had no `.github` counterpart at all, so the tag-driven release workflow would never have fired.
-  Both installer files are now identical and `release.yml` exists in both, with a header in each
-  naming which directory actually runs.
-- Avoid: putting a step that needs host privileges ahead of cheap unconditional checks. A single
-  environment failure then hides the entire suite, and the job looks uniformly broken when almost
-  all of it would have passed. Equally, do not read the resulting green as full coverage: the
-  namespace checks are skipped, not passing, until the runner can create namespaces. And never
-  assume which of the two workflow directories a forge executes — confirm it against the step
-  names in a real run before concluding a workflow edit had any effect.
+- Date: 2026-09-10
+- Symptom: every Gitea `phase1`/`installer` run failed since 2026-09-08. `phase1` stopped at the VLAN bridge namespace step (`unshare: unshare failed: Operation not permitted`), skipping 18 later steps (unit tests, `generate_api --check`, UI build, advisories, browser checks); `installer` failed with `bash: installer/check.sh: No such file or directory`.
+- Root cause: `act_runner` v1.0.6 runs jobs in an unprivileged container: no `CAP_SYS_ADMIN` for namespaces, and `docker run -v "$PWD:/work"` names a job-container path that mounts empty on the host. Masked because the privileged step ran sixth. Second cause: this Gitea instance executes `.github/workflows/`, not `.gitea/workflows/`, so two pushes editing `.gitea/workflows/installer.yml` changed nothing, and `.gitea/workflows/release.yml` had no `.github` copy.
+- Fix: unprivileged `phase1` steps run first; a single `hostcap` step probes namespace creation and a Docker bind mount, gating all five host-dependent steps (namespace, `localcore_browser.py` which failed with `cc1: fatal error: .../nex-root-auth.c: No such file`, two libvirt/KVM steps) with a `::warning::`. Gitea `installer.yml` (project owner decision, 2026-09-10) runs `installer/check.sh`, seven installer regressions and `docker build` in the job container; **four checks were deleted, not fixed** (native bridge, DHCP preview, ISO build/initramfs completeness, wizard review/disk confirmation/progress), and every run warns that no bootable ISO is established. GitHub `installer.yml` keeps the full matrix. Both installer files now identical, `release.yml` exists in both, each with a header naming the executed directory.
+- Regression: none automated (a workflow file is not coverage). `bash installer/check.sh`, the seven `tests/integration/installer-*.py` and the `installer-network.c` compile-and-run passed outside any container; workflows parse, gating confirmed. After the third pass every ungated step passed; the five gated steps report as skipped.
+- Avoid: a host-privileged step ahead of cheap unconditional checks; reading the resulting green as full coverage (skipped is not passing); assuming which workflow directory a forge executes without checking step names in a real run.
 
 ## BUG-0044 — Website hosting test asserted against 404s instead of the serving policy
 
-- Date: 2026-09-10.
-- Symptom: `test_website_hosting.WebsiteHosting.test_serving_policy_and_headers` failed every
-  assertion with `404 != 200`, `404 != 403` and `404 != 301` once the unit tests were reachable
-  in CI again.
-- Root cause: the fixture directory came from `tempfile`, which creates it mode 0700. The nginx
-  master starts as root but drops its workers to an unprivileged user, and that user cannot
-  traverse a 0700 directory. `try_files` treats the resulting `EACCES` as "not found" and falls
-  through to `=404`, so every path answered 404 and none of the serving policy, header or
-  redirect behaviour under test was ever exercised.
-- Fix: the fixture is made traversable (`0755` directories, `0644` files) before nginx starts,
-  matching production, where `/srv/nex-website/current` is root-owned but readable by the same
-  unprivileged worker. Fixed in `4da27f2`.
-- Regression evidence: `python3 -m unittest discover -s tests -p 'test_*.py'`, run by the
-  `Check contracts and contributor tools` step of both phase1 workflows. That step had been
-  skipped on every run since 2026-09-08 because of BUG-0043, which is why this surfaced only
-  after the step ordering was fixed; it has not yet been confirmed green in CI.
-- Avoid: asserting only on status codes when the server can answer 404 for reasons unrelated to
-  the policy under test. A permission error that `try_files` renders as "not found" makes the
-  whole suite vacuous rather than failing loudly, so a fixture that nginx cannot read looks the
-  same as a policy that does not match.
+- Date: 2026-09-10
+- Symptom: `test_website_hosting.WebsiteHosting.test_serving_policy_and_headers` failed every assertion with `404 != 200`/`403`/`301` once unit tests ran in CI again.
+- Root cause: the `tempfile` fixture directory was 0700; nginx's unprivileged workers got `EACCES`, which `try_files` renders as `=404`, so no policy was exercised.
+- Fix: fixture made traversable (0755 dirs, 0644 files), matching production `/srv/nex-website/current`. `4da27f2`.
+- Regression: `python3 -m unittest discover -s tests -p 'test_*.py'` in both phase1 workflows' `Check contracts and contributor tools` step (skipped since 2026-09-08 by BUG-0043); not yet confirmed green in CI.
+- Avoid: asserting only status codes when the server can 404 for reasons unrelated to the policy under test.
 
 ## BUG-0045 — New maintainer script omitted from the corresponding-source archive
 
-- Date: 2026-09-10.
-- Symptom: `packaging/core-local/preinst` was added to the package builder but not to the file
-  allowlist in `scripts/build-source.py`, so it was absent from the generated AGPL
-  corresponding-source archive.
-- Root cause: `packaging/core-local/build.py` extracts that archive and runs `build-inside.sh`
-  from the extracted copy, so the builder's `install -m755 packaging/core-local/preinst ...`
-  would fail on a file the archive never contained. Two lists have to agree — what the package
-  installs and what the source archive ships — and only one was updated. The second is also the
-  corresponding source Nex is obliged to distribute, so an omission there is a licensing defect,
-  not only a build break.
-- Fix: add `packaging/core-local/preinst` to the allowlist, and add
-  `test_installed_maintainer_scripts_are_in_the_allowlist`, which cross-checks every packaging
-  path referenced by a package builder against the archive allowlist so the next omission fails
-  a check instead of a build.
-- Regression evidence: `python3 -m unittest discover -s tests -p 'test_build_source.py'` — with
-  the allowlist entry removed the new case fails with
-  `referenced by a package builder but absent from the source archive: ['packaging/core-local/preinst']`;
-  with it restored all 5 pass. Run by the `Check contracts and contributor tools` step of both
-  phase1 workflows.
-- Avoid: adding a file to a package builder without adding it to the source archive that builder
-  is itself built from. Neither an ISO build nor a package build was runnable in CI when this
-  landed, so nothing would have caught it before a release attempt.
+- Date: 2026-09-10
+- Symptom: `packaging/core-local/preinst` was added to the package builder but not to the `scripts/build-source.py` allowlist, so the AGPL corresponding-source archive lacked it.
+- Root cause: `packaging/core-local/build.py` builds from the extracted archive, so the builder's `install -m755 packaging/core-local/preinst` would fail; two lists must agree and only one was updated (a licensing defect, not only a build break).
+- Fix: allowlist entry plus `test_installed_maintainer_scripts_are_in_the_allowlist`, cross-checking every packaging path a builder references.
+- Regression: `python3 -m unittest discover -s tests -p 'test_build_source.py'`; fails without the entry (`referenced by a package builder but absent from the source archive: ['packaging/core-local/preinst']`), all 5 pass with it. Both phase1 workflows.
+- Avoid: adding a file to a package builder without adding it to the source archive that builder is built from.
 
 ## BUG-0046 — Local service Close left the enrollment agent racing TempDir cleanup
 
-- Date: 2026-09-10.
-- Symptom: Gitea `phase1` failed `TestEnrollmentWithReplacementControllerSucceeds` with
-  `TempDir RemoveAll cleanup: unlinkat …/agent: directory not empty` even though the enrollment
-  assertions had already passed (run <redacted> job <redacted>).
-- Root cause: `Service.Close` cancelled the service context and waited on `s.wg`, but the embedded
-  handoff agent goroutine is not on that WaitGroup. The agent could still be writing `state.json`
-  when `testing.T.TempDir` deleted the tree, so RemoveAll failed on the busy agent directory.
-- Fix: `Close` now calls `releaseHandoffAgent`, which waits for the agent goroutine (or closes a
-  leftover store that was never started) before returning. The replacement-enrollment test removes
-  the agent directory immediately after `Close` so a regression fails the test instead of only CI
-  TempDir cleanup.
-- Regression evidence: `go test -race -count=10 ./internal/localcore -run TestEnrollmentWithReplacementControllerSucceeds`
-  and `go test -race -count=1 ./internal/localcore` pass. Both GitHub and Gitea phase1 workflows
-  already run `go test -race ./...` on push/PR.
-- Avoid: treating testing.TempDir cleanup failures as flakes when a background goroutine still owns
-  files under that tree; shut the owner down in Close (or an explicit stop) before returning.
+- Date: 2026-09-10
+- Symptom: Gitea `phase1` failed `TestEnrollmentWithReplacementControllerSucceeds` with `TempDir RemoveAll cleanup: unlinkat …/agent: directory not empty` after assertions passed.
+- Root cause: `Service.Close` waited on `s.wg`, but the embedded handoff agent goroutine was not on it and could still write `state.json`.
+- Fix: `Close` calls `releaseHandoffAgent` (waits for the goroutine or closes an unstarted store); the test removes the agent directory right after `Close`.
+- Regression: `go test -race -count=10 ./internal/localcore -run TestEnrollmentWithReplacementControllerSucceeds` and `go test -race -count=1 ./internal/localcore` pass; `go test -race ./...` in both phase1 workflows.
+- Avoid: dismissing TempDir cleanup failures as flakes when a background goroutine still owns files; stop the owner in Close.
 
 ## BUG-0047 — Create VM kept a blank "system" disk name instead of the derived default
 
-- Date: 2026-09-10.
-- Symptom: Gitea `phase1` failed `managed_vm_browser.py` with
-  `AssertionError: disk name 'system' does not derive from VM name 'browser-vm-…'`
-  (run <redacted> job <redacted>) after the disk-name default feature landed.
-- Root cause: `VMWizard` built `started` disks with `autoDiskName`, then discarded them
-  whenever `blank.disks` was present — which it always is after `{...blank, ...restored}`.
-  Fresh wizards therefore kept the template name `system`, so renaming the VM never
-  matched `autoDiskName(pool, "", i)` and never updated the field.
-- Fix: only keep restored disks when the restore payload itself supplies them; otherwise
-  start from `autoDiskName`. `managed_vm_browser.py` already asserts the derived default
-  and the suffixed second disk.
-- Regression evidence: the failing assertion in `tests/integration/managed_vm_browser.py`
-  is the detector; it runs in both GitHub and Gitea phase1 workflows. `npm run typecheck`
-  passes after the init fix. Full Playwright was not re-run on this workstation.
-- Avoid: treating a spread of a non-empty blank draft as "restored state"; check the
-  restore payload, not the merged draft, before skipping generated defaults.
+- Date: 2026-09-10
+- Symptom: Gitea `phase1` failed `managed_vm_browser.py` with `AssertionError: disk name 'system' does not derive from VM name 'browser-vm-…'`.
+- Root cause: `VMWizard` discarded `autoDiskName` disks whenever `blank.disks` existed, which is always true after `{...blank, ...restored}`.
+- Fix: keep restored disks only when the restore payload supplies them.
+- Regression: the existing assertion in `tests/integration/managed_vm_browser.py` (both phase1 workflows); `npm run typecheck` passes. Full Playwright not re-run locally.
+- Avoid: treating a spread of a non-empty blank draft as restored state; check the restore payload.
 
 ## BUG-0048 — Background ISO upload rendered as a panel above Recent tasks
 
-- Date: 2026-09-10.
-- Symptom: while an ISO uploaded to the Controller, the activity dock showed a separate
-  "ISO upload to Controller" panel stacked on top of the Recent tasks heading and table, so the
-  upload looked like a second widget instead of a current task.
-- Root cause: `UploadStatus` was a standalone `section.panel` rendered beside `<Tasks>` rather
-  than inside its table.
-- Fix: replaced it with `UploadRow`, a row that `Tasks` renders first (kind `iso-upload`,
-  progress/rate and Cancel in the Status cell, actor and timestamp like any task). Upload state
-  now records `actor` and `updated_at`; the table also renders when only the upload exists.
-- Regression evidence: `tests/integration/managed_vm_browser.py` now asserts the upload appears
-  as a `tr` inside `.activity-dock table tbody` with a progressbar and that no upload `section`
-  exists; it runs in both phase1 workflows. Local simulated run passed that assertion and
-  captured `browser-simulated-iso-upload-row.png`; the run then stopped on the uncommitted
-  toolbar work's ambiguous **Back** button, which is outside this fix.
-- Avoid: adding a transient client-side item as a sibling panel of a list it conceptually
-  belongs to; render it as an entry of that list.
+- Date: 2026-09-10
+- Symptom: an ISO upload showed as a separate "ISO upload to Controller" panel stacked above Recent tasks.
+- Root cause: `UploadStatus` was a standalone `section.panel` beside `<Tasks>`.
+- Fix: `UploadRow` rendered first in `Tasks` (kind `iso-upload`, progress/rate and Cancel in Status); upload state records `actor` and `updated_at`; table renders with only the upload.
+- Regression: `tests/integration/managed_vm_browser.py` asserts a `tr` in `.activity-dock table tbody` with a progressbar and no upload `section` (both phase1 workflows). Local simulated run passed that assertion, then stopped on the unrelated ambiguous **Back** button.
+- Avoid: rendering a transient item as a sibling panel of the list it belongs to.
 
 ## BUG-0049 — Create VM topology treated blank sockets as zero while showing "1"
 
-- Date: 2026-09-10.
-- Symptom: with Virtual CPUs 4, Sockets looking like 1, Cores 2 and Threads 2, the wizard
-  blocked with `0 × 2 × 2 does not`, even though 1×2×2 equals 4. The working 1×1×4 case
-  looked identical except sockets had actually been typed.
-- Root cause: blank topology fields used `value={n || ""}` with placeholders `"1"` /
-  vCPU count / `"1"`. Empty sockets stayed 0 in state while the placeholder looked filled;
-  filling only cores and threads tripped validation on the still-zero sockets.
-- Fix: remove the misleading placeholders; filling the first topology field seeds the other
-  two from the documented default (1 × count × 1); clearing any field clears all three;
-  incomplete vs product-mismatch errors are distinct. `applyTopology` / `topologyIssue`
-  own the behaviour.
-- Regression evidence: `tests/integration/managed_vm_browser.py` fills cores then threads
-  with count 4 and asserts sockets becomes `1` with no topology error before the existing
-  invalid-product check; both phase1 workflows run it. `npm run typecheck` passes.
-- Avoid: using numeric placeholders on optional number fields whose empty state is stored
-  as 0 — operators cannot tell placeholder from value.
+- Date: 2026-09-10
+- Symptom: vCPUs 4, sockets apparently 1, cores 2, threads 2 blocked with `0 × 2 × 2 does not`.
+- Root cause: `value={n || ""}` with numeric placeholders; empty sockets stayed 0 while the placeholder looked filled.
+- Fix: removed placeholders; filling the first field seeds the others (1 × count × 1); clearing one clears all; separate incomplete vs mismatch errors (`applyTopology`/`topologyIssue`).
+- Regression: `tests/integration/managed_vm_browser.py` fills cores then threads with count 4 and asserts sockets `1`, no error (both phase1 workflows); `npm run typecheck` passes.
+- Avoid: numeric placeholders on optional number fields stored as 0 when empty.
 
 ## BUG-0050 — Create VM dropdowns flickered closed on click
 
-- Date: 2026-09-10.
-- Symptom: every native `<select>` in Create VM (Bus, Storage, guest OS, and the rest)
-  opened and immediately closed, so the menu could not be used.
-- Root cause: `.panel { overflow: hidden }` combined with the desktop shell's nested
-  overflow (`desktop-app` / `#main` / `workspace-content`) made Chromium dismiss the
-  native select popup on the same click that opened it.
-- Fix: stop clipping `.panel` overflow; table scrolling stays on `.table-scroll`.
-- Regression evidence: `tests/integration/form_select_overflow.py` fails when `.panel`
-  sets a clipping overflow and passes with the fix; headed run requires the Bus menu
-  highlight below the control. Both GitHub and Gitea phase1 workflows run it.
-  Local headed: Bus menu stayed open (834 highlight pixels).
-- Avoid: putting `overflow: hidden` on form panels inside the desktop shell; use a
-  dedicated scroll container when clipping is required.
-- Superseded: the diagnosis was wrong. The static fixture never reproduced the flicker
-  (its headed run captured a fleeting popup, not the shell's behaviour), the `.panel` rule
-  had no effect on the native popup, and the dropdowns kept flickering. See BUG-0064 for
-  the actual cause and fix; `form_select_overflow.py` was replaced by
-  `form_select_picker.py`.
+- Date: 2026-09-10
+- Status: superseded — diagnosis wrong; see BUG-0064.
+- Symptom: every native `<select>` in Create VM opened and immediately closed.
+- Root cause (as recorded, wrong): `.panel { overflow: hidden }` with the desktop shell's nested overflow made Chromium dismiss the popup.
+- Fix: stopped clipping `.panel` overflow. Had no effect on the native popup; dropdowns kept flickering.
+- Regression: `tests/integration/form_select_overflow.py` never reproduced the flicker (headed run caught a fleeting popup); replaced by `form_select_picker.py`.
+- Avoid: `overflow: hidden` on form panels in the desktop shell (original note); see BUG-0064 for the real lesson.
 
 ## BUG-0051 — Host console listener let any local uid connect and get an unauthenticated root shell
 
-- Date: 2026-09-10.
-- Symptom: independent code review of the staged host console found `HostConsoleSocket`
-  listening on the abstract UNIX socket `@nex-core-host-console` with RFB security type
-  None and spawning `/bin/bash -l` as root for every accepted connection. Any local
-  process — including a QEMU guest process on the same host — could dial that address
-  and get a root shell with no Controller ticket, no authentication of any kind.
-- Root cause: the host console was built on the same real-listener shape as a normal RFB
-  server, but its only legitimate caller is `internal/agent/console.go` in the very same
-  process (it dials the returned address and pipes it straight to the Controller). A real
-  listener therefore had no legitimate second caller and no reason to be reachable by
-  anything else on the host.
-- Fix: replaced `HostConsoleSocket() (string, error)` with
-  `HostConsoleSession() (net.Conn, error)` in `internal/vmhost/hostconsole.go`, which
-  starts the RFB/PTY session on the server half of an in-process `net.Pipe` and returns
-  the client half directly — no socket, abstract or otherwise, is ever opened. Updated
-  `internal/agent/console.go` (`hostConsoleSession` var) to use the returned `net.Conn`
-  directly instead of dialing a socket path.
-- Regression evidence: `go test ./internal/vmhost -run TestHostConsoleHasNoLocalListener`
-  and `go test ./internal/agent -run TestServeConsoleUsesHostSessionDirectly` pass; the
-  first asserts the old socket address is unreachable, the second confirms `serveConsole`
-  relays the hook's `net.Conn` without dialing anything. Both run under `go test -race
-  ./...` in `.github/workflows/phase1.yml` and `.gitea/workflows/phase1.yml`.
-- Avoid: giving an in-process-only consumer a real OS-level listener "because that's how
-  RFB servers are normally built" — a listener is reachable by every local uid unless
-  something else (peer-credential checks, a network namespace) narrows that, and an
-  abstract UNIX socket narrows nothing.
+- Date: 2026-09-10
+- Symptom: review found `HostConsoleSocket` listening on abstract UNIX socket `@nex-core-host-console` with RFB security None, spawning root `/bin/bash -l` for any local process (including QEMU guests).
+- Root cause: built as a real RFB listener although its only caller is `internal/agent/console.go` in the same process.
+- Fix: `HostConsoleSession() (net.Conn, error)` in `internal/vmhost/hostconsole.go` returns the client half of an in-process `net.Pipe`; `internal/agent/console.go` (`hostConsoleSession`) uses it directly.
+- Regression: `go test ./internal/vmhost -run TestHostConsoleHasNoLocalListener` and `go test ./internal/agent -run TestServeConsoleUsesHostSessionDirectly` pass; `go test -race ./...` in both phase1 workflows.
+- Avoid: giving an in-process-only consumer an OS listener; an abstract UNIX socket is reachable by every local uid.
 
 ## BUG-0052 — Host console streamed a full frame on every FramebufferUpdateRequest, ignoring incremental
 
-- Date: 2026-09-10.
-- Symptom: code review found `serveHostRFB` answered every `FramebufferUpdateRequest`
-  (encoding a fresh 1,024,000-byte raw frame) regardless of the request's incremental
-  flag; noVNC re-requests immediately after each update, so an idle host console
-  streamed full frames back-to-back forever.
-- Root cause: the handler discarded the whole 9-byte request body (`io.CopyN(io.Discard,
-  c, 9)`) instead of reading the incremental flag, and always called `send()`. The PTY
-  reader goroutine made this worse by calling `send()` (a full frame) after every read
-  chunk instead of just marking the terminal dirty.
-- Fix: track `dirty`/`wantUpdate` in `serveHostRFB`; a non-incremental request always
-  gets a frame, an incremental request only gets one immediately if the terminal
-  changed since the last frame sent, and otherwise the PTY reader pushes the deferred
-  frame itself the next time it marks the terminal dirty. Second review round: `sendFrame`
-  now clears `wantUpdate` (under the same mutex as `dirty`), because a deferred
-  incremental request later satisfied by a full request otherwise left the flag set and
-  the PTY reader pushed one unsolicited full frame on the next output.
-- Regression evidence: `go test -race -count=1 ./internal/vmhost -run
-  TestHostConsoleIncrementalUpdateOnlyOnChange` drives the real RFB protocol against
-  `HostConsoleSession()` (a real `/bin/bash -l` PTY): confirms an incremental request
-  with nothing changed gets no reply within 300ms (asserts `os.ErrDeadlineExceeded`),
-  then confirms typing a character (which the PTY echoes) causes the deferred frame to
-  arrive without a further request. Extended in the second review round with a deferred
-  incremental request satisfied by a full request, after which new PTY output must
-  produce no unsolicited frame within 500ms; that assertion fails with
-  "output pushed an unsolicited frame after a satisfied incremental request" when the
-  `wantUpdate = false` line in `sendFrame` is removed, and passes with it. Runs under
-  `go test -race ./...` in both phase1 workflows.
-- Avoid: treating "send a frame" and "the client asked for one" as the same event when
-  the protocol has an explicit incremental flag for exactly this case.
+- Date: 2026-09-10
+- Symptom: `serveHostRFB` answered every request with a 1,024,000-byte raw frame; noVNC re-requests immediately, so an idle console streamed forever.
+- Root cause: the 9-byte request body was discarded (`io.CopyN(io.Discard, c, 9)`) and `send()` always called; the PTY reader also sent a full frame per read chunk.
+- Fix: `dirty`/`wantUpdate` tracking — non-incremental always answered, incremental only if changed, otherwise the PTY reader pushes the deferred frame; `sendFrame` clears `wantUpdate` under the same mutex (second review round: a satisfied deferred request otherwise caused one unsolicited frame).
+- Regression: `go test -race -count=1 ./internal/vmhost -run TestHostConsoleIncrementalUpdateOnlyOnChange` over a real PTY: no reply to unchanged incremental, deferred frame after echo, no unsolicited frame after a satisfied request (fails with "output pushed an unsolicited frame after a satisfied incremental request" without the `wantUpdate = false` line). Both phase1 workflows.
+- Avoid: conflating "send a frame" with "the client asked for one" when the protocol has an incremental flag.
 
 ## BUG-0053 — Host console KeyEvent handling dropped Ctrl+C/D/Z and arrow keys
 
-- Date: 2026-09-10.
-- Symptom: code review found `keysymByte` had a literal dead branch
-  (`if sym >= 0x61 && sym <= 0x7a { return nil }`) that could never execute because the
-  `0x20..0x7e` Latin-1 range above it already covered lowercase letters and returned
-  first. Ctrl+C/D/Z therefore arrived at the shell as plain `c`/`d`/`z`, and arrow keys
-  (not in any handled range) were silently dropped.
-- Root cause: the handler never tracked Control key state (it also skipped every
-  key-up event outright with `if body[0] == 0 { continue }`, so a held Control_L could
-  never be observed), and `keysymByte` had no case for arrow/Home/End keysyms.
-- Fix: `serveHostRFB` now tracks a per-connection `keyState.ctrl` set by Control_L/R
-  (0xffe3/0xffe4) down/up events; `keysymByte(sym, ctrl)` maps a held-Ctrl keysym in
-  0x40..0x5f to `sym & 0x1f` (Ctrl+@ -> 0x00, Ctrl+A..Z -> 0x01..0x1a,
-  Ctrl+`[`/`\`/`]`/`^`/`_` -> 0x1b..0x1f), lowercase letters the same way, Ctrl+Space to
-  NUL, and adds Left/Up/Right/Down/Home/End escape sequences. The non-letter control
-  codes were missed in the first round: Ctrl+\ (SIGQUIT) and Ctrl+] reached the shell as
-  literal characters.
-  
-- Regression evidence: `go test -race -count=1 ./internal/vmhost -run
-  TestKeysymByteCtrlAndArrows` (pure-function table test) passes; the table covers
-  Ctrl+C/D/Z, the arrow/Home/End sequences, and — added in the second review round —
-  Ctrl+`\` (0x1c), Ctrl+`[` (0x1b), Ctrl+@ and Ctrl+Space (0x00), plus plain `\` to show
-  the unmodified path is unchanged. Runs under `go test -race ./...` in both phase1
-  workflows. Optionally added a Ctrl+C entry to the `Send key…` menu in
-  `web/src/console.tsx` (`npm run typecheck` passes) since the backend now honours it.
-- Avoid: leaving an unreachable branch in review as "the intended hook" without wiring
-  the modifier state that would make it reachable — dead code here was a working sign
-  the feature was incomplete, not defensive coverage.
+- Date: 2026-09-10
+- Symptom: `keysymByte` had an unreachable lowercase branch; Ctrl+C/D/Z arrived as `c`/`d`/`z` and arrow keys were dropped.
+- Root cause: no Control state tracking (key-up events skipped entirely) and no arrow/Home/End cases.
+- Fix: per-connection `keyState.ctrl` from Control_L/R (0xffe3/0xffe4); `keysymByte(sym, ctrl)` maps 0x40..0x5f and lowercase to `sym & 0x1f`, Ctrl+Space to NUL, adds Left/Up/Right/Down/Home/End sequences. Second round added non-letter controls (Ctrl+\ and Ctrl+] had reached the shell literally). Ctrl+C added to `Send key…` in `web/src/console.tsx`.
+- Regression: `go test -race -count=1 ./internal/vmhost -run TestKeysymByteCtrlAndArrows` (covers Ctrl+C/D/Z, arrows/Home/End, Ctrl+\ 0x1c, Ctrl+[ 0x1b, Ctrl+@/Space 0x00, plain `\`); both phase1 workflows; `npm run typecheck` passes.
+- Avoid: leaving an unreachable branch as "the intended hook" without wiring the modifier state it needs.
 
 ## BUG-0054 — Host console tab expansion emitted roughly half the intended spaces
 
-- Date: 2026-09-10.
-- Symptom: a scratch test confirmed `"\t"` from column 0 left `t.cur == 4` (expected 8),
-  and `"abc\t"` left `t.cur == 6` (expected 8).
-- Root cause: `for i := 0; i < 8-(t.cur%hostCols)%8; i++ { t.put(' ') }` re-evaluated the
-  loop bound every iteration; `put()` advances `t.cur`, so the bound shrank as the loop
-  ran and the loop stopped roughly halfway to the next tab stop.
-- Fix: compute the space count once before the loop in `hostTerm.write` (case `'\t'`).
-- Regression evidence: `go test ./internal/vmhost -run
-  TestHostTermTabStopsAtNextMultipleOfEight` reproduces both cases from the scratch test
-  and passes with the fix; runs under `go test -race ./...` in both phase1 workflows.
-- Avoid: writing a `for` loop bound as an expression over mutable state the loop body
-  itself advances; compute it once, or iterate to an absolute target instead of a count.
+- Date: 2026-09-10
+- Symptom: `"\t"` from column 0 left `t.cur == 4` (expected 8); `"abc\t"` left 6.
+- Root cause: loop bound `8-(t.cur%hostCols)%8` re-evaluated while `put()` advanced `t.cur`.
+- Fix: compute the count once in `hostTerm.write` (case `'\t'`).
+- Regression: `go test ./internal/vmhost -run TestHostTermTabStopsAtNextMultipleOfEight`; both phase1 workflows.
+- Avoid: loop bounds over mutable state the body advances.
 
 ## BUG-0055 — HostConsoleSocket cached a one-time Listen failure for the process lifetime
 
-- Date: 2026-09-10.
-- Symptom: code review found `hostConsoleOnce sync.Once` meant a failed `net.Listen` on
-  first use (e.g. address already in use, resource limits during startup) would return
-  the same cached error forever, with no way to recover without restarting the agent.
-- Root cause/fix: moot — BUG-0051's fix removed the listener (and the `sync.Once`/cached
-  error with it) entirely in favor of `HostConsoleSession()`, which starts a fresh
-  `net.Pipe` and PTY session on every call and has no persistent failure state to cache.
-  No separate code change was needed beyond BUG-0051's.
-- Regression evidence: covered by BUG-0051's tests (`TestHostConsoleSessionRFBHandshake`
-  and `TestHostConsoleHasNoLocalListener` both call `HostConsoleSession()` fresh and pass
-  repeatedly).
-- Avoid: n/a — recorded for traceability since it was a separate finding in review, not
-  because it needed its own fix.
+- Date: 2026-09-10
+- Status: moot — resolved by BUG-0051, no separate change.
+- Symptom: `hostConsoleOnce sync.Once` would cache a first `net.Listen` failure forever until agent restart.
+- Root cause/fix: BUG-0051 removed the listener and `sync.Once`; `HostConsoleSession()` starts a fresh `net.Pipe` and PTY per call.
+- Regression: BUG-0051's `TestHostConsoleSessionRFBHandshake` and `TestHostConsoleHasNoLocalListener`.
+- Avoid: n/a — recorded for traceability.
 
 ## BUG-0056 — openHostConsole let an old Core hang the browser instead of refusing it
 
-- Date: 2026-09-10.
-- Symptom: code review found `openHostConsole` gated on `protocol.ConsoleCapability`
-  (`console-v1`), the same capability every agent old enough to support VM consoles
-  already reports — including one that predates the host console feature entirely. A new
-  Controller would enable the host console tab, issue a ticket, and the browser would
-  wait the full 20 seconds for a tunnel the old agent can never open before showing a
-  504, instead of an immediate "upgrade Nex Core" refusal. The 409 branch for that
-  message existed but was unreachable in this scenario.
-- Root cause: host console reused the VM console's capability constant instead of
-  advertising its own, so "reports console-v1" was not proof the agent's host console
-  RFB endpoint existed.
-- Fix: added `protocol.HostConsoleCapability = "host-console-v1"` in
-  `internal/protocol/console.go`; `internal/agent/run.go` now reports it alongside
-  `console-v1`; `internal/controller/console.go`'s `openHostConsole` gates on it instead
-  of `console-v1`, and `hostConsoleBlocker` in `web/src/main.tsx` checks the same
-  capability so the host Console tab is disabled (with the "upgrade Nex Core" reason)
-  rather than auto-connecting into a 409 the console component retries forever — the UI
-  half was missed in the first round and still checked `console-v1`. `docs/API.md` and
-  `docs/api/openapi.json` document the new capability and compatibility behavior; the
-  host console endpoints' 404/409 response wording and the ticket parameter description
-  were also corrected from copy-pasted VM-console text ("VM not found" / "another VM" /
-  "Ticket from openConsole") to host wording.
-- Regression evidence: extended `TestHostConsoleTicket` in
-  `internal/controller/console_test.go` to report only `console-v1` (no
-  `host-console-v1`) and assert the 409 "does not support browser consoles" refusal,
-  then report both and assert the ticket succeeds. `go test ./internal/controller -run
-  TestHostConsoleTicket` passes; runs under `go test -race ./...` in both phase1
-  workflows. The `web/src/main.tsx` gate has no unit test (the UI suite has no component
-  harness); it was verified by `npm run typecheck` and `npm run build` and by inspection
-  against `openHostConsole` — recorded as a coverage limit in
-  `docs/changes/2026-09-10-host-console-hardening.json`.
-- Avoid: reusing a capability constant across two features just because one grew out of
-  the other's code path — if an old deployment can advertise the shared capability
-  without supporting the new feature, gate on a capability that is actually proof of the
-  new feature.
-
----
+- Date: 2026-09-10
+- Symptom: `openHostConsole` gated on `console-v1`, which pre-host-console agents also report; the browser waited 20 s for a 504 instead of an immediate "upgrade Nex Core" 409.
+- Root cause: host console reused the VM console capability constant.
+- Fix: `protocol.HostConsoleCapability = "host-console-v1"` (`internal/protocol/console.go`), reported by `internal/agent/run.go`, gated in `internal/controller/console.go` and in `hostConsoleBlocker` (`web/src/main.tsx`, missed in first round). Host console 404/409 and ticket wording corrected from VM-console copy.
+- Regression: `go test ./internal/controller -run TestHostConsoleTicket` (409 with only `console-v1`, success with both); both phase1 workflows. UI gate has no unit test (typecheck/build and inspection only; limit recorded in `docs/changes/2026-09-10-host-console-hardening.json`).
+- Avoid: sharing a capability constant between two features when old deployments can advertise it without the new feature.
 
 ## BUG-0057 — Interrupted VM media insert could reconcile as succeeded with an empty tray
 
-- Date: 2026-09-10.
-- Symptom: if the agent died before or during `virsh change-media` for an insert, restarting and
-  reconciling the operation reported `succeeded` and mirrored the ISO as inserted (Controller UI
-  showed the media attached), while the VM's CD tray was actually still empty.
-- Root cause: `apply()` persisted the vm-media journal at stage `changing-media` with
-  `MediaPath` empty; `changeMedia` only set the resolved media path in memory
-  (`j.MediaPath = path`) and never saved the journal again before calling `virsh change-media`.
-  On restart, `mediaObserved` compared the domain's current tray (`got`, empty) against `want`,
-  which it also computed as empty for an insert whose journaled `MediaPath` was empty — an empty
-  tray therefore satisfied "empty want" and reconciliation reported success regardless of what
-  actually happened.
-- Fix: root cause was the stage bookkeeping, not the comparison. `apply()` persisted Stage
-  `changing-media` before `changeMedia` had resolved anything, so a crash in the window before
-  the virsh call (ISO verification, tray attach) looked like an issued change and reconciled as
-  a permanent failure or, worse, matched an empty tray. `changeMedia` now writes Stage
-  `changing-media` and the resolved `MediaPath` in one journal save immediately before the
-  `virsh change-media` call (both insert and eject); `apply()` sets no stage. A pending journal
-  without that stage issued nothing, so `reconcile`'s `Stage != "changing-media"` branch simply
-  re-applies the request. The empty-path special case in `mediaObserved` is removed: an insert
-  reaching observation always has its path.
-- Regression evidence: `go test -race -count=1 ./internal/vmhost -run TestManagedMediaChange`.
-  The m11 case executes an insert that cannot resolve its ISO (the same window a crash during
-  ISO verification falls in), asserts the journal on disk does not claim Stage
-  `changing-media`, then re-executes that journal as pending and asserts it re-applies and
-  issues `change-media ... --update`. Hand-reverting the stage move (Stage set in `apply()`
-  before the path is resolved, without `git`) fails it with
-  `nothing was issued, so the journal must not claim a media change was in flight: ... Stage:changing-media`;
-  restoring the fix passes.
-- Avoid: persisting only in memory before an external side-effecting call (`virsh`) that can be
-  interrupted; anything reconciliation depends on to tell "succeeded" from "empty" apart must be
-  durable before that call, not just after it returns.
+- Date: 2026-09-10
+- Symptom: if the agent died before or during `virsh change-media` for an insert, reconciliation reported `succeeded` and mirrored the ISO as inserted while the tray was empty.
+- Root cause: `apply()` persisted stage `changing-media` with empty `MediaPath`; `changeMedia` set the path only in memory, so `mediaObserved` matched an empty tray against an empty want.
+- Fix: `changeMedia` saves stage `changing-media` and the resolved `MediaPath` in one journal write immediately before `virsh change-media` (insert and eject); `apply()` sets no stage, so a journal without it re-applies; removed the empty-path special case in `mediaObserved`.
+- Regression: `go test -race -count=1 ./internal/vmhost -run TestManagedMediaChange` (m11: unresolvable ISO must not journal `changing-media`, then re-applies with `change-media ... --update`); hand-revert fails with `nothing was issued, so the journal must not claim a media change was in flight`.
+- Avoid: keeping reconciliation-critical state only in memory before an interruptible side-effecting call.
 
 ## BUG-0058 — VM media eject zeroed the boot order without renumbering, orphaning boot-order-dependent VMs on re-adoption
 
-- Date: 2026-09-10.
-- Symptom: a VM created with the install ISO first in boot order (`media_boot_order=1`,
-  disk `boot_order=2`, the shape `vmSpec`/`managedTestVM` use when media is given) that then had
-  its media ejected ended up with a disk boot order of 2 and nothing at 1.
-  `protocol.ValidateVMSpec` rejects that shape ("boot order must number the boot devices from 1
-  without gaps"), so on Core the VM's own managed journal failed its own re-validation in
-  `journals()` and vanished from `Applied()`; on the Controller, `adoptManaged` `continue`d past
-  it during host-report adoption. A replacement Controller reconnecting to the pool master would
-  never re-adopt the VM, even though it was still running on the host.
-- Root cause: both `recordVMMedia` (`internal/vmhost/managed.go`) and `mirrorVMMedia`
-  (`internal/controller/vmmedia.go`) independently zeroed `MediaID`/`Boot.MediaBootOrder` on
-  eject without shifting the remaining disk boot orders down to close the gap, and neither gave
-  a re-inserted ISO a boot order.
-- Fix: the round-one renumbering made the durable record lie. `virsh change-media` never
-  touches `bootindex`: an inserted ISO gets no boot element, and an eject leaves the (now
-  empty) CD drive and every disk with the bootindex they had. `protocol.ApplyVMMedia` therefore
-  records only `media_id` — insert invents no media boot order, eject clears `media_id` with
-  `media_boot_order` and leaves the disks' `boot_order` untouched. So that the gap an eject
-  leaves cannot make a re-adopting Controller reject and silently skip a running VM
-  (`internal/controller/managed.go` adoption drops any spec failing `ValidateVMSpec`),
-  `ValidateVMSpec` now requires boot order values to be unique, positive and at least one, but
-  no longer contiguous — libvirt orders devices by bootindex and tolerates gaps. **Decision for
-  the project owner to confirm:** relaxing the contiguity rule. Nothing promises 1..N numbering to
-  operators: `web/src/vm-create.tsx` renumbers its own list to 1..N before submitting, the VM
-  details page prints each device's own number, and `docs/guide/create-virtual-machine.md` says
-  only "an explicit boot order". The alternative (rewriting the domain's bootindex values in the
-  same virsh step) was rejected as far more code for no operator-visible gain.
-- Regression evidence: `go test -race -count=1 ./internal/protocol ./internal/vmhost ./internal/controller`.
-  New `TestApplyVMMediaKeepsBootOrder` (protocol) asserts eject keeps disk order 2, clears the
-  media order, validates the ejected spec, and that a re-insert invents nothing;
-  `TestManagedRecordVMMediaKeepsBootOrderOnEject` (vmhost) and
-  `TestMirrorVMMediaKeepsBootOrderOnEject` (controller) assert the same for Core's journal and
-  the Controller mirror, both still passing `ValidateVMSpec`; `protocol/managed_test.go` covers
-  the accepted gap ("boot order gap", "boot order not from one", "boot order after eject").
-  Hand-reverting `ApplyVMMedia` to the renumbering version fails all three
-  (`eject must not renumber the disk boot order libvirt still holds: ... BootOrder:1`).
-- Avoid: mutating a derived, order-dependent field (boot order) independently on two sides
-  (Core and Controller) that must never diverge, and mutating it without maintaining the
-  invariant (contiguous numbering from 1) the rest of the system assumes holds.
+- Date: 2026-09-10
+- Status: fixed; relaxing boot-order contiguity awaits project owner confirmation.
+- Symptom: a VM with ISO first (`media_boot_order=1`, disk `boot_order=2`) had its media ejected, leaving disk 2 and nothing at 1; `protocol.ValidateVMSpec` rejected it, so Core's `journals()` dropped it from `Applied()` and Controller `adoptManaged` skipped it — a replacement Controller would never re-adopt the running VM.
+- Root cause: `recordVMMedia` (`internal/vmhost/managed.go`) and `mirrorVMMedia` (`internal/controller/vmmedia.go`) independently zeroed media fields without closing the gap. The first-round renumbering fix made the record lie, since `virsh change-media` never touches `bootindex`.
+- Fix: `protocol.ApplyVMMedia` records only `media_id` (insert invents no boot order; eject clears `media_id` and `media_boot_order`, disks untouched); `ValidateVMSpec` requires unique positive boot orders but no longer contiguous (libvirt tolerates gaps; `web/src/vm-create.tsx` still submits 1..N). Rewriting domain bootindex values was rejected as more code for no operator gain.
+- Regression: `go test -race -count=1 ./internal/protocol ./internal/vmhost ./internal/controller` — `TestApplyVMMediaKeepsBootOrder`, `TestManagedRecordVMMediaKeepsBootOrderOnEject`, `TestMirrorVMMediaKeepsBootOrderOnEject`, plus gap cases in `protocol/managed_test.go`; renumbering revert fails all three.
+- Avoid: mutating a derived order-dependent field independently on Core and Controller, or without maintaining the invariant the rest of the system assumes.
 
 ## BUG-0059 — Ejecting an already-empty CD tray failed instead of succeeding, and could attach a tray just to fail ejecting from it
 
-- Date: 2026-09-10.
-- Symptom: an eject request on a VM whose tray was already empty (a fresh eject retried after
-  the mirror was already cleared, an eject following an out-of-band `virsh` eject on the host, or
-  eject on a stopped VM with no CD drive defined at all) failed with "libvirt refused the media
-  change; inspect the VM on its host". A stopped VM without a drive at all would first get an
-  empty tray persistently attached by `ensureCDROM`, and the eject would then still fail on that
-  freshly attached, already-empty tray. There was no way to clear a stale `media_id` mirror this
-  way.
-- Root cause: `changeMedia` always called `ensureCDROM` (which attaches an empty tray if none
-  exists) and then unconditionally ran `virsh change-media ... --eject` for every eject request,
-  without checking whether the drive already had no media. Real `virsh` refuses to eject a
-  source-less cdrom ("doesn't have media"); `--force` does not bypass that.
-- Fix: the short-circuit decided "already empty" from the persistent definition only and only
-  looked at `<source file>`, so a running VM whose tray was changed outside Nex, or whose media
-  is attached as `<source dev>`, was reported ejected while the guest still held the ISO.
-  `cdromSource` now takes the `running` flag and reads the live definition for a running domain
-  (the same `dumpManagedDomain` call `ensureCDROM` uses), and treats either `<source file>` or
-  `<source dev>` as media present. `mediaObserved` uses the same helper instead of its own
-  `dumpxml --inactive` + unmarshal + first-cdrom scan, and one args builder now serves both
-  insert and eject (branching only on `--eject` vs `path --update`).
-- Regression evidence: `go test -race -count=1 ./internal/vmhost -run 'TestManagedMediaChange|TestManagedMediaEjectReadsLiveDefinition'`.
-  New `TestManagedMediaEjectReadsLiveDefinition` uses a fake virsh whose `dumpxml --inactive`
-  shows an empty tray while the live `dumpxml` shows `<source dev="/dev/sr0">` on a running VM,
-  and asserts the eject issues `change-media <vm> sda --force --live --config --eject`.
-  Hand-reverting `cdromSource` to the inactive definition and `<source file>` only fails it:
-  the virsh log holds `dumpxml ... --inactive` and no `change-media`.
-- Avoid: calling a side-effecting host command unconditionally for an operation that may already
-  be satisfied; read the current observed state first when the API allows a cheap read-only check.
+- Date: 2026-09-10
+- Symptom: eject on an empty tray (retry, out-of-band eject, or stopped VM with no drive) failed with "libvirt refused the media change; inspect the VM on its host"; a driveless stopped VM first got an empty tray attached by `ensureCDROM`; stale `media_id` could not be cleared.
+- Root cause: `changeMedia` always ran `ensureCDROM` then `virsh change-media ... --eject`; virsh refuses to eject a source-less cdrom even with `--force`. The first short-circuit read only the persistent definition and `<source file>`, so a running VM with out-of-band or `<source dev>` media was reported ejected.
+- Fix: `cdromSource` takes `running`, reads the live definition for running domains (`dumpManagedDomain`), and treats `<source file>` or `<source dev>` as present; `mediaObserved` uses the same helper; one args builder for insert and eject.
+- Regression: `go test -race -count=1 ./internal/vmhost -run 'TestManagedMediaChange|TestManagedMediaEjectReadsLiveDefinition'` (inactive empty, live `<source dev="/dev/sr0">` → expects `change-media <vm> sda --force --live --config --eject`); revert fails.
+- Avoid: issuing side-effecting host commands unconditionally when a cheap read shows the operation is already satisfied.
 
 ## BUG-0060 — A VM media change broke idempotent replay of the original create request
 
-- Date: 2026-09-10.
-- Symptom: create a VM with request_id `R`; later insert or eject its media; then replay the
-  original create request with the same request_id `R` (the documented idempotent-retry
-  behavior) — the replay returned 409 "request_id already used with another payload" instead of
-  200 with the original VM.
-- Root cause: `mirrorVMMedia` (`internal/controller/vmmedia.go`) rewrote both the `command` and
-  the `payload` columns of the vm-create `managed_resources` row after a successful media change.
-  `replayResource` (`internal/controller/managed.go`) looks up a request solely by `request_id`
-  and treats it as a replay only if the stored `payload` matches the replayed request byte for
-  byte; once `mirrorVMMedia` had rewritten `payload` with the new `media_id`/boot order, the
-  original create request's payload no longer matched, so the replay was rejected as "another
-  payload" instead of recognized as the same request.
-- Fix: `mirrorVMMedia` now updates only the `command` column (the live mirror of the VM's current
-  state, already read from the `command` column by `poolMACs`, `hostMemory`, `adoptManaged`, and
-  `listResources`) and leaves `payload` (the original request body, which only backs idempotent
-  replay of that specific request_id) untouched.
-- Regression evidence: `internal/controller/vmmedia_test.go`,
-  `TestVMCreateReplayStaysIdempotentAfterMediaChange` (create a VM, eject its media, then replay
-  the original create request_id and assert 200 with the same VM ID/operation ID). Manually
-  reverted `mirrorVMMedia` back to also rewriting `payload` (not via git) and reran: failed with
-  `POST /api/v1/vms: got 409 want 200: {"error":"request_id already used with another payload"}`
-  — the exact symptom described above. Restored the fix and reran: passes. Runs in
-  `go test`/`go test -race ./internal/controller/`, which both phase1 workflows already execute
-  on push/PR.
-- Avoid: treating a stored request payload (the input a request_id owns for idempotent replay)
-  as if it were the same thing as a live mirror of current resource state; when both need to be
-  derived from the same event, update only the one that is supposed to change.
+- Date: 2026-09-10
+- Symptom: after a media change, replaying the original create `request_id` returned 409 "request_id already used with another payload" instead of 200.
+- Root cause: `mirrorVMMedia` (`internal/controller/vmmedia.go`) rewrote both `command` and `payload` of the `managed_resources` row; `replayResource` compares `payload` byte for byte.
+- Fix: update only `command` (the live mirror); leave `payload` (replay input) untouched.
+- Regression: `TestVMCreateReplayStaysIdempotentAfterMediaChange` in `internal/controller/vmmedia_test.go`; revert fails with `POST /api/v1/vms: got 409 want 200`. Runs under `go test -race` in both phase1 workflows.
+- Avoid: treating a stored request payload as a live mirror of resource state.
 
 ## BUG-0061 — Playwright Back locator ambiguous against the new fixed toolbar
 
 - Date: 2026-09-10
-- Symptom: `tests/integration/managed_vm_browser.py` failed Playwright strict-mode resolution
-  at the Create VM wizard's "back to review the last step" assertion; both phase1 CI
-  workflows (`.github/workflows/phase1.yml`, `.gitea/workflows/phase1.yml`) that run this
-  script would go red. `docs/changes/2026-09-10-iso-upload-task-row.json` already recorded
-  the run failing on this ambiguity.
-- Root cause: `web/src/main.tsx`'s new always-visible toolbar added a second button whose
-  accessible name is exactly "Back" (browser history navigation, icon `aria-hidden`),
-  alongside the Create VM wizard's own step-back "Back" button
-  (`web/src/vm-create.tsx`). `page.get_by_role('button', name='Back', exact=True)` on the
-  whole page then matched two elements.
-- Fix: scoped the wizard's locator to the wizard's own landmark
-  (`page.get_by_role('region', name='Create VM', exact=True).get_by_role('button',
-  name='Back', exact=True)`) instead of renaming the toolbar button. Renaming the toolbar
-  button's accessible name was rejected: `tests/integration/phase1_browser.py` (not in this
-  agent's write set) already asserts `toolbar.get_by_role('button', name='Back',
-  exact=True)` for that same button, so changing its name would have broken that file
-  instead.
-- Regression evidence: ran the real simulated Playwright acceptance end-to-end —
-  `.cache/phase1-qa-venv/bin/python tests/integration/managed_vm_browser.py --simulated
-  --evidence <scratchpad>/managed-vm-browser-run2` — all 5 phases PASS, including the
-  six-step wizard's step-back assertion that previously threw in strict mode. Both phase1
-  workflows already run this script.
-- Avoid: adding an unscoped `page.get_by_role(..., name='Back')` locator anywhere the fixed
-  toolbar is present; scope to the relevant landmark/region instead, since "Back" is a
-  generic label likely to recur.
+- Symptom: `tests/integration/managed_vm_browser.py` failed Playwright strict-mode resolution at the wizard step-back assertion (recorded in `docs/changes/2026-09-10-iso-upload-task-row.json`).
+- Root cause: the new always-visible toolbar in `web/src/main.tsx` added a second button named exactly "Back" alongside the wizard's in `web/src/vm-create.tsx`.
+- Fix: scope the locator to `get_by_role('region', name='Create VM', exact=True)`; renaming the toolbar button rejected because `tests/integration/phase1_browser.py` asserts its name.
+- Regression: `tests/integration/managed_vm_browser.py --simulated` passes all 5 phases locally; both phase1 workflows run it.
+- Avoid: unscoped `get_by_role(..., name='Back')` where the toolbar exists; scope to the landmark.
 
 ## BUG-0062 — Create VM draft restore replaced an explicit empty NIC list with one blank NIC
 
 - Date: 2026-09-10
-- Symptom: an operator removes every network interface in the Create VM wizard (the
-  protocol allows 0 NICs) and submits. If the submission response is lost (uncertain
-  outcome) the draft persists with `nics: []`. Reopening the wizard shows one NIC with an
-  empty required Network select, blocking Next; choosing a network there then makes
-  `web/src/managed.tsx`'s retry throw because the resubmitted payload no longer matches the
-  original stored request.
-- Root cause: `web/src/vm-create.tsx`'s draft-restore logic used
-  `Array.isArray(r.nics) && r.nics.length ? r.nics : blank.nics`, so a legitimate empty
-  array was treated the same as a missing/absent field and replaced by the one-NIC blank
-  template.
-- Fix: extracted the restore rule into a pure exported function,
-  `restoredNICs(nics: unknown): NICRow[]`, that falls back to `blank.nics` only when the
-  value is not an array at all (`Array.isArray(nics) ? nics : blank.nics`), preserving an
-  explicit `[]`. `VMWizard`'s initial-draft `useState` now calls `restoredNICs(r.nics)`.
-- Regression evidence: no unit-test harness existed in `web/` (no vitest/jest). Added
-  `web/src/vm-create.test.mjs` as `npm --prefix web run test`, which both phase1 workflows
-  (`.github/workflows/phase1.yml`, `.gitea/workflows/phase1.yml`) now run after typecheck:
-  it uses the already-installed `esbuild` to transform-and-import `vm-create.tsx` directly
-  (stubbing the `react` and `./managed` imports, which the pure functions under test do not
-  need) and asserts `restoredNICs([])` stays `[]`, `restoredNICs(undefined)` and
-  `restoredNICs('not-an-array')` fall back to the one-NIC template, and a populated array is
-  preserved unchanged. Confirmed the check fails against the original
-  `Array.isArray(r.nics) && r.nics.length` logic and passes after the fix. Run with:
-  `node web/src/vm-create.test.mjs`. `cd web && npm run typecheck && npm run build` both
-  pass.
-- Avoid: treating "empty array" the same as "field absent" when restoring a persisted
-  draft/form whose protocol allows a legitimately empty collection (here, 0 NICs); check
-  `Array.isArray` alone, not truthiness/length, to distinguish "never set" from
-  "deliberately cleared."
+- Symptom: after a lost submit with 0 NICs, the reopened wizard showed one NIC with an empty required Network, and choosing one made `web/src/managed.tsx`'s retry throw on payload mismatch.
+- Root cause: `web/src/vm-create.tsx` used `Array.isArray(r.nics) && r.nics.length ? r.nics : blank.nics`, treating `[]` as absent.
+- Fix: exported pure `restoredNICs(nics)` falls back only when not an array; `VMWizard` uses it.
+- Regression: new `web/src/vm-create.test.mjs` (`npm --prefix web run test`, esbuild transform with stubbed imports) asserts `[]` stays `[]`, non-arrays fall back, populated arrays preserved; fails on old logic. Added to both phase1 workflows after typecheck; `npm run typecheck && npm run build` pass.
+- Avoid: truthiness/length checks to distinguish "never set" from "deliberately cleared".
 
 ## BUG-0063 — Deploy guide claimed guest root console login stays locked
 
 - Date: 2026-09-10
-- Symptom: `docs/guide/deploy-controller-appliance.md` said "SSH password login stays
-  disabled and guest root stays locked" in the recovery section, directly contradicted by
-  the very next sentence on the same page ("The deploy password also unlocks the appliance
-  console as root...") and by the staged `appliance/firstboot.py` behavior.
-- Root cause: the guide was not updated when `firstboot.py`'s
-  `provision_console_login()` was added/changed to unlock the guest `root` account with the
-  deploy/admin password (`chpasswd -e` then `passwd -u`) and add it to the `sudo` group
-  where one exists on the image; the "stays locked" clause went stale.
-- Fix: read `appliance/firstboot.py` (read-only) to confirm current behavior, then
-  corrected the guide paragraph to state that first boot unlocks the guest root console
-  account with the deploy password and may grant it `sudo`, and to spell out the security
-  implication (knowing the Controller administrator password gives a full root shell at the
-  console, not only web access; treat it like host root). SSH password login staying
-  disabled was left as-is (unaffected by `firstboot.py`, which never touches sshd config).
-- Regression evidence: this is a documentation-accuracy fix, not executable logic; no
-  automated regression check applies. Verification: re-read `appliance/firstboot.py` in
-  full and confirmed every clause of the corrected paragraph matches its actual behavior
-  (useradd/usermod into `sudo` when present, `openssl passwd -6` + `chpasswd -e` +
-  `passwd -u` for the deploy password, no sshd changes). `python3 scripts/check_docs.py
-  --worktree` passes with the updated page correctly declared in
-  `docs/changes/2026-09-10-wizard-draft-back-locator.json` (guide impact: updated).
-- Avoid: letting a guide correctness claim ("X stays locked/disabled") drift from a
-  security-relevant script it describes; grep the guide for the changed behavior whenever
-  `appliance/firstboot.py` (or any onboarding/bootstrap script) changes what it provisions.
+- Symptom: `docs/guide/deploy-controller-appliance.md` said "guest root stays locked", contradicting the next sentence and `appliance/firstboot.py`.
+- Root cause: guide not updated when `provision_console_login()` began unlocking root with the deploy password (`chpasswd -e`, `passwd -u`) and adding it to `sudo` where present.
+- Fix: guide states first boot unlocks the root console with the deploy password, may grant `sudo`, and that the Controller admin password therefore gives a console root shell; SSH password login stays disabled (firstboot never touches sshd).
+- Impact: guide updated (`docs/changes/2026-09-10-wizard-draft-back-locator.json`).
+- Regression: docs accuracy, no automated check; re-read `appliance/firstboot.py` against every clause; `python3 scripts/check_docs.py --worktree` passes.
+- Avoid: letting security claims in a guide drift from the provisioning script; grep the guide when `appliance/firstboot.py` changes.
 
 ## BUG-0064 — Create VM dropdowns still flickered closed: the OS popup was being dismissed
 
-- Date: 2026-09-10.
-- Symptom: after BUG-0050, every native `<select>` in Create VM (Bus, Storage, guest OS,
-  Placement host and the rest) still opened and closed at once when clicked.
-- Root cause: not the Controller. A native `<select>` picker is a separate compositor popup
-  window. On the reporting desktop (Hyprland 0.56.2, Brave 152 on Wayland) that popup is
-  dismissed as soon as the pointer moves after the click. Reproduced with a plain page that
-  contains nothing but a `<select>`; in the real Create VM form under the same browser the
-  popup stayed open for 6 s as long as the pointer was still, so no Controller code (React
-  re-render, the 10 s inventory reload, focus handling or panel overflow) closes it.
-- Fix: `select, ::picker(select) { appearance: base-select }` in `web/src/style.css` and
-  `web/src/local.css`, with picker, option, hover and checked styling. Chromium 135+ then
-  renders the picker in the page (top layer) where a compositor cannot dismiss it; browsers
-  without base-select keep their native picker. Select semantics, keyboard use and
-  `onChange` handling are unchanged.
-- Regression evidence: `tests/integration/form_select_picker.py` (replaces
-  `form_select_overflow.py`) clicks Bus under the Controller stylesheet in headless Chromium
-  and requires computed `appearance: base-select`, `:open` after the click, `:open` after a
-  controlled re-selection of the options, the picker drawn below the control in a page
-  capture, and ArrowUp + Enter choosing SATA. It fails against the previous stylesheet
-  (native picker: appearance `auto`). Both phase1 workflows run it. Real-app evidence:
-  the Create VM Bus picker in Brave 152 on Hyprland stayed open for 6 s with the pointer
-  moving across the desktop, and the picker appears in headless page captures of the built
-  bundle. See [QA record](qa/form-select/2026-09-10-base-select.md).
-- Avoid: "fixing" a native popup that the compositor closes by changing page CSS around it,
-  and reading a single early screenshot as proof that a popup stayed open. Playwright's
-  synthetic clicks do not move the real pointer, so a headed run on a Wayland desktop can
-  keep a native popup open that a real click never does; use real input or an in-page picker.
+- Date: 2026-09-10
+- Symptom: after BUG-0050, every native `<select>` in Create VM still opened and closed at once.
+- Root cause: not the Controller — the compositor (Hyprland 0.56.2, Brave 152 on Wayland) dismisses the native picker popup when the pointer moves; reproduced with a page containing only a `<select>`, while the Create VM popup stayed open 6 s with a still pointer.
+- Fix: `select, ::picker(select) { appearance: base-select }` with picker/option styling in `web/src/style.css` and `web/src/local.css`; Chromium 135+ renders the picker in the top layer; other browsers keep the native picker.
+- Regression: `tests/integration/form_select_picker.py` (replaces `form_select_overflow.py`) requires `appearance: base-select`, `:open` after click and re-selection, picker below the control, ArrowUp + Enter choosing SATA; fails on the old stylesheet. Both phase1 workflows. Evidence: [QA record](qa/form-select/2026-09-10-base-select.md).
+- Avoid: changing page CSS around a compositor-dismissed native popup; trusting one early screenshot; Playwright synthetic clicks do not move the real pointer — use real input or an in-page picker.
 
 ## BUG-0065 — One corrupt managed journal file emptied the host's reported pool state
 
 - Date: 2026-09-10
-- Symptom: with one unreadable or invalid file in `<agent-state>/managed-vms/`, the host's
-  report carried an empty `Inventory.managed`, so a fresh Controller adopted nothing from the
-  pool and showed empty Storage, Networking, ISO and VM tabs, with no signal why.
-- Root cause: `ManagedEngine.Applied` (`internal/vmhost/managed.go`) returned an empty state on
-  any error from `journals()`, and `journals()` aborted on the first bad file. Failing closed is
-  right for `Execute` (a mutation must not proceed over an unreadable journal) but wrong for
-  read-only reporting, where it silently discarded every other entry.
-- Fix: reporting reads through `readable()`, which skips a bad file and names it; `Applied`
-  reports every other entry and returns a `managed-journal` check that is `failed` with the
-  file names (healthy otherwise). `Execute` still fails closed through the strict `journals()`.
-  In the same change, `Applied` reports failed/needs_attention outcomes, re-observes interrupted
-  creations, flags VMs missing from libvirt, and the agent reports the appliance deploy journal;
-  Controller adoption records every entry it cannot adopt (`docs/changes/2026-09-10-adoption-completeness.json`).
-- Regression evidence: `go test ./internal/vmhost -run TestAppliedSurvivesCorruptJournalEntry`.
-  Run against the previous strict read (Applied wired back to `journals()`) it failed with
-  `corrupt file emptied the applied state: &{Storage:[] ...}`; with the fix it passes, and
-  `go test ./...` passes for every package. It runs in CI through `go test -race ./...` in both
-  `.github/workflows/phase1.yml` (line 31) and `.gitea/workflows/phase1.yml` (line 31). The
-  namespace/no-VM Controller replacement run (`tests/integration/controller_replacement.py`,
-  phase1.yml lines 80-90) now also seeds a corrupt journal file and asserts the other entries
-  are adopted and the host's `managed-journal` check is `failed` naming `corrupt.json`.
-- Avoid: sharing one fail-closed reader between a mutation path and a read-only reporting path.
-  Reporting must degrade entry by entry and say what it skipped; never turn one bad record into
-  "the host holds nothing".
+- Symptom: one unreadable file in `<agent-state>/managed-vms/` made the report's `Inventory.managed` empty, so a fresh Controller adopted nothing, with no signal why.
+- Root cause: `ManagedEngine.Applied` (`internal/vmhost/managed.go`) returned empty on any `journals()` error, and `journals()` aborted on the first bad file — right for `Execute`, wrong for reporting.
+- Fix: reporting uses `readable()`, skipping and naming bad files; `Applied` adds a `managed-journal` check (`failed` with file names). `Execute` stays fail-closed. Same change: `Applied` reports failed/needs_attention outcomes, re-observes interrupted creations, flags VMs missing from libvirt; agent reports the appliance deploy journal; Controller adoption records unadoptable entries (`docs/changes/2026-09-10-adoption-completeness.json`).
+- Regression: `go test ./internal/vmhost -run TestAppliedSurvivesCorruptJournalEntry` (strict read fails with `corrupt file emptied the applied state`); `go test -race ./...` in both phase1 workflows; `tests/integration/controller_replacement.py` seeds `corrupt.json` and asserts other entries adopt and the check names it.
+- Avoid: sharing one fail-closed reader between mutation and read-only reporting paths.
 
 ## BUG-0066 — A failed VM edit reserved its revision, so every retry of that edit was refused
 
 - Date: 2026-09-10
-- Symptom: after a VM edit failed on the host (stop-first refusal, name clash, capacity, a
-  transient virsh error), every later edit of that VM failed with *resource ID already
-  reserved by another operation*. The host still reported the previous revision, so the
-  Controller kept sending the same next revision, and Core kept refusing it.
-- Root cause: `ManagedEngine.Execute` (`internal/vmhost/managed.go`) reserved every journal
-  entry's resource key regardless of status, and a `vm-update` is keyed
-  `vm-update:<vm>:<revision>`. The pending entry is saved before `update` runs, so an edit
-  that failed inside `update` left a `failed` entry holding a revision it never produced.
-  Related: `promote` only re-observed interrupted `vm-create` entries, so a `vm-update` a dead
-  agent process left pending at `defining`/`attaching`/`defined` held its key until a re-sent
-  operation, which a replaced Controller never sends; and Controller `adoptManaged` never closed
-  an adopted `adopt-outcome:<host>:<op>` needs_attention row once the host settled the entry.
-- Fix: the reservation loop skips `failed` `vm-update` entries (they changed nothing; `update`'s
-  `revision == current + 1` check still serialises retries); `promote` re-observes interrupted
-  `vm-update` entries with `observeDefinition` in the state the edit left the guest
-  (`attaching` → running, else shut off); `adoptManaged` marks needs_attention adopt-outcome
-  rows succeeded when their operation is absent from the host's current outcomes.
-- Regression evidence: `go test ./internal/vmhost -run 'TestManagedFailedUpdateDoesNotReserveRevision|TestAppliedPromotesInterruptedEdit'`
-  and `go test ./internal/controller -run TestAdoptedOutcomeClosesWhenHostSettlesIt`. Before the
-  fix all three failed (`retry did not reach the edit: ... resource ID already reserved by
-  another operation`; `interrupted edit not promoted`; `settled outcome still needs
-  attention`); with the fix they pass, and `go test -race -count=1 ./...` passes for every
-  package. They run in CI through `go test -race ./...` in both `.github/workflows/phase1.yml`
-  (line 31) and `.gitea/workflows/phase1.yml` (line 31).
-- Avoid: keying a reservation on a value the operation has not yet produced. A reservation
-  must be released when the operation provably changed nothing, or it must be keyed on the
-  request instead of the outcome.
+- Symptom: after a host-side VM edit failure, every later edit failed with *resource ID already reserved by another operation*; the Controller kept resending the same next revision.
+- Root cause: `ManagedEngine.Execute` (`internal/vmhost/managed.go`) reserved `vm-update:<vm>:<revision>` for entries of any status, so a `failed` edit held a revision it never produced. `promote` only re-observed interrupted `vm-create` entries, and Controller `adoptManaged` never closed a settled `adopt-outcome:<host>:<op>` needs_attention row.
+- Fix: skip `failed` `vm-update` entries in the reservation loop (`revision == current + 1` still serialises retries); `promote` re-observes interrupted `vm-update` entries via `observeDefinition`; `adoptManaged` marks adopt-outcome rows succeeded once absent from host outcomes.
+- Regression: `go test ./internal/vmhost -run 'TestManagedFailedUpdateDoesNotReserveRevision|TestAppliedPromotesInterruptedEdit'` and `go test ./internal/controller -run TestAdoptedOutcomeClosesWhenHostSettlesIt` failed before, pass after; CI via `go test -race ./...` in both phase1 workflows.
+- Avoid: keying a reservation on a value the operation has not yet produced; release it when nothing changed, or key it on the request.
 
 ## BUG-0067 — A needs_attention VM edit locked its revision; libvirt CPU check=none failed observation
 
 - Date: 2026-09-11
-- Symptom: after a VM edit ended *needs_attention* with *VM CPU or machine changed*, every
-  later edit failed with *resource ID already reserved by another operation*
-  (private operation and host identifiers omitted). The host still reported the previous succeeded revision, so
-  the Controller kept sending the same next revision.
-- Root cause: (1) `validateManagedDefinition` required an exact CPU `check` match, but libvirt
-  injects `check='none' migratable='on'` on host-passthrough when the domain omitted `check`,
-  so observation after define failed and the entry stayed `needs_attention` at stage
-  `defining`. (2) BUG-0066 only skipped `failed` `vm-update` entries from the reservation
-  loop; `needs_attention` still held `vm-update:<vm>:<revision>` even though `Applied` never
-  treats those entries as the current definition.
-- Fix: write `check='none'` for host-passthrough/host-model; tolerate libvirt's injected
-  `check='none'` when the expected definition omitted check; skip `needs_attention`
-  `vm-update` entries in the reservation loop the same way as `failed`.
-- Regression evidence: `go test ./internal/vmhost -run 'TestManagedNeedsAttentionUpdateDoesNotReserveRevision|TestLibvirtCPUCheckNoneAccepted|TestManagedDefinitionTampering|TestManagedFailedUpdateDoesNotReserveRevision'`.
-  Before the fix, NeedsAttention reserved the revision and libvirt's check=none injection was
-  rejected; with the fix they pass, and `go test -count=1 ./internal/vmhost` passes. They run
-  in CI through `go test -race ./...` in both `.github/workflows/phase1.yml` and
-  `.gitea/workflows/phase1.yml`.
-- Avoid: treating `needs_attention` as a lasting reservation when reporting does not adopt it
-  as current state; and treating libvirt-injected CPU attributes as tampering when the domain
-  omitted them.
+- Symptom: after an edit ended *needs_attention* with *VM CPU or machine changed*, every later edit failed with *resource ID already reserved by another operation*.
+- Root cause: `validateManagedDefinition` required an exact CPU `check` match, but libvirt injects `check='none' migratable='on'` on host-passthrough when omitted; BUG-0066 skipped only `failed`, not `needs_attention`, `vm-update` entries.
+- Fix: write `check='none'` for host-passthrough/host-model, tolerate the injected value, and skip `needs_attention` `vm-update` entries in the reservation loop.
+- Regression: `go test ./internal/vmhost -run 'TestManagedNeedsAttentionUpdateDoesNotReserveRevision|TestLibvirtCPUCheckNoneAccepted|TestManagedDefinitionTampering|TestManagedFailedUpdateDoesNotReserveRevision'` failed before, passes after; CI via `go test -race ./...` in both phase1 workflows.
+- Avoid: treating `needs_attention` as a lasting reservation, or libvirt-injected CPU attributes as tampering.
 
 ## BUG-0068 — VNC lossy wrapper omitted from the corresponding-source archive
 
 - Date: 2026-09-11
-- Symptom: release job failed building `nex-core-local` with
-  `install: cannot stat 'packaging/core-local/qemu-vnc-lossy': No such file or directory`
-  (a private CI run (identifiers omitted)).
-- Root cause: same class as BUG-0045. `qemu-vnc-lossy` is extensionless, so the
-  `packaging/core-local` TREES suffix allowlist never copied it, and it was not listed in
-  `scripts/build-source.py` FILES. The package builder installs from the extracted source
-  archive, so the release build failed after appliance packaging had already succeeded.
-- Fix: add `packaging/core-local/qemu-vnc-lossy` to FILES. Keep
-  `MaintainerScriptRetentionTests` before `if __name__` so discovery always loads it.
-- Regression evidence: `python3 -m unittest tests.test_build_source -v` — with the FILES
-  entry removed the retention case fails naming `qemu-vnc-lossy`; with it restored all 5
-  pass. Covered by phase1 `Check contracts and contributor tools` in both workflows.
-- Avoid: shipping any new packaging path through `build-inside.sh` without adding
-  extensionless files to FILES (or giving them a TREES-covered suffix).
+- Symptom: release build of `nex-core-local` failed: `install: cannot stat 'packaging/core-local/qemu-vnc-lossy': No such file or directory`.
+- Root cause: same class as BUG-0045; the extensionless file matched no `packaging/core-local` TREES suffix and was absent from `scripts/build-source.py` FILES.
+- Fix: add it to FILES; keep `MaintainerScriptRetentionTests` before `if __name__`.
+- Regression: `python3 -m unittest tests.test_build_source -v` fails naming `qemu-vnc-lossy` without the entry, 5 pass with it; phase1 `Check contracts and contributor tools` in both workflows.
+- Avoid: adding packaging paths via `build-inside.sh` without listing extensionless files in FILES.
 
 ## BUG-0069 — Console emulator wrapper blocked VM definition
 
 - Date: 2026-09-11
-- Symptom: Controller deployment needs recovery after libvirt reports permission denied
-  probing `/usr/lib/nex/qemu-vnc-lossy`; managed VM creation uses the same wrapper.
-- Root cause: the console quality change replaced libvirt's standard emulator with an
-  executable outside its usual security-policy paths. Packaging sets mode 0755, but that
-  does not establish permission for confined libvirt. AppArmor is consistent with the
-  reported error; the affected host's audit log has not been inspected to confirm it.
-- Fix: remove the override in both domain builders and the runtime installer; retain the
-  packaged wrapper for existing definitions so upgrading cannot remove their emulator.
-  Keep native VNC socket configuration. Quality presets still request compression,
-  but lossy JPEG remains unavailable. Existing domains/journals are not rewritten.
-- Regression evidence: `TestApplianceDomainUsesDefaultEmulator` and
-  `TestManagedDomainXMLUsesDefaultEmulator` both failed before the fix when the old wrapper
-  path was redirected to a writable temporary directory, exposing the offending emulator
-  in both XML outputs. After removing the wrapper and that test-only path override,
-  `go test -race ./internal/vmhost ./internal/localcore` passed. Both workflows run these
-  checks through `go test -race ./...` in `.github/workflows/phase1.yml` and
-  `.gitea/workflows/phase1.yml` on pushes and pull requests. Source retention checks passed:
-  `python3 -m unittest tests.test_build_source -v` (5 tests).
-- Limits: these are local automated checks, not an AppArmor-enforced host deployment,
-  console browser walkthrough, recovered failed appliance, rebuilt package or hosted CI run.
-  Deployment/recovery acceptance on the affected build remains open.
-- Avoid: replacing a hypervisor executable for a display preference, treating chmod as
-  proof of security-policy compatibility, or telling an operator to deploy another VM
-  before the retained operation, definition and disk ownership have been reconciled.
+- Status: fixed in code; deployment/recovery acceptance on the affected build remains open.
+- Symptom: libvirt reported permission denied probing `/usr/lib/nex/qemu-vnc-lossy`, blocking appliance and managed VM definition.
+- Root cause: the console quality change replaced libvirt's emulator with an executable outside confined-libvirt policy paths; mode 0755 grants no policy permission. AppArmor is consistent but the host audit log was not inspected.
+- Fix: remove the override in both domain builders and the runtime installer; keep the packaged wrapper for existing definitions (not rewritten). Lossy JPEG stays unavailable.
+- Regression: `TestApplianceDomainUsesDefaultEmulator`, `TestManagedDomainXMLUsesDefaultEmulator` failed before; `go test -race ./internal/vmhost ./internal/localcore` and `python3 -m unittest tests.test_build_source -v` pass; both phase1 workflows. Local checks only: no AppArmor host, browser walkthrough, rebuilt package or hosted CI.
+- Avoid: replacing a hypervisor executable for a display preference, treating chmod as policy compatibility, or redeploying before the retained operation, definition and disk ownership are reconciled.
 
 ## BUG-0070 — Package-update policy test retained the removed upgrade-only assertion
 
 - Date: 2026-09-11
-- Symptom: Private CI Phase 1 runs (identifiers omitted) failed in `Check contracts and contributor tools`
-  after the intended first-install update change.
-- Root cause: `test_core_updater_uses_apt_and_not_dpkg_install` still required
-  `--only-upgrade`, even though `ApplyLocal` correctly uses plain `apt install` so an
-  appliance with only its initial binary can receive its first Debian package.
-- Fix: assert the plain apt install and reject the obsolete upgrade-only form.
-- Regression evidence: `python3 -m unittest tests.test_distribution_packaging.AptUpdatePathTests -v`.
-  The test runs in both `.github/workflows/phase1.yml` and `.gitea/workflows/phase1.yml`
-  through `python3 -m unittest discover -s tests -p 'test_*.py' -v`.
-- Avoid: retaining a source-text assertion after intentionally changing the packaged update path.
+- Symptom: CI failed in `Check contracts and contributor tools` after the first-install update change.
+- Root cause: `test_core_updater_uses_apt_and_not_dpkg_install` still required `--only-upgrade`; `ApplyLocal` correctly uses plain `apt install`.
+- Fix: assert plain apt install and reject the upgrade-only form.
+- Regression: `python3 -m unittest tests.test_distribution_packaging.AptUpdatePathTests -v`; both phase1 workflows via unittest discovery.
+- Avoid: keeping a source-text assertion after intentionally changing the update path.
 
 ## BUG-0071 — Website browser check asserted release copy the site no longer had
 
 - Date: 2026-09-11
-- Symptom: `tests/integration/website_browser.py` failed at `assert 'Not available yet' in
-  page.locator('#releases').inner_text()` against the site at `HEAD`, so the website job in both
-  Phase 1 workflows could not pass. Reproduced locally before any roadmap change by serving the
-  build from `HEAD` and running the check.
-- Root cause: the Development status section was rewritten to offer approved testers a development
-  download ("In development", "not a supported production release"), and the assertion pinned to
-  the retired "Not available yet" wording instead of the property it was protecting — that the site
-  never presents Nex as publicly released or links installable media.
-- Fix: assert the current status wording and the "not a supported production release" disclaimer,
-  keeping the existing assertion that no download link points at an `.iso`, `.deb` or `.qcow2`.
-- Regression evidence: the check failed at `HEAD` with the old assertion and passes with the new
-  one; all 12 scenario groups pass, including the JavaScript-disabled run. It runs in both
-  `.github/workflows/phase1.yml` and `.gitea/workflows/phase1.yml` on pushes and pull requests.
-  See the [website roadmap QA](qa/website-roadmap/checks.md).
-- Avoid: asserting exact marketing copy when the check exists to protect a claim boundary. Pin the
-  property (no public-release promise, no media links), not the sentence.
+- Symptom: `tests/integration/website_browser.py` failed at `assert 'Not available yet' in page.locator('#releases').inner_text()` at `HEAD`.
+- Root cause: the status section was reworded ("In development", "not a supported production release"); the assertion pinned retired wording instead of the claim boundary.
+- Fix: assert the current wording and disclaimer; keep the no `.iso`/`.deb`/`.qcow2` link assertion.
+- Regression: failed at `HEAD`, passes all 12 groups including JavaScript-disabled; both phase1 workflows. Evidence: [website roadmap QA](qa/website-roadmap/checks.md).
+- Avoid: asserting exact marketing copy; pin the property (no public-release promise, no media links).
 
 ## BUG-0072 — Site header navigation could not wrap, so a sixth item overflowed at 360px
 
 - Date: 2026-09-11
-- Symptom: adding the Roadmap link made the home page scroll horizontally at a 360px viewport;
-  `document.documentElement.scrollWidth` was 411 against an `innerWidth` of 360, with the
-  overflowing elements identified as `nav` and `.nav-release`.
-- Root cause: `.site-header nav` in `website/src/app.css` set `display: flex` with no
-  `flex-wrap`, and its narrow-viewport rule set `flex-basis: 100%` with
-  `justify-content: space-between`, so the row could only grow past the viewport. The Gallery page
-  had been compensating locally with its own `flex-wrap: wrap`, which hid the shared defect.
-- Fix: allow wrapping in the shared rule with a row gap, and start the wrapped narrow-viewport rows
-  from the left instead of justifying a partly filled row.
-- Regression evidence: the existing per-width
-  `assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')` in
-  `tests/integration/website_browser.py` failed at 360px before the fix and passes after it, and
-  now also runs against the roadmap page. Both Phase 1 workflows run it. Inspected 360px and 768px
-  header captures confirm the wrap is deliberate rather than clipped.
-- Avoid: fixing a shared layout defect in one page's scoped styles, which leaves every other page
-  carrying it until something new exposes it.
+- Symptom: with the Roadmap link, `scrollWidth` 411 vs `innerWidth` 360; overflow from `nav` and `.nav-release`.
+- Root cause: `.site-header nav` in `website/src/app.css` had `display: flex` without `flex-wrap` and a narrow `flex-basis: 100%`/`space-between` rule; the Gallery page's local `flex-wrap` hid it.
+- Fix: allow wrapping with a row gap in the shared rule; left-align wrapped narrow rows.
+- Regression: `scrollWidth <= innerWidth` assertion in `tests/integration/website_browser.py` failed at 360px before, passes after (now also on roadmap page); both phase1 workflows; 360/768px captures inspected.
+- Avoid: fixing a shared layout defect in one page's scoped styles.
 
 ## BUG-0073 — Private identities appeared in public repository content
 
 - Date: 2026-09-11
-- Symptom: documentation, QA evidence, installer examples, and publishing defaults exposed
-  personal names, private infrastructure details, and observed environment identifiers.
-- Root cause: historical notes and lab output were retained without anonymization; the
-  existing privacy check covered website inputs only. APT bootstrap also hard-coded the
-  sudoers account instead of using its configured publishing account.
-- Fix: sanitize current files, use role labels and consistent anonymous evidence aliases,
-  require configured publishing accounts, and add the public-repository rule to AGENTS.md.
-- Regression evidence: `python3 -m unittest tests.test_repository_privacy
-  tests.test_apt_bootstrap_privacy tests.test_apt_publish tests.test_website_public_files
-  tests.test_ci_security tests.test_api_contract tests.test_build_source -v` — 36 passed.
-  The privacy check rejects original paths and observed QA IDs. The two temporary/stubbed bootstrap checks
-  detect the prior missing/invalid-account behavior and pass with the fix. Both Phase 1
-  workflows discover these tests on pushes and pull requests; hosted CI was not run.
-  Full local discovery ran 135 tests with one setup error because nginx is unavailable.
-  Details and limitations: [privacy cleanup](qa/2026-09-11-public-repository-privacy.md).
-- Avoid: embedding private identities in regression fixtures, treating website-only scans
-  as repository coverage, or claiming current-file cleanup removes published Git history.
+- Symptom: docs, QA evidence, installer examples and publishing defaults exposed personal names, private infrastructure and environment identifiers.
+- Root cause: lab output kept without anonymization; privacy check covered website inputs only; APT bootstrap hard-coded the sudoers account.
+- Fix: sanitize current files with role labels and anonymous aliases, require configured publishing accounts, add the AGENTS.md public-repository rule.
+- Regression: `python3 -m unittest tests.test_repository_privacy tests.test_apt_bootstrap_privacy tests.test_apt_publish tests.test_website_public_files tests.test_ci_security tests.test_api_contract tests.test_build_source -v` — 36 passed; both phase1 workflows discover them; hosted CI not run. Full discovery: 135 tests, one nginx-unavailable setup error. Evidence: [privacy cleanup](qa/2026-09-11-public-repository-privacy.md).
+- Avoid: private identities in fixtures, website-only scans as repository coverage, or claiming file cleanup removes Git history.
 
 ## BUG-0074 — Website browser check crashed against the hardened deployment's image policy
 
 - Date: 2026-09-11
-- Symptom: running `tests/integration/website_browser.py` against the deployed private backend
-  aborted at the logo backdrop assertion with
-  `Page.evaluate: EncodingError: The source image cannot be decoded`, so the deployed site could
-  not be verified at all. It passes against a locally served build.
-- Root cause: the check screenshots each `.wordmark`, re-loads that capture inside the page through
-  a `data:image/png;base64,` URI and samples its corner pixels. The deployed nginx sends
-  `img-src 'self'`, which correctly refuses `data:` images; the load failure surfaces as a decode
-  error. Confirmed directly: the same one-pixel `data:` image decodes on a locally served build and
-  is blocked on the deployed backend, with the browser console reporting the CSP refusal.
-- Fix: read the response's `content-security-policy`, run the pixel assertion only where `img-src`
-  permits `data:`, and otherwise record `logo backdrop SKIPPED (CSP img-src blocks data:; covered by
-  build-hash match)` in the results rather than reporting a pass that never happened. The policy was
-  not weakened. Behind a CSP the same guarantee comes from every served file hashing equal to the
-  locally checked build.
-- Regression evidence: against the deployed backend the check aborted before the fix and afterwards
-  passed all 12 groups with the skip recorded; against a locally served build it still reports
-  `logo backdrop` and the pixel assertion still runs. Both Phase 1 workflows serve the build with
-  `python3 -m http.server` on `127.0.0.1`, so CI keeps the full assertion.
-- Avoid: relaxing a deployment's security headers so a test can run, or letting a check that could
-  not execute report the same result as one that passed.
+- Symptom: against the deployed backend, `website_browser.py` aborted with `Page.evaluate: EncodingError: The source image cannot be decoded`.
+- Root cause: the logo backdrop check reloads a `data:image/png;base64,` capture; deployed nginx `img-src 'self'` correctly blocks `data:`.
+- Fix: run the pixel assertion only when CSP `img-src` permits `data:`; otherwise record `logo backdrop SKIPPED (CSP img-src blocks data:; covered by build-hash match)`. Policy not weakened.
+- Regression: deployed run aborted before, passes 12 groups with recorded skip after; local build still runs the pixel assertion, as does CI (`python3 -m http.server` on `127.0.0.1`).
+- Avoid: relaxing security headers for a test, or reporting an unexecuted check as passed.
 
 ## BUG-0075 — Releases stopped publishing to the website and the pipeline stayed green
 
 - Date: 2026-09-11
-- Symptom: https://nexvirtualization.com/downloads/latest/ still offered 0.1.6~alpha1 while the
-  changelog was at 0.1.8. On the website host `/srv/nex-downloads/` held only `0.1.6~alpha1`
-  (2026-09-10) with `latest` pointing at it, and `/srv/nex-apt/` likewise stopped at
-  `0.1.6~alpha1` for both packages. `scripts/release-publish.py --keep 3` retains three
-  releases, so a single retained version means exactly one publish has ever succeeded.
-- Root cause: the `Check for deploy credentials` step wrote `enabled=false` and continued
-  whenever a deploy secret was unset, and both the publish and reachability steps are gated on
-  that output. `Create or replace the release` runs *before* it, so the tag and the Gitea
-  release were created, the job finished green, and nothing reported that the website had been
-  skipped. `v0.1.7-alpha1` and `v0.1.8` exist on the remote while no artifact of either reached
-  the host, and no deploy-key SSH session appears in the host's auth log after 2026-09-09 —
-  the step was skipped, not failed. Commit `0b1d12e` then removed the `NEX_DEPLOY_USER`
-  default and made it a fourth required secret, so the same silent skip now applies until that
-  secret is configured. The release workflow itself was byte-identical between
-  `v0.1.6-alpha1` and `v0.1.7-alpha1`, so the trigger was the secret configuration, not a
-  workflow change.
-- Fix: require every deploy secret or none. All four set enables publishing; none set is a fork
-  or a clone with nowhere to publish and still skips with a notice; any partial combination
-  fails the release and names the missing secret. A half-configured deploy is always a
-  misconfiguration, and it is the only state that produced this silent drift.
-- Regression evidence: `python3 -m unittest tests.test_ci_security` — 5 tests, OK. The new tests
-  extract the step's shell body from each workflow and execute it, so they exercise what CI
-  actually runs rather than a copy. Mutation-checked: restoring the previous silent-skip logic
-  fails 4 of the 5, including `NEX_DEPLOY_KNOWN_HOSTS missing must fail, not skip the website`.
-  Both `.github/workflows/phase1.yml` and `.gitea/workflows/phase1.yml` run
-  `python3 -m unittest discover -s tests -p 'test_*.py' -v` on pushes and pull requests.
-- Outstanding: the fix makes the condition visible; it cannot set the secrets. Configuring
-  `NEX_DEPLOY_USER` (and confirming the other three) in the Gitea repository is required before
-  a release reaches the website again, and 0.1.7 and 0.1.8 remain unpublished there until a
-  release runs with publishing enabled. Run logs were not readable: the repository is private
-  and no API token was available, so the skip-versus-failure conclusion rests on host-side
-  evidence and the step ordering above.
-- Avoid: gating a publishing step on a condition whose false branch only prints. If skipping is
-  legitimate for some repositories, distinguish "deliberately not configured" from "configured
-  wrong" and fail the second, or a green release will keep meaning nothing was published.
-
+- Status: fix makes the failure visible; publishing still outstanding until secrets are configured.
+- Symptom: the website's latest download stayed at 0.1.6~alpha1 while the changelog was at 0.1.8; downloads and APT roots on the host held only `0.1.6~alpha1` despite `--keep 3`.
+- Root cause: `Check for deploy credentials` wrote `enabled=false` and continued when any deploy secret was unset, after `Create or replace the release` had run, so tags and releases were created green with the website skipped. Commit `0b1d12e` made `NEX_DEPLOY_USER` a fourth required secret; the workflow was unchanged between `v0.1.6-alpha1` and `v0.1.7-alpha1`.
+- Fix: all four deploy secrets enable publishing; none skips with a notice; any partial set fails and names the missing secret.
+- Regression: `python3 -m unittest tests.test_ci_security` — 5 OK, executing each workflow's extracted step shell; restoring the old logic fails 4 of 5. Both phase1 workflows via unittest discovery.
+- Outstanding: configure `NEX_DEPLOY_USER` (and confirm the other three) in Gitea; 0.1.7 and 0.1.8 remain unpublished. Run logs were unreadable (no API token); skip-vs-failure rests on host-side evidence and step order.
+- Avoid: gating publishing on a condition whose false branch only prints; distinguish "not configured" from "configured wrong" and fail the latter.
 
 ## BUG-0076 — VM display names were restricted to hostnames
 
-- Date: 2026-09-11.
-- Symptom: creating or renaming a VM rejected normal names containing spaces, uppercase,
-  dots or Unicode; merely relaxing the UI would still fail at Core or lose adoption.
-- Root cause: duplicated hostname regexes in the UI, Controller create/update/adoption,
-  and Core command validation, despite stable UUIDs already owning paths and operations.
-- Fix: shared bounded nonblank display-name validation, exact Core journal/libvirt retention,
-  matching create/edit validation and unchanged disk-label sanitization. Preserve surrounding
-  spaces in duplicate-name checks and terminate virsh options before rename arguments.
-- Regression: `go test ./...`, `npm --prefix web test`, UI typecheck/build and
-  `tests/integration/managed_vm_browser.py --simulated` passed. Both phase1 CI workflows
-  already run these suites on pushes and pull requests. Original guards/parser restored via
-  temporary overlays fail the new Core checks; fresh-Controller adoption failed before fix.
-  [Evidence and native-execution limits](qa/vm-display-names/checks.md).
-- Avoid: a frontend-only display-name alias or relaxed UI regex with hostname checks still
-  present in the host, update or adoption paths.
+- Date: 2026-09-11
+- Symptom: create/rename rejected names with spaces, uppercase, dots or Unicode.
+- Root cause: duplicated hostname regexes in UI, Controller create/update/adoption and Core validation, although UUIDs own paths and operations.
+- Fix: shared bounded nonblank display-name validation, exact Core journal/libvirt retention, unchanged disk-label sanitization; preserve surrounding spaces in duplicate checks; terminate virsh options before rename arguments.
+- Regression: `go test ./...`, `npm --prefix web test`, UI typecheck/build and `tests/integration/managed_vm_browser.py --simulated` pass; old guards fail new Core checks; both phase1 workflows. Evidence: [VM display names QA](qa/vm-display-names/checks.md).
+- Avoid: a frontend-only alias or relaxed UI regex while host, update or adoption paths keep hostname checks.
 
 ## BUG-0077 — Console quality presets advertised unavailable image changes
 
-- Date: 2026-09-11.
-- Symptom: Low bandwidth, Balanced and Best image showed identical image detail.
-- Root cause: noVNC encoding preferences reached a native Core VNC server without lossy
-  JPEG enabled. The earlier emulator-wrapper attempt broke VM definition (BUG-0069)
-  and was removed, but the selector remained. The old lab assertion checked only that
-  frames still appeared, not quality or bandwidth differences.
-- Fix: remove the unsupported selector, old saved-quality handling and private framebuffer
-  refresh hook from the shared console; retain View and noVNC's default encoding settings.
-- Regression: `tests/integration/console_controls_browser.py` failed against the old build
-  because Image quality was present; after removal all four browser groups passed, with
-  no page errors. Both `.github/workflows/phase1.yml` and
-  `.gitea/workflows/phase1.yml` invoke it on pushes and pull requests. Actual post-fix
-  results, commands and simulation limits: [console quality QA](qa/console-quality/checks.md).
-- Avoid: treating a successful setter or visible framebuffer as proof of image-quality
-  changes, or replacing the hypervisor executable to implement a display preference.
-
+- Date: 2026-09-11
+- Symptom: Low bandwidth, Balanced and Best image looked identical.
+- Root cause: noVNC encoding preferences reached a Core VNC server without lossy JPEG; the BUG-0069 wrapper was removed but the selector stayed; the lab assertion only checked frames appeared.
+- Fix: remove the selector, saved-quality handling and private refresh hook; keep View and noVNC defaults.
+- Regression: `tests/integration/console_controls_browser.py` failed on the old build, passes 4 groups after; both phase1 workflows. Evidence: [console quality QA](qa/console-quality/checks.md).
+- Avoid: treating a successful setter or visible framebuffer as proof of quality change, or replacing the hypervisor executable.
 
 ## BUG-0078 — Start repeatedly reopened a busy-error confirmation
 
-- Date: 2026-09-11.
-- Symptom: Start was refused while a power/edit task remained pending; each confirmation
-  repeated the busy error instead of accepting work into Recent tasks.
-- Root cause: Controller enforced one pending action, while the Core worker selected its
-  persisted commands from an unordered map and enrollment discarded received pending work.
-  Removing the guard alone could start a VM before its preceding edit finished.
-- Fix: capability-gated power queue, Core-owned durable FIFO order and same-VM successful
-  prerequisites; retained queue through restart/replacement and passive task adoption.
-  UI reports acceptance as queued. Actual failures still require recovery, not a retry loop.
-- Regression: `go test ./...`, UI typecheck/test/build, 21 API contract tests and
-  `tests/integration/phase1.py --browser` passed. Both GitHub/Gitea phase1 workflows already
-  execute these suites on pushes and pull requests. Prerequisite-rejection checks failed
-  before their guard; review added actual engine-promotion and capability-starvation cases.
-  [Evidence and simulation limits](qa/power-queue/checks.md).
-- Avoid: a Controller or browser retry timer, dropping the pending guard without ordered
-  Core execution, or replaying an uncertain power effect until it appears to succeed.
-
+- Date: 2026-09-11
+- Symptom: Start was refused while a power/edit task was pending; each confirmation repeated the busy error.
+- Root cause: Controller enforced one pending action, Core picked persisted commands from an unordered map, and enrollment discarded pending work; removing the guard alone could start a VM before its edit finished.
+- Fix: capability-gated power queue with Core-owned durable FIFO and same-VM successful prerequisites, retained across restart/replacement with passive task adoption; UI reports queued. Failures still need recovery, not retry.
+- Regression: `go test ./...`, UI typecheck/test/build, 21 API contract tests and `tests/integration/phase1.py --browser` pass; prerequisite-rejection checks failed before; both phase1 workflows. Evidence: [power queue QA](qa/power-queue/checks.md).
+- Avoid: Controller/browser retry timers, dropping the guard without ordered Core execution, or replaying uncertain power effects.
 
 ## BUG-0079 — Console ISO progress remained after successful media change
 
-- Date: 2026-09-11.
-- Symptom: CD/DVD showed Empty after eject, but Ejecting ISO… never cleared. Insert had
-  the same stale feedback path.
-- Root cause: the UI wrote a progress string after API acceptance without following its
-  returned operation or the host-reported VM media state.
-- Fix: track the existing operation and requested media, clear completed feedback, and
-  retain failed/needs-attention reasons even after recent task history evicts the operation.
-- Regression: `tests/integration/console_controls_browser.py` reproduced the old stuck
-  message, then passed insert/eject completion, failure and task-eviction checks. The same
-  suite runs in both GitHub/Gitea phase1 workflows on pushes and pull requests. UI build
-  and typecheck passed. [Evidence and simulation limits](qa/console-media-status/checks.md).
-- Avoid: a timeout that hides ongoing work or errors, or merely hiding the string while
-  retaining an old queued state that can reappear after the tray changes again.
+- Date: 2026-09-11
+- Symptom: CD/DVD showed Empty after eject but Ejecting ISO… never cleared; insert likewise.
+- Root cause: the UI wrote a progress string on API acceptance without following the operation or host media state.
+- Fix: track the operation and requested media; clear on completion; retain failure/needs-attention reasons after task eviction.
+- Regression: `tests/integration/console_controls_browser.py` reproduced the stuck message, passes completion/failure/eviction checks; UI build/typecheck pass; both phase1 workflows. Evidence: [console media status QA](qa/console-media-status/checks.md).
+- Avoid: a timeout that hides work or errors, or hiding the string while an old queued state can reappear.
 
 ## BUG-0080 — Pool registration forms stayed open on unrelated tabs
 
-- Date: 2026-09-11.
-- Symptom: opening **Register network**, **Upload ISO** or the **Create VM** wizard and then
-  selecting another pool view left that form above the new view's content. Only **Close**
-  removed it, so the page appeared not to change when the operator switched tabs.
-- Root cause: the pool view rendered each form from one `form` state that no view checked.
-  Every other panel was gated on the selected tab; the forms were not.
-- Fix: pair each form with the view that opens it and hide it elsewhere. The form stays
-  mounted so entries and wizard progress survive a trip to Storage, Networking or the ISO
-  library and return when the operator does.
-- Regression: `web/src/managed.test.mjs` renders the pool view for every form and every tab and
-  asserts the panel is present but hidden away from its own view. It fails on the pre-fix
-  markup (`network form on Virtual machines: wrong visibility`) and passes with the fix. Runs
-  as `npm --prefix web run test` in the existing GitHub and Gitea `phase1` workflows on pushes
-  and pull requests. UI typecheck and build passed.
-  [Evidence and limits](qa/pool-tab-forms/checks.md).
-- Avoid: unmounting the form on a tab change. The wizard's own **Open Storage**,
-  **Open Networking** and **Open ISO library** buttons switch tabs, so discarding its state
-  would lose a part-completed VM definition.
-
+- Date: 2026-09-11
+- Symptom: **Register network**, **Upload ISO** or **Create VM** stayed above other pool views until **Close**.
+- Root cause: forms rendered from one `form` state no view checked.
+- Fix: hide each form outside the view that opens it, keeping it mounted so entries and wizard progress survive.
+- Regression: `web/src/managed.test.mjs` fails pre-fix (`network form on Virtual machines: wrong visibility`), passes after via `npm --prefix web run test` in both phase1 workflows. Evidence: [pool tab forms QA](qa/pool-tab-forms/checks.md).
+- Avoid: unmounting on tab change; the wizard's **Open Storage**/**Open Networking**/**Open ISO library** buttons switch tabs and would lose a part-completed VM.
 
 ## BUG-0081 — Dedicated VM memory was promised but not physically reserved
 
-- Date: 2026-09-11.
-- Symptom: a VM assigned 4 GiB of dedicated RAM could consume around 1 GiB on the host.
-- Root cause: Core set `memory`/`currentMemory` and disabled ballooning but omitted libvirt
-  memory backing, leaving allocation on demand and allowing swapping and KSM sharing.
-- Fix: the shared Core definition builder preallocates, locks and disables page sharing for
-  dedicated RAM. Observation verifies the backing and guest allocation. Maximum stays reclaimable;
-  stopped VMs retain admission accounting only. Older dedicated VMs require shutdown, stopped
-  save and start; legacy live edits fail before device effects with those instructions.
-- Regression: `go test ./internal/vmhost -run
-  'TestManaged(DedicatedMemoryReservation|LegacyDedicatedLiveEditRequiresStop)$' -count=1`
-  failed before the fix and passed afterward. It detects missing/weakened backing, reduced
-  current memory and unsafe legacy live edits. Existing GitHub and Gitea `phase1.yml` run this
-  suite through `go test -race ./...` on pushes and pull requests; no hosted run was executed.
-- Native regression: `NEX_MEMORY_LIBVIRT_TEST=1` enables `TestDedicatedMemoryLibvirt` on an
-  explicitly disposable libvirt host. See the [QA report](qa/dedicated-memory/checks.md) for
-  actual before/after results and verification limits; ordinary Go runs skip this native test.
-- Avoid: treating equal `memory`/`currentMemory`, balloon removal, or admission arithmetic as
-  proof of physical reservation; guessing a QEMU hard limit that can kill a guest.
-
+- Date: 2026-09-11
+- Symptom: a VM with 4 GiB dedicated RAM consumed about 1 GiB on the host.
+- Root cause: Core set `memory`/`currentMemory` and disabled ballooning but omitted libvirt memory backing, allowing on-demand allocation, swap and KSM.
+- Fix: the shared definition builder preallocates, locks and disables page sharing; observation verifies backing. Legacy dedicated VMs need shutdown, stopped save and start; legacy live edits fail before device effects.
+- Regression: `go test ./internal/vmhost -run 'TestManaged(DedicatedMemoryReservation|LegacyDedicatedLiveEditRequiresStop)$' -count=1` failed before, passes after; both phase1 workflows; no hosted run. Native `TestDedicatedMemoryLibvirt` needs `NEX_MEMORY_LIBVIRT_TEST=1` on a disposable host (skipped otherwise). Evidence: [dedicated memory QA](qa/dedicated-memory/checks.md).
+- Avoid: treating equal memory values, balloon removal or admission arithmetic as physical reservation; guessing a QEMU hard limit that can kill a guest.
 
 ## BUG-0082 — Storage adoption and startup validation lost Core evidence
 
-- Date: 2026-09-11.
-- Symptom: a successful native NFS registration remained queued without its Core-generated ID;
-  source replacement and filesystem access also needed explicit startup and freshness checks.
-- Root cause: Controller matched a cleared projection operation ID instead of Core's successful
-  outcome; storage event replay originally depended on filename order, and filesystem-only
-  observations did not prove current QEMU access.
-- Fix: correlate adoption through the Core outcome, fold durable generations and tombstones,
-  retain observed backend identity/capabilities, accept nameless tombstones without rejecting
-  host reports, use stored-source validation during fresh Controller adoption, bound QEMU
-  access observations, and guard native libvirt startup against missing/replaced repositories
-  and aliased disk paths. Native regressions also cover repeated lifecycle operations, pending
-  attachment aliases, engine-scoped initiator ownership outside its scanned node directory,
-  existing-session login, duplicate identical mount rows and verified credential rollback.
-  Packaged testing also exposed remote VM directories created as `0700` under the service's
-  `0077` umask: the remote directory helper omitted the explicit post-create mode already used
-  by the local helper. The observed iSCSI guest could start after restoring traversal to `0711`;
-  the shared creator now explicitly sets `0711` only on newly created Core directories.
-  It opens the directory without following symlinks, changes mode through the descriptor and
-  checks inode identity, preventing a remote path replacement from redirecting `chmod`.
-  `TestManagedDirectoryPreservesQEMUTraversalUnderPrivateUmask` verifies that mode in a
-  subprocess with umask `0077`; full vmhost tests pass. Existing server-owned directories are
-  left unchanged.
-- Regression: focused controller/agent/protocol/vmhost suites passed; the live disposable NFS
-  registration now projects its Core ID, identity, capabilities and current access. The root
-  startup/monitor check `go test ./internal/vmhost -run
-  'TestStorageStartup|TestStorageGuard|TestStorageMonitor' -count=1` passed. Both GitHub and Gitea
-  run these Go tests through `go test -race ./...` on pushes and pull requests. The browser
-  regression runs in both workflows as `tests/integration/storage_repositories_browser.py`.
-  Full `go test -race ./...` passed after the independently reviewed native corrections;
-  packaged service and live backend acceptance remain open in the linked evidence.
-  [Current evidence and remaining native gates](qa/storage-repositories/checks.md).
-- Avoid: treating a successful mount or a green mocked test as proof of source identity, VM write
-  access, durable adoption or safe recovery; use real backend failures to verify those boundaries.
+- Date: 2026-09-11
+- Status: code fixed; packaged service and live backend acceptance remain open.
+- Symptom: a successful native NFS registration stayed queued without its Core ID; source replacement and filesystem access lacked startup/freshness checks.
+- Root cause: Controller matched a cleared projection operation ID instead of Core's outcome; event replay depended on filename order; filesystem-only observations did not prove QEMU access. The remote directory helper also created VM directories `0700` under the service's `0077` umask.
+- Fix: correlate adoption via Core outcome, fold generations and tombstones, retain backend identity/capabilities, validate stored sources on adoption, bound QEMU access observations, and guard libvirt startup against missing/replaced repositories and aliased disks. The shared creator sets `0711` on new Core directories through a no-follow descriptor with inode checks; existing directories unchanged.
+- Regression: `go test ./internal/vmhost -run 'TestStorageStartup|TestStorageGuard|TestStorageMonitor' -count=1`, `TestManagedDirectoryPreservesQEMUTraversalUnderPrivateUmask` and full `go test -race ./...` pass; `tests/integration/storage_repositories_browser.py`; both phase1 workflows. Evidence: [storage QA](qa/storage-repositories/checks.md).
+- Avoid: treating a mount or green mocked test as proof of source identity, VM write access, adoption or recovery.
 
 ## BUG-0083 — First console connection had a zero-sized Fit viewport
 
-- Date: 2026-09-11.
-- Symptom: the installed storage-test guest showed a login prompt over direct VNC, but Nex's
-  connected browser console was black until the operator selected Actual size.
-- Root cause: initial noVNC autoscaling could run before the selected console had usable layout,
-  leaving its canvas CSS dimensions at zero despite a populated framebuffer.
-- Fix: after connection and layout, reset scaling and reapply the selected view; ignore callbacks
-  for replaced clients.
-- Regression: `tests/integration/console_controls_browser.py` now asserts a visible canvas and
-  passed against the built UI. Both GitHub and Gitea phase1 workflows run this check on pushes
-  and pull requests. Actual disposable Debian guest first-load Fit displayed its login prompt
-  at 1280×800 with no browser errors; worker and root inspected the capture. Web typecheck,
-  unit tests and build passed. [Storage QA](qa/storage-repositories/checks.md) records remaining
-  installed-guest interaction checks separately.
+- Date: 2026-09-11
+- Symptom: a guest showed a login prompt over direct VNC but the browser console was black until Actual size.
+- Root cause: noVNC autoscaling ran before layout, leaving zero canvas CSS size.
+- Fix: after connection and layout, reset scaling and reapply the view; ignore callbacks for replaced clients.
+- Regression: `tests/integration/console_controls_browser.py` asserts a visible canvas; both phase1 workflows; disposable Debian guest Fit showed login at 1280×800. Evidence: [storage QA](qa/storage-repositories/checks.md).
 - Avoid: equating a connected WebSocket or nonempty framebuffer with a visible console.
 
 ## BUG-0084 — Timed-out VM power requests were reported as failed after taking effect
 
-- Date: 2026-09-11.
-- Symptom: an NFS outage test reported a failed start, but the same VM had already started
-  and was later found running during Core shutdown. Correlated operation and libvirt timestamps
-  established that this was the same request, not a later retry or autostart.
-- Root cause: the managed result classifier treated a returned libvirt error as definitive
-  failure even after persisting the power-effect boundary. The pre-effect replay branch had
-  the same classification gap. A client timeout does not cancel a request libvirt accepted.
-- Fix: preserve the native diagnostic and classify errors from the actual power request as
-  `needs_attention` in both execution paths. Preflight refusals remain failed. Reconciliation
-  of the same Core command observes state without issuing another power effect; reboot remains
-  uncertain when running state alone cannot establish whether it happened.
-- Regression: `TestManagedPowerRequestCancellationSettlesFromObservation` synchronizes
-  cancellation after the fake start takes effect and covers initial execution and pre-effect
-  replay. `TestManagedPowerPostEffectFailureIsUncertain` covers shutdown, reboot and force-stop,
-  including same-command replay and exactly one native action. Full vmhost tests passed;
-  independent focused race review passed in 2.160 s. Both GitHub and Gitea phase1 workflows
-  run these tests through `go test -race ./...` on pushes and pull requests. Native rerun is
-  recorded separately in [storage QA](qa/storage-repositories/checks.md).
-- Avoid: interpreting a timed-out command as proof no side effect occurred, or retrying the
-  power effect merely to obtain a successful response.
+- Date: 2026-09-11
+- Symptom: during an NFS outage test a start was reported failed but the VM had started (same request, per correlated timestamps).
+- Root cause: the result classifier treated a libvirt error after the persisted power-effect boundary as definitive failure, in both execution and pre-effect replay paths; client timeout does not cancel an accepted request.
+- Fix: classify errors from the actual power request as `needs_attention` in both paths, keep native diagnostics; preflight refusals stay failed; reconciliation observes without reissuing; reboot stays uncertain.
+- Regression: `TestManagedPowerRequestCancellationSettlesFromObservation`, `TestManagedPowerPostEffectFailureIsUncertain` pass; both phase1 workflows via `go test -race ./...`. Evidence: [storage QA](qa/storage-repositories/checks.md).
+- Avoid: treating a timeout as proof of no side effect, or retrying the power effect for a success response.
 
 ## BUG-0085 — SMB repository identity changed after host restart
 
-- Date: 2026-09-11.
-- Symptom: an unchanged SMB share and saved VM were refused after Core restarted because
-  the recorded CIFS filesystem ID no longer matched.
-- Root cause: Linux CIFS includes SMB volume creation time in `statfs` identity, and Samba
-  derives that value from the share root. This is not a stable repository identity. The
-  observed serial portion stayed the same while the creation-time portion changed.
-- Fix: new SMB registrations atomically create or reuse `.nex-storage-marker`, persist its
-  opaque ID in Core and verify it with exact mounted source and strict options before use.
-  Core compares markers for duplicate backing aliases; filesystem IDs remain diagnostic.
-  Marker files are bounded, regular, single-link and opened without following symlinks.
-  File sync is mandatory; narrowly unsupported CIFS directory sync requires close/reopen
-  verification. Missing, altered or unsafe markers fail closed. Detach retains the marker.
-  Legacy development records remain strict and are never silently assigned a new identity.
-- Regression: `TestSMBMarkerDurableIdentity`, `TestSMBMarkerRejectsUnsafeFilesAndConcurrentCreate`,
-  `TestSMBMarkerDirectorySyncPolicy`, `TestSMBMarkerLegacyFSIDRemainsStrict`, and
-  `TestSMBMarkerBackingConflictPrefersDurableMarker` passed, including independent full vmhost
-  review. Both GitHub and Gitea phase1 workflows run these through `go test -race ./...` on
-  pushes and pull requests. Native marker creation/restart acceptance remains separately
-  recorded in [storage QA](qa/storage-repositories/checks.md).
-- Avoid: truncating an unstable identifier to make an existing journal match, or replacing
-  identity automatically after a mismatch.
+- Date: 2026-09-11
+- Symptom: an unchanged SMB share and saved VM were refused after Core restart because the CIFS filesystem ID changed.
+- Root cause: Linux CIFS `statfs` identity includes volume creation time, which Samba derives from the share root and is unstable.
+- Fix: new registrations create/reuse `.nex-storage-marker` (bounded, regular, single-link, no-follow, synced), persist its ID in Core and verify with exact source/options; markers decide backing aliases; missing/altered markers fail closed; legacy records stay strict.
+- Regression: `TestSMBMarkerDurableIdentity`, `TestSMBMarkerRejectsUnsafeFilesAndConcurrentCreate`, `TestSMBMarkerDirectorySyncPolicy`, `TestSMBMarkerLegacyFSIDRemainsStrict`, `TestSMBMarkerBackingConflictPrefersDurableMarker` pass; both phase1 workflows. Native acceptance: [storage QA](qa/storage-repositories/checks.md).
+- Avoid: truncating an unstable identifier to match a journal, or auto-replacing identity after a mismatch.
 
 ## BUG-0086 — Managed libvirt observation could delay heartbeat reporting
 
-- Date: 2026-09-11.
-- Symptom: report construction synchronously allowed a managed-VM libvirt list command to
-  consume its full native timeout before sending a heartbeat.
-- Root cause: the report path passed its transport context into managed observation without
-  the configured probe timeout. This code-path issue was identified while investigating an
-  outage attempt against an obsolete Controller endpoint; that attempt does not establish
-  runtime causality for the heartbeat delay.
-- Fix: bound only report-time managed observation by `ProbeTimeout`, cancel that child
-  context, and retain the parent for report transport. Unverified VM definitions are unknown,
-  never fabricated as missing. Storage probing remains outside the heartbeat path.
-- Regression: `TestReportBoundsManagedLibvirtObservation` uses a managed VM journal, a
-  blocking native-command substitute and an HTTP receiver. A 100 ms probe budget still
-  delivers the report with an unknown check and no missing VMs. Independent race review
-  passed five repetitions at approximately 0.12–0.14 s each. Both GitHub and Gitea phase1
-  workflows run the regression through `go test -race ./...` on pushes and pull requests.
-- Avoid: extending heartbeat test waits to conceal synchronous work, or identifying an outage
-  cause without verifying the Controller endpoint and clock used by the evidence.
+- Date: 2026-09-11
+- Symptom: report construction let a managed-VM libvirt list consume its full native timeout before the heartbeat.
+- Root cause: the report path passed its transport context to managed observation without `ProbeTimeout`. Found during an outage attempt against an obsolete Controller endpoint, which does not prove runtime causality.
+- Fix: bound report-time observation by `ProbeTimeout` in a cancelled child context; unverified definitions are unknown, not missing.
+- Regression: `TestReportBoundsManagedLibvirtObservation` (100 ms budget still delivers report) passes; both phase1 workflows via `go test -race ./...`.
+- Avoid: lengthening heartbeat test waits to hide synchronous work, or naming an outage cause without verifying the Controller endpoint and clock.
 
 ## BUG-0087 — Duplicate iSCSI registration could disturb an owned session
 
-- Date: 2026-09-11.
-- Symptom: a second registration of an isolated test LUN reached login and its failure
-  cleanup disturbed the first repository's session; subsequent detach also failed when the
-  session was already absent.
-- Root cause: source equality included the mount path generated from each new repository ID,
-  so otherwise identical iSCSI claims differed before native preparation. Native rollback
-  and detach also needed to distinguish an existing session from an effect owned by this
-  attempt, and a deleted node from its remaining ownership receipt. Session parsing also
-  expected invented comma-separated portal output, so actual Debian `host:port,tpgt` output
-  was missed and detach attempted node deletion while still logged in.
-- Fix: compare canonical target/portal and WWID/filesystem claims before any native effect,
-  allowing one repository per session in this profile. Ignore generated paths in source
-  identity, retain mutation checks and normalize WWID prefixes and UUID case. Current
-  projection owns successful claims; obsolete successful history does not reserve a detached
-  or replaced source, while unresolved claims remain protected. Rollback logs out only a
-  session created by that attempt. Detach verifies ownership and handles an already-absent
-  session or node without altering unrelated initiator state; absence requires native typed
-  exit 21 rather than matching arbitrary error text. Parse the observed `host:port,tpgt`
-  grammar strictly, including bracketed IPv6, bounded ports and numeric portal-group tags.
-- Regression: `TestISCSIRegistrationConflictPreventsSecondSessionPreparation`,
-  `TestISCSISourceChangeIgnoresCoreMountPathButConflictsWithOtherRepository`,
-  `TestISCSINoActiveSessionsErrorRequiresTypedExit21`, `TestISCSISessionPortalStrictGrammar`, and
-  `TestDetachISCSICleansOwnerAfterNodeDeleteCrash` passed independent focused and full vmhost
-  review. Both GitHub and Gitea phase1 workflows run them through `go test -race ./...` on
-  pushes and pull requests. Actual wrong-WWID/UUID rejection and the original duplicate
-  failure were observed in isolated disposable fixtures. The corrected live duplicate claim
-  was rejected before initiator activity and preserved the original session and mount;
-  the parser-fixed deployed build then completed the partial detach and a fresh registration.
-  Root verified both succeeded Core journal results; further evidence remains tracked in
-  [storage QA](qa/storage-repositories/checks.md).
-- Avoid: using allocated mount paths to distinguish ownership of the same LUN, or ignoring
-  every logout error to make a retry appear idempotent.
+- Date: 2026-09-11
+- Symptom: a second registration of the same test LUN reached login and its cleanup disturbed the first session; detach failed when the session was already absent.
+- Root cause: source equality included the per-ID mount path; rollback/detach did not distinguish pre-existing sessions or leftover receipts; session parsing expected invented output instead of Debian `host:port,tpgt`, so detach deleted a node while logged in.
+- Fix: compare canonical target/portal and WWID/filesystem claims before native effects (one repository per session); ignore generated paths; rollback logs out only sessions it created; detach verifies ownership and requires typed exit 21 for absence; strict `host:port,tpgt` parsing including bracketed IPv6.
+- Regression: `TestISCSIRegistrationConflictPreventsSecondSessionPreparation`, `TestISCSISourceChangeIgnoresCoreMountPathButConflictsWithOtherRepository`, `TestISCSINoActiveSessionsErrorRequiresTypedExit21`, `TestISCSISessionPortalStrictGrammar`, `TestDetachISCSICleansOwnerAfterNodeDeleteCrash` pass; both phase1 workflows. Live duplicate rejected before initiator activity. Evidence: [storage QA](qa/storage-repositories/checks.md).
+- Avoid: using allocated mount paths to distinguish ownership of one LUN, or ignoring logout errors to fake idempotence.
 
 ## BUG-0088 — Debian confinement and hook discovery blocked storage startup protection
 
-- Date: 2026-09-11.
-- Symptom: libvirt invoked the installed prepare hook but AppArmor denied execution of the
-  Core-local storage guard. Adding a hook to an already-running daemon also left it undiscovered.
-- Root cause: Debian's libvirtd profile did not permit the packaged executable, and installing
-  a `qemu.d` script requires daemon activation; a systemd unit reload does not discover hooks.
-- Fix: maintain one exact `rix` rule in the administrator-owned local include without owning
-  that file. Reject malformed owned blocks and non-regular policy files without modification;
-  preserve administrator bytes, ownership and mode. Require a parser when the live profile
-  needs reloading, then restart only an active libvirtd. The hook ignores reconnect events.
-- Regression: `test_packaged_hook_preserves_admin_apparmor_policy` exercises idempotent
-  install/removal, unrelated rule preservation, malformed blocks and symlink refusal, plus
-  safe empty-root path selection. Packaging checks assert policy/reload/activation ordering.
-  Seven storage packaging tests and independent shell syntax review passed; both GitHub and
-  Gitea phase1 workflows run these via Python unittest discovery on pushes and pull requests.
-  Native policy reload and libvirtd restart preserved a running SMB guest's hash, boot ID and
-  QEMU PID. Complete hook refusal and package lifecycle evidence remains in
-  [storage QA](qa/storage-repositories/checks.md).
-- Avoid: owning Debian's administrator local include, disabling AppArmor, treating a static
-  hook file as activation evidence, or skipping activation whenever a guest is running.
+- Date: 2026-09-11
+- Symptom: AppArmor denied libvirt's prepare hook executing the Core-local storage guard; a hook added to a running daemon was not discovered.
+- Root cause: Debian's libvirtd profile did not permit the executable; `qemu.d` hooks need daemon restart, not unit reload.
+- Fix: maintain one exact `rix` rule in the administrator local include without owning it (reject malformed blocks and non-regular files, preserve bytes/owner/mode); require a parser when reload is needed; restart only an active libvirtd; hook ignores reconnect events.
+- Regression: `test_packaged_hook_preserves_admin_apparmor_policy` and seven storage packaging tests pass; both phase1 workflows via unittest discovery. Native reload/restart kept a running SMB guest. Evidence: [storage QA](qa/storage-repositories/checks.md).
+- Avoid: owning the administrator local include, disabling AppArmor, treating a static hook file as activation, or skipping activation while a guest runs.
 
 ## BUG-0089 — NFS statfs identifiers falsely collided across distinct filesystems
 
-- Date: 2026-09-11.
-- Symptom: a separate disposable NFS export was rejected as already registered because its
-  client `statfs` filesystem ID and the original export's ID were both zero.
-- Root cause: Linux NFS does not provide a usable protocol filesystem identity through that
-  `statfs` field. Equality of those unavailable values falsely established common backing.
-- Fix: bind the actual mounted path's device to exactly one NFSv4 kernel volume-table record.
-  Store its protocol filesystem ID together with the mounted server address and port. Require
-  the expected table format and exact source checks; missing, malformed or ambiguous identity
-  blocks use. Protocol FSID `0:0` is valid and differs from unavailable statfs identity.
-  Preserve legacy records as unavailable instead of silently assigning a new identity.
-- Regression: `TestNFSKernelFilesystemIdentity`,
-  `TestNFSKernelFilesystemIdentityBindsPathDevice`,
-  `TestNFSKernelFilesystemIdentityIPv6AndZeroProtocolFSID`,
-  `TestNFSKernelFilesystemIdentityRejectsUnavailableOrAmbiguousRows`,
-  `TestNFSKernelFilesystemIdentityChangesWhenServerOrFilesystemChanges`, and
-  `TestNFSIdentityRejectsLegacyStatfsAndChangedProtocolProfiles` passed independent full
-  vmhost review and the focused vmhost/agent/protocol race run (8.877 s, 2.877 s, 1.021 s).
-  Both GitHub and Gitea phase1 workflows run these through `go test -race ./...` on pushes
-  and pull requests. Final native-profile evidence is tracked in
-  [storage QA](qa/storage-repositories/checks.md).
-- Avoid: treating zero statfs values as identities, dropping duplicate detection to admit
-  another export, comparing unnamespaced filesystem IDs across servers, or silently replacing
-  a stored identity after a mismatch.
+- Date: 2026-09-11
+- Symptom: a separate NFS export was rejected as already registered; both `statfs` filesystem IDs were zero.
+- Root cause: Linux NFS `statfs` gives no usable protocol identity; equal unavailable values implied common backing.
+- Fix: bind the mounted path's device to exactly one NFSv4 kernel volume-table record; store protocol FSID with server address and port; missing/malformed/ambiguous identity blocks use; `0:0` protocol FSID is valid; legacy records stay unavailable.
+- Regression: `TestNFSKernelFilesystemIdentity`, `TestNFSKernelFilesystemIdentityBindsPathDevice`, `TestNFSKernelFilesystemIdentityIPv6AndZeroProtocolFSID`, `TestNFSKernelFilesystemIdentityRejectsUnavailableOrAmbiguousRows`, `TestNFSKernelFilesystemIdentityChangesWhenServerOrFilesystemChanges`, `TestNFSIdentityRejectsLegacyStatfsAndChangedProtocolProfiles` pass; both phase1 workflows. Evidence: [storage QA](qa/storage-repositories/checks.md).
+- Avoid: treating zero statfs values as identity, dropping duplicate detection, comparing unnamespaced FSIDs across servers, or silently replacing stored identity.
 
 ## BUG-0091 — Concurrent SMB marker create failed closed on the loser
 
-- Date: 2026-09-11.
-- Symptom: `TestSMBMarkerRejectsUnsafeFilesAndConcurrentCreate` failed under
-  `go test -race ./...` with `SMB repository marker is unavailable` or `invalid`.
-- Root cause: `smbMarkerAt` treated a lost `O_EXCL` create as a hard failure, and a reader
-  that opened the winner's file before the 32-byte id was written observed an incomplete
-  marker as permanently invalid.
-- Fix: retry short incomplete reads after a lost create race, and remove a marker file that
-  fails to persist so the next attempt can claim it.
-- Regression: `TestSMBMarkerRejectsUnsafeFilesAndConcurrentCreate` (8 concurrent creators)
-  passed `go test -race ./internal/vmhost -run TestSMBMarker -count=200`. Both GitHub and
-  Gitea phase1 workflows run this through `go test -race ./...` on pushes and pull requests.
-- Avoid: returning immediately on `EEXIST` during marker create, or treating a zero-length
-  provisional marker as a durable identity failure without a short read retry.
+- Date: 2026-09-11
+- Symptom: `TestSMBMarkerRejectsUnsafeFilesAndConcurrentCreate` failed under `go test -race ./...` with `SMB repository marker is unavailable` or `invalid`.
+- Root cause: `smbMarkerAt` treated a lost `O_EXCL` create as fatal, and a reader seeing the winner's file before the 32-byte ID was written judged it permanently invalid.
+- Fix: retry short reads after a lost create race; remove a marker that fails to persist.
+- Regression: `go test -race ./internal/vmhost -run TestSMBMarker -count=200` passes (8 concurrent creators); both phase1 workflows.
+- Avoid: returning on `EEXIST`, or treating a provisional zero-length marker as a durable identity failure without a short retry.
 
 ## BUG-0092 — nex-core-local postinst failed during ISO install on AppArmor hosts
 
-- Date: 2026-09-11.
-- Symptom: Debian Installer late configure failed with
-  `nex-core-local package post-installation script subprocess returned error exit status 1`.
-  Logs showed `apparmor_parser` warnings (`unable to find a suitable fs in /proc/mounts`)
-  immediately before the dpkg error.
-- Root cause: postinst treated the live installer kernel's AppArmor-enabled flag under
-  `/sys` as proof the target could reload profiles. `apparmor_parser -r` then failed under
-  `set -e` inside `in-target`, aborting package configure before first boot.
-- Fix: write the libvirtd local include always; reload AppArmor only outside a chroot
-  when `/sys/kernel/security/apparmor/.load` exists. Installer `in-target` defers reload
-  to first boot on the live host.
-- Regression: `test_apparmor_live_gate_skips_reload_in_chroot_or_without_load` and updated
-  packaging assertions in `tests/test_storage_packaging.py`. Both GitHub and Gitea phase1
-  workflows run these through Python unittest discovery on pushes and pull requests.
-  Full ISO reinstall on an AppArmor-capable installer host is still required for end-to-end
-  proof after the next Core package rebuild.
-- Avoid: treating `/sys/module/apparmor/parameters/enabled=Y` alone as a usable policy load
-  path inside Debian Installer `in-target`, relying on `[ -w .load ]` under root (mode bits
-  are ignored), or making `apparmor_parser` failures fatal in a chroot.
+- Date: 2026-09-11
+- Status: fixed in packaging; full ISO reinstall on an AppArmor-capable host still required after the next Core package rebuild.
+- Symptom: late configure failed with `nex-core-local package post-installation script subprocess returned error exit status 1` after `apparmor_parser` warned `unable to find a suitable fs in /proc/mounts`.
+- Root cause: postinst took the live installer kernel's AppArmor-enabled flag as proof the target could reload; `apparmor_parser -r` failed under `set -e` in `in-target`.
+- Fix: always write the libvirtd local include; reload only outside a chroot when `/sys/kernel/security/apparmor/.load` exists; first boot reloads.
+- Regression: `test_apparmor_live_gate_skips_reload_in_chroot_or_without_load` and packaging assertions in `tests/test_storage_packaging.py`; both phase1 workflows via unittest discovery.
+- Avoid: trusting `/sys/module/apparmor/parameters/enabled=Y` inside `in-target`, `[ -w .load ]` as root, or fatal `apparmor_parser` failures in a chroot.
 
 ## BUG-0090 — Undersized iSCSI registration left session and mount behind
 
-- Date: 2026-09-11.
-- Symptom: an isolated undersized iSCSI registration returned
-  `insufficient free storage including reserve`, but its session, node and mount remained.
-- Root cause: native iSCSI preparation marked itself complete before the shared readiness and
-  capacity check ran. Capacity refusal then returned without detaching the provisional
-  attachment.
-- Fix: treat native preparation as provisional until readiness and capacity succeed, then
-  detach on refusal. Keep registration attachments provisional through post-prepare conflict
-  and writable-probe checks, and surface cleanup failures as uncertain. Source-changing
-  updates that fail admission after replacing the previous attachment also detach the refused
-  new attachment and report uncertain rollback.
-- Regression: `TestManagedStoragePrepareRollsBackCapacityRefusal`,
-  `TestManagedStoragePrepareReportsUncertainCapacityCleanup`, and
-  `TestPrepareISCSIRollbackRemovesEngineOwnerReceipt` passed the focused
-  `go test -race -vet=off ./internal/vmhost ./internal/agent ./internal/protocol -count=1`
-  run (8.407 s, 2.795 s, 1.013 s). Both GitHub and Gitea phase1 workflows run these through
-  `go test -race ./...` on pushes and pull requests. A disposable undersized LUN registration
-  failed with `insufficient free storage including reserve` and left no session, node, mount
-  unit or ownership receipt; see [storage QA](qa/storage-repositories/checks.md).
-- Avoid: treating a capacity refusal as complete cleanup, disarming prepare rollback before
-  admission finishes, discarding detach errors after a rejected registration, or rolling back
-  iSCSI preparation with a bare background context that drops the engine owner-root.
+- Date: 2026-09-11
+- Symptom: an undersized iSCSI registration returned `insufficient free storage including reserve` but left session, node and mount.
+- Root cause: native preparation marked itself complete before the readiness/capacity check, so refusal skipped detach.
+- Fix: keep preparation provisional through capacity, conflict and writable-probe checks and detach on refusal; surface cleanup failure as uncertain; source-changing updates refused after replacement also detach and report uncertain rollback.
+- Regression: `TestManagedStoragePrepareRollsBackCapacityRefusal`, `TestManagedStoragePrepareReportsUncertainCapacityCleanup`, `TestPrepareISCSIRollbackRemovesEngineOwnerReceipt` pass; both phase1 workflows. Disposable undersized LUN left no session, node, mount unit or receipt. Evidence: [storage QA](qa/storage-repositories/checks.md).
+- Avoid: treating capacity refusal as cleanup, disarming rollback before admission, discarding detach errors, or rolling back with a bare context that drops the engine owner-root.
 
 ## Current bug work and unresolved issues
 
 ## BUG-0093 — Default ISO library cannot self-register on installed hosts
 
-- Date: 2026-09-12.
+- Date: 2026-09-12
 - Status: fixed; packaged Core and native Controller adoption verified in the disposable lab.
-- Symptom: a new Nex Core host has `/var/lib/libvirt/images` created by the agent service,
-  but its default **ISO** library is not adopted by Nex Controller. Manual registration fails
-  with `storage is not traversable by libvirt-qemu: runuser: cannot set user id: Operation not permitted`.
-- Expected behavior: every Nex Core installation self-registers its local **ISO** storage at
-  `/var/lib/libvirt/images` in the Core managed journal; the Controller then adopts and shows
-  it without operator action.
-- Root cause: `qemuStorageAccess` runs `runuser -u libvirt-qemu` during local-storage
-  verification. Installed hosts run the embedded agent inside `nex-core-local.service`,
-  whose sandbox lacked the effective/permitted `CAP_SETUID` capability. The earlier
-  investigation incorrectly blamed `RestrictSUIDSGID`: that directive restricts file-mode
-  bits, not the identity-change syscall. The failed access probe blocked `RegisterDefaults`.
-- Fix: add only `AmbientCapabilities=CAP_SETUID` to the actual packaged Core-local service;
-  retain `NoNewPrivileges` and `RestrictSUIDSGID` and the other confinement settings.
-- Impact and temporary workaround: ISO upload and VM-install workflows are blocked until a
-  Core/service fix restores the QEMU access probe, then registration is retried; creating the
-  directory manually cannot cure this. Do not add Controller-owned fallback state.
-- Regression evidence: `python3 -m unittest tests.test_core_local_package` passes; both
-  Actions providers run the Python suite on pushes and pull requests. The primary reproduced
-  the original sandbox failure, verified the minimal capability correction, built/installed
-  the package on a disposable BIOS ISO-installed host and verified automatic healthy ISO
-  adoption with the same Core ID after restart. See [native acceptance and lab prerequisites](qa/2026-09-12-bug-ledger.md).
-- Avoid: weakening the wrong standalone service, removing SUID/SGID file protections, or
-  adding a Controller-owned fallback registration.
+- Symptom: the default **ISO** library at `/var/lib/libvirt/images` was not adopted; manual registration failed with `storage is not traversable by libvirt-qemu: runuser: cannot set user id: Operation not permitted`.
+- Root cause: `qemuStorageAccess` runs `runuser -u libvirt-qemu`, but `nex-core-local.service` lacked `CAP_SETUID`, blocking `RegisterDefaults`. (Not `RestrictSUIDSGID`, as first blamed.)
+- Fix: add only `AmbientCapabilities=CAP_SETUID` to the packaged Core-local service; keep `NoNewPrivileges`, `RestrictSUIDSGID` and other confinement.
+- Regression: `python3 -m unittest tests.test_core_local_package` passes; both Actions providers. Disposable BIOS host adopted the ISO library automatically with the same Core ID after restart. Evidence: [native acceptance](qa/2026-09-12-bug-ledger.md).
+- Avoid: weakening the wrong service, removing SUID/SGID protections, or a Controller-owned fallback registration.
 
 ## BUG-0094 — Pool-wide remote repository access is not available
 
-- Date: 2026-09-12.
-- Status: fixed for the scoped NFS/SMB multi-host slice; native acceptance and independent review passed.
-- Original behavior: registering NFS, SMB, ZFS or iSCSI storage selects one host and creates a
-  host-specific Core record. Other members of the same pool do not receive an equivalent
-  registration, access check or mount/session configuration.
-- Requested behavior: a pool-scoped remote repository is held by the pool master and reconciled
-  on every eligible pool member, with Core reporting each host's real access state. A fresh
-  Controller must adopt that Core-owned record and per-host observations without re-entry.
-- Scope and safety: NFS and SMB may become multi-host only after each host passes source,
-  identity, locking, QEMU-access and shared-writer checks. Local ZFS remains local unless a
-  later replicated/shared design is implemented. An ordinary-filesystem iSCSI LUN must never
-  be mounted writable by every host: it requires explicit single-writer placement or a separate
-  shared-block, clustered-filesystem and fencing design.
-- Cluster-aware acceptance: Core must manage member-specific mount/session lifecycle,
-  reconnect and health observations; validate protocol locking and cache/durability behavior;
-  serialize configuration changes; and fail closed on an ambiguous writer, failed fencing or
-  lost/replaced backing identity. A timeout or Controller outage must never authorize a second
-  writable VM execution.
-- Initial investigation: the API, UI and Core journal bound every registration to one `host_id`.
-  This was an intentional limit: the storage plan deferred multi-host placement and
-  shared-writer protection to Phase 4, even though the table is presented under a pool.
-- State and API direction: durable pool registration and member-access results belong on Nex
-  Core (the pool master plus members), recoverable through Core inventory/adoption. Implementing
-  it needs a changed/new Core contract; Controller must not probe, retain or reconcile it.
-- Fix: authenticated Core-local join establishes durable peer trust and membership. Members
-  pull master-owned NFS/SMB registrations, retain their IDs and generations, and report native
-  backing identity, QEMU access and shared locking. Durable reservations fence master mutations
-  while member workloads retain references. Controller adoption recovers member VMs backed by
-  master-owned repositories, and UI placement uses fresh Core-reported member access.
-- Regression evidence: `go test -race ./...`, Python/API suites, UI checks and both browser
-  suites pass; both Actions providers run them on pushes and pull requests. Focused cases cover
-  peer authentication/replay, valid operation IDs, generation convergence, identity mismatch,
-  reservation retention/release over real mTLS and fresh Controller member-VM adoption.
-  The primary's [native walkthrough](qa/2026-09-12-bug-ledger.md) passed NFS/SMB member VM
-  execution, permission failure/recovery, safe in-use detach refusal, peer outage with VM
-  survival, missed-generation recovery, unused detach/unmount and fresh Controller replacement.
-  The isolated iSCSI fixture rejected its unauthorized second initiator without a session.
-- Limits: local/ZFS/iSCSI remain single-host; this does not complete Phase 4, migration,
-  master change, member ejection, HA or physical-hardware acceptance. BUG-0097 remains excluded.
-- Avoid: copying desired pool state into Controller persistence, treating local storage as
-  shared, declaring access from stale/cached results, or dropping a reservation on an
-  ambiguous/failed operation while another durable workload still holds the repository.
+- Date: 2026-09-12
+- Status: fixed for the scoped NFS/SMB multi-host slice; native acceptance and independent review passed. Local/ZFS/iSCSI remain single-host; Phase 4, migration, master change, ejection, HA and physical hardware not covered; BUG-0097 excluded.
+- Symptom: NFS/SMB/ZFS/iSCSI registration bound to one `host_id`; other pool members got no registration, access check or mount/session.
+- Root cause: intentional single-host limit; the storage plan deferred multi-host placement and shared-writer protection to Phase 4.
+- Fix: authenticated Core-local join gives durable peer trust; members pull master-owned NFS/SMB registrations with IDs and generations and report backing identity, QEMU access and locking; durable reservations fence master mutations; Controller adopts member VMs; UI placement uses fresh member access. iSCSI never becomes multi-writer without a fencing/cluster design.
+- Impact: new/changed Core contract; state owner core (pool master plus members), recovered via Core inventory/adoption.
+- Regression: `go test -race ./...`, Python/API suites, UI and both browser suites pass; both Actions providers. Covers peer auth/replay, generation convergence, identity mismatch, reservations over mTLS, fresh Controller adoption. Native NFS/SMB walkthrough passed; second iSCSI initiator rejected. Evidence: [native walkthrough](qa/2026-09-12-bug-ledger.md).
+- Avoid: copying desired pool state into the Controller, treating local storage as shared, trusting stale access results, or dropping a reservation on an ambiguous operation while a workload holds the repository.
 
 ## BUG-0095 — Storage registration lacks discovery and a guided workflow
 
-- Date: 2026-09-12.
+- Date: 2026-09-12
 - Status: fixed; native browser walkthrough and independent review passed.
-- Symptom: operators must manually enter server names, exports/shares, paths, target details
-  and related values. The form cannot discover available safe sources or guide an operator
-  through selecting a directory within an authorized SMB/NFS source.
-- Expected behavior: storage setup starts with Core-reported discovery and a guided workflow:
-  discover reachable supported sources, select a validated export/share/target and directory,
-  display only compatible options, then confirm the exact host access and safety limits before
-  registration. Manual entry remains available for environments discovery cannot reach.
-- Design boundary: discovery and validation run on Nex Core, scoped to the selected pool/host;
-  Controller only requests and renders results. Discovery results are transient observations,
-  not Controller-owned inventory or credentials. Browsing must not create directories, mount
-  arbitrary sources, expose secrets or weaken SMB/NFS/iSCSI safety checks.
-- State and API direction: this needs new Core discovery contracts, including credential-scoped
-  SMB browsing where applicable; Controller retains neither results nor credentials.
-- Fix: bounded Core-native discovery reports safe local/ZFS sources, NFS exports/directories,
-  authenticated SMB shares/directories and iSCSI targets. The guided form retains manual entry
-  and explicit exclusive-initiator confirmation. Core verifies host/pool scope; Controller
-  erases relayed credentials after delivery and retains no durable discovery inventory.
-- Regression evidence: `go test ./internal/agent ./internal/controller ./internal/vmhost
-  ./internal/protocol` and the API contract suite pass; both Actions providers run the Go,
-  API and storage-browser suites on pushes and pull requests. The primary exercised native
-  selection and healthy master registration for exact NFS/SMB directories, iSCSI discovery,
-  empty ZFS/manual fallback, invalid SMB credentials, cancellation and stale Core exclusion;
-  see [native acceptance](qa/2026-09-12-bug-ledger.md). Independent review accepted the slice.
-- Avoid: Controller-side probing, retaining delivered credentials, treating arbitrary export
-  paths as URI query strings, or assuming source discovery proves safe shared execution.
+- Symptom: operators hand-entered servers, exports/shares, paths and targets with no discovery or directory guidance.
+- Root cause: no Core discovery contract; registration form was manual-only.
+- Fix: bounded Core-native discovery of local/ZFS sources, NFS exports/directories, authenticated SMB shares/directories and iSCSI targets; guided form keeps manual entry and explicit exclusive-initiator confirmation; Controller erases relayed credentials and keeps no discovery inventory. UX correction: SMB browses from server/account/password, NFS from server alone, via dialogs that preserve edits on cancel; spaced and hidden SMB names retained.
+- Impact: new Core discovery contracts; Controller retains neither results nor credentials.
+- Regression: `go test ./internal/protocol ./internal/vmhost ./internal/agent ./internal/controller`, API contract suite, UI checks and `tests/integration/storage_repositories_browser.py` pass (failed on missing Browse exports before the picker); both Actions providers. Evidence: [native acceptance](qa/2026-09-12-bug-ledger.md), [picker evidence](qa/2026-09-12-network-storage-picker.md).
+- Avoid: Controller-side probing, retaining credentials, treating export paths as URI query strings, assuming discovery proves safe shared execution, treating registered storage as destination discovery, requiring a share before browsing, or interpolating folder names into native commands.
 
 ## BUG-0096 — Host and pool health summaries omit the observed cause
 
 - Date: 2026-09-12.
 - Status: fixed; focused regression, full browser suite and primary native walkthrough passed.
-- Symptom: the Hosts table shows only **degraded** under **Last observed health**. An operator
-  must open the host and inspect separate health checks to learn which check failed and why.
-- Expected behavior: wherever a host or pool summary reports degraded, failed, unknown or stale
-  health, show the current affected check and its sanitized Core-reported reason immediately
-  below the status, with a direct link to the detailed host health view. A healthy summary stays
-  compact. Multiple affected checks must state their count and expose each reason without
-  concealing the most severe condition.
-- Investigation: the existing host inventory contract already carries named `checks` with
-  status, freshness, observed time and `error`; the detailed host page renders that error. The
-  summary reduces all non-healthy checks to the bare `degraded` badge and drops the available
-  context.
-- State and API direction: existing contract for the initial UI fix; no new durable state.
-  Core remains the source of check results and sanitizes operator-visible detail. The Controller
-  must display observations, not invent diagnoses or retain a separate health-cause cache.
-- Fix: shared health summaries expose severity, affected-check count, each sanitized
-  Core-reported reason and a direct detail link; healthy remains compact. Core permits only
-  explicitly public probe errors and replaces arbitrary native detail with safe check reasons.
-- Regression evidence: `go test ./internal/agent`, web typecheck/build and
-  `tests/integration/phase1.py --browser` pass. Both Actions providers run the Go and browser
-  suites on pushes and pull requests. Browser cases cover healthy, one/multiple failures,
-  unknown/stale and revoked states. The primary stopped native lab libvirt, verified matching
-  summary/detail causes and restored it to a fresh healthy observation; see
-  [native acceptance](qa/2026-09-12-bug-ledger.md).
-- Avoid: collapsing all problems to `degraded`, inventing Controller diagnoses, or rendering
-  arbitrary command output as a public health reason.
+- Symptom: the Hosts table showed only **degraded**; the failed check and reason needed the host detail page.
+- Root cause: the summary reduced all non-healthy `checks` (which already carry status, freshness and `error`) to a bare badge.
+- Fix: shared summaries show severity, affected-check count, each sanitized Core-reported reason and a detail link; healthy stays compact. Core publishes only explicitly public probe errors.
+- Regression: `go test ./internal/agent`, web typecheck/build and `tests/integration/phase1.py --browser` pass (healthy, one/multiple failures, unknown/stale, revoked); both Actions providers run them. Native libvirt-stop walkthrough passed. Evidence: [native acceptance](qa/2026-09-12-bug-ledger.md).
+- Impact: API existing contract; no new durable state (Core owns check results).
+- Avoid: collapsing all problems to `degraded`, inventing Controller diagnoses or caching causes, or rendering arbitrary command output as a public reason.
 
 ## BUG-0097 — Starting a UEFI guest can crash a nested Nex Core lab host
 
 - Date: 2026-09-12.
-- Status: unresolved lab-critical defect; root cause not yet established.
-- Symptom: starting a UEFI guest on a Nex Core host running as a nested VM under XCP-ng causes
-  libvirt or the Nex Core guest to crash. BIOS guest launch is the comparison path; the exact
-  outer-hypervisor and Core crash evidence has not yet been captured.
-- Investigation: Nex asks libvirt for KVM x86-64/q35 domain capabilities and only emits
-  `firmware='efi'` when EFI is advertised; it does not select a private firmware binary or
-  directly control the outer hypervisor. Nex has successfully started an OVMF UEFI guest in a
-  separate disposable nested-KVM lab, so UEFI is not known to fail on all nested hosts.
-  Earlier nested-lab ISO QA also recorded KVM/OVMF stalling at the EFI loader for both stock
-  Debian and Nex media, which supports an environment/firmware lead rather than a proven Nex
-  regression. Libvirt may select a Secure-Boot OVMF variant with SMM and per-VM NVRAM, so that
-  selection is part of the evidence to capture.
-  XCP-ng documents its nested-virtualization support as partial, experimental and unsupported,
-  with possible host crashes; CPU passthrough and exposed virtualization extensions do not make
-  that configuration equivalent to a supported bare-metal KVM host. The outer Xen/KVM nesting
-  boundary is therefore the leading hypothesis, but not proof.
-- Required diagnostics: reproduce only in a disposable lab and retain the pre-crash domain XML,
-  `virsh domcapabilities` output, selected OVMF loader/VARS paths, QEMU/libvirt log, Nex agent
-  and kernel journal from the affected and previous boot, `coredumpctl`, package versions, plus
-  the XCP-ng/Xen host logs and exact versions. Compare BIOS, default UEFI and a stock libvirt
-  UEFI guest on this lab, then repeat on bare-metal KVM or another supported host. Do not
-  repeatedly start the guest after a crash without collecting evidence.
-- Safety and acceptance: Core must reject a detectable incompatible firmware/runtime with
-  actionable host evidence, and must not cause a host crash. UEFI launch needs regression
-  coverage on a disposable nested XCP-ng/Xen lab and a supported non-nested host; neither a
-  successful definition nor a boot menu on another environment establishes safety.
+- Status: unresolved lab-critical defect; root cause not established.
+- Symptom: starting a UEFI guest on Nex Core nested under XCP-ng crashes libvirt or the Core guest; BIOS is the comparison path; crash evidence not yet captured.
+- Root cause: unknown. Nex emits `firmware='efi'` only when libvirt q35 domcapabilities advertise it; OVMF UEFI worked in a separate nested-KVM lab; earlier nested ISO QA saw OVMF stall for stock Debian too. Leading hypothesis: the partial/unsupported Xen nesting boundary (libvirt may pick a Secure-Boot OVMF with SMM/NVRAM).
+- Fix: none yet. Required diagnostics (disposable lab only): domain XML, `virsh domcapabilities`, selected OVMF loader/VARS, QEMU/libvirt log, agent/kernel journals for this and previous boot, `coredumpctl`, package versions, XCP-ng/Xen logs; compare BIOS, default UEFI and stock libvirt UEFI, then a supported non-nested KVM host.
+- Regression: none. Acceptance: Core rejects detectable incompatible firmware/runtime with host evidence and never crashes the host; UEFI coverage needed on nested XCP-ng and a supported non-nested host.
+- Avoid: repeatedly starting the guest after a crash without collecting evidence, or treating a successful definition or boot menu elsewhere as safety.
+
+## BUG-0098 — Shared VM starts lacked durable pool-master execution admission
+
+- Date: 2026-09-12.
+- Status: implementation and independent code review passed; native multi-host acceptance open.
+- Symptom: repository reservations let hosts share storage but did not decide which host may execute a VM; native starts/autostart lacked Controller-request ownership protection.
+- Root cause: repository access and VM execution treated as one exclusion boundary; no durable member-VM ownership record or epoch-bound admission on the master.
+- Fix: peers publish generation-bound VM inventory; master admits ownership only after complete conflict-free observations; native starts consume a one-use pool/host/VM/epoch/boot-bound permit. Confirmed stop invalidates permits without moving placement; timeouts never release ownership.
+- Regression: `go test ./internal/agent ./internal/vmhost` (incomplete inventory, owner retention, competing hosts, single-use permits, stale epochs) passed; both `phase1.yml` race jobs run it; no remote CI run claimed. Evidence: [concurrent storage evidence](qa/2026-09-12-concurrent-pool-storage.md).
+- Avoid: first-caller ownership, expiring ownership on timeout, using repository locking as VM fencing, keeping a permit after confirmed stop, or re-starting an intentionally stopped VM as "autostart".
+
+## BUG-0099 — Cluster setup relay discarded valid Core lifecycle states
+
+- Date: 2026-09-12.
+- Status: reproduced and fixed; complete native workflow acceptance open.
+- Symptom: cluster status replies timed out when Core reported awaiting fencing, verifying a fence, or healthy.
+- Root cause: the Controller result validator omitted those three states and dropped the whole reply.
+- Fix: accept every implemented state; keep unknown-state, size and host/pool checks; no Controller-inferred health.
+- Regression: `TestStorageClusterRelayDeliversCoreLifecycleStates` failed before, passes after (`go test ./internal/controller -run TestStorageCluster -count=1`); both `phase1.yml` race jobs; no remote CI run claimed.
+- Avoid: adding a Core state without matching relay validation/reference coverage, or treating a transport ack as completed setup.
+
+## BUG-0100 — Shared storage probed a different lock family from QEMU
+
+- Date: 2026-09-12.
+- Status: repaired and reviewed; native cross-host QEMU lock evidence passed for NFS, SMB and GFS2; broader outage/HA acceptance open.
+- Symptom: a member could pass the lock probe without proving QEMU byte-range locks are exclusive across hosts.
+- Root cause: probe used `flock`; QEMU uses OFD/POSIX byte-range locks.
+- Fix: nonblocking OFD byte-range locks on both peers; reject unsupported locking; require conflicting acquisition to fail and acquisition after master release.
+- Regression: `TestPoolProbeUsesCrossProcessOFDLockFamily` via `go test ./internal/agent -run 'TestPoolProbeUsesCrossProcessOFDLockFamily|TestPoolStorage' -count=1` passed; both `phase1.yml` race jobs. Native six-VM runs recorded QEMU write-lock refusal and release: [concurrent storage evidence](qa/2026-09-12-concurrent-pool-storage.md).
+- Avoid: treating a local lock test, another lock family, or a successful mount as cross-host QEMU exclusion.
+
+## BUG-0101 — Healthy managed observations blocked shared VM operations
+
+- Date: 2026-09-12.
+- Status: reproduced natively; regression and review passed; scoped multi-host workload passed; broader failure/outage/HA acceptance open.
+- Symptom: shared VM creation or inventory publication refused a healthy host.
+- Root cause: callers treated any returned observation as an error; the engine returns healthy observations on success.
+- Fix: accept only healthy/passed observations; still reject unknown, empty-status and failed.
+- Regression: `TestManagedVMChecksReady`, `TestSharedVMCreateAcceptsRealHealthyManagedObservations`, `TestPoolVMInventoryAcceptsRealHealthyManagedObservations` pass in `go test -race ./internal/agent`; both `phase1.yml` jobs.
+- Avoid: using a nonempty observation list as a failure flag, or ignoring unhealthy checks.
+
+## BUG-0102 — Stale member generation prevented complete VM inventory
+
+- Date: 2026-09-12.
+- Status: reproduced on three hosts; regression and review passed; native retry in progress.
+- Symptom: starts failed with incomplete inventory after a third Core joined.
+- Root cause: an existing member kept the old membership generation and the master rightly rejected its inventory; partial snapshots also needed retention.
+- Fix: retain current-generation partial snapshots without activating owners; return authenticated newer membership on conflict; validate pinned membership; retry once.
+- Regression: `TestPublishPoolVMInventoryRefreshesStaleMemberAndAcceptsPartialSnapshot` (real TLS conflict/refresh) and full Agent tests pass; both `phase1.yml` race jobs; no remote CI success claimed.
+- Avoid: weakening completeness, accepting changed identity pins, discarding partial observations, or retrying indefinitely.
+
+## BUG-0103 — Replaying unchanged iSCSI configuration requested credential rotation
+
+- Date: 2026-09-12.
+- Status: reproduced natively; regression and review passed; complete clustered bootstrap acceptance open.
+- Symptom: retrying iSCSI setup demanded safe reconnect though credentials were unchanged.
+- Root cause: node renderer accumulated newlines before its marker; byte equality failed when open-iscsi rewrote the node without the marker.
+- Fix: idempotent rendering; matching effective auth is a no-op only after inline-marker or exact sidecar ownership validation. Real changes still require safe reconnect; no selected-LUN reconnect bypass.
+- Regression: `TestNexISCSINodeConfigIsIdempotentForUnchangedCredentials`, `TestConfigureISCSICHAPActiveLegacyWhitespaceIsNotCredentialRotation`, `TestConfigureISCSICHAPActiveSidecarOwnedMatchingAuthIsNoop` pass (VM-host suite); both `phase1.yml` race jobs.
+- Avoid: equating formatting with credential change, adopting unmanaged sessions, or reconnecting a target-wide session for one unmounted LUN.
+
+## BUG-0104 — Fence UI omitted repository scope and offered premature verification
+
+- Date: 2026-09-12.
+- Status: repair, Core/browser regressions and review passed; native destructive walkthrough open.
+- Symptom: fence verification omitted the repository ID; incomplete bootstrap exposed controls before Core resolved storage identity.
+- Root cause: UI dropped the operation's full API scope; Core accepted intent without resolved bootstrap metadata.
+- Fix: send the exact repository ID, disable premature controls, reject unresolved configuration before any durable fence request/proof.
+- Regression: `TestStorageClusterFenceRejectsUnresolvedBootstrap` failed before, passes after (Agent race suite); cluster browser fixture asserts payload and confirmation/error behavior. Both `phase1.yml` run the fixture and Go checks; no remote CI run claimed.
+- Avoid: accepting destructive intent for an unresolved candidate, guessing a repository from a host ID, or permissive mocks ignoring required fields.
+
+## BUG-0105 — Cluster restart recovery could strand setup or repeat fence work
+
+- Date: 2026-09-12.
+- Status: regressions and review passed; three stopped-workload native Pacemaker restart/recovery checks passed; interrupted bootstrap and fence-replay acceptance open; final re-review of direct-proof receipt fix open.
+- Symptom: interrupted bootstrap stayed unresolved, `applying` could skip native setup, delegated fence outcomes lacked restart-safe reconciliation.
+- Root cause: replay rebuilt a different input digest; no durable native-apply completion marker; fence dispatch lacked persisted identity and selected executor.
+- Fix: resume the accepted candidate and original digest; idempotently retry missing native receipts; persist fence intent before dispatch bound to one executor; never redispatch ambiguous actions. Expired peer reports are not readiness; partial fencing returns to awaiting proofs; direct proofs and terminal request status save together, keeping prior receipts.
+- Regression: `TestClusterOriginalInputDigestSurvivesDurableRoundTrip`, `TestClusterRestartResumesOriginalCandidateWithoutReconstructedDigest`, `TestResumeApplyingClusterWithoutNativeReceiptReappliesDurableConfig`, `TestClusterMasterHealthRefreshReplacesExpiredOwnObservation`, `TestStorageClusterFenceRequestIsDurablyOneShot`, `TestClusterSurvivorFenceReplaySurvivesRestart`, `TestClusterFenceReducerPreservesPartialAndBadProofStates`, `TestClusterProofPollingCannotSkipQueuedBootstrap`, `TestStorageClusterDirectFenceProofRetainsPriorRequestReceipt` pass (Agent race); both `phase1.yml` race jobs.
+- Avoid: reconstructing immutable accepted input, treating an `applying` label as native application, or trying another destructive executor after an uncertain reply.
+
+## BUG-0106 — Default-port fence pins and derived secret files did not recover
+
+- Date: 2026-09-12.
+- Status: reproduced read-only natively; repair and review passed.
+- Symptom: strict SSH rejected a `[host]:22` known-host entry; an existing master's derived credential files did not regenerate on reconciliation.
+- Root cause: OpenSSH looks up unbracketed DNS/IPv4 for the default port; derived files were only written when storing/importing a secret.
+- Fix: normalize only the unambiguous default-port token in private files, keeping signed receipt material; authenticated peer export revalidates the master record and regenerates derived files without new offers.
+- Regression: `TestMaterializedKnownHostsOnlyNormalizesUnambiguousDefaultPort`, `TestClusterCredentialResolutionProjectsRecipientLocalRefs` pass; native strict-pinned SSH then authenticated; both `phase1.yml` race jobs.
+- Avoid: disabling host-key verification, rewriting signed receipts, or requiring an expired Controller offer to recover a Core-owned file.
+
+## BUG-0107 — Native virsh fencing used an unsupported selector and lost its prompt
+
+- Date: 2026-09-12.
+- Status: reproduced read-only; fixes and review passed; bounded destructive native fencing passed; failed-fence and broader outage acceptance open.
+- Symptom: correctly configured targets failed identity/status checks despite working pinned SSH and matching UUIDs.
+- Root cause: `virsh domuuid` rejected the UUID selector; overriding `fence_virsh` SSH options dropped its fixed terminal/prompt; libvirt URI not bound to the transport.
+- Fix: inspect exact UUID via explicit system-connection `dominfo`; keep the agent's terminal/prompt with strict pins; validate URI scope; native proof and Pacemaker derive identical fence arguments.
+- Regression: `TestVirshDOMInfoMatchesExactUUID`, `TestVerifyStorageClusterFenceRequiresActualVirshPowerOff`, `TestFenceCIBUsesProofCredentialAndPinnedHostKeyPaths`, `TestVirshURIIsBoundToPinnedSSHTransport` pass; read-only status succeeded for all nine executor/target pairs (not power exclusion); both `phase1.yml` race jobs.
+- Avoid: assuming similar subcommands accept the same identifiers, replacing required agent defaults, or keeping an ignored connection-identity field.
+
+## BUG-0108 — Controller write deadline hid an uncertain cluster response
+
+- Date: 2026-09-12.
+- Status: reproduced natively; deadline regression passed; reporting-path diagnosis, native recheck and final review open.
+- Symptom: a member fence powered off its target and Core recorded a passed proof, but the browser got no timely response.
+- Root cause: 30-second relay wait equalled the server write deadline, leaving no time for the uncertain-outcome response. Separately, the lab's older Controller rejected the new fence-proof request identity field (matching builds required; older-Controller compatibility not established).
+- Fix: 45-second server write deadline with bounded relay; transport loss is unknown, reconcile Core status, never auto-resend destructive requests. Does not explain the delayed report.
+- Regression: `TestClusterRelayWriteDeadlineLeavesResponseMargin` passes (`go test ./cmd/nex-controller -count=1`); browser fixture covers timeout and reset uncertainty; both `phase1.yml` race jobs.
+- Avoid: treating a missing response as proof the target stayed on, or retrying a power action before reconciling the original intent and proof.
+
+## BUG-0109 — Cluster proof updates were sent to an incompatible Controller
+
+- Date: 2026-09-12.
+- Status: reproduced; acknowledgement repair, matching-build rollout and bounded aggregate-status checks passed; Controller replacement and outage acceptance open.
+- Symptom: an older Controller rejected updated fence-proof reports; status requests timed out while Core kept valid evidence.
+- Root cause: a shared capability name admitted incompatible proof fields without acknowledgement from the strict decoder.
+- Fix: negotiate the revised clustered-storage capability before sending results; reset readiness on startup, replacement and report failure; Core keeps durable work regardless; unsupported Controllers get no cluster envelope.
+- Regression: `TestClusteredStoragePreflightProtectsStrictOlderControllerAndReconnect`, `TestClusteredStorageV2AcknowledgementDispatchesAndAcceptsProofRequestID` pass; both `phase1.yml` race jobs; not a native Controller-replacement run.
+- Avoid: equating an advertised feature name with schema negotiation, or persisting readiness across a different Controller without a fresh handshake.
+
+## BUG-0110 — Master-to-member peer calls expected the master's certificate
+
+- Date: 2026-09-12.
+- Status: reproduced; regressions, review and native delegated exclusion passed.
+- Symptom: member power proofs passed but master fencing returned uncertain without reaching the survivor's fence handler.
+- Root cause: master-to-member connection reused a client pinned to the master identity, rejecting the member certificate.
+- Fix: master-only member client bound to the ready member's advertised origin, host identity and certificate fingerprint (CA validation, mTLS, redirect rejection kept); member verify/proof routes authenticate only the current pinned master; uncertain intent kept, new action needs confirmation.
+- Regression: `go test ./internal/agent -run 'TestPool(MemberPeerClient|PeerJoin)' -count=1` incl. `TestPoolMemberPeerClientPinsCurrentMemberOriginAndCertificate`, plus `TestStorageClusterMemberVerifyPathsAcceptOnlyCurrentMaster` pass; both `phase1.yml` race jobs. Native GUI verification read a survivor receipt with the master confirmed off, then recovered it.
+- Avoid: weakening TLS validation, accepting any pool certificate for any endpoint, or repeating an uncertain power request automatically.
+
+## BUG-0111 — GFS2 could become startable before its DLM ordering constraint
+
+- Date: 2026-09-12.
+- Status: found in source review; regression and review passed; native activation verification open.
+- Symptom: sequential CIB creation could expose a startable GFS2 resource before the DLM ordering constraint existed.
+- Root cause: resource creation enabled the filesystem before the constraint command.
+- Fix: create the clone disabled, reread exact DLM/resource/order state, then enable; existing enabled-but-unordered resources fail closed without disabling a possibly mounted filesystem; racing creation accepted only after exact reread.
+- Regression: `TestGFS2EnableWaitsForDisabledResourceAndExactOrder`, `TestGFS2ApplyRefusesEnabledUnorderedExistingResource` pass (interrupted, failed-ordering, duplicate cases); both `phase1.yml` race jobs.
+- Avoid: treating final desired CIB state as proof intermediate activation is safe, or force-stopping a filesystem to fix ownership mismatch.
+
+## BUG-0112 — Rendered quorum configuration was rejected by Corosync
+
+- Date: 2026-09-12.
+- Status: reproduced on all three lab Cores; corrected renderer deployed; scoped three-Core runtime verification passed; broader failure/HA acceptance separate.
+- Symptom: Corosync exited status 8 with an extra-characters-after-brace error, blocking Pacemaker and GFS2.
+- Root cause: renderer put the quorum property on the section's opening line.
+- Fix: render the quorum section and provider on separate lines.
+- Regression: `TestRenderStorageClusterIsDeterministicAndAuthenticated` requires the multiline stanza; installed `corosync -t -c` rejects old and accepts corrected config; both `phase1.yml` race jobs.
+- Avoid: substring tests as proof of parser compatibility, or fixing only the deployed file instead of the renderer.
+
+## BUG-0113 — Native CIB reconciliation misread stopped clones and could panic
+
+- Date: 2026-09-12.
+- Status: reproduced; repair and review passed; scoped native mount and six-guest admission rerun passed.
+- Symptom: reconciliation tried to recreate an existing disabled clone; health inspection panicked and restarted Core services on a non-default state root.
+- Root cause: stopped state read from primitive metadata, not the clone; fence health assumed the default credential directory and its failure hit an unchecked slice.
+- Fix: read clone-level metadata; reject malformed specs without panic; carry the real Core state root through health, pool validation and VM admission; missing context fails closed.
+- Regression: `TestCIBResourceChecksArePanicFreeAndRecognizeDisabledCloneMeta`, `TestManagedClusteredAdmissionUsesContextStateRoot` pass in full Agent/VM-host suites; both `phase1.yml` race jobs.
+- Avoid: fixing only the panic guard, assuming native XML matches a hand-written fixture, or silently falling back to another credential directory.
+
+## BUG-0114 — Members raced the master when writing shared Pacemaker state
+
+- Date: 2026-09-12.
+- Status: observed natively; repair and review passed; native reconciliation rerun open.
+- Symptom: member reconciliation also wrote shared resources/constraints, racing on the CIB.
+- Root cause: local Corosync preparation and master-owned CIB reconciliation shared one apply operation.
+- Fix: members only connect storage and start local services; only the master reconciles shared resources and constraints.
+- Regression: `TestStartStorageClusterDoesNotWriteSharedCIB`, `TestMemberClusterReconcileStartsLocalServicesWithoutCIBApply` pass; both `phase1.yml` race jobs.
+- Avoid: treating local service configuration as permission for members to author pool-wide state.
+
+## BUG-0115 — Public cluster reports discarded per-host observation identity
+
+- Date: 2026-09-12.
+- Status: reproduced in live GUI; typed-contract regressions, review and matching-build walkthrough passed.
+- Symptom: natively healthy cluster, but every GUI member said health not reported and workload preflight could not identify healthy members.
+- Root cause: the public Core mapper flattened member reports into anonymous status objects; UI/runner expected host-bound envelopes.
+- Fix: publish typed member reports with host identity, nested status, storage/membership generations, config digest, stage and receiver timestamp; Controller rejects duplicate/unrelated references. Matching Core/Controller builds required.
+- Regression: `TestStorageClusterPublicMemberReportPreservesObservedIdentity` (real JSON) and `TestStorageClusterMemberReportsKeepThreeIdentitiesAndRejectMalformedReferences` pass; both `phase1.yml` race jobs.
+- Avoid: frontend-only identity mapping by array order, treating private journal JSON as the public schema, or mocks of an uninspected API.
+
+## BUG-0116 — Healthy GFS2 was rejected by ordinary repository inventory and member import
+
+- Date: 2026-09-12.
+- Status: repairs and source review passed; live six-guest admission, start and concurrent I/O passed; failed-fence, outage, adoption and HA acceptance open.
+- Symptom: all hosts reported healthy GFS2 but inventory rejected the master's filesystem as non-ext4/XFS and members rejected a resolved mount path.
+- Root cause: observation still used exclusive-iSCSI filesystem validation; member intent carried a Core-resolved path through public validation without the trusted path later; bootstrap journal omitted supported capabilities, so the repository never became selectable.
+- Fix: GFS2 observation for the clustered profile (native lock table, journal count); sanitize member intent and restore the path only from matching Core-private config; Core derives capabilities for new records and projects them for older zero-capability ones without identity change. Quorum/fencing stays a separate VM-admission gate.
+- Regression: `TestInspectISCSIObservesClusteredGFS2Identity`, `TestPoolMemberStorageIntentLetsCoreResolveClusteredISCSIMount`, `TestClusteredISCSIRegistrationRestoresOnlyTrustedConfigMountPath` pass in `go test ./internal/agent ./internal/vmhost -count=1`; both `phase1.yml` race jobs.
+- Avoid: loosening public path validation, treating a mount as cluster safety, or reporting desired host count as observed journal count.
+
+## BUG-0117 — Shared-storage admission and lifecycle still assumed NFS/SMB only
+
+- Date: 2026-09-12.
+- Status: fixes and source review passed; native member VM admission, start and concurrent I/O passed; failed-fence, outage, adoption and HA acceptance open; UI selection regressions part of batch acceptance.
+- Symptom: GFS2 treated as host-exclusive by Controller member selection and the VM picker; member adoption could replace the master's storage projection; generic iSCSI lifecycle unsuitable for a Pacemaker-managed LUN.
+- Root cause: NFS/SMB-only conditions not extended to every caller; generic updates advance repository generation without updating cluster config.
+- Fix: explicit pool-shared predicate across Core/Controller admission and adoption with fresh access checks; UI shows member eligibility; refuse generic clustered update/detach before native mutation; carry Core-private config into read-only rechecks.
+- Regression: `TestClusteredISCSISharedStorageRequiresMembershipAndMasterRegistration`, `TestClusteredISCSIUpdateRefusesBeforeNativePreparation`, `TestDetachISCSIRefusesClusteredProfileBeforeNativeMutation`, `TestPoolRemoteStoragePlacementUsesFreshCoreMemberObservation`, `TestStorageRecheckReceivesCoreOwnedClusterContext` pass; both `phase1.yml` run Go suites and the clustered browser workflow.
+- Avoid: changing a native backend without tracing API and picker callers, treating ordinary iSCSI as shared, or exclusive detach/logout on GFS2.
+
+## BUG-0118 — Disposable workload runner could not safely resume partial creation
+
+- Date: 2026-09-12.
+- Status: partial-resume repair, safety review and bounded native continuation passed; broader failure/outage acceptance open.
+- Symptom: after one GFS2 VM creation then an HTTP refusal, resume required all six VMs; naive continuation could duplicate a host/ordinal or an accepted-but-uncheckpointed VM.
+- Root cause: resume validation assumed only post-creation failures.
+- Fix: validate retained VM/disk/host/ordinal identities, reject ambiguous or uncheckpointed slots, check capacity first, create only missing slots without recopying disks; wait for fresh matching per-host storage observations before mutation. Lab-only GFS2 exclusion may name a terminal failed creation after exact binding and proven absence on every Core; replacement gets a new identity; failed record preserved. Capture live QEMU PID before exit removes the pidfile.
+- Regression: `python3 -m unittest tests.test_cluster_storage_workloads` passes 28 tests (one retained VM leads to exactly five creations; capacity/uncheckpointed refusal; stale-to-fresh, timeout, generation mismatch; replacement binding; PID evidence); both `phase1.yml` Python jobs; no remote CI run claimed.
+- Avoid: deleting a partial lab for a green run, overwriting failure evidence, or treating a missing checkpoint as proof no VM was created.
+
+## BUG-0119 — One repository deadline poisoned later member reconciliation
+
+- Date: 2026-09-12.
+- Status: reproduced; scoped deadline repair reviewed; matching-build lab verification open.
+- Symptom: a member's GFS2 access observation went too old for VM admission while host and cluster were healthy.
+- Root cause: one three-second context covered the whole sequential reconciliation pass; a slow repository expired later calls. Native filesystem calls outliving cancellation remain a separate, unfixed latency.
+- Fix: independently bounded list, repository and orphan-cleanup operations keeping shutdown cancellation and single-flight; late successes are deadline failures, not healthy access.
+- Regression: `TestMemberReconcilePostsLaterAccessAfterEarlierDeadline` plus cancellation/late-return checks pass in `go test ./internal/agent ./internal/vmhost -count=1`; both `phase1.yml` jobs; no remote run claimed.
+- Avoid: raising the global deadline, relaxing freshness or fsync, or overlapping reconciliation while a filesystem call is stuck.
+
+## BUG-0120 — Cancelled folder discovery could reopen from a late success
+
+- Date: 2026-09-12.
+- Status: source and browser regression review passed; updated live deployment walkthrough open.
+- Symptom: a discovery response fulfilled after cancellation reopened the closed folder picker.
+- Root cause: cancellation kept the active request reference; success callbacks did not reject aborted requests.
+- Fix: Cancel and native dialog close clear the reference before aborting; success handling rejects an aborted signal.
+- Regression: `tests/integration/cluster_storage_browser.py` (Cancel/Escape then deferred success) passes; `tests/integration/storage_repositories_browser.py`, storage UI checks and typecheck rerun; both `phase1.yml` run the browser regression; no remote CI run claimed.
+- Avoid: assuming transport abort stops an already-fulfilled callback from updating the UI.
+
+## BUG-0121 — Clustered iSCSI was not ready before Pacemaker on host boot
+
+- Date: 2026-09-12.
+- Status: fixed; isolated master cold-login reboot passed after publication repair.
+- Symptom: Pacemaker permanently refused GFS2 start because its device was absent; the other two hosts kept quorum and mounts.
+- Root cause: clustered connection did not persist iSCSI automatic node startup; Pacemaker had no Core-validated storage readiness dependency.
+- Fix: before Pacemaker, validate local durable cluster intent, membership and fencing proofs, connect and verify exact GFS2 identity; needs no Controller/peer and issues no guest permit. Existing masters install the dependency without native reapply; unreadable receipts stay uncertain.
+- Regression: agent/vmhost race and Core CLI checks pass (active-agent locks, unsafe ownership/ancestors, foreign units, reload retry, conflicting history, upgrade, receipts, session/device publication, post-command cancellation); both providers run the Go suites. First repeat boot failed before session/device appeared (warm-device CLI probe is not a pass); after repair, a master reboot with automatic login disabled restored login and passed the gate; all three hosts mounted the GFS2 UUID with quorum, no manual steps.
+- Avoid: clearing failure counters to call a failed boot healthy, manual GFS2 mounts, accepting any available disk, or requiring a healthy mounted cluster before its own startup prerequisite.
+
+## BUG-0122 — An uncertain remote VM creation could not settle by observation
+
+- Date: 2026-09-12.
+- Status: fixed; original stopped SMB creation settled in the disposable lab.
+- Symptom: exact stopped domain and blank disk existed but creation stayed `needs_attention` after an ownership-inspection failure.
+- Root cause: generic promotion skips remote-backed VMs and no Core authority-aware observer handled recovery; Controller replay must not redispatch.
+- Fix: the serialized Core worker validates owner, master's durable VM spec and storage, observes the exact stopped definition under the journal lock, and settles the same operation without allocating, starting, deleting or replacing.
+- Regression: agent spec-binding and vmhost reconciliation tests pass (changed revision/disk refusal, cancellation after autostart claim, legacy-success requires positive `spec_match` receipt); both providers run the Go suite. Native settlement confirmed via API, journal and libvirt; no replay, disk replacement or start.
+- Avoid: editing journals, calling a start-capable replay to inspect state, deleting an uncertain disk, or making Controller stay alive to finish recovery.
+
+## BUG-0123 — Autostart attempts were process-bound rather than boot-bound
+
+- Date: 2026-09-12.
+- Status: source repair accepted; native agent/OS-restart walkthrough passed.
+- Symptom: restarting Core could retry autostart for a VM manually stopped during the same host boot.
+- Root cause: attempted-VM map lived only in process memory though autostart is an on-host-boot policy.
+- Fix: private boot-bound claim (exclusive create, file/dir sync) survives agent restart and allows one attempt per actual host boot; uncertain-definition recovery consumes the claim first.
+- Regression: `go test ./internal/agent` (race) passes same-boot, new-boot, concurrent, malformed, symlink, foreign-ownership and unsafe-ancestor cases; both providers run it. Native: agent restart kept VM stopped; real OS reboot made one new-boot start on the assigned host; policy restored. Not HA, not a remote CI result.
+- Avoid: resetting the marker on agent/Controller reconnect, treating a timeout as proof a VM stopped, or silently changing the pool autostart policy.
+
+## BUG-0124 — Shared-storage lock fixture put its PID file in the datastore root
+
+- Date: 2026-09-12.
+- Status: fixed; native lock proof passed with all six GFS2 guests running; complete six-VM workload a separate gate.
+- Symptom: six guests started but the lock holder could not create its PID file before the competing-write test.
+- Root cause: fixture treated probe-disk write access as permission to create runtime files in a protected datastore root; a later attempt also dropped the QEMU account's datastore group by deriving credentials from disk ownership and clearing supplementary groups.
+- Fix: PID/log files in a private host-local directory; resolve the real non-root QEMU account and full groups on both hosts, refusing mismatches. Datastore access not broadened.
+- Regression: `python3 -m unittest discover -s tests -p 'test_cluster_storage_workloads.py'` passes 33 checks (runtime paths, process identity before signalling, artifact preservation, lock/refusal/release, QEMU identity); both providers run it. Native probe got second-host write-lock refusal then a 512-byte write after release; later failure recorded as BUG-0125.
+- Avoid: treating a startup failure as a lock refusal, removing lock coverage, or changing repository permissions for test-only files.
+
+## BUG-0125 — Fenced lab Core returned before the requested recovery step
+
+- Date: 2026-09-13.
+- Status: native policy upgrade and six-VM write-time controlled-return repeat passed.
+- Symptom: Core recorded a passed power-off proof but the target was running again while survivor writes were active, before the runner's return step. No automatic VM recovery result claimed.
+- Root cause: Core did not set `stonith-action=off`; Pacemaker's default reboot returned the target after Core's direct power-off test.
+- Fix: configure power-off fencing and require the exact property in readiness; master validates intent, membership, native receipt and owned CIB before policy-only upgrade; matching is a no-op; stale/foreign state and cancellation fail closed without remount/recreate.
+- Regression: `go test -race ./internal/agent ./internal/vmhost -count=1` passes (missing/wrong/duplicate policy, stale intent, foreign CIB, no-op, cancellation); both providers run it. Native upgrade added the policy on all three hosts without changing CIB hashes or mounts; attempt nine passed exclusion with target held off, return and checksums (see BUG-0134).
+- Avoid: treating a past power-off observation as proof a host remains off, skipping the pre-return power-state check, or manually editing cluster properties for a pass.
+
+## BUG-0126 — Lab admission compared volatile SMB filesystem identifiers
+
+- Date: 2026-09-13.
+- Status: fixed; review and six-guest SMB workload passed.
+- Symptom: SMB workload stopped before creating a member VM despite fresh member access; two stopped VMs remain checkpointed on the master from that attempt.
+- Root cause: runner compared full identity objects; CIFS filesystem IDs differ per host while server, share and durable marker match (Core's marker-aware comparison already handles this).
+- Fix: fixture uses the existing backing-identity contract, keeping freshness/generation/host checks; reject changed markers/sources; markerless still strict; mixed marker/legacy refused more strictly than Core.
+- Regression: fixture suite passes 34 checks (differing-FSID/same-marker, wrong marker/source, blank identity); SMB attempt three passed six-VM fsync writes, reboot checksums and cross-host QEMU lock refusal/release; both providers run the Python suite.
+- Avoid: changing product identity reporting to satisfy a broken test, bypassing member readiness, or reading a client-local filesystem ID as a server UUID.
+
+## BUG-0127 — Shared-storage monitor timeouts fenced every lab Core
+
+- Date: 2026-09-13.
+- Status: monitor-budget repair and native upgrade passed; initiating-stall investigation and interruption testing open.
+- Symptom: after the SMB workload passed and guests stopped, all three Cores powered off before the next GFS2 workload's mutations.
+- Root cause: partial. Journals show a transient iSCSI ping timeout, three GFS2 monitor timeouts and power-off fencing; Core left the default 20-second monitor despite the Filesystem agent's 40-second recommendation; a fence monitor also timed out. Transport stall cause unknown.
+- Fix: explicit 40-second GFS2 monitor; guarded master upgrade recognizes only the exact legacy resource, applies a version-conditioned CIB patch and rechecks, preserving fencing, mounts and failure history.
+- Regression: agent/vmhost race suites pass (strict legacy recognition, drift/conflict refusal, no broad reconciliation); both providers run them. Native read-only capture showed only the expected timeout attribute changed, stable on repeat; two-host DLM/GFS2 recovery passed. The failed preflight is not a pass.
+- Avoid: disabling fencing, clearing failures to claim health, blaming host load without evidence, or treating a larger timeout as proof of transport reliability.
+
+## BUG-0128 — DLM fencing helper requires an unavailable Pacemaker library
+
+- Date: 2026-09-13.
+- Status: prerequisite guard and matching package reviewed; reproduced two-host native recovery passed; write-time and interruption gates separate.
+- Symptom: quorum and power exclusion succeed but GFS2 mount blocks joining the DLM lockspace, times out, and the host is fenced again.
+- Root cause: Debian `dlm-controld` 4.3.0-3's helper requests `libstonithd.so.26`; Pacemaker 3.0.0-2 ships `.so.56` only (`kick_helper error -79`, exit 177). The Pacemaker 3 development header itself still defines `.so.26`, so a plain rebuild does not fix it.
+- Fix: Core checks the helper's exact library name, architecture and exports without fencing; setup, health and pre-Pacemaker boot readiness fail closed (before iSCSI connect). A rebuilt Debian package keeps the upstream helper and corrects only the stale header constant via a reproducible build-local overlay; no library alias or new fencing implementation.
+- Regression: agent/vmhost race suites pass (missing library, ambiguous candidates, late cancellation); both providers run them. Package-loader check passed; offline deployment to three disposable hosts; two-host startup excluded the third and recovered DLM/GFS2 without manual steps. Evidence: [concurrent storage evidence](qa/2026-09-12-concurrent-pool-storage.md).
+- Avoid: trusting package installation as fencing compatibility, symlinking incompatible library versions, disabling DLM fencing, or manually acknowledging exclusion the integration cannot verify.
+
+## BUG-0129 — Cluster lab inhibited the wrong DLM service name
+
+- Date: 2026-09-13
+- Status: fixture correction reviewed; corrected native boot order verified on all three hosts.
+- Symptom: the lab's standalone `dlm.service` was enabled and active before Pacemaker, unlike the product installer's ordering.
+- Root cause: lab provisioning inhibited `dlm_controld.service`, not Debian's actual `dlm.service`; successful package install hid the drift.
+- Fix: use the actual Debian unit in the fixture and keep the standalone service disabled after upgrades, leaving Pacemaker's DLM resource in control; no executable masking or CIB ordering change.
+- Regression: all six fixture tests pass (Python discovery, both CI providers); native check verified the disabled unit and readiness gate before Corosync/Pacemaker on all three hosts, with all GFS2 clones healthy.
+- Avoid: treating a nonexistent unit's tolerated error as successful inhibition, or claiming lab boot ordering matches the product without checking.
+
+## BUG-0130 — Healthy majority recovery was rejected as missing quorum
+
+- Date: 2026-09-13
+- Status: correction reviewed; native majority health, initial activation and degraded existing-VM admission passed.
+- Symptom: Corosync reports a quorate two-of-three partition and DLM/GFS2 recovers on both survivors, but Core reports quorum unconfirmed and blocks storage admission.
+- Root cause: health parsing equated live nodes with configured pool size; DLM/GFS2 checks required the full clone count; master admission required all hosts indefinitely; member readiness treated the registration's master owner as the local observer.
+- Fix: distinguish configured membership from its live voting majority, keeping exact membership, vote policy, fencing and resource-identity checks; bind the observer to the native local membership row. Initial setup still needs every host's fresh evidence and a master-recorded, configuration-bound activation receipt before majority operation; observations distinguish degraded from healthy.
+- Regression: focused agent/vmhost race suites (member-observed master registration, malformed membership, stale/mismatched activation, unsafe resource states), both CI providers; native survivor reports, third-host return and existing-VM restart with the third host off passed. Separate stale aggregate-health label split to BUG-0137.
+- Avoid: accepting a bare `Quorate: Yes`, lowering configured votes to the live count, dropping fencing checks, or treating a configured pool as fully online.
+
+## BUG-0131 — Shared VM policy update leaves the ownership definition stale
+
+- Date: 2026-09-13
+- Status: reviewed correction, native API recovery and full autostart walkthrough passed.
+- Symptom: after starting a shared-storage VM and changing its autostart policy, the next graceful shutdown fails with a durable-inventory definition conflict.
+- Root cause: the managed update changed the definition without updating the pool master's ownership record, so exact inventory reconciliation rejected it; the scan could also block operations on other VMs.
+- Fix: keep authorized definition changes and the master-owned record consistent, including interrupted-operation recovery; reboot/media use owner admission; a local journal alone never reports an unconfirmed master transition as succeeded. Divergent member inventory and exclusive ownership stay strict.
+- Regression: `GOMAXPROCS=2 go test -race ./internal/agent ./internal/vmhost -count=1` passed (reserve/commit/abort acks, replay, invalid input, master confirmation, journal recovery), both CI workflows; native journal recovery, shutdown and agent-restart/OS-reboot autostart walkthrough passed.
+- Avoid: deleting the ownership journal, ignoring spec mismatches, manually rewriting state, or claiming the failed autostart walkthrough passed.
+
+## BUG-0132 — Disk-placement changes lose the existing pool ownership path
+
+- Date: 2026-09-13
+- Status: corrected and independently reviewed; stopped local/NFS attachment transition verified; broader conversion acceptance open.
+- Symptom: after removing a VM's last shared disk, a local-only edit or power action can bypass its master ownership record; adding the first shared disk to a local VM has no master record to reserve against.
+- Root cause: admission classified only requested/current disks, not durable ownership history; initial inventory adoption skipped local definitions.
+- Fix: preserve pool ownership through disk-placement changes using retained Core journal evidence; bind first-transition adoption to the authenticated prior owner definition, not client input. No second member policy store.
+- Regression: `GOMAXPROCS=2 go test -race ./internal/agent ./internal/vmhost -count=1` (local-to-shared seeding via master-local and member paths, history after detach, local-edit bypass), both CI workflows; native stopped attach/detach 1 → 2 → 1 passed (not disk migration or running reconfiguration). Evidence: [current native evidence](qa/2026-09-14-cluster-storage-reliability.md).
+- Avoid: treating the disappearance of a shared disk as permission to discard the master's VM identity or accept a new owner.
+
+## BUG-0133 — Cached stopped inventory overwrites newer execution state
+
+- Date: 2026-09-13
+- Status: native mismatch reproduced; reviewed correction and native reboot checks passed.
+- Symptom: the master ownership record says stopped while the assigned guest is running, blocking running-only reboot admission.
+- Root cause: owner seeding replayed runtime observations from all cached member inventories; an older stopped observation overwrote a later start ack and later running inventory did not correct it.
+- Fix: accept runtime transitions only from the relevant fresh owner observation, protecting newer execution epochs and in-flight starts; never infer stop from a timeout, foreign report or cached pre-start snapshot.
+- Regression: fresh-owner and stale-foreign-inventory tests under `GOMAXPROCS=2 go test -race ./internal/agent ./internal/vmhost -count=1`, both CI workflows; native six guest reboots and survivor stop/start passed (foreign-report race covered only by the deterministic test).
+- Avoid: replaying cached runtime state during global definition seeding, or changing the UI to hide a contradictory master record.
+
+## BUG-0134 — External DLM fencing requests bypass the default off policy
+
+- Date: 2026-09-13
+- Status: native configuration upgrade and external-DLM controlled-return gate passed; stricter foreign-parameter guard deployed with native exact-CIB no-op verified.
+- Symptom: DLM requests reboot fencing although Pacemaker's default fencing policy is off, so the default alone does not guarantee controlled host return.
+- Root cause: DLM is an independent client of the Pacemaker fencing API and requests its own action; the cluster default governs only requests using it.
+- Fix: render `pcmk_reboot_action=off` on every Core-owned fence resource; readiness requires one direct unconditional mapping with its deterministic CIB ID. Only a recognized otherwise-exact predecessor missing the mapping gets a version-checked narrow patch; conflicting/duplicate/conditional/inherited mappings and extra or duplicate fence parameters are refused before mutation.
+- Regression: full agent/vmhost race checks (wrong-mapping no-write, legacy upgrade), both CI workflows; native rollout installed mappings with unchanged PIDs, and a DLM reboot request resolved to off with the target held off (on the pre-guard build). Foreign-parameter refusal is regression-tested only, not injected live. Remote CI results not established.
+- Avoid: assuming `stonith-action=off` covers all fencing clients, disabling DLM fencing, or acknowledging an unresolved request to make a mount succeed.
+
+## BUG-0135 — Initial cluster activation receipt disappears
+
+- Date: 2026-09-13
+- Status: reviewed correction and combined checks passed; selected native master fence/replay passed with the receipt retained. Other failure modes remain separate.
+- Symptom: an initially qualified cluster returns to awaiting initial healthy member confirmation instead of its established degraded state.
+- Root cause: a runtime-fault retry moved the operation to queued and reconstructed it for native replay without copying the completed activation receipt.
+- Fix: preserve master-owned initial-activation evidence across reporting, restart and failure paths without inferring it from historical status.
+- Regression: `TestResumeNeedsAttentionRetainsCompletedActivationReceipt` passes (pre-fix red not captured); combined agent/vmhost race checks, both CI workflows; native reboot and master fence/replay kept activation and registration byte-identical (final raw guest inventory not retained). Evidence: [reliability follow-up](qa/2026-09-14-cluster-storage-reliability.md).
+- Avoid: manufacturing an activation receipt from a status label, bypassing initial qualification, or relabeling the UI without restoring durable behavior.
+
+## BUG-0136 — Workload fixture rejects equivalent empty media defaults
+
+- Date: 2026-09-13
+- Status: fixture corrected and independently reviewed; native retry passed.
+- Symptom: the six-VM GFS2 resume gate rejects otherwise matching retained VMs before any VM starts.
+- Root cause: fixture input omits the optional media ID while Core reports an empty string; canonical comparison treated them as different.
+- Fix: normalize only omitted/empty no-media defaults; actual media selections and all other fields stay strict.
+- Regression: all 39 workload fixture tests pass (equivalent defaults, invalid media types, real media mismatch), Python suite in both CI providers; native resume of the six retained VMs passed.
+- Avoid: removing spec comparison, accepting arbitrary media drift, or overwriting retained guest images to fake compatibility.
+
+## BUG-0137 — Recent pre-fence reports keep aggregate storage falsely healthy
+
+- Date: 2026-09-13
+- Status: correction independently accepted; native degraded-state recapture passed.
+- Symptom: a positively fenced-off host and aggregate storage still show healthy from recent pre-fence reports while the host connection shows offline.
+- Root cause: the freshness window alone did not invalidate observations predating a new exclusion proof, and proof acceptance did not reduce persisted aggregate status.
+- Fix: invalidate older target observations, require reports to acknowledge the current passed proof via the existing status contract, and recompute readiness on proof acceptance; keep the activation receipt and never infer health from exclusion.
+- Regression: verifier test against persisted activated state proves immediate durable degradation; `go test -race ./internal/agent ./internal/vmhost -count=1` and 210 Python tests passed; Go packages in both CI providers. Native captures showed degraded after exclusion and healthy after controlled return.
+- Avoid: shortening the freshness timeout, changing only the UI label, or treating a successful fence as proof the target returned healthy.
+
+## BUG-0138 — Single-host iSCSI interruption is followed by all-host exclusion
+
+- Date: 2026-09-13
+- Status: native failure reproduced; reviewed correction passes source regressions and the stopped-VM native interruption repeat; live-write acceptance remains open.
+- Symptom: a bounded 90-second TCP/3260 interruption on only the third Core powered off all three Core hosts (guests stopped; heartbeat/fencing paths not targeted).
+- Root cause: GFS2 monitor-stall cascade: the isolated host's iSCSI NOP timeout preceded stalled monitors on all three hosts, all exceeding 40 seconds and scheduled for fencing before session recovery. Exact blocking syscall unproven; not DLM-monitor-first.
+- Fix: monitor-only exact-session OCF resource ahead of each affected GFS2 clone, one transport identity per portal/IQN; never logs in/out or changes mounts. Activation and legacy upgrade need fresh live adapter/session readiness from every member, keep the activation receipt and version-check the narrow CIB patch; real health refresh precedes the legacy retry gate.
+- Regression: parser, wrapper attestation, CLI, CIB and agent retry tests in `go test -mod=vendor ./...` plus agent/vmhost/protocol race tests, both CI workflows (remote CI not executed); native 90-second repeat with stopped VMs fenced only the target and survivors stayed healthy (28 observations). Live-write fault and final delivery open.
+- Avoid: disabling fencing, clearing native failure state, raising every timeout without causal evidence, or claiming a baseline write pass proves resilience to storage-path loss.
+
+## BUG-0139 — Offline storage retains current-looking healthy access
+
+- Date: 2026-09-13
+- Status: correction, browser regressions and native all-stale outage/recovery workflow passed.
+- Symptom: with every Core disconnected, cached NFS/SMB rows still show green healthy/readable/writable access and enabled lifecycle actions.
+- Root cause: the UI rendered the last access projection without the assigned Core's connection freshness; the media storage picker filtered cached access the same way.
+- Fix: keep the last report as history, mark current access unknown, and gate actions/pickers on host freshness. Core stays authoritative; no Controller-owned state.
+- Regression: `tests/integration/cluster_storage_browser.py` (stale NFS/SMB labels, disabled actions, withheld ISO destinations, stale update/detach, deferred SMB credential handoff; simulated API capture labelled) in both CI workflows, remote CI not executed; typecheck/build/UI unit tests passed; native all-stale workflow passed.
+- Avoid: deleting useful last-known data, turning cached Core facts into invented current state, or treating a green cached badge as proof of writable storage.
+
+## BUG-0140 — Source archive metadata retains the builder's account identity
+
+- Date: 2026-09-13
+- Status: source correction and regression pass; neutral ownership verified on all 396 members of a newly built private source archive.
+- Symptom: candidate source files passed content privacy review, but tar member ownership retained the build machine's account and group names.
+- Root cause: the packager used default `tarfile.add` metadata without a public ownership policy.
+- Fix: normalize every member's uid/gid to zero and clear account/group names and inherited extended headers, keeping contents and notices.
+- Regression: `test_archive_metadata_does_not_retain_builder_identity` failed before and passes after; all eight `test_build_source.py` tests pass; Python discovery in both CI workflows, remote CI not executed. Existing private archives, published history and distributed artifacts were not rewritten or audited.
+- Avoid: checking only file contents, renaming the outer archive, or claiming distributed artifacts were sanitized by fixing the current builder.
+
+## BUG-0141 — Cluster status times out after a master-agent outage during writes
+
+- Date: 2026-09-13
+- Status: mixed-version correction and independent source/documentation review passed; corrected native outage repeat pending.
+- Symptom: after stopping and restoring only the master's management service during six GFS2 guest writers, clustered-storage status returned HTTP 504 (guest writes progressed meanwhile).
+- Root cause: new Core sends `session_monitor_ready` in member status; the older Controller's strict decoder rejects the unknown field with 400 and the broad cluster capability does not negotiate it, so report handshake/reset cycles starve the broker until its 30-second expiry. Not a native storage stall.
+- Fix: negotiate the report extension and omit it from the Controller-facing projection until acknowledged, keeping Core-native readiness state.
+- Regression: test rejects the raw payload with the old decoder then accepts the negotiated projection (new/new, old/new, late base ack, reconnect, re-enrollment); `go test -race ./...` and 212 Python tests passed; Go suites in both CI workflows, remote CI not executed. No corrected native checksum/reboot or outage acceptance claimed.
+- Avoid: hiding the timeout with unbounded retry, clearing native failures, treating a restarted process as complete recovery, or calling write progress alone a passed durability test.
+
+## BUG-0142 — Lab cleanup can falsely report unknown guests stopped
+
+- Date: 2026-09-13
+- Status: reproduced in the disposable lab; correction and independent review passed; native management-outage repeat pending.
+- Symptom: the management-outage helper recorded all six guests stopped, but native inspection found both master-host guests still running.
+- Root cause: shared workload cleanup selected only guests initially `running` and verified that subset, silently excluding unknown/missing ones; the private caller asserted complete cleanup. The original run's exact mismatch is inconclusive; its false receipt is retained.
+- Fix: require fresh known state for every requested VM before any cleanup request, verify the full set is freshly stopped, and keep the original error when cleanup is unproven; private verifier uses bounded fresh-report reconciliation after restart.
+- Regression: 41 shared workload tests, 18 private outage checks and 214 Python discovery tests passed; discovery suite in both CI workflows, remote CI not executed.
+- Avoid: interpreting unknown as stopped, checking only a convenient subset, or treating a helper's return as evidence every requested cleanup happened.
+
+## BUG-0143 — Session-monitor fencing cascades during writes before fault injection
+
+- Date: 2026-09-13
+- Status: reproduced; diagnosis and resilience acceptance open. Bounded disposable IBLOCK scenario later passed; production, HA, migration, physical SAN, soak, strict continuous-writer handover with transport fault, and current-ISO acceptance remain open.
+- Symptom: with six GFS2 guest writers, session monitoring fenced two members before the planned transport fault was installed and the master lost quorum; stopped-guest fault passes did not cover writes.
+- Root cause: unresolved. The target logged unrecoverable iSCSI DataOut timeouts immediately before both monitor failures (return code 7, zero exec/queue time, not a monitor timeout); distinct initiator identities rule out cloned identity. CPU/backing-I/O pressure is a hypothesis; the OCF wrapper suppresses CLI diagnostics.
+- Fix: none for the root cause. Lab work: BUG-0145 fixture correction (repeat still failed with master DataOut before injection and force-stops stuck `in shutdown`); switching lab target backing FILEIO → IBLOCK let a second full six-writer run pass with only the selected Core fenced, no DataOut, healthy survivors and matching 600 MiB hashes (first IBLOCK run failed on a `pending` fence history sample). No target timer or fencing change claimed.
+- Regression: no fix or passed write-time repeat of the original failure; the required regression must detect the established cause, keep fail-closed persistent-loss behavior and run in both CI workflows. NFS/SMB six-VM write/reboot/lock repeats and strict Controller-adoption handover (C-to-D) passed separately; aggregate CPU-model observation and transient member-reconciliation warnings remain under investigation. Evidence: [reliability follow-up](qa/2026-09-14-cluster-storage-reliability.md).
+- Avoid: disabling fencing, lowering the workload solely to pass, assuming a timeout without evidence, or extrapolating a stopped-guest fault pass to workload resilience.
+
+## BUG-0144 — Lost-quorum storage admission blocks shared-VM stop requests
+
+- Date: 2026-09-13
+- Status: reproduced; narrow source/API/guide correction independently accepted. Native check passed only with master management down and storage healthy; lost-quorum and frozen-I/O completion remain open.
+- Symptom: after the preceding cascade, API force-stop of a surviving VM failed with `clustered VM storage is not ready` before reaching libvirt.
+- Root cause: shared execution admission required live clustered storage and peer bookkeeping for stop-only actions, though native stop does not need storage admission.
+- Fix: allow only authenticated, scope-validated shutdown/force-stop of the locally journal-defined shared VM without a healthy cluster or reachable master; start, reboot, autostart, creation, updates, permits and ownership transfer stay fail-closed; no invented stopped state after error. During frozen GFS2 I/O native termination may still hang (`in shutdown`).
+- Regression: stop-only/no-permit/unchanged-owner tests, full agent suite and race check passed; Go suites in both CI workflows, remote CI not executed.
+- Impact: API and guide updated for stop-only admission.
+- Avoid: granting start/reboot through a stop exception, transferring ownership on a timeout, or reporting a requested stop as observed completion.
+
+## BUG-0145 — Disposable host definitions omit ACPI/APIC CPU enumeration
+
+- Date: 2026-09-13
+- Status: fixture correction and controlled native cold return verified; unchanged six-writer verification remains open under BUG-0143.
+- Symptom: the storage target had two vCPUs but booted with one present CPU and SMP disabled; shutdown flushed filesystems but could not power off.
+- Root cause: the outer libvirt fixture omitted ACPI/APIC features (no MADT or MP tables). Not proof of the BUG-0143 DataOut stall.
+- Fix: render ACPI, APIC and an internal VGA device (no graphics endpoint), keeping identities, disks, memory, CPU count and networks. ACPI without VGA repeatedly reset on this QEMU version; ACPI with VGA booted two CPUs.
+- Regression: fixture test failed before, all seven pass after; 215 Python discovery tests in both CI workflows, remote CI not run; native storage and three Cores booted with two CPUs and healthy quorum/DLM/GFS2 with no guests. Not a write-time resilience pass.
+- Avoid: calling configured CPU count observed capacity, altering storage timers to hide a stall, or treating fixture tests as native boot evidence.
+
+## BUG-0146 — Member reconciliation rewrites healthy native cluster state
+
+- Date: 2026-09-13
+- Status: source correction, independent review, Core rollout and post-fix native idle observation passed.
+- Symptom: each five-second member reconciliation rewrote an unchanged Corosync configuration and reissued service enable/start while the cluster was already active (120 generator calls, 60 reloads per member in 30 s).
+- Root cause: `StartStorageClusterAt` did not distinguish exact steady state from recovery.
+- Fix: compare owned configuration byte-for-byte and check every required unit for persistent enablement and active state; exact healthy state is read-only, disabled/inactive keeps recovery, foreign configuration is refused.
+- Regression: `TestStartStorageClusterIsPersistentServiceAndConfigNoop` reproduces the old starts/inode change and passes with the fix; vmhost race/full checks, both CI workflows; native 35 s no-VM observation showed zero generator calls or reloads. Steady-state idempotence only; no DataOut causality.
+- Impact: existing setup/status/reconciliation contract, no schema change; state owner Core (existing master journal and native config).
+- Avoid: treating every periodic pass as recovery, silently accepting foreign configuration, or making disabled/inactive recovery a no-op.
+
+## BUG-0147 — Unknown master storage status appears as an empty configuration
+
+- Date: 2026-09-13
+- Status: source correction, independent review, UI publication and native outage/recovery workflow passed.
+- Symptom: an unavailable or still-checking master storage status rendered as empty configuration, offering initial setup and hiding existing additional repositories.
+- Root cause: the browser collapsed unknown, failed and confirmed-empty responses into one absence state.
+- Fix: distinguish checking, unavailable, succeeded-empty and configured views; setup only after confirmed status and preserves additional repositories; a pool-key remount rejects late writes from a previous scope.
+- Regression: source UI checks and fixture coverage pass; browser suites in both CI workflows; native outage/recovery workflow passed without browser errors.
+- Impact: existing status GET contract; guide updated (storage guidance); state owner Core, no durable record change.
+- Avoid: treating unavailable data as empty, enabling setup during a pending status read, or applying late replies after a pool-scope change.
+
+## BUG-0148 — Replacement enrollment can leave credential recovery ambiguous
+
+- Date: 2026-09-13
+- Status: source correction and independent review accepted; focused normal/race checks and bounded three-member Core rollout (CIB, quorum, GFS mounts unchanged) passed. Replacement-enrollment failure paths not exercised natively; aggregate pool health, production readiness, HA and transport-fault recovery not established.
+- Symptom: a rejected or lost replacement enrollment could make recovery ambiguous, and a failure after renaming the new state file could be misread as proof the replacement credential was inactive.
+- Root cause: enrollment did not make explicit the boundary between pending credential, still-active credential, and a published but not durably confirmed state file.
+- Fix: keep the replacement key/CSR in Core state until a validated response is atomically accepted; keep prior trust/key/certificate on rejection or lost response; after rename, retain published state even if directory fsync fails, return uncertain, and reconcile observed identity/inventory before retry.
+- Regression: agent tests (byte-for-byte retry after lost response, old credential preserved, post-rename failure matches published state) and local-core handoff tests; `go test -race ./...` passed; Go suites in both CI workflows, remote CI not run.
+- Impact: existing contract — `POST /api/v1/agent/enroll` and local handoff shapes unchanged; callers reconcile before retrying a post-rename uncertain error. Guide updated (enrollment recovery). State owner Core: agent `state.json` holds active and pending material; fresh Controller adopts via enrollment and reports.
+- Avoid: deleting or cloning the state directory after a failed replacement, pairing a new key/trust with an old certificate, or retrying a post-rename uncertain result before reconciling.
+
+## BUG-0151 — Controller restart mislabels clustered-storage preflight as unsupported
+
+- Date: 2026-09-13
+- Status: source correction and independent review accepted; bounded Controller-outage workload passed hash/reboot, off/return and cleanup, but the natural 503 branch did not occur (source/contract-only). Earlier failed outage receipts remain failures.
+- Symptom: after Controller restart, a v2 Core withholding clustered capability during preflight got a permanent-looking 409 unsupported instead of a retryable state.
+- Root cause: capability selection treated an offered preflight extension like a Core that never advertised clustered support.
+- Fix: return 503 `clustered storage capability negotiation is pending` for the bounded v2 preflight; keep 409 for genuinely unsupported. No broker request, native work, credential handoff or legacy fallback while negotiating; callers retry after the acknowledged report.
+- Regression: Controller capability tests (status and credential refusal without dispatch during preflight, relay after ack); workload consumer treats 503 as retryable. Bounded lab evidence only, not production or ISO acceptance.
+- Impact: changed error contract for clustered-status, setup, credential and fence routes (negotiation 503, absent support 409); guide updated; no Controller state.
+- Avoid: dispatching native work or credentials before acknowledgement, treating transient preflight as permanent unsupported, or adding a legacy fallback route.
+
+## BUG-0152 — Adopted task history implies an unavailable original timestamp
+
+- Date: 2026-09-13
+- Status: source correction and independent review accepted; browser captures passed full adopted-history (688 outcomes) and recent-five views.
+- Symptom: task history showed the Controller re-observation timestamp for Core-reported historical outcomes as the original outcome time.
+- Fix: label only rows whose request ID is exactly `adopt-outcome:<host-id>:<operation-id>` as **Reobserved from Core history** and state the original time was not reported; all other tasks keep the updated timestamp.
+- Regression: UI checks cover the exact identity and reject lookalike prefixes; typecheck, tests, build and privacy passed; browser capture passed (earlier locator failure retained).
+- Impact: existing contract (existing request ID, no Core field); guide updated.
+- Avoid: inferring a missing original timestamp, matching a loose request-ID prefix, or presenting a re-observation as a newly dispatched task.
+
+## BUG-0149 — Fresh ISO management cannot start with unprovisioned agent state permissions
+
+- Date: 2026-09-13
+- Status: source regression, independent review and seventh-ISO clean-install BIOS verification passed; hosted CI and broader production gates remain open.
+- Symptom: BIOS installation completed and booted, but local Core management repeatedly exited with an agent state-directory permission error.
+- Root cause: the embedded agent uses `/var/lib/nex-core-agent` (root 0755 after install), but the local management unit provisioned only `/var/lib/nex/core-local`; strict store validation correctly rejected it.
+- Fix: declare both directories in local management's `StateDirectory` with `StateDirectoryMode=0700`; validation unchanged.
+- Regression: private-state-directory package test failed before, passes after; `python3 -m unittest discover -s tests -p 'test_core_local_package.py'` passed 15, in both CI workflows' Python discovery; seventh ISO clean install showed both dirs root 0700 and zero restarts across a reboot. Hosted CI has not run.
+- Impact: existing contract (restores Core-local API startup); state owner Core (existing agent `state.json`).
+- Avoid: weakening store permission checks, relying on an inactive standalone unit, or manually fixing one lab directory and calling the installer fixed.
+
+## BUG-0150 — Fresh-install acceptance can pass with failed Core management
+
+- Date: 2026-09-13
+- Status: fixed; corrected seventh-ISO baseline/reboot walkthrough passed (not UEFI or physical hardware); hosted CI not run. Original false-positive output retained, not relabeled passed.
+- Symptom: the fresh-install helper printed a baseline pass while Core local management was restart-looping.
+- Root cause: multi-unit `systemctl is-active` succeeds if any unit is active; baseline and reboot checks trusted that aggregate.
+- Fix: require each named service to be exactly `active`; validate the reboot UUID; stop labeling a version/service check as signature verification; check the BIOS fixture's active/autostart NAT prerequisite before creating its domain/disk.
+- Regression: `python3 -m unittest discover -s tests -p 'test_fresh_install_host.py'` passed 12 (reproduces aggregate exit-zero); corrected check refused the unhealthy install and accepted the healthy one after a distinct reboot. CI: both providers run the `test_*.py` discovery suite.
+- Avoid: treating a multi-unit exit code, a Type=simple service start, or a package version as proof of a healthy product or verified artifact.
+
+## BUG-0153 — Disk-step explanatory text clips at 800×600
+
+- Date: 2026-09-13
+- Status: fixed; eighth-ISO native wizard checks passed at 800×600 and 1024×768 (not a completed eighth-ISO install); broader production gates open.
+- Symptom: the disk-step introductory and empty-state labels extended beyond the visible page at 800×600 (presentation only; target review and erase confirmation still worked).
+- Root cause: long GTK labels were not constrained to the page width by automatic wrapping.
+- Fix: explicit line breaks at the two clipped clause boundaries, preserving wording, selected disk, erase review and confirmation.
+- Regression: `python3 tests/integration/installer-disk.py` and `make installer-check` passed; native wizard walkthrough checks both continuation bands (seventh ISO failed it; a first eighth-ISO run failed on a wrong screenshot coordinate, retained). CI: both providers run these suites; hosted CI not run.
+- Avoid: accepting clipped destructive-step explanations because the final confirmation works, or claiming a guessed label-width adjustment is verified.
+
+## BUG-0154 — CPU capability observation uses a connection libvirt rejects
+
+- Date: 2026-09-13
+- Status: fixed; bounded three-Core native rollout returned 59 models and healthy CPU checks.
+- Symptom: fresh hosts reported a failed CPU-model check and no usable model list.
+- Root cause: the shared inventory runner adds `--readonly`, but libvirt rejects `virConnectGetDomainCapabilities` on that connection (not a nested-virtualization limit).
+- Fix: omit read-only mode only for `domcapabilities`; keep it, cancellation, output bounds and stderr redaction for every other query.
+- Regression: `go test ./internal/agent -count=1` plus CPU-probe race tests (reproduce refusal, keep other queries read-only, reject invalid models). CI: both providers; hosted CI not run.
+- Impact: API existing contract (restores `inventory.cpu_models`).
+- Avoid: labeling a deterministic query error a hardware limitation, or removing read-only protection from every inventory query.
+
+## BUG-0155 — Member reconciliation failure has no actionable diagnostic stage
+
+- Date: 2026-09-13
+- Status: diagnostic deployed and reviewed; the underlying intermittent repository deadline failures remain open.
+- Symptom: a fresh member health check told the operator to inspect Core, but neither the error nor the journal named the failing stage.
+- Root cause: reconciliation kept only a final error with fixed public text; the background caller discarded the error.
+- Fix: report a bounded stage and safe outcome in the existing check (unknown stages fall back to generic), preserving retries, deadlines and raw-error secrecy.
+- Regression: focused normal/race agent checks (redaction, classifications, recovery; source-bound tags for native deadline branches, not executed). Native rollout exposed `pool storage reconciliation repository deadline` then fresh recovery. CI: both providers; hosted CI pending.
+- Impact: API existing contract (`check.error` text only); guide updated.
+- Avoid: treating fresh failed health as task history, hiding failure because mounts work, or publishing raw peer/command errors and secrets.
+
+## BUG-0156 — Periodic repository validation repeats clustered setup
+
+- Date: 2026-09-14
+- Status: partial; deployed to three lab Cores, but a five-minute idle capture still had three fresh deadline episodes across two members; six-writer verification pending.
+- Symptom: members repeatedly reported fresh repository deadlines with mounted storage and no running guests.
+- Root cause: periodic iSCSI validation repeated full cluster reconciliation (2.985–3.316 s measured) inside its three-second child context while the cluster worker did the same work; cluster scheduling also sat below the repository busy check.
+- Fix: validate against the refreshed, activated, membership-bound Core record; keep native identity/access/locking checks and explicit refresh; schedule cluster work before the busy check. Deadlines unchanged.
+- Regression: `go test ./internal/agent -run '^TestPeriodicPoolStorageReconcileSkipsDuplicateClusterRefresh$' -count=1` failed on the restored old dispatch; `go test -race ./internal/agent -run '^TestPeriodic' -count=1` passed. Scheduling order: source review only. Evidence: [the follow-up](qa/2026-09-14-cluster-storage-reliability.md). CI: both Go race jobs; hosted CI not run.
+- Avoid: increasing deadlines, treating an aggregate timing label as a specific syscall, hiding current failure behind healthy mounts, or caching healthy state.
+
+## BUG-0157 — Outage harness waits for all writes before restoring management
+
+- Date: 2026-09-14
+- Status: fixed; bounded diagnostic native outage and independent payload rereads passed (audit limits in the reliability QA report).
+- Symptom: a slow writer could outlast the completion wait or management restart watchdog, invalidating the bounded outage.
+- Root cause: the harness awaited all 600 fsynced writes while master management stayed stopped.
+- Fix: observe six-writer progress and admission refusal during the outage, restore management in `finally`, then wait on one bounded budget.
+- Regression: `python3 -m unittest tests.test_cluster_storage_workloads.ClusterStorageWorkloadTests.test_master_agent_outage_accepts_real_api_shaped_admission_record -v` fails with the old order; focused suite passed 53. CI: both providers' Python discovery.
+- Avoid: extending the management outage merely to wait for slow storage writes.
+
+## BUG-0158 — Fresh member access reports synchronously rewrite durable pool state
+
+- Date: 2026-09-14
+- Status: reviewed; full race checks passed; clean-build idle verification still found two deadline episodes, so native acceptance is open.
+- Symptom: fresh NFS and clustered-iSCSI reconciliation still hit the three-second deadline after duplicate setup was removed.
+- Root cause: each member access observation rewrote and flushed the master's pool-state file and directory (~350 ms per flush when slow). Native access validation also consumes budget; not every latency source is fixed.
+- Fix: keep current access observations in master Core memory only (unknown after restart); repository and reservation/mutation state stay durable with error, generation, identity, freshness and execution gates.
+- Regression: `go test ./internal/agent -run '^TestMemberReconcilePostsLaterAccessAfterEarlierDeadline$' -count=1` fails with the durable handler; `GOMAXPROCS=2 go test -race ./...` passes. CI: both Go race jobs; hosted runs not executed.
+- Impact: API existing contract; guide updated for post-restart access; state owner core (storage and reservation records stay on Core; adoption reads master inventory plus fresh member observations).
+- Avoid: removing configuration/ownership durability, hiding a failed report, extending probe deadlines or substituting an old healthy result.
+
+## BUG-0159 — Clustered repository wrappers repeat QEMU access proof
+
+- Date: 2026-09-14
+- Status: fixed and reviewed; native acceptance open.
+- Symptom: periodic clustered-iSCSI validation spent budget repeating the disposable QEMU-account probe.
+- Root cause: `ValidatePoolStorageAccess` repeated the proof already done by `ValidateClusteredISCSIAt`; the preparation wrapper overlapped `PrepareClusteredISCSI` the same way.
+- Fix: omit only the second wrapper probe for clustered iSCSI; NFS/SMB keep theirs; identity, quorum, fencing, mount and cross-Core locking checks remain.
+- Regression: `go test ./internal/vmhost -run '^TestValidatePoolStorageAccessRunsOneClusteredQEMUProof$' -count=1` failed (two proofs) on the old wrapper; `GOMAXPROCS=2 go test -race ./internal/agent ./internal/vmhost` passed. Success counts use a clustered-validator seam. CI: both providers; no native or hosted pass claimed.
+- Avoid: removing the underlying proof or testing only a new boolean predicate without exercising the actual wrapper.
+
+## BUG-0160 — Reused workload markers can reject or mismeasure a new writer
+
+- Date: 2026-09-14
+- Status: fixed and reviewed; native outage acceptance open.
+- Symptom: a reused guest could expose the previous run's progress after a new start marker, or the poll rejected an old marker before the new writer reached its barrier.
+- Root cause: the writer published its start before resetting progress; the poll treated an older marker as terminal failure.
+- Fix: sync progress zero before publishing the start marker; keep waiting for this run's marker within the bounded timeout.
+- Regression: old producer/poll failed all three targeted checks; `python3 -m unittest tests.test_cluster_storage_workloads` passed 55, full discovery 242. CI: both providers.
+- Avoid: trusting a new marker paired with an old progress counter or accepting a stale marker as evidence of a current writer.
+
+## BUG-0161 — Workload exclusion rejects an adopted failed-create outcome
+
+- Date: 2026-09-14
+- Status: fixed and reviewed; corrected diagnostic outage and payload rereads passed (limits in QA).
+- Symptom: the retained six-VM workload stopped before writes because an old failed-create exclusion had no Controller VM row.
+- Root cause: the harness expected the original Controller's failed VM and request ID; a replacement Controller correctly adopts the terminal Core operation with an adoption request ID and no VM.
+- Fix: accept only the exact adopted terminal failed operation with absent VM, keeping checkpoint binding, fresh hosts, GFS identity and all-Core domain/disk-directory absence checks.
+- Regression: `ClusterStorageWorkloadTests.test_failed_create_exclusion_requires_terminal_absent_exact_slot` failed on the old guard; focused 55 and discovery 242 passed. CI: both providers.
+- Avoid: deleting the exclusion, inventing a failed VM row, or accepting uncertain execution/native artifacts merely to make a workload resume.
+
+## BUG-0162 — Outage admission check rejects the actual master transport error
+
+- Date: 2026-09-14
+- Status: fixed and reviewed; corrected diagnostic outage and payload rereads passed (limits in QA).
+- Symptom: a terminal failed start during master-agent outage was rejected by the harness despite reporting the unavailable master inventory endpoint.
+- Root cause: the harness required the words "pool master"; the Core guard can return the inventory request's connection refusal.
+- Fix: also accept the exact refusal for the selected master's inventory URL, keeping terminal-failure and stopped-VM identity checks.
+- Regression: `ClusterStorageWorkloadTests.test_refused_start_accepts_only_exact_observed_master_inventory_refusal` failed on the old guard; `python3 -m unittest tests.test_cluster_storage_workloads` passed 56. CI: both providers.
+- Avoid: accepting any failed start as proof of master-authority refusal.
+
+## BUG-0163 — Simultaneous member lock proofs contend on the same byte
+
+- Date: 2026-09-14
+- Status: fixed and reviewed; native rollout passed but the five-minute idle reliability check still failed.
+- Symptom: concurrent member probes reported the master could not hold, or did not recover, the shared-storage lock on filesystems that enforce locks correctly.
+- Root cause: per-challenge leases all locked byte zero of the same probe file; the client also treated any lock error as exclusion.
+- Fix: negotiate a challenge-derived nonzero range (byte zero for legacy/older masters); bind release to member and lease; reject unknown modes, malformed challenges and non-conflict errors; cap active leases at 64 (exact replay before capacity). Expiry is not VM fencing.
+- Regression: `go test ./internal/agent -run '^TestPoolProbeDistinctChallengesDoNotConflict$' -count=1` failed on the old code; the authenticated two-member test got HTTP 409 with the old rule; `go test ./internal/agent` and `-race` passed. CI: both Go race jobs; no hosted run claimed.
+- Impact: API changed Core-peer lock mode/acknowledgement contract (documented in API reference); Controller schemas unchanged.
+- Avoid: sharing one byte among independent proofs, treating arbitrary I/O errors as exclusion, or assuming a new range without confirming peer support.
+
+## BUG-0164 — Cluster lifecycle repeats connection preparation after native start
+
+- Date: 2026-09-14
+- Status: fixed and reviewed; native rollout passed but the latest idle reliability check still failed on both members (one deadline on Core2, two on Core3 in 150 samples).
+- Symptom: cluster reconciliation added repeated native work alongside repository validation; remaining deadlines not fully attributed.
+- Root cause: after Connect and native start/apply, the lifecycle called Prepare, repeating CHAP configuration, login, device publication and GFS preflight.
+- Fix: keep Connect before start/apply, then use the full post-start validator (LUN identity, GFS metadata, CIB/quorum/mount, path and QEMU checks).
+- Regression: overlay restoring the two old Prepare callsites failed both focused tests; `go test ./internal/agent -count=1` and `-race` passed. CI: both Go race jobs; no hosted result claimed.
+- Avoid: removing full post-start validation, dropping distinct QEMU/path checks, or claiming duplicate calls explain every deadline without timing evidence.
+
+## BUG-0165 — Storage reconciliation performs unrelated VM inventory work
+
+- Date: 2026-09-14
+- Status: fixed, reviewed and diagnostically deployed; clean idle/loaded reliability verification open.
+- Symptom: managed-inventory processing (2.399–2.663 s aggregate) consumed repository budget before native storage validation.
+- Root cause: two member reconciliation reads and four periodic master peer handlers used the full managed inventory path (VM promotion, media/credentials, libvirt domain listing) for storage only.
+- Fix: a read-only durable storage projection for those six reads, reusing generation folding, detach tombstones and journal checks; pending entries excluded, unreadable ones reported.
+- Regression: `TestMemberReconcileReadsStorageWithoutUnrelatedVMObservation` and the master-handler test failed on old-path overlays; `go test ./internal/vmhost ./internal/agent` and `-race` passed. CI: both Go race jobs; hosted CI not run.
+- Avoid: globally replacing managed inventory reads that need VM/media state, or claiming this explains every native deadline.
+
+## BUG-0166 — Concurrent checks repeat identical native GFS metadata queries
+
+- Date: 2026-09-14
+- Status: fixed, reviewed and diagnostically deployed; idle reliability still failed on Core3; no deadline elimination claimed.
+- Symptom: overlapping repository, cluster-worker and storage-monitor GFS metadata queries took up to 2.611 s, exhausting the repository deadline.
+- Root cause: identical simultaneous queries ran independently; gfs2-utils 3.6.1-1 journal inspection issues buffer-cache flushes on startup (not proven to explain all latency).
+- Fix: share only a running query for the exact device string; drop it on completion; waiters keep their own deadlines and run their own read once after a failed leader.
+- Regression: `TestGFS2MetadataCoalescesOnlyConcurrentSameDeviceReads` failed on the old path; `go test ./internal/vmhost -count=1`, `-race`, and `go test ./internal/agent ./internal/vmhost -count=1` passed. CI: both Go race jobs; no hosted result claimed.
+- Avoid: retaining completed healthy results, extending another caller's context, serializing unrelated devices, or deleting journal verification.
+
+## BUG-0167 — GFS2 access probes contend in one shared directory
+
+- Date: 2026-09-14
+- Status: fixed and deployed; native probes passed on three hosts; idle reliability still failed once on Core2; revised loaded checks open. An earlier pathname-based candidate silently fell back on the mode-2770 root (failed receipts retained).
+- Symptom: QEMU access checks spent much of the budget creating/removing temp files in one shared GFS2 directory (a contributor, not the sole cause).
+- Root cause: every Core mutated the same GFS2 directory.
+- Fix: hold GFS root and per-host leaf by directory descriptors, validate held filesystem/mount and root-owned leaf mode, anchor create/cleanup and child working directory to them; root permissions and non-GFS behavior unchanged. Empty leaves are regenerable artifacts.
+- Regression: old-root overlay failed the per-host placement assertion; `go test ./internal/vmhost -count=1`, `go test ./internal/agent -count=1` and `-race` passed. CI: both Go race jobs; hosted CI not run.
+- Avoid: caching healthy access, removing fsync or permission checks, changing operator root permissions, or trusting a leaf pathname beneath a writable parent.
+
+## BUG-0168 — NFS access probes contend in the export root
+
+- Date: 2026-09-14
+- Status: fixed; three-Core native NFS proof, six-guest NFS workload and 150-sample health check passed; the separate post-GFS/SMB-startup reliability investigation remains open.
+- Symptom: under six GFS2 writers, member NFS reconciliation took 3.436 s and reported a repository deadline though access and payloads passed.
+- Root cause: NFS still used the export-root temp-file probe (3.423 s proof: 1.894 s create, 850 ms remove); a contributor, not every deadline.
+- Fix: extend the descriptor-anchored per-Core leaf (root-owned mode 0711) to NFS; a leaf-owner mismatch keeps the full-root proof for root-squash compatibility without trusting the leaf. SMB unchanged.
+- Regression: `go test ./internal/vmhost -run '^TestQEMUStorageAccessNFSUsesPerMachineLeaf$' -count=1` failed on the GFS-only selector; full vmhost/agent normal and `-race` passed. Root-squash fallback is unit-tested only (lab export was no_root_squash, mode 0777, not changed). CI: both Go race jobs; hosted not executed.
+- Avoid: accepting non-root probe leaves, changing an operator's export policy, increasing deadlines, omitting file sync or calling a passing payload a health pass.
+
+## BUG-0169 — Concurrent same-host GFS2 checks repeat the full QEMU proof
+
+- Date: 2026-09-14
+- Status: fixed and reviewed; combined native acceptance pending.
+- Symptom: a loaded clustered-iSCSI reconciliation exhausted its budget; a second full QEMU proof (1.217 s) overlapped on the same Core and repository.
+- Root cause: monitor, reconciliation and admission callers repeated the full file proof concurrently in the same held per-Core directory.
+- Fix: share only a running GFS2 proof with the same held mount/device/inode and QEMU UID; each caller keeps its own traversal, validation and context; no completed result retained; a live waiter reruns once after a failed leader. NFS keeps individual proofs.
+- Regression: `go test ./internal/vmhost -run '^TestQEMUGFSAccessCoalescesConcurrentLeafProof$' -count=1` failed on the old source; full vmhost/agent normal and race passed (UID/leaf key checks are key-level, not concurrent native users). CI: both `go test -race ./...` jobs; hosted CI not run.
+- Avoid: sharing by pathname alone or across QEMU identities, extending a waiter's deadline, caching a completed proof, suppressing cleanup failure, or claiming the loaded deadline is gone before a native rerun.
+
+## BUG-0170 — SMB credential replay repeatedly syncs an unchanged mount file
+
+- Date: 2026-09-14
+- Status: fixed and reviewed; six-guest SMB workload passed; reliability open (seven failed observer samples from two member repository deadlines, unattributed).
+- Symptom: loaded SMB reconciliation spent 567–1196 ms re-saving its existing credential.
+- Root cause: replaying an accepted credential unconditionally created, synced and renamed identical bytes and synced the directory.
+- Fix: reuse only an exact-content, bounded, regular, single-link, effective-user-owned mode-0600 credential; otherwise atomic repair; stat/read errors propagate. No cache.
+- Regression: inode-retention check failed on the original via overlay; `GOMAXPROCS=2 go test ./internal/vmhost -count=1`, agent equivalent and `-race` passed. The wrong-owner test requires root and skips otherwise. CI: both Go race jobs; hosted CI not run.
+- Avoid: caching a successful credential check, ignoring unsafe file metadata, weakening secret-file permissions or claiming latency improvement before measuring the repaired build.
+
+## BUG-0171 — QEMU access proof changes an already exact file mode
+
+- Date: 2026-09-14
+- Status: fixed and reviewed; clean native acceptance open.
+- Symptom: NFS file proofs spent hundreds of milliseconds on Chmod; a reconciliation reached 2.950 s of its 3 s budget (earlier deadlines not attributed).
+- Root cause: unconditional Chmod after Chown even when the held file already had the exact mode (native: stat 3–6 µs vs Chmod 4.055–6.424 ms idle).
+- Fix: skip Chmod only when the held descriptor proves a regular exact-0600 file with the QEMU owner; otherwise repair. Fsync, Close, access checks, cleanup and deadlines unchanged.
+- Regression: `TestQEMUStorageAccessSkipsOnlyExactQEMUModeChmod` failed behaviorally on the original (one call, expected zero); vmhost/agent `GOMAXPROCS=2 go test -count=1` normal and `-race` passed. CI: both Go race jobs; hosted CI not run.
+- Avoid: assuming creation mode survives umask/owner changes, comparing only permission bits, trusting a pathname instead of the held file, skipping the rest of the proof, or claiming intermittent deadlines closed before native acceptance.
+
+## BUG-0172 — NFS monitor and reconciliation duplicate a live file proof
+
+- Date: 2026-09-14
+- Status: fixed and reviewed; clean native acceptance pending.
+- Symptom: Core2 timing showed 12 overlapping monitor/reconciliation NFS file proofs (0.589–2.065 s) on the sole NFS repository; duplicate work, not the cause of every deadline.
+- Root cause: the in-flight held-leaf proof selector admitted only GFS2.
+- Fix: admit eligible held NFS leaves to the mount/device/inode/QEMU-UID key; per-caller validation and deadlines, failed-leader retry and independent root-squash fallback kept; no completed cache.
+- Regression: `TestQEMUNFSAccessCoalescesConcurrentLeafProof` failed on the GFS-only selector; `GOMAXPROCS=2 go test -count=1 ./internal/vmhost`, `-race` and agent normal/race passed. CI: both Go race jobs; hosted CI not run.
+- Avoid: sharing across hosts or different held leaves/UIDs, completed-health caching, bypassing preflight or cleanup, extending deadlines, or attributing the separate SMB lock-probe failure to this work.
+
+## BUG-0173 — Closing one SMB probe lease releases another lease's lock
+
+- Date: 2026-09-14
+- Status: fixed; clean three-Core rollout, 150-sample idle observation and six-guest SMB, NFS and clustered-iSCSI GFS2 workloads passed (bounded no-fault runs; see the QA follow-up).
+- Symptom: members intermittently reported "shared storage OFD lock is not exclusive across Cores" for SMB while the master held their challenge byte.
+- Root cause: one open description per lease; on the lab SMB stack (Samba 4.22, Linux 6.12 cifs, SMB 3.1.1) closing one description released another's held OFD range (one shared description kept range B in 20 of 20 rounds).
+- Fix: concurrent leases on one lock file share a reference-counted description closed after the last range unlocks; a second lease on an already held range is refused.
+- Regression: `TestPoolProbeConcurrentLeasesShareOneDescription` failed on the per-lease-descriptor overlay; `go test -count=1 ./internal/agent` and `GOMAXPROCS=2 go test -race` passed. Asserts the invariant only (local filesystems cannot reproduce SMB close). CI: both Go race jobs; hosted CI not run.
+- Avoid: `nobrl` or other options disabling byte-range locking, longer lease/probe deadlines, treating it as SMB-unsupported, or assuming it covers other same-host multi-descriptor SMB locking.
+
+## BUG-0174 — Pool advertise returns 400 for a wrong HTTP method
+
+- Date: 2026-09-14. Status: fixed; regression passed; hosted CI has not run.
+- Symptom: a non-POST request to the Core peer route `/api/v1/pool/advertise` returned 400 "invalid peer origin" instead of 405.
+- Root cause: the method check shared one condition and error path with body decoding.
+- Fix: after peer authentication and before reading the body, return 405 with `Allow: POST`; `/api/v1/pool/join` already did.
+- Regression: `TestPoolPeerExactRoutesRejectWrongMethodWith405` failed on the old handler (400, no `Allow`) and passes; `go test ./internal/agent` normal/race pass; both CI providers run this suite.
+- Avoid: combining method and input validation in one error path, or checking the method before authentication.
+
+## BUG-0175 — Empty storage-cluster proof list is served as plain-text null
+
+- Date: 2026-09-14. Status: fixed; regression passed; hosted CI has not run.
+- Symptom: `GET /api/v1/pool/storage-cluster/proof/{repository_id}` with no recorded proofs returned `null` as `text/plain; charset=utf-8`, contradicting the documented JSON array.
+- Root cause: a nil slice was JSON-encoded without an explicit Content-Type, so net/http sniffed the type.
+- Fix: start from an empty slice and set `Content-Type: application/json`. The only caller decodes `null` and `[]` identically, so mixed-version pools are unaffected.
+- Regression: `TestStorageClusterEmptyProofListIsJSONArray` failed on the old handler and passes; `go test ./internal/agent` normal/race pass; both CI providers run this suite.
+- Avoid: documenting accidental content sniffing, or making callers depend on `null` versus `[]`.

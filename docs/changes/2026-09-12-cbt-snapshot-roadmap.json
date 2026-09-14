@@ -1,0 +1,9 @@
+{
+  "summary": "Explicitly plan CBT-backed incremental backups, QEMU VM snapshots independent of ZFS/Btrfs, and later validated native snapshot integration. API impact: none for this roadmap-only change.",
+  "paths": ["docs/plans/2026-09-08-nex-platform.md", "website/src/routes/roadmap/+page.svelte"],
+  "guide": {"impact": "none", "reason": "No feature becomes available. Future implementation slices require supported-profile instructions and executed restore walkthroughs.", "pages": []},
+  "api": {"impact": "none", "reason": "Planning only; the plan names future capability, checkpoint and lifecycle flows with authorization, retry, outage and compatibility requirements. Existing backup orchestration exception remains unchanged.", "pages": []},
+  "roadmap": {"impact": "updated", "reason": "Explicitly list VM snapshot mechanism coverage and later CBT/incremental and native ZFS/Btrfs integration, keeping all work outstanding.", "pages": ["website/src/routes/roadmap/+page.svelte"]},
+  "state": {"owner": "none", "reason": "No runtime state added. Planned disk tracking stays Core-owned; backup scheduling/catalog retain their existing Controller-scoped exception."},
+  "verification": {"method": "Reviewed upstream technical sources; independent Terra review accepted planned scope, state ownership and failure/restore gates. Documentation/privacy/diff checks and website check/build passed (zero Svelte errors/warnings). Primary Chromium walkthrough confirmed expanded snapshot/CBT text and Next/Later status, inspected desktop/360px captures and found no horizontal overflow, JavaScript errors or failed HTTP responses. No snapshot, CBT, incremental-backup or native-storage acceptance is claimed.", "evidence": ["docs/plans/2026-09-08-nex-platform.md", "website/src/routes/roadmap/+page.svelte"]}
+}

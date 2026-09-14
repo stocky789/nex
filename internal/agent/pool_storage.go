@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -26,6 +27,15 @@ import (
 
 const poolStoragePath = "/api/v1/pool/storage/"
 
+const (
+	poolProbeModeChallengeByte = "challenge-byte-v1"
+	poolProbeModeHeader        = "X-Nex-Pool-Probe-Mode"
+	poolProbeLegacyMode        = "legacy-byte-0"
+	// poolProbeLeaseLimit bounds only concurrent, challenge-addressed peer
+	// probes. Each lease is ephemeral (ten seconds) and is never VM ownership.
+	poolProbeLeaseLimit = 64
+)
+
 type poolStorageTransfer struct {
 	Storage     protocol.StorageRegistration `json:"storage"`
 	Credentials *protocol.StorageCredentials `json:"credentials,omitempty"`
@@ -45,14 +55,124 @@ var poolReconcileStatus = struct {
 }{byDir: map[string]poolReconcileObservation{}}
 
 type poolReconcileObservation struct {
-	at  time.Time
-	err error
+	at    time.Time
+	err   error
+	stage string
 }
 
+type poolReconcileStageError struct {
+	stage string
+	err   error
+}
+
+var poolReconcileStages = map[string]bool{
+	"membership": true, "master-url": true, "peer-client": true, "master-list": true,
+	"repository": true, "local-observation": true, "orphan-detach": true, "observation": true,
+}
+
+func (e *poolReconcileStageError) Error() string { return e.err.Error() }
+func (e *poolReconcileStageError) Unwrap() error { return e.err }
+func poolReconcileStage(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &poolReconcileStageError{stage: stage, err: err}
+}
+func poolReconcileErrorStage(err error) string {
+	var staged *poolReconcileStageError
+	if errors.As(err, &staged) && poolReconcileStages[staged.stage] {
+		return staged.stage
+	}
+	return "observation"
+}
+
+func poolStorageEligibleForMember(storage protocol.StorageRegistration, hostID string) bool {
+	if !protocol.IsPoolSharedStorage(storage) {
+		return false
+	}
+	if !protocol.IsClusteredISCSI(storage) {
+		return true
+	}
+	for _, eligible := range storage.Source.ISCSI.EligibleHostIDs {
+		if eligible == hostID {
+			return true
+		}
+	}
+	return false
+}
+
+// Concurrent leases on one repository share one open description. On the SMB
+// client/server stack, closing one description released another description's
+// still-held OFD range (BUG-0173), so the description closes only after its
+// last held range is unlocked.
 var poolProbeLocks = struct {
 	sync.Mutex
-	files map[string]*os.File
-}{files: map[string]*os.File{}}
+	files  map[string]poolProbeLock
+	shared map[string]*poolProbeFile
+}{files: map[string]poolProbeLock{}, shared: map[string]*poolProbeFile{}}
+
+type poolProbeFile struct {
+	file    *os.File
+	offsets map[int64]bool
+}
+
+type poolProbeLock struct {
+	path   string
+	offset int64
+}
+
+// reconcilePoolStorage is the periodic, member-local reconciliation boundary.
+// Cluster projection refresh runs independently of the repository child deadline;
+// this path only uses its already durable Core record.
+var reconcilePoolStorage = reconcilePoolStorageWithKnownCluster
+var reconcileStorageClusters = ReconcileStorageClustersFromMaster
+var validatePoolStorageAccess = vmhost.ValidatePoolStorageAccess
+var probePoolStorageLock = crossCoreLockProbe
+
+// F_OFD_SETLK is the Linux open-file-description byte-range lock command.
+// QEMU uses OFD/POSIX image locks; unlike flock, OFD locks participate in the
+// same kernel lock family and remain associated with this open description.
+// Unsupported filesystems or kernels are rejected rather than downgraded.
+const fOFDSetLK = 37
+
+func poolProbeOFDLockAt(f *os.File, lockType int16, offset int64) error {
+	if offset < 0 {
+		return errors.New("invalid shared-storage probe offset")
+	}
+	return syscall.FcntlFlock(f.Fd(), fOFDSetLK, &syscall.Flock_t{Type: lockType, Whence: int16(0), Start: offset, Len: 1})
+}
+
+func poolProbeOffset(challenge string) (int64, error) {
+	b, err := hex.DecodeString(challenge)
+	if err != nil || len(b) != 16 {
+		return 0, errors.New("invalid shared-storage probe challenge")
+	}
+	digest := sha256.Sum256(b)
+	// Byte zero remains the legacy rolling-upgrade range. A collision between two
+	// challenge hashes can only fail a concurrent probe; it cannot report health.
+	return int64(binary.BigEndian.Uint64(digest[:8])&uint64((1<<63)-2)) + 1, nil
+}
+
+func poolProbeModeOffset(challenge, mode string) (string, int64, error) {
+	if mode == "" {
+		if _, err := poolProbeOffset(challenge); err != nil {
+			return "", 0, err
+		}
+		return poolProbeLegacyMode, 0, nil
+	}
+	if mode != poolProbeModeChallengeByte {
+		return "", 0, errors.New("unsupported shared-storage probe mode")
+	}
+	offset, err := poolProbeOffset(challenge)
+	if err != nil {
+		return "", 0, err
+	}
+	return mode, offset, nil
+}
+
+func poolProbeLockKey(hostID, repositoryID, generation, challenge, mode string) string {
+	return hostID + "\x00" + repositoryID + "\x00" + generation + "\x00" + challenge + "\x00" + mode
+}
 
 func poolStorageFile(s *Store) string { return filepath.Join(s.dir, "pool-storage.json") }
 func loadPoolStorage(s *Store) (poolStorageState, error) {
@@ -67,9 +187,9 @@ func loadPoolStorage(s *Store) (poolStorageState, error) {
 	if err = json.Unmarshal(b, &state); err != nil || state.Storage == nil {
 		return state, errors.New("invalid pool storage state")
 	}
-	if state.Access == nil {
-		state.Access = map[string]map[string]protocol.PoolStorageAccess{}
-	}
+	// Member access is a process-local observation. Older files may contain
+	// health reports from a prior agent process; never rehydrate those as current.
+	state.Access = map[string]map[string]protocol.PoolStorageAccess{}
 	if state.Reservations == nil {
 		state.Reservations = map[string]map[string]string{}
 	}
@@ -79,61 +199,51 @@ func loadPoolStorage(s *Store) (poolStorageState, error) {
 	return state, nil
 }
 
+func poolStorageAccess(s *Store) map[string]map[string]protocol.PoolStorageAccess {
+	if s.poolStorageAccess == nil {
+		s.poolStorageAccess = map[string]map[string]protocol.PoolStorageAccess{}
+	}
+	return s.poolStorageAccess
+}
+
 func PoolStorageMemberAccess(s *Store, storage []protocol.StorageRegistration) []protocol.StorageRegistration {
 	poolStorageMu.Lock()
 	defer poolStorageMu.Unlock()
-	state, err := loadPoolStorage(s)
-	if err != nil {
-		return storage
+	accesses := poolStorageAccess(s)
+	if _, err := loadPoolStorage(s); err != nil {
+		// A corrupt durable reservation/mutation record must not be masked by a
+		// prior process-local healthy observation.
+		s.poolStorageAccess = map[string]map[string]protocol.PoolStorageAccess{}
+		accesses = s.poolStorageAccess
 	}
 	membership, _ := Membership(s)
 	out := append([]protocol.StorageRegistration(nil), storage...)
 	for i := range out {
-		if out[i].StorageKind() == protocol.StorageKindNFS || out[i].StorageKind() == protocol.StorageKindSMB {
+		// Member access is this process's observation, never a journaled or
+		// caller-provided health cache. The copy above keeps the caller untouched.
+		out[i].MemberAccess = nil
+		if protocol.IsPoolSharedStorage(out[i]) {
 			for _, member := range membership.Members {
-				if member.HostID != s.State.HostID && member.Status == "ready" && state.Access[out[i].ID][member.HostID].HostID == "" {
+				if member.HostID != s.State.HostID && member.Status == "ready" && poolStorageEligibleForMember(out[i], member.HostID) && accesses[out[i].ID][member.HostID].HostID == "" {
 					out[i].MemberAccess = append(out[i].MemberAccess, protocol.PoolStorageAccess{RepositoryID: out[i].ID, HostID: member.HostID, Generation: out[i].Generation, Error: "awaiting member reconciliation"})
 				}
 			}
 		}
-		for _, access := range state.Access[out[i].ID] {
+		for _, access := range accesses[out[i].ID] {
 			out[i].MemberAccess = append(out[i].MemberAccess, access)
 		}
 	}
 	return out
 }
 func savePoolStorage(s *Store, state poolStorageState) error {
+	// Access observations are not durable state: a restarted Core must wait for
+	// another authenticated native observation rather than reuse an old healthy one.
+	state.Access = map[string]map[string]protocol.PoolStorageAccess{}
 	b, err := json.Marshal(state)
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(s.dir, ".pool-storage-")
-	if err != nil {
-		return err
-	}
-	name := f.Name()
-	defer os.Remove(name)
-	if _, err = f.Write(b); err == nil {
-		err = f.Sync()
-	}
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return err
-	}
-	if err = os.Chmod(name, 0600); err != nil {
-		return err
-	}
-	if err = os.Rename(name, poolStorageFile(s)); err != nil {
-		return err
-	}
-	d, err := os.Open(s.dir)
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	return d.Sync()
+	return vmhost.AtomicWrite(poolStorageFile(s), b, 0600)
 }
 
 // PoolStorageHandler runs only on the dedicated peer listener. The mTLS member identity
@@ -158,7 +268,7 @@ func PoolStorageHandler(s *Store) http.Handler {
 			managed, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(r.Context())
 			valid := false
 			for _, storage := range managed.Storage {
-				if storage.ID == id && !storage.Tombstone && storage.Generation == request.Generation && (storage.StorageKind() == protocol.StorageKindNFS || storage.StorageKind() == protocol.StorageKindSMB) {
+				if storage.ID == id && !storage.Tombstone && storage.Generation == request.Generation && poolStorageEligibleForMember(storage, member.HostID) {
 					valid = true
 					break
 				}
@@ -220,10 +330,10 @@ func PoolStorageHandler(s *Store) http.Handler {
 				http.Error(w, "invalid member access", http.StatusBadRequest)
 				return
 			}
-			managed, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(r.Context())
+			storage, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).AppliedStorage()
 			valid := false
-			for _, storage := range managed.Storage {
-				if storage.ID == id && !storage.Tombstone && storage.Generation == access.Generation && (storage.StorageKind() == protocol.StorageKindNFS || storage.StorageKind() == protocol.StorageKindSMB) {
+			for _, entry := range storage {
+				if entry.ID == id && !entry.Tombstone && entry.Generation == access.Generation && poolStorageEligibleForMember(entry, member.HostID) {
 					valid = true
 					break
 				}
@@ -234,13 +344,15 @@ func PoolStorageHandler(s *Store) http.Handler {
 			}
 			access.ObservedAt = time.Now().UTC()
 			poolStorageMu.Lock()
-			state, e := loadPoolStorage(s)
+			_, e := loadPoolStorage(s)
 			if e == nil {
-				if state.Access[id] == nil {
-					state.Access[id] = map[string]protocol.PoolStorageAccess{}
+				accesses := poolStorageAccess(s)
+				if accesses[id] == nil {
+					accesses[id] = map[string]protocol.PoolStorageAccess{}
 				}
-				state.Access[id][member.HostID] = access
-				e = savePoolStorage(s, state)
+				accesses[id][member.HostID] = access
+			} else {
+				s.poolStorageAccess = map[string]map[string]protocol.PoolStorageAccess{}
 			}
 			poolStorageMu.Unlock()
 			if e != nil {
@@ -252,27 +364,31 @@ func PoolStorageHandler(s *Store) http.Handler {
 		}
 		if (r.Method == http.MethodPost || r.Method == http.MethodDelete) && strings.HasSuffix(r.URL.Path, "/lock") {
 			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, poolStoragePath), "/lock")
-			generation, challenge := r.URL.Query().Get("generation"), r.URL.Query().Get("challenge")
-			if id == "" || generation == "" || len(challenge) != 32 {
+			generation, challenge, requestedMode := r.URL.Query().Get("generation"), r.URL.Query().Get("challenge"), r.URL.Query().Get("probe_mode")
+			mode, offset, modeErr := poolProbeModeOffset(challenge, requestedMode)
+			if id == "" || generation == "" || modeErr != nil {
 				http.NotFound(w, r)
 				return
 			}
-			lockKey := id + ":" + generation + ":" + challenge
+			lockKey := poolProbeLockKey(member.HostID, id, generation, challenge, mode)
 			if r.Method == http.MethodDelete {
 				releasePoolProbeLock(lockKey)
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
-			managed, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(r.Context())
-			for _, storage := range managed.Storage {
-				if storage.ID == id && (storage.StorageKind() == protocol.StorageKindNFS || storage.StorageKind() == protocol.StorageKindSMB) {
-					if strconv.FormatUint(storage.Generation, 10) != generation {
+			storage, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).AppliedStorage()
+			for _, entry := range storage {
+				if entry.ID == id && poolStorageEligibleForMember(entry, member.HostID) {
+					if strconv.FormatUint(entry.Generation, 10) != generation {
 						http.Error(w, "storage generation changed", http.StatusConflict)
 						return
 					}
-					if err := holdPoolProbeLock(lockKey, storage.Path); err != nil {
+					if err := holdPoolProbeLock(lockKey, entry.Path, offset); err != nil {
 						http.Error(w, "lock unavailable", http.StatusConflict)
 						return
+					}
+					if mode == poolProbeModeChallengeByte {
+						w.Header().Set(poolProbeModeHeader, mode)
 					}
 					w.WriteHeader(http.StatusNoContent)
 					return
@@ -282,13 +398,13 @@ func PoolStorageHandler(s *Store) http.Handler {
 			return
 		}
 		if r.Method == http.MethodGet && r.URL.Path == strings.TrimSuffix(poolStoragePath, "/") {
-			managed, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(r.Context())
+			storage, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).AppliedStorage()
 			out := []protocol.StorageRegistration{}
-			for _, storage := range managed.Storage {
-				if !storage.Tombstone && (storage.StorageKind() == protocol.StorageKindNFS || storage.StorageKind() == protocol.StorageKindSMB) {
-					storage.MemberAccess = nil
-					storage.CredentialReceipt = ""
-					out = append(out, storage)
+			for _, entry := range storage {
+				if !entry.Tombstone && poolStorageEligibleForMember(entry, member.HostID) {
+					entry.MemberAccess = nil
+					entry.CredentialReceipt = ""
+					out = append(out, entry)
 				}
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -304,17 +420,17 @@ func PoolStorageHandler(s *Store) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		managed, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(r.Context())
-		for _, storage := range managed.Storage {
-			if storage.ID == id && !storage.Tombstone {
-				if storage.StorageKind() != protocol.StorageKindNFS && storage.StorageKind() != protocol.StorageKindSMB {
+		storage, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).AppliedStorage()
+		for _, entry := range storage {
+			if entry.ID == id && !entry.Tombstone {
+				if !poolStorageEligibleForMember(entry, member.HostID) {
 					http.Error(w, "repository is not pool-shareable", http.StatusConflict)
 					return
 				}
-				transfer := poolStorageTransfer{Storage: storage}
+				transfer := poolStorageTransfer{Storage: entry}
 				transfer.Storage.MemberAccess = nil
-				if storage.StorageKind() == protocol.StorageKindSMB {
-					c, e := vmhost.PoolStorageCredential(s.dir, storage.CredentialReceipt)
+				if entry.StorageKind() == protocol.StorageKindSMB {
+					c, e := vmhost.PoolStorageCredential(s.dir, entry.CredentialReceipt)
 					if e != nil {
 						http.Error(w, "credential unavailable", http.StatusConflict)
 						return
@@ -334,6 +450,18 @@ func PoolStorageHandler(s *Store) http.Handler {
 // ReconcilePoolStorage fetches exactly one master repository over pinned mTLS, persists
 // any SMB secret directly to the member credential store, then prepares/mounts it locally.
 func ReconcilePoolStorage(ctx context.Context, s *Store, masterURL, repositoryID string) error {
+	return reconcilePoolStorageWithCluster(ctx, s, masterURL, repositoryID, true)
+}
+
+// reconcilePoolStorageWithKnownCluster keeps the periodic repository probe bounded
+// to repository work. The periodic cluster reconciler owns its separate durable
+// projection refresh; repeating that full native setup here consumed this probe's
+// deadline without adding a safety check.
+func reconcilePoolStorageWithKnownCluster(ctx context.Context, s *Store, masterURL, repositoryID string) error {
+	return reconcilePoolStorageWithCluster(ctx, s, masterURL, repositoryID, false)
+}
+
+func reconcilePoolStorageWithCluster(ctx context.Context, s *Store, masterURL, repositoryID string, refreshCluster bool) error {
 	if repositoryID == "" || strings.ContainsAny(repositoryID, "/\\") {
 		return errors.New("invalid pool repository ID")
 	}
@@ -359,11 +487,28 @@ func ReconcilePoolStorage(ctx context.Context, s *Store, masterURL, repositoryID
 		return errors.New("invalid pool storage response")
 	}
 	storage := transfer.Storage
-	if storage.ID != repositoryID || storage.PoolID != s.State.PoolID || (storage.StorageKind() != protocol.StorageKindNFS && storage.StorageKind() != protocol.StorageKindSMB) {
+	if storage.ID != repositoryID || storage.PoolID != s.State.PoolID || !poolStorageEligibleForMember(storage, s.State.HostID) {
 		return errors.New("pool storage response does not match membership")
 	}
 	storage.HostID = s.State.HostID
 	expectedIdentity := storage.Identity
+	executionCtx := vmhost.WithPoolStorageExpectation(ctx, expectedIdentity, storage.Generation)
+	if protocol.IsClusteredISCSI(storage) {
+		// Explicit reconciliation refreshes the durable cluster projection first;
+		// periodic reconciliation uses that same record. A missing or unhealthy
+		// profile is never a reason to use ordinary exclusive-iSCSI preparation.
+		if refreshCluster {
+			if err := reconcileStorageClusters(ctx, s); err != nil {
+				return err
+			}
+		}
+		config, err := StorageClusterConfigForRepository(s, storage.ID)
+		if err != nil || config.ValidFor(storage) != nil {
+			return errors.New("clustered iSCSI configuration is unavailable or does not match repository")
+		}
+		executionCtx = vmhost.WithStorageClusterConfig(executionCtx, config)
+		executionCtx = vmhost.WithStorageClusterStateDir(executionCtx, s.dir)
+	}
 	if storage.StorageKind() == protocol.StorageKindSMB {
 		if transfer.Credentials == nil {
 			return errors.New("pool SMB credential is unavailable")
@@ -382,14 +527,14 @@ func ReconcilePoolStorage(ctx context.Context, s *Store, masterURL, repositoryID
 	// Execute journals intent before native mount/session side effects and supplies the
 	// existing recovery/tombstone/dependency behavior to member-applied storage too.
 	engine := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms"))
-	applied, _ := engine.Applied(ctx)
+	applied, _ := engine.AppliedStorage()
 	operation := poolStorageOperation("apply", storage.ID, storage.Generation)
 	command := protocol.Command{OperationID: operation, Kind: "storage-register", Storage: &storage}
 	alreadyCurrent := false
-	for _, current := range applied.Storage {
+	for _, current := range applied {
 		if current.ID == storage.ID && !current.Tombstone {
 			if current.Generation == storage.Generation {
-				storage, err = vmhost.ValidatePoolStorageAccess(ctx, current)
+				storage, err = validatePoolStorageAccess(executionCtx, current)
 				if err != nil {
 					_ = postPoolStorageAccess(ctx, s, masterURL, repositoryID, protocol.PoolStorageAccess{RepositoryID: repositoryID, HostID: s.State.HostID, Generation: current.Generation, Error: err.Error()})
 					return err
@@ -404,7 +549,7 @@ func ReconcilePoolStorage(ctx context.Context, s *Store, masterURL, repositoryID
 		}
 	}
 	if !alreadyCurrent {
-		result, err := engine.Execute(vmhost.WithPoolStorageExpectation(ctx, expectedIdentity, storage.Generation), command, nil)
+		result, err := engine.Execute(executionCtx, command, nil)
 		if err != nil || result.Status != "succeeded" {
 			if err == nil {
 				err = errors.New(result.Error)
@@ -412,8 +557,8 @@ func ReconcilePoolStorage(ctx context.Context, s *Store, masterURL, repositoryID
 			_ = postPoolStorageAccess(ctx, s, masterURL, repositoryID, protocol.PoolStorageAccess{RepositoryID: repositoryID, HostID: s.State.HostID, Generation: storage.Generation, Error: err.Error()})
 			return err
 		}
-		applied, _ = engine.Applied(ctx)
-		for _, candidate := range applied.Storage {
+		applied, _ = engine.AppliedStorage()
+		for _, candidate := range applied {
 			if candidate.ID == storage.ID {
 				storage = candidate
 				break
@@ -426,12 +571,12 @@ func ReconcilePoolStorage(ctx context.Context, s *Store, masterURL, repositoryID
 		return err
 	}
 	if storage.Generation < transfer.Storage.Generation {
-		return ReconcilePoolStorage(ctx, s, masterURL, repositoryID)
+		return reconcilePoolStorageWithCluster(ctx, s, masterURL, repositoryID, refreshCluster)
 	}
 	if storage.Generation > transfer.Storage.Generation {
 		return errors.New("member repository generation is newer than the master")
 	}
-	if err = crossCoreLockProbe(ctx, s, masterURL, storage); err != nil {
+	if err = probePoolStorageLock(ctx, s, masterURL, storage); err != nil {
 		_ = postPoolStorageAccess(ctx, s, masterURL, repositoryID, protocol.PoolStorageAccess{RepositoryID: repositoryID, HostID: s.State.HostID, Generation: storage.Generation, Error: err.Error()})
 		return err
 	}
@@ -441,6 +586,14 @@ func ReconcilePoolStorage(ctx context.Context, s *Store, masterURL, repositoryID
 
 func poolMemberStorageIntent(storage protocol.StorageRegistration) protocol.StorageRegistration {
 	storage.Path, storage.Identity, storage.Capabilities, storage.Access = "", protocol.StorageIdentity{}, protocol.StorageCapabilities{}, protocol.StorageAccess{}
+	if storage.Source.ISCSI != nil {
+		// The master reports its resolved mount path, but member import is still a
+		// client-shaped command. The member's ManagedEngine restores its own
+		// deterministic Core-owned path before native cluster preparation.
+		source := *storage.Source.ISCSI
+		source.MountPath = ""
+		storage.Source.ISCSI = &source
+	}
 	storage.Status, storage.Error, storage.OperationID = "", "", ""
 	return storage
 }
@@ -449,21 +602,38 @@ func poolStorageOperation(action, id string, generation uint64) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(action+"\x00"+id+"\x00"+strconv.FormatUint(generation, 10)+"\x00"+strconv.FormatInt(time.Now().UnixNano(), 10))))
 }
 
-func holdPoolProbeLock(id, path string) error {
+func holdPoolProbeLock(id, path string, offset int64) error {
 	poolProbeLocks.Lock()
 	defer poolProbeLocks.Unlock()
-	if poolProbeLocks.files[id] != nil {
+	if _, held := poolProbeLocks.files[id]; held {
 		return nil
 	}
-	f, err := os.OpenFile(filepath.Join(path, ".nex-peer-lock"), os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		return err
+	if len(poolProbeLocks.files) >= poolProbeLeaseLimit {
+		return errors.New("too many active shared-storage probe leases")
 	}
-	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
-		return err
+	name := filepath.Join(path, ".nex-peer-lock")
+	shared := poolProbeLocks.shared[name]
+	if shared != nil && shared.offsets[offset] {
+		// One description re-locking its own range would succeed silently; separate
+		// leases must never share a held range.
+		return errors.New("shared-storage probe range is already leased")
 	}
-	poolProbeLocks.files[id] = f
+	if shared == nil {
+		f, err := os.OpenFile(name, os.O_CREATE|os.O_RDWR, 0600)
+		if err != nil {
+			return err
+		}
+		shared = &poolProbeFile{file: f, offsets: map[int64]bool{}}
+	}
+	if err := poolProbeOFDLockAt(shared.file, syscall.F_WRLCK, offset); err != nil {
+		if len(shared.offsets) == 0 {
+			shared.file.Close()
+		}
+		return fmt.Errorf("shared-storage OFD locking is unavailable: %w", err)
+	}
+	shared.offsets[offset] = true
+	poolProbeLocks.shared[name] = shared
+	poolProbeLocks.files[id] = poolProbeLock{path: name, offset: offset}
 	// A peer crash or lost DELETE must not leave a probe lock as a denial of service.
 	// The member's conflicting probe runs immediately; this bounded lease is not a VM fence.
 	time.AfterFunc(10*time.Second, func() { releasePoolProbeLock(id) })
@@ -472,11 +642,40 @@ func holdPoolProbeLock(id, path string) error {
 func releasePoolProbeLock(id string) {
 	poolProbeLocks.Lock()
 	defer poolProbeLocks.Unlock()
-	if f := poolProbeLocks.files[id]; f != nil {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		_ = f.Close()
-		delete(poolProbeLocks.files, id)
+	lock, held := poolProbeLocks.files[id]
+	if !held {
+		return
 	}
+	delete(poolProbeLocks.files, id)
+	shared := poolProbeLocks.shared[lock.path]
+	_ = poolProbeOFDLockAt(shared.file, syscall.F_UNLCK, lock.offset)
+	delete(shared.offsets, lock.offset)
+	if len(shared.offsets) == 0 {
+		_ = shared.file.Close()
+		delete(poolProbeLocks.shared, lock.path)
+	}
+}
+
+func poolProbeExpectedExclusion(err error) bool {
+	return errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EACCES)
+}
+
+func releasePoolProbeLease(c *http.Client, lockURL string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	release, err := http.NewRequestWithContext(ctx, http.MethodDelete, lockURL, nil)
+	if err != nil {
+		return err
+	}
+	released, err := c.Do(release)
+	if err != nil {
+		return err
+	}
+	defer released.Body.Close()
+	if released.StatusCode != http.StatusNoContent {
+		return errors.New("master could not release shared-storage lock")
+	}
+	return nil
 }
 func crossCoreLockProbe(ctx context.Context, s *Store, masterURL string, storage protocol.StorageRegistration) error {
 	c, err := PoolPeerClient(s, masterURL)
@@ -488,7 +687,8 @@ func crossCoreLockProbe(ctx context.Context, s *Store, masterURL string, storage
 	if _, err := rand.Read(challengeBytes); err != nil {
 		return err
 	}
-	lockURL := strings.TrimRight(masterURL, "/") + poolStoragePath + storage.ID + "/lock?generation=" + strconv.FormatUint(storage.Generation, 10) + "&challenge=" + hex.EncodeToString(challengeBytes)
+	challenge := hex.EncodeToString(challengeBytes)
+	lockURL := strings.TrimRight(masterURL, "/") + poolStoragePath + storage.ID + "/lock?generation=" + strconv.FormatUint(storage.Generation, 10) + "&challenge=" + challenge + "&probe_mode=" + poolProbeModeChallengeByte
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, lockURL, nil)
 	if err != nil {
 		return err
@@ -497,35 +697,49 @@ func crossCoreLockProbe(ctx context.Context, s *Store, masterURL string, storage
 	if err != nil {
 		return err
 	}
+	mode := resp.Header.Get(poolProbeModeHeader)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		return errors.New("master could not hold shared-storage lock")
 	}
+	offset := int64(0)
+	switch mode {
+	case "": // An older master held the legacy byte-zero lock.
+	case poolProbeModeChallengeByte:
+		if offset, err = poolProbeOffset(challenge); err != nil {
+			_ = releasePoolProbeLease(c, lockURL)
+			return err
+		}
+	default:
+		_ = releasePoolProbeLease(c, lockURL)
+		return errors.New("master returned an unsupported shared-storage probe mode")
+	}
+	leased := true
+	defer func() {
+		if leased {
+			_ = releasePoolProbeLease(c, lockURL)
+		}
+	}()
 	f, err := os.OpenFile(filepath.Join(storage.Path, ".nex-peer-lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		return errors.New("shared storage lock is not exclusive across Cores")
+	if err = poolProbeOFDLockAt(f, syscall.F_WRLCK, offset); err == nil {
+		_ = poolProbeOFDLockAt(f, syscall.F_UNLCK, offset)
+		return errors.New("shared storage OFD lock is not exclusive across Cores")
 	}
-	release, _ := http.NewRequestWithContext(context.Background(), http.MethodDelete, lockURL, nil)
-	if release == nil {
+	if !poolProbeExpectedExclusion(err) {
+		return fmt.Errorf("shared storage OFD lock probe failed: %w", err)
+	}
+	if err = releasePoolProbeLease(c, lockURL); err != nil {
 		return errors.New("cannot release master shared-storage lock")
 	}
-	released, releaseErr := c.Do(release)
-	if releaseErr != nil || released.StatusCode != http.StatusNoContent {
-		if released != nil {
-			released.Body.Close()
-		}
-		return errors.New("cannot release master shared-storage lock")
+	leased = false
+	if err = poolProbeOFDLockAt(f, syscall.F_WRLCK, offset); err != nil {
+		return errors.New("shared storage OFD lock did not recover after master release")
 	}
-	released.Body.Close()
-	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return errors.New("shared storage lock did not recover after master release")
-	}
-	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	_ = poolProbeOFDLockAt(f, syscall.F_UNLCK, offset)
 	return nil
 }
 
@@ -571,7 +785,7 @@ func ReservePoolStorage(ctx context.Context, s *Store, command protocol.Command)
 	reserved := []string{}
 	for _, id := range ids {
 		for _, storage := range local.Storage {
-			if storage.ID == id && (storage.StorageKind() == protocol.StorageKindNFS || storage.StorageKind() == protocol.StorageKindSMB) {
+			if storage.ID == id && poolStorageEligibleForMember(storage, s.State.HostID) {
 				c, err := PoolPeerClient(s, master)
 				if err != nil {
 					releasePoolStorageIDs(ctx, s, master, reserved, command.OperationID, false)
@@ -704,7 +918,7 @@ func poolStorageUnusedIDs(managed *protocol.ManagedState, checks []protocol.Chec
 	}
 	ids := []string{}
 	for _, storage := range managed.Storage {
-		if used[storage.ID] || (storage.StorageKind() != protocol.StorageKindNFS && storage.StorageKind() != protocol.StorageKindSMB) {
+		if used[storage.ID] || !poolStorageEligibleForMember(storage, storage.HostID) {
 			continue
 		}
 		ids = append(ids, storage.ID)
@@ -727,7 +941,7 @@ func BeginPoolStorageMutation(ctx context.Context, s *Store, command protocol.Co
 	managed, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(ctx)
 	remote := false
 	for _, storage := range managed.Storage {
-		if storage.ID == id && !storage.Tombstone && (storage.StorageKind() == protocol.StorageKindNFS || storage.StorageKind() == protocol.StorageKindSMB) {
+		if storage.ID == id && !storage.Tombstone && protocol.IsPoolSharedStorage(storage) {
 			remote = true
 			break
 		}
@@ -802,9 +1016,21 @@ func recordPoolStorageReservation(state *poolStorageState, id, hostID, operation
 }
 
 // ReconcilePoolStorageFromMaster is member pull transport for the master's durable desired
-// projection. It discovers only already-authorized NFS/SMB repository IDs; the master still
+// projection. It discovers only already-authorized pool-shareable repository IDs; the master
 // owns configuration, generations and outcomes, while the member owns its native mount state.
+// Direct calls retain the normal independent storage probe deadline per repository.
 func ReconcilePoolStorageFromMaster(ctx context.Context, s *Store) error {
+	return reconcilePoolStorageFromMaster(ctx, s, 3*time.Second)
+}
+
+// reconcilePoolStorageFromMaster reconciles one master list without allowing a
+// slow earlier repository to poison the deadline of a later one. A native
+// filesystem call can still be uninterruptible after its own deadline; the
+// caller remains single-flight in that case rather than starting another pass.
+func reconcilePoolStorageFromMaster(ctx context.Context, s *Store, perRepositoryTimeout time.Duration) error {
+	if perRepositoryTimeout <= 0 {
+		return errors.New("pool storage reconciliation timeout is required")
+	}
 	membership, err := Membership(s)
 	if err != nil {
 		return err
@@ -816,53 +1042,85 @@ func ReconcilePoolStorageFromMaster(ctx context.Context, s *Store) error {
 	defer func() { recordPoolReconcile(s, result) }()
 	master, err := PoolMasterURL(s)
 	if err != nil {
-		result = err
+		result = poolReconcileStage("master-url", err)
 		return result
 	}
 	c, err := PoolPeerClient(s, master)
 	if err != nil {
-		result = err
+		result = poolReconcileStage("peer-client", err)
 		return result
 	}
 	defer c.CloseIdleConnections()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(master, "/")+strings.TrimSuffix(poolStoragePath, "/"), nil)
+	listCtx, cancelList := context.WithTimeout(ctx, perRepositoryTimeout)
+	defer cancelList()
+	req, err := http.NewRequestWithContext(listCtx, http.MethodGet, strings.TrimRight(master, "/")+strings.TrimSuffix(poolStoragePath, "/"), nil)
 	if err != nil {
-		result = err
+		result = poolReconcileStage("master-list", err)
 		return result
 	}
 	resp, err := c.Do(req)
 	if err != nil {
-		result = err
+		result = poolReconcileStage("master-list", err)
 		return result
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		result = errors.New("pool master repository list unavailable")
+		result = poolReconcileStage("master-list", errors.New("pool master repository list unavailable"))
 		return result
 	}
 	var storage []protocol.StorageRegistration
 	if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&storage) != nil {
-		result = errors.New("invalid pool master repository list")
+		result = poolReconcileStage("master-list", errors.New("invalid pool master repository list"))
 		return result
 	}
-	var last error
-	desired := map[string]bool{}
+	if err := listCtx.Err(); err != nil {
+		result = poolReconcileStage("master-list", err)
+		return result
+	}
+	cancelList()
 	for _, entry := range storage {
-		desired[entry.ID] = true
 		if entry.PoolID != s.State.PoolID {
-			result = errors.New("pool master returned another pool repository")
+			result = poolReconcileStage("master-list", errors.New("pool master returned another pool repository"))
 			return result
 		}
-		if err := ReconcilePoolStorage(ctx, s, master, entry.ID); err != nil {
-			last = err
-		}
 	}
-	local, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(ctx)
+	desired, last := reconcilePoolStorageEntries(ctx, s, master, storage, perRepositoryTimeout)
+	if err := ctx.Err(); err != nil {
+		result = poolReconcileStage("repository", err)
+		return result
+	}
+	localCtx, cancelLocal := context.WithTimeout(ctx, perRepositoryTimeout)
+	local, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(localCtx)
+	if err := localCtx.Err(); err != nil {
+		cancelLocal()
+		result = poolReconcileStage("local-observation", err)
+		return result
+	}
+	cancelLocal()
+	if err := ctx.Err(); err != nil {
+		result = poolReconcileStage("local-observation", err)
+		return result
+	}
 	for _, entry := range local.Storage {
-		if !desired[entry.ID] && (entry.StorageKind() == protocol.StorageKindNFS || entry.StorageKind() == protocol.StorageKindSMB) {
-			result, err := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Execute(ctx, protocol.Command{OperationID: poolStorageOperation("detach", entry.ID, entry.Generation), Kind: "storage-detach", StorageLifecycle: &protocol.StorageLifecycleRequest{Action: "detach", RepositoryID: entry.ID, PoolID: s.State.PoolID, HostID: s.State.HostID, ExpectedGeneration: entry.Generation}}, nil)
-			if err != nil || result.Status != "succeeded" {
-				last = errors.New("pool storage detach did not converge")
+		if err := ctx.Err(); err != nil {
+			result = poolReconcileStage("orphan-detach", err)
+			return result
+		}
+		if !desired[entry.ID] && protocol.IsPoolSharedStorage(entry) {
+			work, cancel := context.WithTimeout(ctx, perRepositoryTimeout)
+			detachResult, detachErr := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Execute(work, protocol.Command{OperationID: poolStorageOperation("detach", entry.ID, entry.Generation), Kind: "storage-detach", StorageLifecycle: &protocol.StorageLifecycleRequest{Action: "detach", RepositoryID: entry.ID, PoolID: s.State.PoolID, HostID: s.State.HostID, ExpectedGeneration: entry.Generation}}, nil)
+			deadlineErr := work.Err()
+			cancel()
+			if deadlineErr != nil {
+				last = poolReconcileStage("orphan-detach", deadlineErr)
+				if ctx.Err() != nil {
+					result = poolReconcileStage("orphan-detach", deadlineErr)
+					return result
+				}
+				continue
+			}
+			if detachErr != nil || detachResult.Status != "succeeded" {
+				last = poolReconcileStage("orphan-detach", errors.New("pool storage detach did not converge"))
 			}
 		}
 	}
@@ -870,10 +1128,33 @@ func ReconcilePoolStorageFromMaster(ctx context.Context, s *Store) error {
 	return result
 }
 
+func reconcilePoolStorageEntries(ctx context.Context, s *Store, master string, storage []protocol.StorageRegistration, perRepositoryTimeout time.Duration) (map[string]bool, error) {
+	desired := map[string]bool{}
+	var last error
+	for _, entry := range storage {
+		if err := ctx.Err(); err != nil {
+			return desired, err
+		}
+		desired[entry.ID] = true
+		work, cancel := context.WithTimeout(ctx, perRepositoryTimeout)
+		err := reconcilePoolStorage(work, s, master, entry.ID)
+		deadlineErr := work.Err()
+		cancel()
+		if deadlineErr != nil {
+			last = poolReconcileStage("repository", deadlineErr)
+			continue
+		}
+		if err != nil {
+			last = poolReconcileStage("repository", err)
+		}
+	}
+	return desired, last
+}
+
 func recordPoolReconcile(s *Store, err error) {
 	poolReconcileStatus.Lock()
 	defer poolReconcileStatus.Unlock()
-	poolReconcileStatus.byDir[s.dir] = poolReconcileObservation{at: time.Now().UTC(), err: err}
+	poolReconcileStatus.byDir[s.dir] = poolReconcileObservation{at: time.Now().UTC(), err: err, stage: poolReconcileErrorStage(err)}
 }
 func PoolStorageReconcileCheck(s *Store) *protocol.Check {
 	membership, err := Membership(s)
@@ -890,7 +1171,14 @@ func PoolStorageReconcileCheck(s *Store) *protocol.Check {
 		return &protocol.Check{Name: "pool-storage-reconciliation", Status: "unknown", Freshness: "stale", ObservedAt: observed.at, Error: "pool storage reconciliation observation is stale"}
 	}
 	if observed.err != nil {
-		return &protocol.Check{Name: "pool-storage-reconciliation", Status: "failed", Freshness: "fresh", ObservedAt: observed.at, Error: "pool storage reconciliation failed; inspect member Core"}
+		outcome := "failed"
+		if errors.Is(observed.err, context.DeadlineExceeded) {
+			outcome = "deadline"
+		}
+		if errors.Is(observed.err, context.Canceled) {
+			outcome = "cancelled"
+		}
+		return &protocol.Check{Name: "pool-storage-reconciliation", Status: "failed", Freshness: "fresh", ObservedAt: observed.at, Error: "pool storage reconciliation " + observed.stage + " " + outcome}
 	}
 	return &protocol.Check{Name: "pool-storage-reconciliation", Status: "healthy", Freshness: "fresh", ObservedAt: observed.at}
 }

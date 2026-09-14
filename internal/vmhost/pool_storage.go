@@ -13,22 +13,66 @@ import (
 	"nex.local/nex/internal/protocol"
 )
 
-// PreparePoolStorage is the member-side, idempotent native preparation boundary. Only
-// NFS and SMB can be reconciled to another Core; local ZFS and ordinary iSCSI remain
-// host/single-writer storage and are rejected before any mount or session side effect.
+type storageClusterStateDirContextKey struct{}
+
+var (
+	preparePoolStorageAt               = storagePrepareAt
+	prepareClusteredPoolStorageAccess  = PrepareClusteredISCSI
+	validateClusteredPoolStorageAccess = ValidateClusteredISCSIAt
+)
+
+// StorageClusterConfig returns the trusted profile for clustered iSCSI preparation.
+func StorageClusterConfig(ctx context.Context) (protocol.StorageClusterConfig, bool) {
+	config, ok := ctx.Value(storageClusterConfigContextKey{}).(protocol.StorageClusterConfig)
+	return config, ok
+}
+
+// WithStorageClusterConfig carries the Core-master-approved profile into the private
+// member storage transaction; it is never supplied by a client command.
+func WithStorageClusterConfig(ctx context.Context, config protocol.StorageClusterConfig) context.Context {
+	return context.WithValue(ctx, storageClusterConfigContextKey{}, config)
+}
+
+// WithStorageClusterStateDir carries the local Core state root through a
+// no-mutation admission check. It is transient execution context, never a
+// second durable cluster record.
+func WithStorageClusterStateDir(ctx context.Context, stateDir string) context.Context {
+	return context.WithValue(ctx, storageClusterStateDirContextKey{}, stateDir)
+}
+
+func storageClusterStateDir(ctx context.Context) (string, bool) {
+	stateDir, ok := ctx.Value(storageClusterStateDirContextKey{}).(string)
+	return stateDir, ok && filepath.IsAbs(stateDir) && filepath.Clean(stateDir) == stateDir
+}
+
+// PreparePoolStorage is the member-side, idempotent native preparation boundary. NFS,
+// SMB, and a config-validated clustered GFS2 iSCSI profile may be reconciled; local ZFS
+// and ordinary iSCSI remain host/single-writer storage.
 func PreparePoolStorage(ctx context.Context, agentStateDir string, s protocol.StorageRegistration) (protocol.StorageRegistration, error) {
-	if s.StorageKind() != protocol.StorageKindNFS && s.StorageKind() != protocol.StorageKindSMB {
-		return s, errors.New("only NFS and SMB repositories may be reconciled to pool members")
+	if !protocol.IsPoolSharedStorage(s) {
+		return s, errors.New("repository is not eligible for pool-member reconciliation")
 	}
-	access, err := storagePrepareAt(ctx, s, filepath.Join(agentStateDir, "storage-credentials"))
+	var access storageAccess
+	var err error
+	if protocol.IsClusteredISCSI(s) {
+		config, ok := StorageClusterConfig(ctx)
+		if !ok {
+			return s, errors.New("clustered iSCSI requires a Core cluster configuration")
+		}
+		access, err = prepareClusteredPoolStorageAccess(ctx, agentStateDir, s, config)
+	} else {
+		access, err = preparePoolStorageAt(ctx, s, filepath.Join(agentStateDir, "storage-credentials"))
+	}
 	if err != nil {
 		return s, err
 	}
 	if access.ReadOnly || access.Health != "healthy" {
 		return s, errors.New("pool repository is not writable")
 	}
-	if err = qemuStorageAccess(ctx, access.Path); err != nil {
-		return s, err
+	if !protocol.IsClusteredISCSI(s) {
+		if err = qemuStorageAccess(ctx, access.Path); err != nil {
+			return s, err
+		}
 	}
 	s.Path, s.Identity = access.Path, access.Observed
 	available := access.Available
@@ -40,18 +84,34 @@ func PreparePoolStorage(ctx context.Context, agentStateDir string, s protocol.St
 // registered member repository. It re-inspects the active mount/session and proves
 // libvirt-qemu access without mounting, logging in, or creating a managed journal entry.
 func ValidatePoolStorageAccess(ctx context.Context, s protocol.StorageRegistration) (protocol.StorageRegistration, error) {
-	if s.StorageKind() != protocol.StorageKindNFS && s.StorageKind() != protocol.StorageKindSMB {
-		return s, errors.New("only NFS and SMB repositories may be reconciled to pool members")
+	if !protocol.IsPoolSharedStorage(s) {
+		return s, errors.New("repository is not eligible for pool-member reconciliation")
 	}
-	access, err := storageInspect(ctx, s)
+	var access storageAccess
+	var err error
+	if protocol.IsClusteredISCSI(s) {
+		config, ok := StorageClusterConfig(ctx)
+		if !ok {
+			return s, errors.New("clustered iSCSI requires a Core cluster configuration")
+		}
+		stateDir, ok := storageClusterStateDir(ctx)
+		if !ok {
+			return s, errors.New("clustered iSCSI requires the local Core state directory")
+		}
+		access, err = validateClusteredPoolStorageAccess(ctx, stateDir, s, config)
+	} else {
+		access, err = storageInspect(ctx, s)
+	}
 	if err != nil {
 		return s, err
 	}
 	if access.ReadOnly || access.Health != "healthy" {
 		return s, errors.New("pool repository is not writable")
 	}
-	if err = qemuStorageAccess(ctx, access.Path); err != nil {
-		return s, err
+	if !protocol.IsClusteredISCSI(s) {
+		if err = qemuStorageAccess(ctx, access.Path); err != nil {
+			return s, err
+		}
 	}
 	s.Path, s.Identity = access.Path, access.Observed
 	available := access.Available

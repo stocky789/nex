@@ -4,8 +4,8 @@
 // operator clicks Close. There is no test harness in web/ (no vitest/jest), so this bundles the
 // real module with the already-installed esbuild and renders it with react-dom/server;
 // run with: node src/managed.test.mjs
-import { buildSync } from "esbuild";
-import { mkdirSync } from "node:fs";
+import { buildSync, transformSync } from "esbuild";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { createElement } from "react";
@@ -48,5 +48,24 @@ for (const [form, ownTab, heading] of [["network", "Networking", "Register guest
 
 assert.equal(formTab(""), "", "no open form matches no tab");
 assert.equal(formTab("storage"), "", "storage registration lives in its own tab-scoped view");
+
+// BUG-0152: adopted Core outcomes retain their original request/status/error, but the
+// Controller's updated_at is when that history was re-observed. Only the exact Core
+// adoption identity gets the recovered-history time treatment; ordinary request IDs do not.
+const mainSource = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
+const timingStart = mainSource.indexOf("const date =");
+const timingEnd = mainSource.indexOf("const size =", timingStart);
+assert.ok(timingStart >= 0 && timingEnd > timingStart, "task timestamp helper is present");
+const timingCode = transformSync(mainSource.slice(timingStart, timingEnd), { loader: "tsx", format: "esm" }).code;
+const timingFile = `${outdir}/main-task-timestamp.test.mjs`;
+writeFileSync(timingFile, timingCode);
+const { taskTimestamp } = await import(`file://${timingFile}?${Date.now()}`);
+const adopted = { id: "historic", host_id: "core-a", request_id: "adopt-outcome:core-a:historic", updated_at: "2026-09-01T00:00:00Z" };
+assert.equal(taskTimestamp(adopted).reobserved, true);
+assert.equal(taskTimestamp({ ...adopted, request_id: "operator-adopt-outcome:core-a:historic" }).reobserved, false);
+assert.equal(taskTimestamp({ ...adopted, request_id: "adopt-outcome:core-b:historic" }).reobserved, false);
+assert.equal(taskTimestamp({ ...adopted, request_id: "adopt-outcome:core-a:other-operation" }).reobserved, false);
+assert.match(mainSource, /Reobserved from Core history/);
+assert.match(mainSource, /Original outcome time was not reported\./);
 
 console.log("managed.test.mjs: ok");

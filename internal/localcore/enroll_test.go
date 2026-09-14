@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"nex.local/nex/internal/agent"
 	"nex.local/nex/internal/protocol"
 )
 
@@ -167,6 +168,38 @@ func TestEnrollmentValidationRejectsWithoutPersisting(t *testing.T) {
 	}
 }
 
+func TestReconcileEnrollmentCacheUsesPublishedStoreState(t *testing.T) {
+	_, cfg := testService(t)
+	handoffAgents.Lock()
+	a, err := getHandoffAgent(cfg.AgentStateDir)
+	if err != nil {
+		handoffAgents.Unlock()
+		t.Fatal(err)
+	}
+	// Model the state immediately after an accepted replacement was renamed but
+	// its directory durability confirmation failed. The HTTP caller still gets
+	// 502, yet the restarted registry must not retain old cached credentials.
+	a.hostID, a.controller, a.trust = "old-host", "https://old.example", "old trust"
+	a.store.State.HostID = "new-host"
+	a.store.State.Controller = "https://replacement.example"
+	a.store.State.TrustPEM = "replacement trust"
+	reconcileEnrollmentCache(a)
+	gotHost, gotController, gotTrust := a.hostID, a.controller, a.trust
+	handoffAgents.Unlock()
+	if gotHost != "new-host" || gotController != "https://replacement.example" || gotTrust != "replacement trust" {
+		t.Fatal("published Store state did not replace stale enrollment cache")
+	}
+
+	handoffAgents.Lock()
+	a.store.State.HostID = ""
+	reconcileEnrollmentCache(a)
+	gotHost, gotController = a.hostID, a.controller
+	handoffAgents.Unlock()
+	if gotHost != "" || gotController != "" {
+		t.Fatal("pending first enrollment appeared enrolled in local cache")
+	}
+}
+
 func TestEnrollmentSuccessPersistsAndReportsOnHost(t *testing.T) {
 	buf := captureLog(t)
 	s, _ := testService(t)
@@ -263,6 +296,35 @@ func TestEnrollmentControllerRejectionLeavesHostUnenrolled(t *testing.T) {
 	}
 	if got := hostLocal(t, s, cookie)["host_id"]; got != "" {
 		t.Fatalf("host enrolled despite controller rejection: %v", got)
+	}
+}
+
+func TestReplacementEnrollmentFailureKeepsOldCredentialAndPendingRetry(t *testing.T) {
+	s, cfg := testService(t)
+	cookie, csrf := loginLocal(t, s)
+	first, firstTrust := fakeController(t, func(protocol.EnrollRequest) (int, protocol.EnrollResponse) {
+		return http.StatusOK, protocol.EnrollResponse{HostID: "host-1"}
+	})
+	if w := callLocal(s, "POST", "/api/local/v1/enrollment", map[string]string{"controller_url": first.URL, "ca_pem": firstTrust, "token": "first-token"}, cookie, csrf, "https://core.test"); w.Code != http.StatusOK {
+		t.Fatalf("initial enrollment: %d %s", w.Code, w.Body)
+	}
+	oldController, oldTrust := first.URL, firstTrust
+	failure, failureTrust := fakeController(t, func(protocol.EnrollRequest) (int, protocol.EnrollResponse) {
+		return http.StatusUnauthorized, protocol.EnrollResponse{}
+	})
+	if w := callLocal(s, "POST", "/api/local/v1/enrollment", map[string]string{"controller_url": failure.URL, "ca_pem": failureTrust, "token": "replacement-token"}, cookie, csrf, "https://core.test"); w.Code != http.StatusBadGateway {
+		t.Fatalf("replacement rejection: %d %s", w.Code, w.Body)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := agent.OpenStore(cfg.AgentStateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stored.Close()
+	if stored.State.Controller != oldController || stored.State.TrustPEM != oldTrust || stored.State.CertificatePEM == "" || stored.State.KeyPEM == "" || stored.State.PendingKeyPEM == "" || stored.State.PendingCSRPEM == "" {
+		t.Fatal("replacement rejection did not preserve old active credential and pending retry")
 	}
 }
 

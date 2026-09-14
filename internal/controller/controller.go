@@ -43,6 +43,8 @@ type Controller struct {
 	observed    map[string]observationReceipt
 	credentials *credentialBroker
 	consoles    consoleHub
+	clusterOnce sync.Once
+	clusters    storageClusterBroker // transient storage-cluster report round-trips
 	stop        chan struct{}
 	stopped     chan struct{}
 }
@@ -278,6 +280,10 @@ func (c *Controller) Handler() http.Handler {
 	m.HandleFunc("GET /api/v1/storage", c.admin(c.storage))
 	m.HandleFunc("POST /api/v1/storage", c.admin(c.storage))
 	m.HandleFunc("POST /api/v1/storage/discover", c.admin(c.discoverStorage))
+	m.HandleFunc("GET /api/v1/storage/cluster", c.admin(c.storageCluster))
+	m.HandleFunc("POST /api/v1/storage/cluster/apply", c.admin(c.applyStorageCluster))
+	m.HandleFunc("POST /api/v1/storage/cluster/verify-fence", c.admin(c.verifyStorageClusterFence))
+	m.HandleFunc("POST /api/v1/storage/cluster/credentials", c.admin(c.storageClusterCredentials))
 	m.HandleFunc("POST /api/v1/storage/{id}/update", c.admin(c.updateStorage))
 	m.HandleFunc("POST /api/v1/storage/{id}/recheck", c.admin(c.recheckStorage))
 	m.HandleFunc("POST /api/v1/storage/{id}/detach", c.admin(c.detachStorage))

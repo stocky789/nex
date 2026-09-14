@@ -1,0 +1,35 @@
+{
+  "summary": "BUG-0169: Share only concurrent identical held-GFS2 QEMU access proofs. API impact: existing contract.",
+  "paths": [
+    "internal/vmhost/storage_native.go",
+    "internal/vmhost/storage_native_test.go",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-14-cluster-storage-reliability.md",
+    "docs/plans/2026-09-12-concurrent-pool-storage.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Internal duplicate-proof removal preserves current operator workflows and complete access validation.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: existing contract. Existing monitor, repository and admission callers retain independent identity/preflight and result contracts; no Controller/Core or client-facing schema or operation changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Current storage reliability remains in testing; no phase or capability is marked complete.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Process-local in-flight entries disappear on completion; no completed health cache, durable setting or execution authority is introduced. Existing Core records and adoption are unchanged."
+  },
+  "verification": {
+    "method": "The old source failed a duplicate-full-proof regression. Fixed concurrency/cancellation/failed-leader recovery and key identity checks, full vmhost/agent normal and race suites, and independent source review passed. Reviewer independently reran vmhost normal tests. Combined candidate native and loaded verification remain pending.",
+    "evidence": [
+      "docs/qa/2026-09-14-cluster-storage-reliability.md"
+    ]
+  }
+}

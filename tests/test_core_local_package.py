@@ -309,6 +309,12 @@ class CoreLocalPackageTests(unittest.TestCase):
         self.assertIn('NoNewPrivileges=yes', service)
         self.assertIn('RestrictSUIDSGID=yes', service)
 
+    def test_local_service_creates_the_embedded_agent_state_directory_privately(self):
+        """BUG-0149: the local service must not leave its agent store at mode 0755."""
+        service = (ROOT / 'packaging/core-local/nex-core-local.service').read_text()
+        self.assertIn('StateDirectory=nex/core-local nex-core-agent', service)
+        self.assertIn('StateDirectoryMode=0700', service)
+
 
 if __name__ == '__main__':
     unittest.main()

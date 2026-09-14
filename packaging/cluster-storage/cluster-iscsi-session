@@ -1,0 +1,79 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-only
+# Pacemaker OCF monitor for one already-established Nex clustered iSCSI session.
+# It never discovers, logs in/out, mounts, or changes a native resource.
+
+OCF_SUCCESS=0
+OCF_ERR_GENERIC=1
+OCF_ERR_ARGS=2
+OCF_ERR_UNIMPLEMENTED=3
+OCF_ERR_PERM=4
+OCF_ERR_INSTALLED=5
+OCF_ERR_CONFIGURED=6
+OCF_NOT_RUNNING=7
+
+readonly core=/usr/lib/nex/nex-core-local
+readonly timeout=/usr/bin/timeout
+
+meta_data() {
+    cat <<'XML'
+<?xml version="1.0"?>
+<!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
+<resource-agent name="cluster-iscsi-session" version="1.0">
+<version>1.0</version>
+<longdesc lang="en">Checks one already-established Nex clustered iSCSI session without changing iSCSI, mounts, or Pacemaker configuration.</longdesc>
+<shortdesc lang="en">Nex clustered iSCSI session check</shortdesc>
+<parameters>
+<parameter name="portal" unique="0" required="1"><longdesc lang="en">Canonical iSCSI portal host:port.</longdesc><shortdesc lang="en">Portal</shortdesc><content type="string"/></parameter>
+<parameter name="target" unique="0" required="1"><longdesc lang="en">Exact iSCSI target IQN.</longdesc><shortdesc lang="en">Target IQN</shortdesc><content type="string"/></parameter>
+<parameter name="session_id" unique="1" required="1"><longdesc lang="en">Nex deterministic session-monitor identity.</longdesc><shortdesc lang="en">Session identity</shortdesc><content type="string"/></parameter>
+</parameters>
+<actions>
+<action name="start" timeout="10s"/>
+<action name="stop" timeout="10s"/>
+<action name="monitor" timeout="10s" interval="5s"/>
+<action name="validate-all" timeout="10s"/>
+<action name="meta-data" timeout="5s"/>
+</actions>
+</resource-agent>
+XML
+}
+
+trusted_core() {
+    [ -f "$core" ] && [ ! -L "$core" ] && [ -x "$core" ] && [ -x "$timeout" ] || return 1
+    [ "$(/usr/bin/stat -c '%u:%a' "$core")" = '0:755' ]
+}
+
+validate() {
+    trusted_core || return "$OCF_ERR_INSTALLED"
+    required_parameters || return "$OCF_ERR_CONFIGURED"
+    "$timeout" --signal=TERM --kill-after=1s 1s "$core" cluster-iscsi-session --validate-only --portal "$OCF_RESKEY_portal" --target "$OCF_RESKEY_target" --session-id "$OCF_RESKEY_session_id" >/dev/null 2>&1 || return "$OCF_ERR_CONFIGURED"
+    return "$OCF_SUCCESS"
+}
+
+required_parameters() {
+    [ -n "${OCF_RESKEY_portal:-}" ] && [ -n "${OCF_RESKEY_target:-}" ] && [ -n "${OCF_RESKEY_session_id:-}" ]
+}
+
+check_session() {
+    "$timeout" --signal=TERM --kill-after=1s 8s "$core" cluster-iscsi-session --portal "$OCF_RESKEY_portal" --target "$OCF_RESKEY_target" --session-id "$OCF_RESKEY_session_id" >/dev/null 2>&1
+}
+
+case "${1:-}" in
+    meta-data) meta_data; exit "$OCF_SUCCESS" ;;
+    validate-all) validate; exit $? ;;
+    start)
+        trusted_core || exit "$OCF_ERR_INSTALLED"
+        required_parameters || exit "$OCF_ERR_CONFIGURED"
+        check_session || exit "$OCF_ERR_GENERIC"
+        exit "$OCF_SUCCESS"
+        ;;
+    monitor)
+        trusted_core || exit "$OCF_ERR_INSTALLED"
+        required_parameters || exit "$OCF_ERR_CONFIGURED"
+        check_session || exit "$OCF_NOT_RUNNING"
+        exit "$OCF_SUCCESS"
+        ;;
+    stop) exit "$OCF_SUCCESS" ;;
+    *) exit "$OCF_ERR_UNIMPLEMENTED" ;;
+esac

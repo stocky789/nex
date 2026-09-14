@@ -11,8 +11,7 @@ the console also exchanges clipboard text with the guest and can resize its disp
 
 A VM created through Controller starts stopped; start it with the
 [Power controls](vm-power.md) in the toolbar first. The host-local page offers local power
-only for the Controller appliance it deployed. Consoles are development features verified
-in a disposable nested-KVM lab; see [Verification](#verification).
+only for the Controller appliance it deployed.
 
 ## Prerequisites
 
@@ -62,9 +61,7 @@ host-local console and full-screen or separate-window views.
    the guest to change its resolution to the panel size. The last option is hidden for a VM
    whose host reports no VirtIO display, and takes effect in guests with a virtio-gpu
    driver (Linux, including text consoles; Windows with the virtio-win display driver).
-   The View choice is remembered in this browser. The former **Quality** menu has been
-   removed because the supported console configuration does not provide the advertised
-   image-quality changes; consoles use the client's default encoding settings.
+   The View choice is remembered in this browser.
 5. Exchange text with the guest through **Clipboard**:
    - **Read my clipboard** loads the browser clipboard into the text box (the browser asks
      for permission once); you can also paste or type into the box.
@@ -152,23 +149,11 @@ Leaving the console leaves the VM running. While a reconnect is pending the badg
 
 ## Verification
 
-Executed checks are recorded in the [console QA report](../qa/console/checks.md): Go
-tests for the WebSocket bridge, ticket authorization, host pairing and relay, and the
-host-local bridge; contract and documentation checks; and browser walkthroughs of the
-Controller **Console** tab and the host-local **Open console** flow against a running
-guest in a disposable nested-KVM lab. The toolbar features (send keys, display resize,
-typing, clipboard in both directions, screenshot, view only, reconnect and
-the console-only window) were walked through against a Debian 13 guest with the guest tools
-in the [console features QA report](../qa/console-features/checks.md), with clipboard
-contents verified inside the guest. Hosted CI execution, physical hardware, Windows guests,
-multiple concurrent viewers and long-running sessions have not been exercised.
+VM, host-local and toolbar console flows were walked through against a Debian 13 guest in a
+disposable nested-KVM lab; Windows guests, physical hardware, concurrent viewers and long
+sessions were not. See the [console QA report](../qa/console/checks.md),
+[console features](../qa/console-features/checks.md),
+[quality-menu removal](../qa/console-quality/checks.md),
+[toolbar collapse](../qa/console-toolbar/checks.md) and
+[media status](../qa/console-media-status/checks.md) checks.
 
-The [quality-menu removal check](../qa/console-quality/checks.md) covers the current toolbar
-and old saved preferences using the real browser UI with a simulated host; it does not
-re-verify guest rendering or clipboard behavior on a live VM.
-
-The [toolbar collapse check](../qa/console-toolbar/checks.md) covers keyboard toggling,
-screen growth, retained input settings and visible warnings using simulated API/RFB.
-
-[Console media status checks](../qa/console-media-status/checks.md) cover pending, successful
-and failed insert/eject feedback using the real UI with simulated API and display responses.

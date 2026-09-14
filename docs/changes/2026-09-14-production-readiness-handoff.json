@@ -1,0 +1,9 @@
+{
+  "summary": "Document the unresolved production-readiness failures and continuation evidence. API impact: none; handoff only, no runtime changes.",
+  "paths": ["docs/plans/2026-09-14-production-readiness-handoff.md"],
+  "guide": {"impact": "none", "reason": "Contributor handoff only; no operator behavior changes.", "pages": []},
+  "api": {"impact": "none", "reason": "No client API, Controller relay, Core command or observation contract changes.", "pages": []},
+  "roadmap": {"impact": "none", "reason": "Indexes existing unresolved work without changing milestone scope or status.", "pages": []},
+  "state": {"owner": "none", "reason": "Documentation introduces no durable product state."},
+  "verification": {"method": "Reviewed the existing plan, QA chronology and previous session's observed results; handoff distinguishes current failures, unexecuted gates and historical passes. Verified local helper/evidence filename patterns. Documentation worktree check (143 paths), repository privacy test and diff whitespace check passed. Independent documentation review accepted scope, evidence limits, privacy and impact decisions; no new runtime scenario is claimed.", "evidence": ["docs/plans/2026-09-14-production-readiness-handoff.md", "docs/qa/2026-09-12-concurrent-pool-storage.md"]}
+}

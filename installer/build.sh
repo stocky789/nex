@@ -59,6 +59,19 @@ rebuild_iso_artifacts() {
     cp -a "$appliance_out"/. dist/appliance/
 }
 
+build_matched_dlm() {
+    local docker_bin=$1 output=.cache/nex-iso/cluster-storage-dlm deb
+    rm -rf "$output"
+    mkdir -p "$output"
+    "$docker_bin" build -t nex-dlm-pacemaker-abi -f packaging/cluster-storage/Dockerfile packaging/cluster-storage >&2
+    "$docker_bin" run --rm -v "$PWD/$output:/output" nex-dlm-pacemaker-abi >&2
+    deb=$(find "$output" -maxdepth 1 -type f -name 'dlm-controld_4.3.0-3+nex1_amd64.deb' -print -quit)
+    [[ -n $deb ]] || { echo 'matched dlm-controld build did not produce its pinned package' >&2; exit 1; }
+    [[ $(dpkg-deb -f "$deb" Package) == dlm-controld ]]
+    dpkg-deb -f "$deb" Depends | grep -Fq 'libstonithd56 (= 3.0.0-2)'
+    printf '%s\n' "$deb"
+}
+
 assert_iso_artifacts_current() {
     local deb=$1
     local want=$2
@@ -102,12 +115,14 @@ if [[ ${1:-} != --inside ]]; then
         exit 1
     fi
     rebuild_iso_artifacts "$version"
+    matched_dlm_deb=$(build_matched_dlm "$docker_bin")
     iso_core_local=.cache/nex-iso/core-local/nex-core-local_${version}_amd64.deb
     assert_iso_artifacts_current "$iso_core_local" "$version"
     "$docker_bin" build -t nex-iso-builder -f installer/Dockerfile installer
     exec "$docker_bin" run --rm --platform linux/amd64 \
         -v "$PWD:/work" -e BUILD_UID="$(id -u)" -e BUILD_GID="$(id -g)" \
         -e "CORE_LOCAL_DEB=/work/${iso_core_local#"$PWD"/}" \
+        -e "MATCHED_DLM_DEB=/work/${matched_dlm_deb#"$PWD"/}" \
         -e "NEX_ISO_VERSION=$version" \
         nex-iso-builder
 fi
@@ -117,6 +132,11 @@ stage=$cache/stage
 # The ISO carries exactly one Nex Core version: the nex-core-local package it installs.
 core_local_deb=${CORE_LOCAL_DEB:?nex-core-local package path required}
 [[ -f $core_local_deb ]] || { echo "missing nex-core-local package: $core_local_deb" >&2; exit 1; }
+matched_dlm_deb=${MATCHED_DLM_DEB:?matched dlm-controld package path required}
+[[ -f $matched_dlm_deb ]] || { echo "missing matched dlm-controld package: $matched_dlm_deb" >&2; exit 1; }
+[[ $(dpkg-deb -f "$matched_dlm_deb" Package) == dlm-controld ]]
+[[ $(dpkg-deb -f "$matched_dlm_deb" Version) == 4.3.0-3+nex1 ]]
+dpkg-deb -f "$matched_dlm_deb" Depends | grep -Fq 'libstonithd56 (= 3.0.0-2)'
 version=$(dpkg-deb -f "$core_local_deb" Version)
 output=/work/dist/nex-core-${version}-amd64.iso
 mkdir -p "$cache" /work/dist
@@ -183,6 +203,21 @@ apt-get -y --download-only --no-install-recommends \
     -o Dir::State::status="$cache/empty-status" \
     -o Dir::Cache::archives="$cache/debs" install "${packages[@]}"
 cp "$cache/debs/"*.deb "$stage/nex/repo/"
+# Keep only the DLM rebuilt against this media's Pacemaker fencing ABI.
+rm -f "$stage/nex/repo"/dlm-controld_*.deb
+cp -f "$matched_dlm_deb" "$stage/nex/repo/"
+runtime_version=$(dpkg-deb -f "$matched_dlm_deb" Depends | sed -n 's/.*libstonithd56 (= \([^)]*\)).*/\1/p')
+[[ -n $runtime_version ]]
+for deb in "$stage/nex/repo"/libstonithd56_*.deb; do
+    [[ $(dpkg-deb -f "$deb" Version) == "$runtime_version" ]] || {
+        echo "APT closure libstonithd56 does not match custom DLM runtime pin $runtime_version" >&2
+        exit 1
+    }
+done
+dlm_source=$(dirname "$matched_dlm_deb")
+[[ -f $dlm_source/build.log && -f $dlm_source/source/dlm_4.3.0-3.dsc && -f $dlm_source/notices/dlm-copyright ]]
+mkdir -p "$stage/nex/third-party"
+cp -a "$dlm_source" "$stage/nex/third-party/dlm-pacemaker-abi"
 # Host-local UI is a Nex package, not from Debian APT; CORE_LOCAL_DEB was validated above.
 cp -f "$core_local_deb" "$stage/nex/repo/"
 printf 'nex-core-local\n' >> "$stage/nex/packages.txt"

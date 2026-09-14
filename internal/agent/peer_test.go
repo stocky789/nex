@@ -3,6 +3,7 @@ package agent
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -139,6 +140,193 @@ func TestPoolPeerJoinPinsMasterCA(t *testing.T) {
 	}
 }
 
+func joinPeerMember(t *testing.T, master, member *Store) {
+	t.Helper()
+	csr, err := PoolJoinCSR(member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Establish the master's CA before configuring the temporary join listener.
+	if _, _, err = CreatePoolJoinOffer(master, "https://master.example.test", member.State.HostID, csr); err != nil {
+		t.Fatal(err)
+	}
+	config, err := PoolPeerTLSConfig(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(PoolPeerHandler(master))
+	server.TLS = config
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	ca, offer, err := CreatePoolJoinOffer(master, server.URL, member.State.HostID, csr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = JoinPoolPeer(context.Background(), member, server.URL, ca, offer); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func advertiseTestPeer(t *testing.T, master, member *Store) *httptest.Server {
+	t.Helper()
+	config, err := PoolPeerTLSConfig(member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) }))
+	server.TLS = config
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(master)
+	if err == nil {
+		for i := range state.Membership.Members {
+			if state.Membership.Members[i].HostID == member.State.HostID {
+				state.Membership.Members[i].PeerOrigin = server.URL
+			}
+		}
+		err = savePoolPeer(master, state)
+	}
+	poolPeerMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server
+}
+
+func TestPoolMemberPeerClientPinsCurrentMemberOriginAndCertificate(t *testing.T) {
+	master := peerStore(t, "master-1", "pool-1")
+	member := peerStore(t, "member-1", "other-pool")
+	joinPeerMember(t, master, member)
+	server := advertiseTestPeer(t, master, member)
+
+	client, err := PoolMemberPeerClient(master, server.URL, member.State.HostID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Get(server.URL)
+	if err != nil {
+		t.Fatalf("master-to-member mTLS: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("member response = %d", response.StatusCode)
+	}
+
+	other := peerStore(t, "member-2", "other-pool")
+	joinPeerMember(t, master, other)
+	otherServer := advertiseTestPeer(t, master, other)
+	// The endpoint can be current while its certificate is not: pinning must
+	// reject this CA-signed, but wrong, member identity during TLS verification.
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(master)
+	if err == nil {
+		for i := range state.Membership.Members {
+			if state.Membership.Members[i].HostID == member.State.HostID {
+				state.Membership.Members[i].PeerOrigin = otherServer.URL
+			}
+		}
+		err = savePoolPeer(master, state)
+	}
+	poolPeerMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err = PoolMemberPeerClient(master, otherServer.URL, member.State.HostID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response, err = client.Get(otherServer.URL); err == nil {
+		response.Body.Close()
+		t.Fatal("mismatched member certificate was accepted")
+	}
+
+	poolPeerMu.Lock()
+	state, err = loadPoolPeer(master)
+	if err == nil {
+		for i := range state.Membership.Members {
+			if state.Membership.Members[i].HostID == member.State.HostID {
+				state.Membership.Members[i].PeerOrigin = server.URL
+				state.Membership.Members[i].Status = "pending"
+			}
+		}
+		err = savePoolPeer(master, state)
+	}
+	poolPeerMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = PoolMemberPeerClient(master, server.URL, member.State.HostID); err == nil {
+		t.Fatal("stale member was accepted")
+	}
+	if _, err = PoolMemberPeerClient(master, server.URL, "not-a-member"); err == nil {
+		t.Fatal("out-of-scope member was accepted")
+	}
+}
+
+func TestStorageClusterMemberVerifyPathsAcceptOnlyCurrentMaster(t *testing.T) {
+	master := peerStore(t, "master-1", "pool-1")
+	member := peerStore(t, "member-1", "other-pool")
+	joinPeerMember(t, master, member)
+	server := httptest.NewUnstartedServer(PoolStorageClusterHandler(member))
+	config, err := PoolPeerTLSConfig(member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.TLS = config
+	server.StartTLS()
+	defer server.Close()
+
+	poolPeerMu.Lock()
+	masterState, err := loadPoolPeer(master)
+	if err == nil {
+		for i := range masterState.Membership.Members {
+			if masterState.Membership.Members[i].HostID == member.State.HostID {
+				masterState.Membership.Members[i].PeerOrigin = server.URL
+			}
+		}
+		err = savePoolPeer(master, masterState)
+	}
+	poolPeerMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := PoolMemberPeerClient(master, server.URL, member.State.HostID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Get(server.URL + poolStorageClusterPath + "/proof/repository-1")
+	if err != nil {
+		t.Fatalf("current master proof request: %v", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("current master proof status = %d", response.StatusCode)
+	}
+
+	foreign := peerStore(t, "member-2", "other-pool")
+	joinPeerMember(t, master, foreign)
+	poolPeerMu.Lock()
+	foreignState, err := loadPoolPeer(foreign)
+	poolPeerMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignCert, err := tls.X509KeyPair([]byte(foreignState.CertificatePEM), []byte(foreignState.KeyPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignClient := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{foreignCert}, InsecureSkipVerify: true}}}
+	response, err = foreignClient.Get(server.URL + poolStorageClusterPath + "/proof/repository-1")
+	if err != nil {
+		t.Fatalf("foreign member request: %v", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("foreign member proof status = %d", response.StatusCode)
+	}
+}
+
 func TestPoolRehomeResumes(t *testing.T) {
 	s := peerStore(t, "member-1", "old-pool")
 	if err := savePoolPeer(s, poolPeerState{PendingRehome: &poolRehome{PoolID: "new-pool", PoolName: "New Pool"}}); err != nil {
@@ -153,5 +341,33 @@ func TestPoolRehomeResumes(t *testing.T) {
 	state, err := loadPoolPeer(s)
 	if err != nil || state.PendingRehome != nil {
 		t.Fatalf("pending rehome = %#v, %v", state.PendingRehome, err)
+	}
+}
+
+func TestPoolPeerExactRoutesRejectWrongMethodWith405(t *testing.T) {
+	master := peerStore(t, "master-1", "pool-1")
+	member := peerStore(t, "member-1", "other-pool")
+	joinPeerMember(t, master, member)
+	config, err := PoolPeerTLSConfig(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(PoolPeerHandler(master))
+	server.TLS = config
+	server.StartTLS()
+	defer server.Close()
+	client, err := PoolPeerClient(member, server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/v1/pool/advertise", poolJoinPath} {
+		response, err := client.Get(server.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusMethodNotAllowed || response.Header.Get("Allow") != http.MethodPost {
+			t.Fatalf("GET %s = %d Allow=%q, want 405 Allow=POST", path, response.StatusCode, response.Header.Get("Allow"))
+		}
 	}
 }

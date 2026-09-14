@@ -475,14 +475,21 @@ func (b *cappedOutput) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 func virsh(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "virsh", append([]string{"--readonly", "--connect", "qemu:///system"}, args...)...)
+	// libvirt rejects virConnectGetDomainCapabilities on a readonly connection,
+	// even though virsh domcapabilities only observes host capabilities. Keep
+	// every other inventory query readonly.
+	prefix := []string{"--readonly", "--connect", "qemu:///system"}
+	if len(args) > 0 && args[0] == "domcapabilities" {
+		prefix = []string{"--connect", "qemu:///system"}
+	}
+	cmd := exec.CommandContext(ctx, "virsh", append(prefix, args...)...)
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	cmd.WaitDelay = time.Second
 	var output cappedOutput
 	cmd.Stdout = &output
 	cmd.Stderr = io.Discard
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("read-only libvirt query: %w", err)
+		return "", fmt.Errorf("libvirt query: %w", err)
 	}
 	return output.String(), nil
 }

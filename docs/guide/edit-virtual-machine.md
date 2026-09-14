@@ -8,7 +8,7 @@ mode and size; disks and network interfaces (add and remove); firmware, machine 
 order and install ISO; and autostart. What a running guest can take is applied while it runs;
 the rest waits for the VM to be stopped and the form says so per field. Deleting a VM,
 resizing a disk, moving a disk to other storage and moving a VM to another host are not
-available in this build. Verification is recorded under [Verification](#verification).
+available in this build.
 
 ## Prerequisites
 
@@ -92,8 +92,7 @@ stop and start), and a changed ISO is visible in the guest's CD drive. **Activit
 
 ## Verification
 
-See the [edit QA report](../qa/vm-edit/checks.md) for the Go, contract and browser checks
-that ran and for what remains untested on a real host.
+See the [edit QA report](../qa/vm-edit/checks.md) and the
+[physical reservation QA report](../qa/dedicated-memory/checks.md) for executed checks and
+untested limits.
 
-The [physical reservation QA report](../qa/dedicated-memory/checks.md) records the dedicated
-memory correction and the limits of the existing-VM upgrade verification.

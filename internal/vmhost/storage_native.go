@@ -7,6 +7,9 @@ package vmhost
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +17,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"nex.local/nex/internal/protocol"
@@ -30,7 +34,19 @@ type storageAccess struct {
 }
 
 var (
-	nativeRun = run
+	nativeRun          = run
+	qemuStorageStatfs  = syscall.Statfs
+	qemuStorageFstatfs = syscall.Fstatfs
+	qemuMachineID      = os.ReadFile
+	qemuProbeRemove    = os.Remove
+	qemuGFSRootTrusted = trustedManagedPath
+	qemuProbeOwner     = func(uid uint32) bool { return uid == 0 }
+	qemuProbeMountFile = qemuProbeMountIDFile
+	qemuProbeStat      = (*os.File).Stat
+	qemuProbeChmod     = (*os.File).Chmod
+	qemuRunInDir       = func(ctx context.Context, dir *os.File, name string, args ...string) ([]byte, error) {
+		return runWithDir(ctx, dir, name, args...)
+	}
 	// VM repositories must sit outside Core's 0700 state directory: libvirt-qemu needs to
 	// traverse them. Credentials and journals remain below the private agent state directory.
 	storageMountRoot      = "/var/lib/nex-storage"
@@ -231,28 +247,259 @@ func credentialFile(ctx context.Context, s protocol.StorageRegistration) (string
 	return p, nil
 }
 
-func qemuStorageAccess(ctx context.Context, path string) error {
-	// QEMU normally writes root-created, QEMU-owned disk files; it need not create a directory
-	// entry itself. Probe that real access model without weakening root-controlled ancestors.
-	if _, err := nativeRun(ctx, "runuser", "-u", "libvirt-qemu", "--", "test", "-x", path); err != nil {
-		return fmt.Errorf("storage is not traversable by libvirt-qemu: %w", err)
+const (
+	gfs2SuperMagic = 0x01161970
+	nfsSuperMagic  = 0x6969 // NFS_SUPER_MAGIC from linux/magic.h.
+)
+
+var machineIDHex = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+var errQEMUProbeLeafOwner = errors.New("QEMU probe directory owner is unsuitable")
+
+type qemuGFSProofKey struct {
+	mount string
+	dev   uint64
+	ino   uint64
+	uid   int
+}
+
+type qemuGFSProofFlight struct {
+	done chan struct{}
+	err  error
+}
+
+var qemuGFSProofFlights = struct {
+	sync.Mutex
+	byKey map[qemuGFSProofKey]*qemuGFSProofFlight
+}{byKey: map[qemuGFSProofKey]*qemuGFSProofFlight{}}
+
+// qemuGFSProbeDirectory returns an opened private per-Core leaf only for GFS2 or NFS.
+// ponytail: isolation requires a trusted ancestry above the mount root; all other
+// paths retain the original full root proof.
+func qemuGFSProbeDirectory(ctx context.Context, path string) (*os.File, bool, error) {
+	var rootFS syscall.Statfs_t
+	if err := qemuStorageStatfs(path, &rootFS); err != nil || !qemuProbeFilesystem(uint64(rootFS.Type)) {
+		return nil, false, nil
 	}
-	uidOut, err := nativeRun(ctx, "id", "-u", "libvirt-qemu")
+	if err := qemuGFSRootTrusted(filepath.Dir(path)); err != nil {
+		return nil, false, nil
+	}
+	root, err := qemuOpenProbeDirectory(path)
 	if err != nil {
-		return fmt.Errorf("cannot resolve libvirt-qemu identity: %w", err)
+		return nil, true, errors.New("GFS2 QEMU probe root is unavailable")
 	}
-	uid, err := strconv.Atoi(strings.TrimSpace(string(uidOut)))
-	if err != nil || uid < 0 {
-		return errors.New("invalid libvirt-qemu identity")
+	defer root.Close()
+	var heldFS syscall.Statfs_t
+	if err := qemuStorageFstatfs(int(root.Fd()), &heldFS); err != nil || uint64(heldFS.Type) != uint64(rootFS.Type) {
+		return nil, true, errors.New("network QEMU probe root changed during validation")
 	}
-	f, err := os.CreateTemp(path, ".nex-qemu-access-")
+	rootMount, err := qemuProbeMountFile(root)
+	if err != nil {
+		return nil, true, err
+	}
+	machineID, err := qemuMachineID("/etc/machine-id")
+	if err != nil {
+		return nil, true, errors.New("GFS2 QEMU probe machine identity is unavailable")
+	}
+	id := strings.TrimSpace(string(machineID))
+	if !machineIDHex.MatchString(id) || id == strings.Repeat("0", 32) {
+		return nil, true, errors.New("GFS2 QEMU probe machine identity is invalid")
+	}
+	mac := hmac.New(sha256.New, []byte("nex-qemu-probe-directory-v1"))
+	_, _ = mac.Write([]byte(id))
+	leafName := ".nex-qemu-probe-" + hex.EncodeToString(mac.Sum(nil))
+	leaf, err := qemuOpenGFSProbeLeaf(ctx, root, leafName)
+	if err != nil {
+		// A root-squashed NFS export may map Core away from UID 0. Keep its
+		// established full-root proof instead of accepting a non-root leaf.
+		if uint64(rootFS.Type) == nfsSuperMagic && errors.Is(err, errQEMUProbeLeafOwner) {
+			return nil, false, nil
+		}
+		return nil, true, err
+	}
+	leafMount, err := qemuProbeMountFile(leaf)
+	if err != nil || rootMount != leafMount {
+		leaf.Close()
+		return nil, true, errors.New("GFS2 QEMU probe directory is outside the repository mount")
+	}
+	return leaf, true, nil
+}
+
+func qemuProbeFilesystem(fsType uint64) bool {
+	return fsType == gfs2SuperMagic || fsType == nfsSuperMagic
+}
+
+func qemuOpenProbeDirectory(path string) (*os.File, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	f := os.NewFile(uintptr(fd), path)
+	info, err := f.Stat()
+	if err != nil || !info.IsDir() {
+		f.Close()
+		return nil, errors.New("GFS2 QEMU probe root is unavailable")
+	}
+	return f, nil
+}
+
+func qemuOpenGFSProbeLeaf(ctx context.Context, root *os.File, leafName string) (*os.File, error) {
+	fd, err := syscall.Openat(int(root.Fd()), leafName, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if errors.Is(err, syscall.ENOENT) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if _, mkdirErr := qemuRunInDir(ctx, root, "mkdir", "--mode=0711", "--", leafName); mkdirErr != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			// A concurrent creator may have completed the leaf. It is never modified
+			// here; the anchored descriptor validation below accepts it or fails closed.
+		}
+		fd, err = syscall.Openat(int(root.Fd()), leafName, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	}
+	if err != nil {
+		return nil, errors.New("GFS2 QEMU probe directory is unavailable")
+	}
+	leaf := os.NewFile(uintptr(fd), leafName)
+	info, statErr := leaf.Stat()
+	if statErr != nil || info == nil {
+		leaf.Close()
+		return nil, errors.New("GFS2 QEMU probe directory is unsafe")
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.IsDir() || info.Mode().Perm() != 0711 {
+		leaf.Close()
+		return nil, errors.New("GFS2 QEMU probe directory is unsafe")
+	}
+	if !qemuProbeOwner(st.Uid) {
+		leaf.Close()
+		return nil, errQEMUProbeLeafOwner
+	}
+	return leaf, nil
+}
+
+func qemuProbeMountIDFile(dir *os.File) (string, error) {
+	info, err := os.ReadFile("/proc/self/fdinfo/" + strconv.Itoa(int(dir.Fd())))
+	if err != nil {
+		return "", errors.New("GFS2 QEMU probe mount is unavailable")
+	}
+	for _, line := range strings.Split(string(info), "\n") {
+		if value, ok := strings.CutPrefix(line, "mnt_id:\t"); ok && value != "" {
+			return value, nil
+		}
+	}
+	return "", errors.New("GFS2 QEMU probe mount is unavailable")
+}
+
+func qemuCreateTemp(dir *os.File) (*os.File, string, error) {
+	base := "/proc/self/fd/" + strconv.Itoa(int(dir.Fd()))
+	f, err := os.CreateTemp(base, ".nex-qemu-access-")
+	if err != nil {
+		return nil, "", err
+	}
+	return f, filepath.Base(f.Name()), nil
+}
+
+func qemuRemoveTemp(dir *os.File, name string) error {
+	return qemuProbeRemove("/proc/self/fd/" + strconv.Itoa(int(dir.Fd())) + "/" + name)
+}
+
+// qemuGFSProofKeyFor identifies an already-opened GFS2 or NFS leaf. A failed
+// extra observation leaves the existing independent proof unchanged.
+func qemuGFSProofKeyFor(dir *os.File, uid int) (qemuGFSProofKey, bool) {
+	var fs syscall.Statfs_t
+	if err := qemuStorageFstatfs(int(dir.Fd()), &fs); err != nil || (uint64(fs.Type) != gfs2SuperMagic && uint64(fs.Type) != nfsSuperMagic) {
+		return qemuGFSProofKey{}, false
+	}
+	mount, err := qemuProbeMountFile(dir)
+	if err != nil {
+		return qemuGFSProofKey{}, false
+	}
+	info, err := dir.Stat()
+	if err != nil {
+		return qemuGFSProofKey{}, false
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return qemuGFSProofKey{}, false
+	}
+	return qemuGFSProofKey{mount: mount, dev: uint64(st.Dev), ino: st.Ino, uid: uid}, true
+}
+
+// qemuGFSStorageAccess shares only a currently-running proof of the same held
+// GFS2 or NFS leaf. It never retains a completed health result.
+func qemuGFSStorageAccess(ctx context.Context, dir *os.File, uid int, key qemuGFSProofKey) error {
+	qemuGFSProofFlights.Lock()
+	flight := qemuGFSProofFlights.byKey[key]
+	if flight == nil {
+		flight = &qemuGFSProofFlight{done: make(chan struct{})}
+		qemuGFSProofFlights.byKey[key] = flight
+		qemuGFSProofFlights.Unlock()
+
+		flight.err = qemuStorageAccessProbe(ctx, dir, "", uid)
+		if flight.err == nil && ctx.Err() != nil {
+			flight.err = ctx.Err()
+		}
+
+		qemuGFSProofFlights.Lock()
+		delete(qemuGFSProofFlights.byKey, key)
+		close(flight.done)
+		qemuGFSProofFlights.Unlock()
+		return flight.err
+	}
+	qemuGFSProofFlights.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-flight.done:
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if flight.err == nil {
+		return nil
+	}
+	// A failed leader is never a shared proof. A live waiter gets one fresh
+	// proof using its own held descriptor and existing context.
+	return qemuStorageAccessProbe(ctx, dir, "", uid)
+}
+
+func qemuStorageAccessProbe(ctx context.Context, probeDir *os.File, path string, uid int) (retErr error) {
+	var f *os.File
+	var probe, probeName string
+	var err error
+	if probeDir != nil {
+		f, probeName, err = qemuCreateTemp(probeDir)
+		probe = probeName
+	} else {
+		f, err = os.CreateTemp(path, ".nex-qemu-access-")
+		if err == nil {
+			probe = f.Name()
+		}
+	}
 	if err != nil {
 		return errors.New("storage cannot create a QEMU access probe")
 	}
-	probe := f.Name()
-	defer os.Remove(probe)
+	if probeDir != nil {
+		defer func() {
+			if err := qemuRemoveTemp(probeDir, probeName); err != nil && retErr == nil {
+				retErr = errors.New("cannot remove GFS2 QEMU access probe")
+			}
+		}()
+	} else {
+		defer os.Remove(probe)
+	}
 	if err = f.Chown(uid, -1); err == nil {
-		err = f.Chmod(0600)
+		info, statErr := qemuProbeStat(f)
+		st, statOK := (*syscall.Stat_t)(nil), false
+		if statErr == nil && info != nil {
+			st, statOK = info.Sys().(*syscall.Stat_t)
+		}
+		if statErr != nil || info == nil || !statOK || st == nil || info.Mode() != 0600 || st.Uid != uint32(uid) {
+			err = qemuProbeChmod(f, 0600)
+		}
 	}
 	if err == nil {
 		err = f.Sync()
@@ -264,9 +511,44 @@ func qemuStorageAccess(ctx context.Context, path string) error {
 		return fmt.Errorf("cannot prepare QEMU access probe: %w", err)
 	}
 	for _, option := range []string{"-r", "-w"} {
-		if _, err := nativeRun(ctx, "runuser", "-u", "libvirt-qemu", "--", "test", option, probe); err != nil {
+		if probeDir != nil {
+			_, err = qemuRunInDir(ctx, probeDir, "runuser", "-u", "libvirt-qemu", "--", "test", option, probe)
+		} else {
+			_, err = nativeRun(ctx, "runuser", "-u", "libvirt-qemu", "--", "test", option, probe)
+		}
+		if err != nil {
 			return fmt.Errorf("storage probe is not accessible to libvirt-qemu: %w", err)
 		}
 	}
 	return nil
+}
+
+func qemuStorageAccess(ctx context.Context, path string) error {
+	// QEMU normally writes root-created, QEMU-owned disk files; it need not create a directory
+	// entry itself. Probe that real access model without weakening root-controlled ancestors.
+	if _, err := nativeRun(ctx, "runuser", "-u", "libvirt-qemu", "--", "test", "-x", path); err != nil {
+		return fmt.Errorf("storage is not traversable by libvirt-qemu: %w", err)
+	}
+	probeDir, isolated, err := qemuGFSProbeDirectory(ctx, path)
+	if err != nil {
+		return err
+	}
+	if isolated {
+		defer probeDir.Close()
+	}
+	uidOut, err := nativeRun(ctx, "id", "-u", "libvirt-qemu")
+	if err != nil {
+		return fmt.Errorf("cannot resolve libvirt-qemu identity: %w", err)
+	}
+	uid, err := strconv.Atoi(strings.TrimSpace(string(uidOut)))
+	if err != nil || uid < 0 {
+		return errors.New("invalid libvirt-qemu identity")
+	}
+	if isolated {
+		if key, ok := qemuGFSProofKeyFor(probeDir, uid); ok {
+			return qemuGFSStorageAccess(ctx, probeDir, uid, key)
+		}
+		return qemuStorageAccessProbe(ctx, probeDir, "", uid)
+	}
+	return qemuStorageAccessProbe(ctx, nil, path, uid)
 }

@@ -2,14 +2,10 @@
 
 ## Status
 
-This page covers the **2026-09-08 web-security development changes** for Nex Controller
-and the Nex Core host-local interface. The changes harden existing authentication,
-sessions and browser responses. The current host package is `0.1.0+usability1`; its root-login checks are recorded
-in Verification. Earlier `0.1.0+security1` nested-KVM results apply to that artifact.
-Earlier appliance results remain separate evidence for their named artifacts. Current
-host-local builds now use the OS **root** password; the older security package used a
-separate local account. Install matching updated service, web assets and authentication
-components before following the root-login instructions.
+This page covers authentication, sessions and browser responses for Nex Controller and the
+Nex Core host-local interface. Host-local builds use the OS **root** password; older security
+packages used a separate local account. Install matching service, web assets and
+authentication components before following the root-login instructions.
 
 Use a private management network or an established VPN. Direct Internet exposure is not
 supported by this development slice. The assessment uses
@@ -113,31 +109,10 @@ Additional bounded server-wide admission can reject a login while password check
 
 ## Verification
 
-[Deployment usability checks](../qa/appliance/deployment-usability.md) record the current
-DHCP/password/power UI changes, simulated browser checks and artifact availability limits.
+Root login, sessions, throttling and recovery were checked in a browser and a nested-KVM lab;
+production-security acceptance, physical hardware and a full updated-ISO install were not. See
+[root-login verification](../qa/appliance/root-auth.md),
+[deployment usability checks](../qa/appliance/deployment-usability.md),
+[security checks](../qa/security/checks.md), [browser walkthrough](../qa/security/browser.md)
+and [lab results](../qa/security/lab.md).
 
-[Root-login verification](../qa/appliance/root-auth.md) covers current root PAM login,
-password changes, rejected/expired/locked account recovery and browser checks.
-
-The [security check report](../qa/security/checks.md) records the reproduced login-admission
-failure, regression/race/API/password checks, independent review and time-specific advisory
-results. [Security package evidence](../qa/security/package.md) distinguishes the older
-compiler findings from the rebuilt package's successful Debian-container smoke and
-exact-binary advisory scan. The separately extracted Controller binary also passed its
-[compiler/advisory checks](../qa/security/compiler.md). The [browser walkthrough](../qa/security/browser.md)
-passed real HTTPS login/logout, cookie and browser-policy checks, throttling, password validation,
-Controller expiry recovery and host-local session-loss recovery. Virtualization was simulated;
-Controller idle expiry was accelerated by changing only a disposable session deadline. Local
-idle expiry remains a focused Go check, not a thirty-minute browser walkthrough.
-
-The security package also passed [real nested-KVM deployment and recovery-of-access checks](../qa/security/lab.md),
-including first workspace enrollment, same-VM refresh, secret cleanup, Controller/local-service
-outages and guest shutdown/cold start. [Actual cookie, policy and throttle responses](../qa/security/lab/security.json)
-were recorded on both services. An actual outer-host reboot also passed native local-service
-startup, same-appliance autostart, original-password login, preserved TLS/source/management
-identity and fresh enrolled-agent reporting. This does not repeat the older artifact's full
-replacement restore or establish physical-LAN/hardware behavior. These results do not
-establish production-security acceptance. Historical
-[appliance verification](../qa/appliance/lab.md) remains evidence for its named older artifacts,
-not for the new session and password policies. The current Core ISO recipe includes the local package; a full updated-ISO installation
-walkthrough remains separate from these container checks.

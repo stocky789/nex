@@ -1,5 +1,19 @@
 # VM storage repositories: NFS, OpenZFS, SMB and iSCSI
 
+2026-09-12 scope expansion (project owner): the
+[concurrent storage plan](2026-09-12-concurrent-pool-storage.md) supersedes the single-host
+limits below only for its explicitly validated profiles; ordinary ext4/XFS iSCSI stays exclusive.
+
+2026-09-12 UX correction (project owner): BUG-0095 requires browsing what the destination
+server offers, not choosing from Nex registrations. SMB server/account/password must be
+enough to open a share-and-folder picker; NFS server alone opens export-and-folder browsing;
+iSCSI discovery fills available target details without guessing LUN identity or exclusivity.
+Manual entry remains a fallback. API impact: **existing contract** for the picker, using
+`POST /api/v1/storage/discover` and Core's transient result; Core still performs every probe.
+Guide impact: **updated** in the storage repository guide. No new durable state is introduced;
+accepted registrations remain in the pool master's Core storage journal and normal inventory
+adoption path. This corrects the existing scope, not migration, HA or UEFI acceptance.
+
 Date: 2026-09-11  
 Status: Implementation authorized by project owner; single-host backend code and UI are in
 review and disposable-lab testing. Acceptance remains open until the checks below pass.
@@ -148,6 +162,16 @@ When members become available, the pool master must drive member work and retain
 through an authenticated Core-to-Core contract; the Controller must not become a multi-host
 storage job runner. Until that Phase 4 contract exists, reject multi-host attachment. Master
 replacement must transfer/recover these records and secret custody before accepting mutations.
+
+**Planned host-loss recovery requirement, 2026-09-12:** network storage must eventually support
+[manual replacement-Core recovery](2026-09-08-nex-platform.md#manual-recovery-after-permanent-host-loss)
+of surviving VMs, including loss of the pool master or sole host. Core-owned recoverable VM/pool
+metadata, required firmware state and safe ownership transfer are prerequisites, not capabilities
+provided by this storage-registration slice. NFS and SMB require per-host checks and exclusion of
+the former VM owner; ordinary-filesystem iSCSI requires exclusive LUN handover, never concurrent
+mounts. The linked Phase 7/8 acceptance gate covers each backend separately and remains outstanding;
+automatic HA is not required for the manual workflow. API impact of this clarification: **none**;
+the linked plan defines the future Core contracts and guide work.
 
 ## Common behavior and safety
 
@@ -363,10 +387,8 @@ and this review have evidence. This plan is not a licensing clearance or a Secur
 No ZFS root installer conversion or custom kernel is required by the proposed dataset integration.
 
 For every backend, retain exact tested Nex/kernel/libvirt/QEMU/client/server versions, lab scope,
-commands, observed results and sanitized captures. Reuse existing Go and integration suites;
-add focused observable-behavior checks rather than one suite per helper. Both GitHub and Gitea
-push/PR workflows must actually run the regression suites; unavailable lab prerequisites leave
-the corresponding gate open. Bug fixes also add [bug ledger](../BUG_LEDGER.md) entries.
+commands, observed results and sanitized captures, under the
+[verification rules](../../AGENTS.md#verification-and-bug-memory).
 
 Browser acceptance covers registration/recheck/removal, VM disk selection and mixed repositories,
 keyboard/focus, empty/loading/error/stale states, permission denials and actionable failures.
@@ -384,20 +406,8 @@ Multi-host shared placement remains a separate outstanding Phase 4 deliverable.
 
 ### Historical planning verification
 
-The following records the earlier planning-only turn, before implementation authorization;
-it does not describe the current working tree. Current evidence is in [storage QA](../qa/storage-repositories/checks.md).
-
-Source and upstream review establish implementation seams and required gates only. No storage
-package was installed, no endpoint connected and no disks or live infrastructure touched.
-Independent review initially requested explicit repository lifecycle replay, credential delivery
-and version handling; those corrections were independently re-reviewed and accepted. Local plan
-links and change-assessment validation passed. `python3 scripts/check_docs.py --worktree` passed
-for 73 uncommitted paths after an unrelated in-flight guide link was resolved;
-`python3 -m unittest discover -s tests -p 'test_repository_privacy.py'` passed (1 test), and
-`git diff --check` passed. A final whole-worktree rerun then found a newly changed, unrelated
-`internal/controller/monitor.go` without an assessment; that concurrent-work gate remains open.
-These checks do not establish backend behavior. All backend
-walkthroughs and performance/durability tests remain unexecuted.
+The pre-implementation plan review (2026-09-11) established design seams and gates only, not
+backend behavior. Current evidence is in [storage QA](../qa/storage-repositories/checks.md).
 
 ### Primary technical references
 

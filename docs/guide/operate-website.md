@@ -93,11 +93,7 @@ limit.
 
 ## Verification
 
-The release script unit checks cover successful publish, failed-switch restoration,
-retained-release rollback rejection and artifact-link rejection. Browser hardening
-checks use a rendered nginx configuration in both CI workflows. The
-[website hardening evidence](../qa/website-security/hardening.md) records passed
-private HTTPS, service, header, listing, rollback and isolated-restore checks. Its
-stated limits apply: this procedure does not verify router/NAT exposure, firewall
-enforcement, allowlists, SSH configuration, host reboot recovery, hosted CI or an
-unrestricted-publication posture.
+Publish, rollback, headers and listing checks passed on a private HTTPS deployment; router/NAT
+exposure, firewall, allowlists, SSH and reboot recovery were not verified. See the
+[website hardening evidence](../qa/website-security/hardening.md).
+

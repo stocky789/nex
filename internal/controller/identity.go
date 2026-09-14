@@ -472,6 +472,16 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 			return
 		}
 	}
+	if len(v.StorageClusters) > 128 {
+		fail(w, 400, "too many clustered storage results")
+		return
+	}
+	for _, result := range v.StorageClusters {
+		if !clusterResultValid(result) || (!slices.Contains(v.Capabilities, protocol.StorageClusterSessionMonitorCapability) && clusterResultHasSessionMonitor(result)) {
+			fail(w, 400, "invalid clustered storage result")
+			return
+		}
+	}
 	tx, err := c.db.Begin()
 	if err != nil {
 		fail(w, 500, "storage unavailable")
@@ -494,16 +504,25 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	}
 	out := protocol.ReportResponse{Commands: []protocol.Command{}, AcknowledgedResults: []string{}}
 	c.completeStorageDiscoveries(host, v.StorageDiscoveries)
+	c.completeStorageClusters(host, v.StorageClusters)
 	// A v2 Core asks for this acknowledgement before it advertises the repository
 	// capability. v1 peers receive their original response shape unchanged.
 	if v.Version == protocol.Version {
 		out.StorageRepositories = &protocol.StorageRepositorySupport{ProtocolVersion: protocol.Version, Capability: protocol.StorageRepositoryCapability}
+		clusterCapability := protocol.StorageClusterCapability
+		if slices.Contains(v.Capabilities, protocol.StorageClusterSessionMonitorCapability) {
+			clusterCapability = protocol.StorageClusterSessionMonitorCapability
+		}
+		out.StorageClusters = &protocol.StorageClusterSupport{Capability: clusterCapability}
 		if slices.Contains(v.Capabilities, protocol.StorageRepositoryCapability) {
 			out.CredentialOffers = c.credentials.offers(host)
 		}
 	}
 	if v.Version == protocol.Version && slices.Contains(v.Capabilities, protocol.StorageDiscoveryCapability) {
 		out.StorageDiscoveries = c.takeStorageDiscoveries(host)
+	}
+	if v.Version == protocol.Version && slices.Contains(v.Capabilities, protocol.StorageClusterCapability) {
+		out.StorageClusterRequests = c.takeStorageClusters(host)
 	}
 	for _, res := range v.Results {
 		var status string

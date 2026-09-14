@@ -9,7 +9,10 @@ Conflicts=nex-core-agent.service
 Type=simple
 User=root
 UMask=0077
-StateDirectory=nex/core-local
+# core-local embeds the agent, so systemd must create both of its private stores
+# before core-local-setup starts.  The standalone agent unit's StateDirectory does
+# not apply while this unit owns the embedded agent.
+StateDirectory=nex/core-local nex-core-agent
 StateDirectoryMode=0700
 ExecStartPre=/usr/lib/nex/core-local-setup init
 ExecStart=/usr/lib/nex/core-local-setup run

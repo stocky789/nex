@@ -1,0 +1,35 @@
+{
+  "summary": "Add a contributor-only BIOS guest persistence acceptance adapter for the current ISO. API impact: none; it uses the installed host's existing libvirt and an explicitly selected private guest fixture, without adding or changing any Nex Controller, Core, or client contract. The adapter verifies a standalone qcow2 fixture and an explicit guest host key, never formats an image container, and retains private artifacts if lifecycle release fails.",
+  "paths": [
+    "tests/integration/fresh_install_host.py",
+    "tests/test_fresh_install_host.py",
+    "docs/changes/2026-09-13-fresh-install-bios-acceptance.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This is private contributor QA for an already installed disposable host; it adds no operator workflow or product behavior.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The adapter invokes local libvirt and private SSH only; it introduces no Nex API operation or changed contract.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The helper verifies a bounded BIOS fixture without completing the wider production milestone.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The independently converted guest disk, SSH key copy, domain definition and result are private disposable-lab artifacts. Successful release undefines the stopped guest; failures retain the exact fixture for diagnosis. No product durable state is added."
+  },
+  "verification": {
+    "method": "Focused 12-test suite passed; corrected per-unit baseline refused the unhealthy fifth-ISO installation. On the independently audited seventh ISO, actual clean BIOS installation/disk-only boot and required services passed. After explicit disposable NAT preparation, a newly converted standalone BIOS guest wrote/fsynced data and verified its checksum across guest and host reboots with distinct boot identities. It was shut down/undefined and its disk retained. Independent live-host review accepted the receipt, current services/private directories, binary/source pins and zero domains. Local desktop/mobile browser review passed. Earlier failed evidence remains retained; UEFI, physical hardware and production certification are not claimed. Integration helpers remain outside the shipped source-archive allowlist.",
+    "evidence": [
+      "tests/integration/fresh_install_host.py",
+      "tests/test_fresh_install_host.py",
+      "tests/test_fresh_install_lab.py"
+    ]
+  }
+}

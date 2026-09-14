@@ -7,13 +7,10 @@ dialog, Refresh view, and the new **Host** menu.
 
 ## Environment and method
 
-Disposable HTTPS Controller and real agent process started by `tests/integration/phase1.py`
-on the development workstation (CachyOS, headless Chromium through Playwright, viewports
-1440×1000 and 360×800). No live host was changed. The lab has no guest VMs, so the VM power
-group is exercised against a **simulated VM record** injected with browser route stubs on top
-of the real host; the stubs are labeled in the script. This establishes UI behavior, not power execution on a host, which remains
-covered by the [console QA report](../console/checks.md). The stubbed groups are named
-"simulated" in the result group list.
+Disposable HTTPS Controller and real agent from `tests/integration/phase1.py` (CachyOS, headless
+Chromium, 1440×1000 and 360×800). The lab has no guests, so the power group uses a **simulated VM
+record** from labeled browser route stubs (groups named "simulated"): UI behavior only; host power
+execution is in the [console QA report](../console/checks.md).
 
 ## Commands and results
 

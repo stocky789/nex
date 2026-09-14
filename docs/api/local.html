@@ -12,6 +12,8 @@
 <li><a href="#joinPool">POST /api/local/v1/pool/join</a></li>
 <li><a href="#createPoolJoinCSR">POST /api/local/v1/pool/join-csr</a></li>
 <li><a href="#createPoolJoinOffer">POST /api/local/v1/pool/join-offer</a></li>
+<li><a href="#getLocalStorageCluster">GET /api/local/v1/pool/storage-cluster</a></li>
+<li><a href="#applyLocalStorageCluster">POST /api/local/v1/pool/storage-cluster/apply</a></li>
 <li><a href="#localVMs">GET /api/local/v1/vms</a></li>
 <li><a href="#localPower">POST /api/local/v1/vms/{id}/actions</a></li>
 <li><a href="#localDeploy">POST /api/local/v1/deployments</a></li>
@@ -481,6 +483,101 @@
     },
     &quot;409&quot;: {
       &quot;description&quot;: &quot;Master Core peer state is unavailable or rejects the request.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="getLocalStorageCluster"><h2>GET <code>/api/local/v1/pool/storage-cluster</code></h2>
+<p>Read this Core&#x27;s clustered-storage operations</p><p>Authenticated local root session. Returns the Core-owned persisted clustered-storage operation projections. A 409 means this Core is not enrolled or its agent state cannot be opened. This read never creates a cluster, fence proof, mount or credential.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;getLocalStorageCluster&quot;,
+  &quot;summary&quot;: &quot;Read this Core&#x27;s clustered-storage operations&quot;,
+  &quot;description&quot;: &quot;Authenticated local root session. Returns the Core-owned persisted clustered-storage operation projections. A 409 means this Core is not enrolled or its agent state cannot be opened. This read never creates a cluster, fence proof, mount or credential.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Core operation projections.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;items&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/LocalStorageClusterOperation&quot;
+            }
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Local root session required.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Core cluster state unavailable.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="applyLocalStorageCluster"><h2>POST <code>/api/local/v1/pool/storage-cluster/apply</code></h2>
+<p>Start Core-owned clustered GFS2 iSCSI setup locally</p><p>Authenticated enrolled local root session, same HTTPS Origin and X-CSRF-Token required. Starts the same Core-owned durable operation as the Controller relay; it is not a Controller job. Core forces its own pool and host scope, derives native mount/device data from verified iSCSI identity, and accepts no credential bytes or claimed fence proof. 202 means the Core accepted/reported the operation, not that a healthy cluster is ready. Same request ID with changed input conflicts in Core state.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;applyLocalStorageCluster&quot;,
+  &quot;summary&quot;: &quot;Start Core-owned clustered GFS2 iSCSI setup locally&quot;,
+  &quot;description&quot;: &quot;Authenticated enrolled local root session, same HTTPS Origin and X-CSRF-Token required. Starts the same Core-owned durable operation as the Controller relay; it is not a Controller job. Core forces its own pool and host scope, derives native mount/device data from verified iSCSI identity, and accepts no credential bytes or claimed fence proof. 202 means the Core accepted/reported the operation, not that a healthy cluster is ready. Same request ID with changed input conflicts in Core state.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/LocalStorageClusterApplyRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Core result.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/LocalStorageClusterResult&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed or unknown request fields.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Local root session required.&quot;
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Core is not enrolled or refuses the request.&quot;
     }
   }
 }</pre></details></section>
@@ -1760,6 +1857,145 @@
     }
   ]
 }</pre></details>
+<details id="LocalStorageClusterApplyRequest"><summary>LocalStorageClusterApplyRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;expected_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;Optional; zero is valid while Core allocates a candidate repository.&quot;
+    },
+    &quot;registration&quot;: {
+      &quot;type&quot;: &quot;object&quot;
+    },
+    &quot;config&quot;: {
+      &quot;type&quot;: &quot;object&quot;
+    },
+    &quot;credential_requests&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;object&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;registration&quot;,
+    &quot;config&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="LocalStorageClusterResult"><summary>LocalStorageClusterResult</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;accepted&quot;,
+        &quot;queued&quot;,
+        &quot;succeeded&quot;,
+        &quot;failed&quot;,
+        &quot;needs_attention&quot;
+      ]
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;operations&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;object&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;status&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="LocalStorageClusterOperation"><summary>LocalStorageClusterOperation</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;membership_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;config&quot;: {
+      &quot;type&quot;: &quot;object&quot;
+    },
+    &quot;registration&quot;: {
+      &quot;type&quot;: &quot;object&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;queued&quot;,
+        &quot;awaiting_fencing&quot;,
+        &quot;verifying_fence&quot;,
+        &quot;applying&quot;,
+        &quot;healthy&quot;,
+        &quot;degraded&quot;,
+        &quot;succeeded&quot;,
+        &quot;failed&quot;,
+        &quot;needs_attention&quot;
+      ]
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;updated_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;members&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;object&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;membership_generation&quot;,
+    &quot;config&quot;,
+    &quot;registration&quot;,
+    &quot;status&quot;,
+    &quot;updated_at&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
 <details id="Error"><summary>Error</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;properties&quot;: {
@@ -2129,6 +2365,10 @@
       &quot;type&quot;: &quot;string&quot;,
       &quot;writeOnly&quot;: true,
       &quot;description&quot;: &quot;Opaque one-use pool join offer.&quot;
+    },
+    &quot;peer_origin&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Optional bare HTTPS peer origin advertised by this admitted member for durable master-side peer recovery.&quot;
     }
   },
   &quot;required&quot;: [

@@ -3,9 +3,7 @@
 ## Status
 
 Applies to **Nex Core** (development alpha) after [installation](install-nex-core.md). These local
-console checks inspect the standalone host, not a Nex Controller service. The eight commands
-in Steps 1–3 were exercised through a serial root console on a disposable clone of the
-historical QA3 host; see Verification for the artifact and limits. [Return to the guide](README.md).
+console checks inspect the standalone host, not a Nex Controller service. [Return to the guide](README.md).
 
 ## Prerequisites
 
@@ -71,9 +69,8 @@ created by this procedure.
 - **`/dev/kvm` is missing or hardware acceleration fails:** check firmware virtualization
   settings and the outer VM's nested-virtualization configuration. Software emulation is
   not proof of the KVM acceptance gate.
-- **IOMMU or Secure Guest warnings:** the QA3 nested lab reported no IOMMU/DMAR and unknown
-  Secure Guest support while KVM checks passed. These warnings concern additional capabilities;
-  do not infer passthrough or confidential-guest support from a working basic KVM host.
+- **IOMMU or Secure Guest warnings:** nested labs commonly report these while KVM checks
+  pass. They concern additional capabilities; do not infer passthrough or confidential-guest support from a working basic KVM host.
 - **Libvirt cannot connect or a service failed:** inspect its journal, for example
   `journalctl -b -u libvirtd --no-pager`, and retain the relevant error. Do not reinstall
   or reset storage as a generic repair step.
@@ -84,24 +81,9 @@ created by this procedure.
 
 ## Verification
 
-The [single Nex Core version checks](../qa/single-nex-core-version.md) record the package
-identity path (real `dpkg` into a temporary root, labeled simulation) and the Controller host
-page showing one **Version** row; no installed host has yet taken an update with this change.
+The Step 1–3 commands were rehearsed on a disposable host; Step 4 reboot was not. See the
+[guide command rehearsal](../qa/guide-host-checks.md), the
+[alpha1 QA report](../qa/iso/2026-09-08-alpha1.md) and the
+[single Nex Core version checks](../qa/single-nex-core-version.md). These checks do not establish
+guest OS installation, guest networking, SSH login, time synchronization or upgrades.
 
-The [guide command rehearsal](../qa/guide-host-checks.md) records all eight commands in
-Steps 1–3 exiting successfully on a disposable QA3 clone. Identity, active services, root SSH
-policy, KVM/device/cgroup checks, and libvirt connectivity matched the instructions. Validation
-also reported IOMMU/DMAR and Secure Guest warnings. The optional shutdown/reboot in Step 4
-was not verified by that rehearsal; it does not establish an end-to-end guide pass.
-
-The [alpha1 QA report](../qa/iso/2026-09-08-alpha1.md) records offline installation, active
-services, `/dev/kvm`, and Nex identity across a same-version `base-files` reinstall and two
-host boots. A libvirt `type=kvm` guest booted the installed kernel and tiny BusyBox userspace.
-Host marker and VM-definition persistence were verified. That image predates the current
-root-only installer account flow; these checks do not establish that the changed password
-prompts have been exercised.
-
-Those tests do **not** prove a fully installed guest OS, guest networking or guest-disk
-persistence, SSH login, time synchronization, future distribution upgrades, or recovery
-features. Follow the [remaining roadmap gates](../plans/2026-09-08-nex-platform.md) before
-treating this as a supported virtualization platform.

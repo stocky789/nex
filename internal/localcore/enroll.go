@@ -39,6 +39,18 @@ func validEnrollmentToken(token string) bool {
 	return true
 }
 
+// reconcileEnrollmentCache makes the registry reflect the Store after every
+// enrollment outcome. The caller holds handoffAgents.Lock.
+func reconcileEnrollmentCache(a *runningAgent) {
+	a.hostID = a.store.State.HostID
+	if a.hostID == "" {
+		a.controller, a.trust = "", ""
+		return
+	}
+	a.controller = a.store.State.Controller
+	a.trust = a.store.State.TrustPEM
+}
+
 // enrollment lets the Controller push a single-use enrollment token to this host over
 // its existing local session, replacing the manual `nex-core-agent enroll` step. It
 // never logs the token or CA, and serializes attempts so a retried Add-host click
@@ -87,8 +99,9 @@ func (s *Service) enrollment(w http.ResponseWriter, r *http.Request) {
 	// running under (e.g. a host revoked on the Controller while still locally up).
 	// Pause that agent before mutating its store, so Enroll's writes never race the
 	// report loop's own reads of the same in-memory state, and always resume it
-	// afterward — restoring the pre-attempt controller/trust on failure, since Enroll
-	// sets both in memory before it knows whether the attempt will succeed.
+	// afterward. Enroll itself keeps a replacement's active credential intact until
+	// its new credential has been durably accepted; its pending CSR is deliberately
+	// retained on a failed or lost response so the same request can be retried.
 	handoffAgents.Lock()
 	stop, done := a.stop, a.done
 	handoffAgents.Unlock()
@@ -97,14 +110,18 @@ func (s *Service) enrollment(w http.ResponseWriter, r *http.Request) {
 		<-done
 	}
 
-	origController, origTrust := a.store.State.Controller, a.store.State.TrustPEM
 	if err := agent.Enroll(r.Context(), a.store, v.ControllerURL, v.CAPEM, v.Token, v.ReplaceHost); err != nil {
+		handoffAgents.Lock()
+		// Keep the registry's observable enrolled identity aligned with Store on
+		// every error. A pre-publication replacement failure leaves the old
+		// identity here; a post-rename sync failure leaves the new identity here
+		// and still returns 502 for Controller-side reconciliation. Unenrolled
+		// pending first attempts remain visibly unenrolled.
+		reconcileEnrollmentCache(a)
 		if stop != nil {
-			a.store.State.Controller, a.store.State.TrustPEM = origController, origTrust
-			handoffAgents.Lock()
 			startHandoffAgent(s.ctx, s.cfg.AgentStateDir, a)
-			handoffAgents.Unlock()
 		}
+		handoffAgents.Unlock()
 		fail(w, 502, err.Error())
 		return
 	}

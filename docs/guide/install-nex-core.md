@@ -2,23 +2,15 @@
 
 ## Status
 
-Applies to the current **Nex Core installer source**. Local lab alpha; the ISO file is named
-after the single Nex Core version it installs (`nex-core-<version>-amd64.iso`). The
-boot menu offers graphical and text installation. Installed hosts include the host-local
-web UI; the console login banner shows its URL after network is up. Central Controller is
-still deployed from that UI or separately. The graphical path starts with Nex's own host,
-network, disk and review pages; minimal installation retains Debian's text workflow. The
-graphical UI is English, supports five keyboard layouts and IPv4 configuration. This is not
-production or physical-hardware installation certification. Current verification and remaining
-limits are recorded below.
-[Return to the guide](README.md).
+Local lab alpha of the Nex Core installer. The ISO is named after the Nex Core version it
+installs (`nex-core-<version>-amd64.iso`); its boot menu offers the graphical Nex wizard
+(English, five keyboard layouts, IPv4) and Debian's minimal text installation. Installed hosts
+include the host-local web UI, from which Nex Controller can be deployed. Not certified for
+production or physical hardware.
 
-Nex Core is a distribution, not a package set you add to an existing Debian system.
-The ISO establishes the storage layout, networking, console identity, host
-configuration and recovery paths that a supported virtualization host depends on, so
-`nex-core-local` refuses to install on a system the Nex Core installer did not create.
-The installer records this as `/etc/nex/core-release`. Updates afterwards come from the
-signed Nex APT archive; see [software updates](software-updates.md).
+Nex Core is a distribution, not a package set added to Debian: `nex-core-local` refuses to
+install on a system the installer did not create (recorded as `/etc/nex/core-release`).
+Later updates come from the signed Nex APT archive; see [software updates](software-updates.md).
 
 ## Prerequisites
 
@@ -183,48 +175,19 @@ to configured Debian repositories. No Nex package repository is configured yet.
 
 ## Verification
 
-The [fresh local installation](../qa/fresh-install/checks.md) used the ISO containing
-Core/Controller `0.1.0+managed1`: actual graphical installation onto a blank disk,
-explicit erase confirmation, corrected logo, disk-only BIOS boot, automatic local
-HTTPS access and deployment of the bundled Controller. Artifact hashes and lab
-networking are recorded there; this does not establish physical-hardware coverage.
-
-The [Nex wizard QA report](../qa/iso/2026-09-08-nex-wizard.md) records the current
-artifact, actual custom-page and network checks, inspected captures, and untested limits.
-The [installer usability QA report](../qa/iso/2026-09-08-installer-qol.md) separately records
-the revised layout, fullscreen behavior, the earlier timezone search and keyboard/password control checks
-for the usability revision.
-Do not infer physical NIC, switch VLAN, full interactive installation or UEFI/Secure Boot
-coverage from a simulated or partial walkthrough.
-
-Earlier evidence remains historical: [alpha1](../qa/iso/2026-09-08-alpha1.md),
-[root-only accounts](../qa/iso/2026-09-08-root-account.md),
-[GUI/minimal choices](../qa/iso/2026-09-08-installer-modes.md), and the
+The [fresh local installation](../qa/fresh-install/checks.md) covers a graphical BIOS
+installation onto a blank disk through Controller deployment. Installer details are recorded in
+the [Nex wizard](../qa/iso/2026-09-08-nex-wizard.md), [usability](../qa/iso/2026-09-08-installer-qol.md),
+[timezone](../qa/iso/2026-09-08-timezone-dropdown.md), [hostname](../qa/iso/2026-09-08-installer-hostname.md),
+[link and erase confirmation](../qa/iso/2026-09-08-installer-link.md),
+[Xen disk](../qa/iso/2026-09-08-installer-xen-disk.md), [keyboard notice](../qa/iso/2026-09-08-keyboard-notice.md),
+[progress](../qa/iso/2026-09-08-installer-progress.md), [continuous progress](../qa/iso/2026-09-08-continuous-progress.md),
+[management bridge](../qa/iso/2026-09-08-management-bridge.md) and
+[DHCP preview](../qa/iso/2026-09-09-installer-dhcp.md) reports. Historical reports:
+[alpha1](../qa/iso/2026-09-08-alpha1.md), [root-only accounts](../qa/iso/2026-09-08-root-account.md),
+[installer modes](../qa/iso/2026-09-08-installer-modes.md) and
 [previous custom shell](../qa/iso/2026-09-08-custom-installer.md).
-Those reports do not verify the new upfront wizard or its per-NIC configuration.
 
-The [timezone dropdown check](../qa/iso/2026-09-08-timezone-dropdown.md) covers the
-current selection-only controls and removal of the keyboard-test field.
+Physical NICs, switch VLANs, Xen installation and UEFI/Secure Boot remain unverified.
 
-[Hostname validation QA](../qa/iso/2026-09-08-installer-hostname.md) records standards,
-boundary checks and qualified-name installation configuration evidence.
-
-[Link and erase-confirmation QA](../qa/iso/2026-09-08-installer-link.md) records live
-carrier changes and the current checkbox confirmation workflow.
-
-[Xen disk and link indicator QA](../qa/iso/2026-09-08-installer-xen-disk.md) records
-simulated Xen target validation and native indicator review; a Xen installation remains unverified.
-
-[Quiet keyboard startup QA](../qa/iso/2026-09-08-keyboard-notice.md) records the silent Welcome screen and retained failure handling.
-
-[Progress, completion and failure QA](../qa/iso/2026-09-08-installer-progress.md) records
-native transition/log-viewer checks and the separately identified completed-installation test.
-
-[Continuous progress QA](../qa/iso/2026-09-08-continuous-progress.md) records the correction
-from alternating layouts to one persistent progress panel.
-
-[Management bridge QA](../qa/iso/2026-09-08-management-bridge.md) records generated
-configuration and disposable native-network checks for the selected management NIC.
-
-[Installer DHCP preview QA](../qa/iso/2026-09-09-installer-dhcp.md) records native lease,
-cleanup and GUI-state checks for the selected adapter.
+[Return to the guide](README.md)

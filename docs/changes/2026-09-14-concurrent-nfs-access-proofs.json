@@ -1,0 +1,36 @@
+{
+  "summary": "BUG-0172: Share an overlapping complete NFS proof of the same held leaf and QEMU identity. API impact: existing contract.",
+  "paths": [
+    "internal/vmhost/storage_native.go",
+    "internal/vmhost/storage_native_test.go",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-14-cluster-storage-reliability.md",
+    "docs/plans/2026-09-12-concurrent-pool-storage.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Internal duplicate-work removal retains operator workflow, validation, permissions and recovery.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: existing contract. Core prepare/validate and monitor/reconciliation results keep existing schemas, authority, authentication and failure/retry behavior.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Current network storage reliability scope only.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable setting or completed health cache. The existing process-local in-flight map is transient; Core master storage registrations and existing inventory/adoption remain authoritative."
+  },
+  "verification": {
+    "method": "Private correlations establish 12 same-Core NFS proof overlaps in the single-NFS-registration fixture. Independent source review passed. Original-selector concurrent NFS regression failed; fixed focused check and full exact-overlay vmhost/agent normal/race suites passed. Clean native acceptance remains pending. A separate diagnostic captured an SMB cross-Core lock exclusion failure; this NFS change does not explain or repair it.",
+    "evidence": [
+      "docs/qa/2026-09-14-cluster-storage-reliability.md"
+    ]
+  }
+}

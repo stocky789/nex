@@ -3,6 +3,7 @@ package vmhost
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"io"
@@ -13,6 +14,116 @@ import (
 
 	"nex.local/nex/internal/protocol"
 )
+
+type poolVMStartPermit struct {
+	PoolID string `json:"pool_id"`
+	HostID string `json:"host_id"`
+	VMID   string `json:"vm_id"`
+	Permit string `json:"permit"`
+	Epoch  uint64 `json:"epoch"`
+	BootID string `json:"boot_id"`
+}
+
+func poolVMStartPermitPath(stateDir, vmID string) string {
+	return filepath.Join(stateDir, "pool-vm-permits", vmID+".json")
+}
+func poolVMAdmissionPath(stateDir, vmID string) string {
+	return filepath.Join(stateDir, "pool-vm-admissions", vmID+".json")
+}
+
+// WritePoolVMStartPermit is called only after the pool master durably admits this
+// host's start.  The hook consumes it once, so a direct libvirt/autostart attempt
+// cannot reuse an old admission.
+func WritePoolVMStartPermit(stateDir, vmID, permit string) error {
+	return WritePoolVMStartPermitAdmission(stateDir, "local", "local", vmID, 1, permit)
+}
+
+// WritePoolVMStartPermitAdmission persists the exact master-issued execution
+// epoch alongside the one-use permit.  It is private Core state, not a
+// libvirt or client supplied token.
+func WritePoolVMStartPermitAdmission(stateDir, poolID, hostID, vmID string, epoch uint64, permit string) error {
+	if poolID == "" || hostID == "" || !uuidPattern.MatchString(vmID) || epoch == 0 || len(permit) != 64 {
+		return errors.New("invalid pool VM start permit")
+	}
+	dir := filepath.Join(stateDir, "pool-vm-permits")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		return err
+	}
+	bootID, err := localBootID()
+	if err != nil {
+		return err
+	}
+	b, err := json.Marshal(poolVMStartPermit{PoolID: poolID, HostID: hostID, VMID: vmID, Permit: permit, Epoch: epoch, BootID: bootID})
+	if err != nil {
+		return err
+	}
+	admissionDir := filepath.Join(stateDir, "pool-vm-admissions")
+	if err := os.MkdirAll(admissionDir, 0700); err != nil {
+		return err
+	}
+	if err := os.Chmod(admissionDir, 0700); err != nil {
+		return err
+	}
+	// Write the durable current admission before making its consumable permit
+	// visible.  A crash between these writes fails closed: an older permit cannot
+	// match the newer epoch record.
+	if err := atomicWrite(poolVMAdmissionPath(stateDir, vmID), b); err != nil {
+		return err
+	}
+	return atomicWrite(poolVMStartPermitPath(stateDir, vmID), b)
+}
+
+func localBootID() (string, error) {
+	b, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil || !uuidPattern.MatchString(strings.TrimSpace(string(b))) {
+		return "", errors.New("local boot identity is unavailable")
+	}
+	return strings.TrimSpace(string(b)), nil
+}
+func RemovePoolVMStartPermit(stateDir, vmID string) error {
+	if !uuidPattern.MatchString(vmID) {
+		return errors.New("invalid pool VM identity")
+	}
+	err := os.Remove(poolVMStartPermitPath(stateDir, vmID))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	err = os.Remove(poolVMAdmissionPath(stateDir, vmID))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+func consumePoolVMStartPermit(stateDir, vmID string) error {
+	path := poolVMStartPermitPath(stateDir, vmID)
+	claimed := path + ".claimed"
+	// rename is atomic: concurrent libvirt prepare hooks cannot both consume one permit.
+	if err := os.Rename(path, claimed); err != nil {
+		return errors.New("managed shared VM startup lacks a Core execution permit")
+	}
+	defer os.Remove(claimed)
+	b, err := os.ReadFile(claimed)
+	if err != nil {
+		return errors.New("managed shared VM startup lacks a Core execution permit")
+	}
+	var p poolVMStartPermit
+	bootID, bootErr := localBootID()
+	if json.Unmarshal(b, &p) != nil || p.PoolID == "" || p.HostID == "" || p.VMID != vmID || p.Epoch == 0 || len(p.Permit) != 64 || bootErr != nil || p.BootID != bootID {
+		return errors.New("managed shared VM execution permit is invalid")
+	}
+	current, err := os.ReadFile(poolVMAdmissionPath(stateDir, vmID))
+	if err != nil {
+		return errors.New("managed shared VM execution admission is unavailable")
+	}
+	var admission poolVMStartPermit
+	if json.Unmarshal(current, &admission) != nil || admission.PoolID != p.PoolID || admission.HostID != p.HostID || admission.VMID != p.VMID || admission.Epoch != p.Epoch || admission.BootID != p.BootID {
+		return errors.New("managed shared VM execution permit is stale")
+	}
+	return nil
+}
 
 // StorageGuard checks libvirt's prepare/begin XML without calling libvirt or taking
 // the managed mutation lock: libvirt invokes it while the initiating operation
@@ -33,7 +144,9 @@ func StorageGuard(ctx context.Context, stateDir string, input io.Reader) error {
 		}
 		return errors.New("storage startup cannot read the Core repository journal")
 	}
+	shared := false
 	err = checkStorageStartup(ctx, domain, js, func(ctx context.Context, s protocol.StorageRegistration) error {
+		shared = shared || protocol.IsPoolSharedStorage(s)
 		a, err := storageInspect(ctx, s)
 		if err != nil {
 			return err
@@ -42,6 +155,11 @@ func StorageGuard(ctx context.Context, stateDir string, input io.Reader) error {
 	})
 	if err != nil {
 		return err
+	}
+	if shared && hasManagedDisk(domain) {
+		if err := consumePoolVMStartPermit(stateDir, domain.UUID); err != nil {
+			return err
+		}
 	}
 	if hasManagedDisk(domain) {
 		for _, disk := range domain.Devices.Disks {

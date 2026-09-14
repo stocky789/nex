@@ -25,10 +25,7 @@ report a member ready when required configuration is missing.
 | BUG-0095 | Core transient discovery, Controller transport, storage wizard | Authorized source/directory selection, manual fallback, empty/error/credential/stale/cancel paths in the real browser and native host lab |
 | BUG-0096 | Health summary presentation and browser regressions | Current reasons, multiple affected checks, severity, stale/unknown/revoked states and direct detail navigation |
 
-One worker owns each file at a time. Shared protocol, dispatch and UI hooks are
-integrated by their assigned writer. The primary owns shared documentation and CI
-integration, final acceptance, and reconciliation of independent review findings.
-Existing user changes remain preserved; no agent stages or changes Git history.
+Work ownership follows [AGENTS.md](../../AGENTS.md#agent-workflow).
 
 ## API, guide and durable state
 
@@ -55,11 +52,7 @@ credentials and loopback forwards. Existing workstation VMs, networks and storag
 remain outside the test targets. Native services and backing fixtures run inside
 the disposable guests. UEFI launch is excluded from these scenarios.
 
-Run focused regressions, both-provider CI coverage checks, UI typecheck/build,
-privacy and documentation gates. Independently inspect implementation and actual
-browser captures. Record native and simulated results separately, including tested
-versions, commands, failures, retries and remaining limits; do not convert a unit
-test pass into a storage or phase acceptance claim.
+Checks and evidence follow [AGENTS.md](../../AGENTS.md#verification-and-bug-memory).
 
 ## Completed evidence
 

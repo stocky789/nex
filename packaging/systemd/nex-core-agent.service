@@ -26,10 +26,14 @@ ReadWritePaths=-/etc/network
 # the agent must never rely on mounts made inside this service's private namespace.
 ReadWritePaths=-/var/lib/nex-storage
 ReadWritePaths=-/var/lib/nex-core-agent/storage-credentials
+# Root-only fence password scripts are consumed by Pacemaker, never passed through Controller.
+ReadWritePaths=-/var/lib/nex-core-agent/storage-cluster
 ReadWritePaths=-/etc/systemd/system
 # Debian open-iscsi persists Nex-owned node records here and serializes iscsiadm updates.
 ReadWritePaths=-/var/lib/iscsi
 ReadWritePaths=-/run/lock/iscsi
+# Clustered GFS2 configuration owns this one generated Corosync projection.
+ReadWritePaths=-/etc/corosync
 ProtectHome=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes

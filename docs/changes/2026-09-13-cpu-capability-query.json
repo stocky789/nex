@@ -1,0 +1,9 @@
+{
+  "summary": "Restore usable CPU model observation on libvirt (BUG-0154). API impact: existing contract; CPU model inventory becomes available without changing its schema.",
+  "paths": ["internal/agent/probes.go", "internal/agent/probes_test.go", "docs/API.md", "docs/BUG_LEDGER.md", "CHANGELOG.md", "docs/changes/2026-09-13-cpu-capability-query.json"],
+  "guide": {"impact": "none", "reason": "Restores the existing CPU selection inventory; operators need no permission workaround or new workflow.", "pages": []},
+  "api": {"impact": "updated", "reason": "API impact: existing contract. Core native observation feeds existing inventory.cpu_models and checks through host reports and Controller relay. No schema, endpoint, authorization or version negotiation changes.", "pages": ["docs/API.md"]},
+  "roadmap": {"impact": "none", "reason": "Fixes an observed capability-query defect, not migration or production acceptance.", "pages": []},
+  "state": {"owner": "none", "reason": "CPU capabilities are observed on Core; no new durable state is introduced."},
+  "verification": {"method": "Exact native read-only domcapabilities command failed with libvirt read-only access refusal. The same observational command on a normal connection returned 59 valid usable models. Regression exercises that refusal, successful CPU observation, retained readonly mode for other inventory calls and invalid model rejection. Full Go race tests passed with independent source review. Sequential deployment of the audited candidate to three idle lab Cores passed: exact binary/source pins, preserved native cluster and Controller state, and fresh healthy CPU reports with 59 models on every Core. Independent review accepted this bounded rollout and observation; hosted CI remains unrun.", "evidence": ["internal/agent/probes_test.go", "docs/BUG_LEDGER.md", "docs/qa/2026-09-12-concurrent-pool-storage.md"]}
+}

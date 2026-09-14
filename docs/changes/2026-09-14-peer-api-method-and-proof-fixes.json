@@ -1,0 +1,42 @@
+{
+  "summary": "BUG-0174/BUG-0175: return 405 for a wrong method on pool advertise and serve an empty storage-cluster proof list as a JSON array; clarify intended reserve-release and verify-target behavior in the peer contract. API impact: existing contract.",
+  "paths": [
+    "docs/BUG_LEDGER.md",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/changes/2026-09-14-peer-api-method-and-proof-fixes.json",
+    "internal/agent/peer.go",
+    "internal/agent/peer_test.go",
+    "internal/agent/storage_cluster.go",
+    "internal/agent/storage_cluster_test.go"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Internal Core peer protocol hygiene; no operator workflow changes.",
+    "pages": []
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Existing contract: advertise documents 405 with Allow: POST; proof returns an empty JSON array with application/json (older Cores may return null, treated identically); reserve release and verify target rules clarified as intended. Callers and mixed-version pools are unaffected.",
+    "pages": [
+      "docs/api/peer-openapi.json",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fixes within current scope.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state change."
+  },
+  "verification": {
+    "method": "Regression tests failed on the old handlers and pass with the fixes; agent normal/race suites, API contract tests, docs gate and privacy test pass.",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "tests/test_api_contract.py"
+    ]
+  }
+}

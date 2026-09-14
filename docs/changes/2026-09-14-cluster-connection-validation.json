@@ -1,0 +1,36 @@
+{
+  "summary": "Avoid repeating iSCSI connection preparation after native cluster start/apply (BUG-0164). API impact: existing contract; native rollout passed, idle reliability still failed.",
+  "paths": [
+    "internal/agent/storage_cluster.go",
+    "internal/agent/storage_cluster_test.go",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-14-cluster-storage-reliability.md",
+    "docs/plans/2026-09-12-concurrent-pool-storage.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator workflows and complete native identity, quorum, mount and QEMU admission checks remain unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: existing contract. Core cluster apply/member reconciliation still connects before native activation, fully validates afterward, and reports through existing authenticated cluster health/results. Only redundant connection preparation is removed; client-facing schemas and retries remain unchanged.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Reliability correction within the current cluster-storage milestone, without a new capability.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new state or setting. Existing durable Core cluster/credential/ownership records and inventory adoption remain unchanged."
+  },
+  "verification": {
+    "method": "An isolated Go overlay restored both old post-native Prepare callsites; member and master regressions failed. Fixed member success/order/validator denial and master order/failure checks passed. Full agent normal/race suites, four relevant vmhost checks and independent focused normal/race review passed. Native rollout passed; 150 idle samples retained one fresh deadline on Core2 and two on Core3, with all 20 guests stopped afterward. This duplicate was not the sole remaining deadline cause.",
+    "evidence": [
+      "internal/agent/storage_cluster_test.go",
+      "docs/qa/2026-09-14-cluster-storage-reliability.md"
+    ]
+  }
+}

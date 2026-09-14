@@ -3,6 +3,7 @@ package agent
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,7 +52,7 @@ func redeemStorageCredentials(ctx context.Context, s *Store, offers []protocol.S
 		if err != nil || handoff.Offer != offer {
 			return errors.New("invalid storage credential handoff")
 		}
-		receipt, err := vmhost.SaveStorageCredential(s.dir, handoff)
+		receipt, err := saveCredentialHandoff(s, handoff)
 		if err != nil {
 			return fmt.Errorf("storage credential persistence failed: %w", err)
 		}
@@ -67,4 +68,47 @@ func redeemStorageCredentials(ctx context.Context, s *Store, offers []protocol.S
 		}
 	}
 	return nil
+}
+
+func clusterCredentialReceipt(s *Store, handoff protocol.StorageCredentialHandoff) (ClusterSecretReceipt, bool) {
+	const prefix = "cluster-credential:"
+	binding := handoff.Offer.RegistrationRequestID
+	if !strings.HasPrefix(binding, prefix) {
+		return ClusterSecretReceipt{}, false
+	}
+	parts := strings.Split(strings.TrimPrefix(binding, prefix), ":")
+	if len(parts) != 3 || handoff.Offer.RepositoryID != "" || (parts[1] != "chap" && parts[1] != "fence_bmc" && parts[1] != "fence_ssh") {
+		return ClusterSecretReceipt{}, false
+	}
+	clusterRequestID, clusterErr := hex.DecodeString(parts[0])
+	recipientHostID, recipientErr := hex.DecodeString(parts[2])
+	if clusterErr != nil || recipientErr != nil || !clusterSecretID(string(clusterRequestID)) || !clusterSecretID(string(recipientHostID)) {
+		return ClusterSecretReceipt{}, false
+	}
+	r := ClusterSecretReceipt{RequestID: handoff.Offer.RequestID, ClusterRequestID: string(clusterRequestID), PoolID: handoff.Offer.PoolID, HostID: handoff.Offer.HostID, RecipientHostID: string(recipientHostID), Kind: parts[1]}
+	if r.Kind != "chap" {
+		r.RecipientHostID, r.FenceTargetHostID = handoff.Offer.HostID, string(recipientHostID)
+	}
+	return r, true
+}
+
+// saveCredentialHandoff is the sole transient handoff persistence seam. Cluster
+// offers use their purpose-bound marker; ordinary storage retains the existing
+// receipt path unchanged.
+func saveCredentialHandoff(s *Store, handoff protocol.StorageCredentialHandoff) (protocol.StorageCredentialReceipt, error) {
+	if cluster, ok := clusterCredentialReceipt(s, handoff); ok {
+		material := ClusterSecretMaterial{SSHPrivateKey: handoff.Credentials.SSHPrivateKey, SSHKnownHosts: handoff.Credentials.SSHKnownHosts}
+		if cluster.Kind != "fence_ssh" {
+			material.Credentials = &protocol.StorageCredentials{Username: handoff.Credentials.Username, Secret: handoff.Credentials.Secret}
+		}
+		stored, err := SaveClusterSecret(s, cluster, material)
+		if err != nil {
+			return protocol.StorageCredentialReceipt{}, err
+		}
+		return protocol.StorageCredentialReceipt{Receipt: stored.Reference, RequestID: handoff.Offer.RequestID, PoolID: handoff.Offer.PoolID, HostID: handoff.Offer.HostID, RegistrationRequestID: handoff.Offer.RegistrationRequestID, Status: "ready", CreatedAt: stored.CreatedAt}, nil
+	}
+	if strings.HasPrefix(handoff.Offer.RegistrationRequestID, "cluster-credential:") {
+		return protocol.StorageCredentialReceipt{}, errors.New("invalid cluster credential offer")
+	}
+	return vmhost.SaveStorageCredential(s.dir, handoff)
 }

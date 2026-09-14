@@ -1,0 +1,36 @@
+{
+  "summary": "BUG-0166: Share only simultaneous identical native GFS metadata reads. API impact: existing contract.",
+  "paths": [
+    "internal/vmhost/storage_cluster.go",
+    "internal/vmhost/storage_cluster_test.go",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-14-cluster-storage-reliability.md",
+    "docs/plans/2026-09-12-concurrent-pool-storage.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Internal read-path correction; operator workflows and required safety checks are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: existing contract. Concurrent callers of the same exact-device metadata query can share its fresh successful result; completed results are not retained, each caller retains its context, and full protocol/table/journal/identity validation remains required. Controller-facing schemas and retries are unchanged.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Reliability work within the current storage milestone; no published capability or milestone status changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable state, pool setting or execution authority. Existing Core-owned records and inventory adoption remain authoritative; temporary in-flight read results are discarded on completion."
+  },
+  "verification": {
+    "method": "The concurrent-query regression failed with the old direct-read behavior. Fixed same-device fan-out, no completed-result reuse, different-device independence, waiter cancellation/deadline and failed-leader fallback checks passed. Full vmhost normal/race and agent/vmhost normal checks passed. Independent implementation review and separate focused normal/race checks passed. The combined diagnostic candidate passed affected normal/race tests, build and independent artifact review; its sequential three-Core rollout passed. That partial BUG-0165/0166 candidate retained three distinct Core3 idle deadline observations; it had no loaded run. Clean-candidate idle/loaded verification remains pending and no deadline elimination is claimed.",
+    "evidence": [
+      "internal/vmhost/storage_cluster_test.go",
+      "docs/qa/2026-09-14-cluster-storage-reliability.md"
+    ]
+  }
+}

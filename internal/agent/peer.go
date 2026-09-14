@@ -129,6 +129,56 @@ func PoolMasterURL(s *Store) (string, error) {
 // PoolPeerHandler serves the one-time CSR exchange at POST /api/v1/pool/join.
 func PoolPeerHandler(s *Store) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/pool/advertise" {
+			member, err := AuthenticatePoolPeer(s, r)
+			if err != nil {
+				http.Error(w, "peer rejected", 401)
+				return
+			}
+			if r.Method != http.MethodPost {
+				w.Header().Set("Allow", http.MethodPost)
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			var v struct {
+				Origin string `json:"origin"`
+			}
+			if json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&v) != nil {
+				http.Error(w, "invalid peer origin", 400)
+				return
+			}
+			origin, err := peerOrigin(v.Origin)
+			if err != nil {
+				http.Error(w, "invalid peer origin", 400)
+				return
+			}
+			poolPeerMu.Lock()
+			state, e := loadPoolPeer(s)
+			if e == nil {
+				for i := range state.Membership.Members {
+					if state.Membership.Members[i].HostID == member.HostID {
+						state.Membership.Members[i].PeerOrigin = origin.String()
+						e = savePoolPeer(s, state)
+						break
+					}
+				}
+			}
+			poolPeerMu.Unlock()
+			if e != nil {
+				http.Error(w, "peer origin unavailable", 409)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.URL.Path == poolStorageClusterPath || strings.HasPrefix(r.URL.Path, poolStorageClusterPath+"/") {
+			PoolStorageClusterHandler(s).ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == strings.TrimSuffix(poolVMPath, "/") || strings.HasPrefix(r.URL.Path, poolVMPath) {
+			PoolVMHandler(s).ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path == strings.TrimSuffix(poolStoragePath, "/") || strings.HasPrefix(r.URL.Path, poolStoragePath) {
 			PoolStorageHandler(s).ServeHTTP(w, r)
 			return
@@ -247,7 +297,21 @@ func PoolJoinCSR(s *Store) (string, error) {
 // PoolPeerClient returns an mTLS client for the current member. It pins the pool
 // CA and the durable master host identity, rather than trusting the endpoint name.
 func PoolPeerClient(s *Store, masterURL string) (*http.Client, error) {
-	if _, err := peerOrigin(masterURL); err != nil {
+	return poolPeerClient(s, masterURL, "")
+}
+
+// PoolMemberPeerClient opens a master-to-member mTLS connection. The endpoint is
+// accepted only when it is the current ready member's advertised peer origin, and
+// the server certificate is pinned to that exact membership record. It is for the
+// few Core-master workflows which must contact a survivor directly; members must
+// continue to use PoolPeerClient when contacting their master.
+func PoolMemberPeerClient(s *Store, memberURL, memberHostID string) (*http.Client, error) {
+	return poolPeerClient(s, memberURL, memberHostID)
+}
+
+func poolPeerClient(s *Store, endpoint, memberHostID string) (*http.Client, error) {
+	u, err := peerOrigin(endpoint)
+	if err != nil {
 		return nil, err
 	}
 	poolPeerMu.Lock()
@@ -267,10 +331,92 @@ func PoolPeerClient(s *Store, masterURL string) (*http.Client, error) {
 	if !roots.AppendCertsFromPEM([]byte(state.CAPEM)) {
 		return nil, errors.New("invalid pool CA")
 	}
+	expectedHost, expectedHash := state.Membership.MasterHostID, ""
+	if memberHostID != "" {
+		if s.State.HostID != state.Membership.MasterHostID {
+			return nil, errors.New("only the pool master can contact a member peer")
+		}
+		expectedHost = memberHostID
+		memberFound := false
+		for _, member := range state.Membership.Members {
+			if member.HostID == memberHostID {
+				memberFound = member.Status == "ready" && member.PeerOrigin != ""
+				expectedHash = member.CertificateSHA256
+				memberOrigin, originErr := peerOrigin(member.PeerOrigin)
+				if originErr != nil || memberOrigin.String() != u.String() {
+					memberFound = false
+				}
+				break
+			}
+		}
+		if !memberFound {
+			return nil, errors.New("member peer is not a current ready membership origin")
+		}
+	}
 	config := &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert}, InsecureSkipVerify: true, VerifyConnection: func(c tls.ConnectionState) error {
-		return verifyMaster(c, roots, state.Membership.MasterHostID)
+		return verifyPoolPeer(c, roots, expectedHost, expectedHash)
 	}}
 	return &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: config}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("peer redirects refused") }}, nil
+}
+
+// AdvertisePoolPeerOrigin records a member's validated peer listener on its master.
+// It is authenticated by the member certificate; Controller input cannot name a member.
+func AdvertisePoolPeerOrigin(ctx context.Context, s *Store, origin string) error {
+	if _, err := peerOrigin(origin); err != nil {
+		return err
+	}
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(s)
+	if err == nil {
+		state.PendingPeerOrigin = origin
+		err = savePoolPeer(s, state)
+	}
+	poolPeerMu.Unlock()
+	if err != nil {
+		return err
+	}
+	master, err := PoolMasterURL(s)
+	if err != nil {
+		return err
+	}
+	c, err := PoolPeerClient(s, master)
+	if err != nil {
+		return err
+	}
+	defer c.CloseIdleConnections()
+	b, _ := json.Marshal(map[string]string{"origin": origin})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(master, "/")+"/api/v1/pool/advertise", bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		return errors.New("pool master rejected peer origin")
+	}
+	poolPeerMu.Lock()
+	state, err = loadPoolPeer(s)
+	if err == nil {
+		state.PendingPeerOrigin = ""
+		err = savePoolPeer(s, state)
+	}
+	poolPeerMu.Unlock()
+	return nil
+}
+
+func RetryPoolPeerOrigin(ctx context.Context, s *Store) error {
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(s)
+	origin := state.PendingPeerOrigin
+	poolPeerMu.Unlock()
+	if err != nil || origin == "" {
+		return err
+	}
+	return AdvertisePoolPeerOrigin(ctx, s, origin)
 }
 
 // AuthenticatePoolPeer proves that this TLS request came from a current ready
@@ -296,6 +442,32 @@ func AuthenticatePoolPeer(s *Store, r *http.Request) (protocol.PoolMember, error
 		}
 	}
 	return protocol.PoolMember{}, errors.New("pool peer is not an admitted member")
+}
+
+// AuthenticatePoolMaster admits the current certificate-pinned master to the
+// narrow member-serving paths. It must not be used by master-owned handlers:
+// those continue to admit only current ready members through AuthenticatePoolPeer.
+func AuthenticatePoolMaster(s *Store, r *http.Request) (protocol.PoolMember, error) {
+	if r == nil || r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.PeerCertificates) == 0 {
+		return protocol.PoolMember{}, errors.New("pool master certificate is required")
+	}
+	poolPeerMu.Lock()
+	defer poolPeerMu.Unlock()
+	state, err := loadPoolPeer(s)
+	if err != nil {
+		return protocol.PoolMember{}, err
+	}
+	if state.Membership.Valid() != nil || state.Membership.MasterHostID == s.State.HostID {
+		return protocol.PoolMember{}, errors.New("this Core does not serve master peer requests")
+	}
+	leaf := r.TLS.PeerCertificates[0]
+	hash := fmt.Sprintf("%x", sha256.Sum256(leaf.Raw))
+	for _, member := range state.Membership.Members {
+		if member.HostID == state.Membership.MasterHostID && member.HostID == leaf.Subject.CommonName && member.CertificateSHA256 == hash && member.Status == "ready" {
+			return member, nil
+		}
+	}
+	return protocol.PoolMember{}, errors.New("pool master is not the current admitted master")
 }
 
 func JoinPoolPeer(ctx context.Context, s *Store, masterURL, poolCAPEM, offer string) error {
@@ -493,12 +665,19 @@ func signPeerCSR(state poolPeerState, csr *x509.CertificateRequest) (string, err
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), nil
 }
 func verifyMaster(c tls.ConnectionState, roots *x509.CertPool, host string) error {
+	return verifyPoolPeer(c, roots, host, "")
+}
+
+func verifyPoolPeer(c tls.ConnectionState, roots *x509.CertPool, host, certificateSHA256 string) error {
 	if len(c.PeerCertificates) == 0 {
-		return errors.New("pool master did not present a certificate")
+		return errors.New("pool peer did not present a certificate")
 	}
 	leaf := c.PeerCertificates[0]
 	if leaf.Subject.CommonName != host {
-		return errors.New("pool master identity does not match offer")
+		return errors.New("pool peer identity does not match membership")
+	}
+	if certificateSHA256 != "" && fmt.Sprintf("%x", sha256.Sum256(leaf.Raw)) != certificateSHA256 {
+		return errors.New("pool peer certificate does not match membership")
 	}
 	_, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates(c.PeerCertificates[1:]), KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}})
 	return err

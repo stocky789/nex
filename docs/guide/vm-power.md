@@ -6,8 +6,7 @@ This development workflow starts, shuts down, reboots and force-stops a virtual 
 from Nex Controller. Each request becomes a durable task for the VM's assigned host;
 the host's next report shows the resulting state. Shut down and Reboot are ACPI requests
 that a guest without ACPI support, such as a firmware boot menu, ignores. Editing a VM is covered in
-[Edit a virtual machine](edit-virtual-machine.md); deleting VMs is not yet available. Verified in a disposable nested-KVM lab; see
-[Verification](#verification).
+[Edit a virtual machine](edit-virtual-machine.md); deleting VMs is not yet available.
 
 ## Prerequisites
 
@@ -77,15 +76,8 @@ records `vm-power` with the administrator.
 
 ## Verification
 
-The toolbar placement and confirmation dialog were exercised in the
-[toolbar QA report](../qa/controller-toolbar/checks.md). The power behavior itself is
-recorded in the [console QA report](../qa/console/checks.md): Go tests
-for the host power execution, interruption reconciliation and Controller authorization,
-replay and dispatch; contract and documentation checks; and the browser walkthrough of
-Start, Reboot (ignored by the boot menu) and Force stop against a real guest in a
-disposable nested-KVM lab. Shut down of a guest that honors ACPI, physical hardware and
-hosted CI were not exercised.
+Start, Reboot and Force stop were walked through in a disposable nested-KVM lab; ACPI shutdown of
+a cooperating guest and physical hardware were not. Queueing was checked with simulation. See the
+[console QA report](../qa/console/checks.md), [toolbar QA report](../qa/controller-toolbar/checks.md)
+and [power queue checks](../qa/power-queue/checks.md).
 
-The [power queue checks](../qa/power-queue/checks.md) cover queued admission, ordering,
-restart/replacement, prerequisite failures and the one-click Start browser flow using
-simulation; native guest state changes were not repeated for this queue change.

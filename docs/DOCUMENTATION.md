@@ -1,9 +1,9 @@
 # Maintaining the Nex documentation
 
-Every change assesses documentation impact. Every implemented user workflow gets instructions
-and verification alongside its code. This is a docs-as-code workflow: documentation uses the same
-version control, review, and automated checks as implementation. It is an established practice,
-not a universal certification standard. [Write the Docs: docs as code](https://www.writethedocs.org/guide/docs-as-code/).
+Every change assesses documentation impact, and every implemented user workflow gets instructions
+and verification alongside its code, using the same version control, review and automated checks
+as implementation ([docs as code](https://www.writethedocs.org/guide/docs-as-code/)). The contributor
+rules behind this gate are in [AGENTS.md](../AGENTS.md#living-user-guide-and-documentation-gate).
 
 ## Where information belongs
 
@@ -13,10 +13,13 @@ not a universal certification standard. [Write the Docs: docs as code](https://w
 - [Plans](plans/2026-09-08-nex-platform.md): future behavior and delivery gates; planned features are
   not presented as available instructions.
 - `docs/qa/`: actual walkthrough/test results, version/environment, inspected captures, and limits.
+- `docs/BUG_LEDGER.md`: bug symptoms, root causes, fixes and regression evidence.
+- [Changelog](../CHANGELOG.md): short user-facing entries.
+- [Development](development.md): build and developer instructions, kept out of the operator guide.
 - `docs/changes/`: small review records tying changed files to guide/API applicability and evidence.
 
 Keep one owner for each fact. Guide pages link to API details or evidence rather than copying
-endpoint tables and raw logs. Build/developer instructions stay outside the operator guide.
+endpoint tables and raw logs.
 
 ## Author and verify a guide page
 
@@ -27,26 +30,23 @@ Use a descriptive filename under `docs/guide/`, one H1 title, and these H2 secti
 3. **Steps** — numbered operator actions; actual UI labels/locations or runnable commands as applicable.
 4. **Expected result** — what the operator should observe and how to confirm completion.
 5. **Troubleshooting** — relevant failures, limitations, safe recovery, and destructive-action cautions.
-6. **Verification** — link to actual evidence and state exactly which steps were exercised or remain untested.
+6. **Verification** — a short statement of which steps were exercised or remain untested, linking
+   to the `docs/qa/` evidence.
 
 Mark an inapplicable section with a reason; do not leave empty headings. Add every page to
 `docs/guide/README.md`, which is the navigation index and is exempt from these six sections.
-Use ordinary Markdown with inline links (`[label](relative-path.md)`), repository-relative links and
-images, plain section headings, stable filenames, descriptive link text,
-and useful image alt text. Avoid workstation paths, embedded secrets, framework-specific components,
-and a second website-only copy. A future static site can render these same files; choose its framework
-when publishing is needed. Keep versioned documentation with release tags; label development guidance.
+Use ordinary Markdown with inline relative links and images, stable filenames, descriptive link
+text and useful alt text. Avoid framework-specific components and a second website-only copy; a
+future static site renders these same files. Keep versioned documentation with release tags; label
+development guidance.
 
-Follow the instructions against the actual feature in a disposable environment before accepting it.
-Check relevant successful, invalid-input, permission, failure, and recovery paths. For GUI work,
-interact through the browser and inspect screenshots, including relevant empty/loading/error states.
-Record the exact version or artifact digest, environment, commands or actions, observed results,
-and evidence actually inspected. Simulated hardware or mocked services must be identified explicitly.
-Existing applicable evidence may be reused for a docs-only change; inspect it and state its limits.
-An automated backend test does not prove that every interactive UI step was walked through.
-
-If verification cannot run, record the reason and leave that acceptance item open. A green link checker
-cannot turn an untested restore, migration, or installation path into a verified feature.
+Walk through the page against the actual feature in a disposable environment, covering relevant
+success, invalid-input, permission, failure and recovery paths; for GUI work use the browser and
+inspect screenshots. Record exact version or artifact digest, environment, actions, observed results
+and evidence inspected; identify simulated hardware or mocked services. Existing evidence may be
+reused for a docs-only change once inspected and its limits stated. An automated backend test does
+not prove interactive UI steps were walked through. If verification cannot run, record why and
+leave that acceptance item open.
 
 ## Record each change
 
@@ -89,114 +89,74 @@ Example for an internal tooling change (replace paths and evidence with the real
 
 For applicable changes set `impact` to `updated` and list the guide/API pages updated in the same
 diff. `guide.pages` names guide Markdown; `api.pages` names `docs/API.md` or files under `docs/api/`.
-The API field concerns documentation impact; retain the more specific runtime API impact classification
-from [AGENTS.md](../AGENTS.md#required-api-impact-check) in the summary/plan. An existing contract
-whose behavior changes can still require updated documentation. Explain any `none` honestly.
+The API field concerns documentation impact; retain the runtime API impact classification from
+[AGENTS.md](../AGENTS.md#required-api-impact-check) in the summary/plan.
 
 `roadmap.impact` says whether the change moves the published
-[roadmap board](../website/src/routes/roadmap/+page.svelte), which is how the project tells
-readers what is built. Set it to `updated` and name the page whenever a milestone's status or its
-built/outstanding items change — a feature finished, an acceptance check finally run, an item
-added or dropped. Set it to `none` with a reason when the board still describes the project
-accurately, which is the ordinary case for bug fixes, refactors and documentation work.
+[roadmap board](../website/src/routes/roadmap/+page.svelte). Set it to `updated` and name the page
+whenever a milestone's status or its built/outstanding items change; set it to `none` with a reason
+otherwise (the ordinary case for bug fixes, refactors and documentation). A milestone is not marked
+built until its acceptance checks have run: the board keeps *built* separate from *in testing*. The
+checker enforces that the question was answered and that an `updated` claim changed the page. The
+field is required for records dated from `2026-09-12` (`ROADMAP_REQUIRED_FROM` in the checker);
+earlier records stay valid, and a record without a date must answer.
 
-A feature is not complete while the site still says it is unbuilt, and a milestone must not be
-marked built until its acceptance checks have actually run: the board distinguishes *built* from
-*in testing* precisely so that unrun checks stay visible. The checker enforces that the question
-was answered and that an `updated` claim really changed the page; only review can judge whether a
-`none` was honest.
+`state.owner` declares where the change's durable state lives, per the
+[architecture invariant](../AGENTS.md#the-architecture-invariant-nex-core-does-the-work-nex-controller-only-asks):
 
-Records written before this assessment existed are not retrofitted. The date in the record's
-filename is the boundary: the field is required from `2026-09-12` onward
-(`ROADMAP_REQUIRED_FROM` in the checker), so earlier records stay valid and no migration commit
-rewrites work that was already in flight. A record whose filename carries no date must answer
-regardless, so that dropping the date cannot quietly opt out of the gate.
+- `none` — persists nothing new. Omit `record` entirely; an empty `""` is rejected.
+- `core` — `record` names the durable host-side record on the pool master and the adoption path a
+  fresh Controller uses to recover it with the same identity and name.
+- `controller` — `record` must name one of the closed Controller-scoped exceptions (the checker
+  matches sites, administrator accounts, roles, audit history, enrollment tokens, Controller CA or
+  backup/restore jobs, case-insensitively) and how it is backed up and restored.
 
-`state.owner` says where the change's durable state lives, because Nex Controller is replaceable
-and must be able to be thrown away and rebuilt from the hosts. Declare one of:
+The checker cannot judge whether the named record exists or the owner is honest; reviewers do.
+`state` is required on **every** record, merged ones included (`--all` validates the whole
+directory); do not remove it from a merged record.
 
-- `none` — the change persists nothing new. Omit the `record` key entirely; an empty `""` is
-  rejected because it hedges instead of answering.
-- `core` — state lives on a Nex Core host. `record` names the durable host-side record on the pool
-  master and the inventory/adoption path a fresh Controller uses to recover it with the same
-  identity and name.
-- `controller` — one of the closed Controller-scoped exceptions (sites, administrator accounts and
-  roles, audit history, enrollment tokens, the Controller CA, backup/restore jobs). `record` must
-  name which one — the checker matches it, case-insensitively, against those terms and refuses a
-  record that names none of them — and how it is backed up and restored. Anything else with this
-  owner is a design defect: fix the design.
+The `impact: updated` same-diff page requirement applies when a record is **added**; correcting a
+merged record later does not require editing its pages again. Prefer a new record for follow-up work.
 
-The checker cannot judge whether the named record actually exists or whether the owner is honest;
-it refuses a change that never answers the question. Reviewers verify the answer against the
-[architecture invariant](../AGENTS.md#the-architecture-invariant-nex-core-does-the-work-nex-controller-only-asks).
-Unlike the `impact: updated` page rule below, `state` is required on **every** record, merged
-ones included: `--all` validates the whole `docs/changes/` directory, so the records stay a
-complete map of where state lives rather than one with unassessed gaps. Every record that
-predated the field has been backfilled; do not remove `state` from a merged record.
-
-The `impact: updated` requirement that listed pages change in the same diff applies when a record
-is **added**, which is when it has to prove the pages were updated with it. Correcting a merged
-record afterwards - fixing a reason, adding a path that was missed - does not ask you to edit its
-pages again. Prefer a new record for follow-up work regardless: records are a history of changes,
-not living documents.
-
-Evidence paths in new or updated assessments must exist. Historical records retain their original
-paths when files are later moved or deleted; inspect the recorded revision to resolve those paths.
-A test source is a runnable check, not proof it passed: the verification
-method and reviewed results must explain what was actually run. Feature walkthroughs should link
-to a `docs/qa/` report with results. Do not change an unrelated page simply to satisfy the gate.
-Removed features update navigation and surviving guidance, including availability/removal information.
+Evidence paths in new or updated assessments must exist; historical records keep their original
+paths. A test source is a runnable check, not proof it passed: the verification method must say
+what was run. Feature walkthroughs should link a `docs/qa/` report. Do not change an unrelated page
+to satisfy the gate. Removed features update navigation and surviving guidance.
 
 ## Local and hosted checks
 
 Run from the repository root:
 
 ```sh
-# Run this BEFORE committing. It applies the full gate, including changed-file
-# coverage, to uncommitted and untracked work, so a missing assessment is caught
-# here instead of as a red build after the push.
+# Run this BEFORE committing: the full gate, including changed-file coverage,
+# over uncommitted and untracked work.
 python3 scripts/check_docs.py --worktree
 
 python3 scripts/check_docs.py --all
 python3 -m unittest discover -s tests -p 'test_check_docs.py'
-# After committing the change locally, compare its actual Git range:
+# After committing locally, check the actual Git range:
 python3 scripts/check_docs.py --base <full-base-sha> --head "$(git rev-parse HEAD)"
 ```
 
-`--worktree` is the one to reach for while working: it runs the same coverage check CI runs, over
-`git status` rather than a pushed range, and treats untracked records as newly added. `--all` checks
-the current guide structure/links and assessment schemas; it does not resolve historical
-assessment references or establish changed-file coverage. Range checking verifies new/updated record
-references and uses the specified Git commits; uncommitted files are not part of their diff.
-Range mode requires a clean checkout at the specified head, so uncommitted documentation cannot
-accidentally satisfy an older committed change. Ignored build/cache artifacts do not block it.
-For a PR use its merge base as the base. CI handles that range selection automatically.
+`--worktree` runs CI's coverage check over `git status` and treats untracked records as added.
+`--all` checks guide structure/links and assessment schemas, not historical references or
+changed-file coverage. Range mode requires a clean checkout at the given head; ignored build/cache
+artifacts do not block it. For a PR use its merge base; CI selects ranges automatically.
 
-Both workflow locations, `.github/workflows/` and `.gitea/workflows/`, invoke the same checker and
-its tests on pushes and pull requests. Pushes assess the net before/after diff, including a multi-commit
-push; PRs assess the merge-base-to-head diff. A new non-default branch has no previous SHA, so its
-push is compared with its merge base against the fetched default branch; a missing default ref fails
-explicitly. A first default-branch push assesses the full tree. The baseline assessment inventories
-the previously committed pre-gate files for that initial audit; it cannot excuse future changes because
-ordinary ranges use only added/modified records. These checks do not demand a separate guide edit for
-every intermediate commit, nor do they run on unpushed local commits.
+`.github/workflows/` and `.gitea/workflows/` both run the checker and its tests on pushes and pull
+requests. Pushes assess the net before/after diff; PRs assess merge-base-to-head. A new non-default
+branch push is compared with its merge base against the fetched default branch (a missing default
+ref fails); a first default-branch push assesses the full tree. The baseline assessment covers only
+pre-gate files.
 
-The gate requires changed paths to be covered by an added/modified assessment, validates reasons
-and evidence references, requires a declared `state.owner` on every record with a named record
-where one is owed (a `controller` owner must name a closed-list exception),
-requires applicable guide/API pages to change, requires records dated from the roadmap cutoff onward
-to declare `roadmap.impact` and to actually move the roadmap board when they claim `updated`,
-and checks guide structure, local links, and navigation. External URLs are not fetched; reference-style Markdown links are outside
-the supported guide format. It deliberately does not infer whether arbitrary code changes need an
-API or judge prose correctness. Reviewers must challenge an incorrect `none`. API schema/operation
-coverage checks accompany the implemented Phase 1 API; use the [development checks](development.md)
-and [API reference](API.md) alongside the documentation gate.
+The gate checks changed-path coverage, reasons, evidence references, `state.owner` (with the
+closed-list rule for `controller`), applicable guide/API page changes, `roadmap.impact` from the
+cutoff onward, guide structure, local links and navigation. External URLs are not fetched and
+reference-style links are unsupported. It does not infer whether code needs an API change or judge
+prose; reviewers must challenge an incorrect `none`. Use the [development checks](development.md)
+alongside it.
 
-Hosted enforcement needs Actions enabled, a compatible runner, and the documentation job configured
-as a required branch-protection check. Inspect a real run on each host, including its executed steps,
-before claiming enforcement. Workflow files and local passes alone are not hosted CI proof. This
-change does not configure remote branch protection or execute a hosted run. On self-hosted Gitea,
-use isolated runners for untrusted PR code and do not expose production credentials to these jobs.
-
-Independent review checks the change diff, impact decisions, guide accuracy, actual walkthrough
-evidence, and remaining limits. The gate supports that review; it does not replace it.
+Hosted enforcement needs Actions enabled, a compatible runner, and the documentation job as a
+required branch-protection check; inspect a real run on each host before claiming enforcement. On
+self-hosted Gitea, use isolated runners for untrusted PR code without production credentials.
+Independent review still checks the diff, impact decisions, guide accuracy and walkthrough evidence.

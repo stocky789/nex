@@ -1,0 +1,28 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-only
+# Mark only Debian's unmodified Corosync conffile as safe for first Nex cluster setup.
+set -eu
+
+root=${1:-}
+case "$root" in ''|/*) ;; *) exit 2 ;; esac
+config=$root/etc/corosync/corosync.conf
+marker=$root/var/lib/nex-core-agent/storage-cluster/corosync-unconfigured
+
+if [ -n "$root" ]; then
+    conffiles=$(dpkg-query --admindir "$root/var/lib/dpkg" -W -f='${Conffiles}\n' corosync 2>/dev/null || true)
+else
+    conffiles=$(dpkg-query -W -f='${Conffiles}\n' corosync 2>/dev/null || true)
+    if [ -d /run/systemd/system ] && systemctl is-active --quiet corosync.service; then
+        exit 1
+    fi
+fi
+expected=$(printf '%s\n' "$conffiles" | awk '$1 == "/etc/corosync/corosync.conf" { print $2; exit }')
+actual=$(test -f "$config" && md5sum "$config" | awk '{ print $1 }' || true)
+case "$expected" in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+    *) exit 1 ;;
+esac
+[ "$actual" = "$expected" ] || exit 1
+install -d -m 0700 "${marker%/*}"
+sha256sum "$config" | awk '{ print $1 }' > "$marker"
+chmod 0600 "$marker"

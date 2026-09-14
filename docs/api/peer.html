@@ -1,0 +1,2898 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nex Core pool peer API — 0.1.0</title>
+<link rel="stylesheet" href="reference.css">
+<main><h1>Nex Core pool peer API — 0.1.0</h1><p>Internal Core-to-Core pool peer contract; not a client or Controller API. Nex Controller never calls it and holds none of its state: membership, the pool CA, repository reservations, pool VM execution records and clustered-storage operations are durable on the pool master Core (peer probe leases and access observations are process-local). Served on the dedicated peer HTTPS listener (--pool-peer-listen, default :9444, on nex-core-local and nex-core-agent), TLS 1.3 only, with server limits of 5 s header, 15 s read, 30 s write and 16 KiB headers. The listener requests a client certificate and verifies it against the pool CA when presented; every route except join then admits only the peer named by its security requirement. Clients pin the pool CA and expected host ID (and, master to member, the membership certificate SHA-256), refuse redirects and time out after 15 s. Errors are short text/plain bodies. Development protocol: deploy matching Core versions in a pool; additive acknowledgements (probe mode echo, update_accepted, spec_match) let newer peers fail closed against older ones.</p>
+<p><a href="peer-openapi.json">Download OpenAPI JSON</a>. This reference works offline; examples do not execute requests.</p>
+<nav aria-label="API operations"><ul>
+<li><a href="#peerJoin">POST /api/v1/pool/join</a></li>
+<li><a href="#peerAdvertiseOrigin">POST /api/v1/pool/advertise</a></li>
+<li><a href="#peerListPoolStorage">GET /api/v1/pool/storage</a></li>
+<li><a href="#peerGetPoolStorage">GET /api/v1/pool/storage/{repository_id}</a></li>
+<li><a href="#peerReservePoolStorage">POST /api/v1/pool/storage/{repository_id}/reserve</a></li>
+<li><a href="#peerReleasePoolStorage">DELETE /api/v1/pool/storage/{repository_id}/reserve</a></li>
+<li><a href="#peerReportPoolStorageAccess">POST /api/v1/pool/storage/{repository_id}/access</a></li>
+<li><a href="#peerHoldPoolStorageLock">POST /api/v1/pool/storage/{repository_id}/lock</a></li>
+<li><a href="#peerReleasePoolStorageLock">DELETE /api/v1/pool/storage/{repository_id}/lock</a></li>
+<li><a href="#peerPublishPoolVMInventory">POST /api/v1/pool/vms/inventory</a></li>
+<li><a href="#peerPoolVMExecution">POST /api/v1/pool/vms/{vm_id}</a></li>
+<li><a href="#peerPullStorageClusters">GET /api/v1/pool/storage-cluster</a></li>
+<li><a href="#peerReportStorageClusterStatus">POST /api/v1/pool/storage-cluster/status</a></li>
+<li><a href="#peerVerifyClusterFence">POST /api/v1/pool/storage-cluster/verify</a></li>
+<li><a href="#peerGetClusterFenceProofs">GET /api/v1/pool/storage-cluster/proof/{repository_id}</a></li>
+</ul></nav>
+<section id="peerJoin"><h2>POST <code>/api/v1/pool/join</code></h2>
+<p>Redeem a pool join offer</p><p>Served by the pool master; the only peer route without a client certificate. Authority is the single-use offer created by the master Core local API: it binds pool, master host, member host ID and CSR SHA-256, and expires after 15 minutes. The master signs the CSR with the pool CA, appends the member as ready, increments the membership generation and persists before replying. A retry of the same offer, host ID and CSR after a lost response returns the same certificate and current membership; a different key or an already-admitted host is refused. The member pins the pool CA and master host ID from the offer, verifies the returned certificate against its pending key, then persists and completes a Core-owned rehome. Body at most 1 MiB.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerJoin&quot;,
+  &quot;summary&quot;: &quot;Redeem a pool join offer&quot;,
+  &quot;description&quot;: &quot;Served by the pool master; the only peer route without a client certificate. Authority is the single-use offer created by the master Core local API: it binds pool, master host, member host ID and CSR SHA-256, and expires after 15 minutes. The master signs the CSR with the pool CA, appends the member as ready, increments the membership generation and persists before replying. A retry of the same offer, host ID and CSR after a lost response returns the same certificate and current membership; a different key or an already-admitted host is refused. The member pins the pool CA and master host ID from the offer, verifies the returned certificate against its pending key, then persists and completes a Core-owned rehome. Body at most 1 MiB.&quot;,
+  &quot;security&quot;: [],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: joining host \u2192 pool master&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Member certificate and membership.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PeerJoinResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid JSON.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Method other than POST; Allow: POST.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Join refused: not a master, invalid/expired/mismatched offer, invalid CSR, host already a member, or persistence failure. Not retryable with the same input except after a lost success.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;description&quot;: &quot;JSON, at most 1 MiB.&quot;,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PeerJoinRequest&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="peerAdvertiseOrigin"><h2>POST <code>/api/v1/pool/advertise</code></h2>
+<p>Advertise member peer origin</p><p>Served by the pool master. Records the calling member&#x27;s peer listener origin in the master membership so the master can later contact that member (PoolMasterCertificate routes). The member is identified only by its certificate; input cannot name another member. Last write wins and repeats are idempotent; an unknown member is accepted without change. The member persists a pending origin first and retries it at startup until the master returns 204. Body at most 4 KiB; any non-POST method is rejected as 400 after authentication.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerAdvertiseOrigin&quot;,
+  &quot;summary&quot;: &quot;Advertise member peer origin&quot;,
+  &quot;description&quot;: &quot;Served by the pool master. Records the calling member&#x27;s peer listener origin in the master membership so the master can later contact that member (PoolMasterCertificate routes). The member is identified only by its certificate; input cannot name another member. Last write wins and repeats are idempotent; an unknown member is accepted without change. The member persists a pending origin first and retries it at startup until the master returns 204. Body at most 4 KiB; any non-POST method is rejected as 400 after authentication.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMemberCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool member \u2192 pool master&quot;,
+  &quot;responses&quot;: {
+    &quot;204&quot;: {
+      &quot;description&quot;: &quot;Origin recorded.&quot;
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Non-POST, invalid JSON, or origin not a bare HTTPS origin.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or unverified client certificate, or the caller is not the admitted peer this route requires (see security).&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Method not allowed (sent after authentication, before the body is read); `Allow: POST`.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Peer state could not be loaded or saved; retry later.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;description&quot;: &quot;JSON, at most 4 KiB.&quot;,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PeerAdvertiseRequest&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="peerListPoolStorage"><h2>GET <code>/api/v1/pool/storage</code></h2>
+<p>List pool-shareable repositories</p><p>Served by the pool master. Returns non-tombstoned repositories eligible for the caller (NFS/SMB, or clustered iSCSI naming the caller as eligible) with member_access and credential_receipt cleared. Read-only; safe to retry. Members use it for periodic master-pull reconciliation. Other methods return 404.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerListPoolStorage&quot;,
+  &quot;summary&quot;: &quot;List pool-shareable repositories&quot;,
+  &quot;description&quot;: &quot;Served by the pool master. Returns non-tombstoned repositories eligible for the caller (NFS/SMB, or clustered iSCSI naming the caller as eligible) with member_access and credential_receipt cleared. Read-only; safe to retry. Members use it for periodic master-pull reconciliation. Other methods return 404.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMemberCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool member \u2192 pool master&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Eligible repositories.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;items&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/StorageRegistration&quot;
+            }
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or unverified client certificate, or the caller is not the admitted peer this route requires (see security).&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Method other than GET.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="peerGetPoolStorage"><h2>GET <code>/api/v1/pool/storage/{repository_id}</code></h2>
+<p>Fetch one repository for member reconciliation</p><p>Served by the pool master. Returns the repository addressed to the caller; SMB repositories include credentials, so this is secret-bearing and only reachable over peer mTLS. Read-only; safe to retry.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerGetPoolStorage&quot;,
+  &quot;summary&quot;: &quot;Fetch one repository for member reconciliation&quot;,
+  &quot;description&quot;: &quot;Served by the pool master. Returns the repository addressed to the caller; SMB repositories include credentials, so this is secret-bearing and only reachable over peer mTLS. Read-only; safe to retry.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMemberCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool member \u2192 pool master&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Repository transfer.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolStorageTransfer&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or unverified client certificate, or the caller is not the admitted peer this route requires (see security).&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown, tombstoned or malformed repository ID, or unsupported method/sub-path.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Repository is not pool-shareable for the caller, or its SMB credential is unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;name&quot;: &quot;repository_id&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;minLength&quot;: 1
+      },
+      &quot;description&quot;: &quot;Repository ID; must not contain / or \\.&quot;
+    }
+  ]
+}</pre></details></section>
+<section id="peerReservePoolStorage"><h2>POST <code>/api/v1/pool/storage/{repository_id}/reserve</code></h2>
+<p>Reserve a repository generation</p><p>Served by the pool master. Before member VM/media work the member reserves the exact current repository generation. The master persists a Core-owned reservation (one per member per repository) and fails closed while a source/credential/detach mutation is pending; such master mutations are in turn refused while reservations exist. Idempotent: an existing reservation for the member is kept unchanged (the first operation ID wins) and 204 is returned. Body at most 4 KiB.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerReservePoolStorage&quot;,
+  &quot;summary&quot;: &quot;Reserve a repository generation&quot;,
+  &quot;description&quot;: &quot;Served by the pool master. Before member VM/media work the member reserves the exact current repository generation. The master persists a Core-owned reservation (one per member per repository) and fails closed while a source/credential/detach mutation is pending; such master mutations are in turn refused while reservations exist. Idempotent: an existing reservation for the member is kept unchanged (the first operation ID wins) and 204 is returned. Body at most 4 KiB.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMemberCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool member \u2192 pool master&quot;,
+  &quot;responses&quot;: {
+    &quot;204&quot;: {
+      &quot;description&quot;: &quot;Reservation held.&quot;
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Empty ID, invalid JSON or missing operation_id.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or unverified client certificate, or the caller is not the admitted peer this route requires (see security).&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Generation mismatch, tombstoned or ineligible repository, pending mutation, or persistence failure.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;name&quot;: &quot;repository_id&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;minLength&quot;: 1
+      },
+      &quot;description&quot;: &quot;Repository ID; must not contain / or \\.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;description&quot;: &quot;JSON, at most 4 KiB.&quot;,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolStorageReservationRequest&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="peerReleasePoolStorage"><h2>DELETE <code>/api/v1/pool/storage/{repository_id}/reserve</code></h2>
+<p>Release a repository reservation</p><p>Served by the pool master. Releases the caller&#x27;s reservation when operation_id matches it, or unconditionally with release_unused=1 (used at member startup once its serialized journal proves the reservation unused). A non-matching operation_id returns 204 without releasing. Idempotent.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerReleasePoolStorage&quot;,
+  &quot;summary&quot;: &quot;Release a repository reservation&quot;,
+  &quot;description&quot;: &quot;Served by the pool master. Releases the caller&#x27;s reservation when operation_id matches it, or unconditionally with release_unused=1 (used at member startup once its serialized journal proves the reservation unused). A non-matching operation_id returns 204 without releasing. Idempotent.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMemberCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool member \u2192 pool master&quot;,
+  &quot;responses&quot;: {
+    &quot;204&quot;: {
+      &quot;description&quot;: &quot;Release applied or not applicable. A reservation is removed only when `operation_id` matches the operation that holds it (or when `release_unused=1` is set). A mismatch or an absent reservation leaves state unchanged and still returns 204: the later operation never held its own reservation, so the live operation&#x27;s reservation must stay in place.&quot;
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Empty ID, or neither operation_id nor release_unused=1.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or unverified client certificate, or the caller is not the admitted peer this route requires (see security).&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Reservation state could not be loaded or saved.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;name&quot;: &quot;repository_id&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;minLength&quot;: 1
+      },
+      &quot;description&quot;: &quot;Repository ID; must not contain / or \\.&quot;
+    },
+    {
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;name&quot;: &quot;operation_id&quot;,
+      &quot;required&quot;: false,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Required unless release_unused=1.&quot;
+    },
+    {
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;name&quot;: &quot;release_unused&quot;,
+      &quot;required&quot;: false,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;enum&quot;: [
+          &quot;1&quot;
+        ]
+      }
+    }
+  ]
+}</pre></details></section>
+<section id="peerReportPoolStorageAccess"><h2>POST <code>/api/v1/pool/storage/{repository_id}/access</code></h2>
+<p>Report member repository access</p><p>Served by the pool master. Posts the member&#x27;s generation-bound native access observation after preparation, QEMU access and cross-Core lock verification. repository_id and host_id in the body must equal the path and the caller. observed_at is replaced by the master clock. Observations are process-local on the master and never persisted: after a master restart members must report again. Repeats overwrite. Body at most 1 MiB.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerReportPoolStorageAccess&quot;,
+  &quot;summary&quot;: &quot;Report member repository access&quot;,
+  &quot;description&quot;: &quot;Served by the pool master. Posts the member&#x27;s generation-bound native access observation after preparation, QEMU access and cross-Core lock verification. repository_id and host_id in the body must equal the path and the caller. observed_at is replaced by the master clock. Observations are process-local on the master and never persisted: after a master restart members must report again. Repeats overwrite. Body at most 1 MiB.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMemberCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool member \u2192 pool master&quot;,
+  &quot;responses&quot;: {
+    &quot;204&quot;: {
+      &quot;description&quot;: &quot;Observation recorded.&quot;
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid JSON, or repository/host mismatch.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or unverified client certificate, or the caller is not the admitted peer this route requires (see security).&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Repository generation unavailable or ineligible.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Pool storage state unreadable; observations cleared.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;name&quot;: &quot;repository_id&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;minLength&quot;: 1
+      },
+      &quot;description&quot;: &quot;Repository ID; must not contain / or \\.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;description&quot;: &quot;JSON, at most 1 MiB.&quot;,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolStorageAccess&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="peerHoldPoolStorageLock"><h2>POST <code>/api/v1/pool/storage/{repository_id}/lock</code></h2>
+<p>Hold a cross-Core probe lock lease</p><p>Served by the pool master. Takes a non-blocking OFD write lock on one byte of .nex-peer-lock in the repository path so the member can prove it observes the same shared filesystem (it must see a conflict, then acquire after DELETE). challenge-byte-v1 uses a nonzero offset derived from SHA-256 of the challenge and echoes X-Nex-Pool-Probe-Mode; absent probe_mode uses legacy byte zero. The lease is bound to caller, repository, generation, challenge and mode; replaying the same held lease returns 204. Leases expire after ten seconds, at most 64 are active, and they are not VM ownership or fencing authority.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerHoldPoolStorageLock&quot;,
+  &quot;summary&quot;: &quot;Hold a cross-Core probe lock lease&quot;,
+  &quot;description&quot;: &quot;Served by the pool master. Takes a non-blocking OFD write lock on one byte of .nex-peer-lock in the repository path so the member can prove it observes the same shared filesystem (it must see a conflict, then acquire after DELETE). challenge-byte-v1 uses a nonzero offset derived from SHA-256 of the challenge and echoes X-Nex-Pool-Probe-Mode; absent probe_mode uses legacy byte zero. The lease is bound to caller, repository, generation, challenge and mode; replaying the same held lease returns 204. Leases expire after ten seconds, at most 64 are active, and they are not VM ownership or fencing authority.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMemberCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool member \u2192 pool master&quot;,
+  &quot;responses&quot;: {
+    &quot;204&quot;: {
+      &quot;description&quot;: &quot;Lease held.&quot;,
+      &quot;headers&quot;: {
+        &quot;X-Nex-Pool-Probe-Mode&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;enum&quot;: [
+              &quot;challenge-byte-v1&quot;
+            ]
+          },
+          &quot;description&quot;: &quot;Present only for challenge-byte-v1. A missing echo means a legacy master; a different value fails closed.&quot;
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or unverified client certificate, or the caller is not the admitted peer this route requires (see security).&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Missing generation, malformed challenge, unsupported probe_mode, or repository unknown/ineligible.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Generation changed, lease limit reached, range already leased, or OFD locking unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;name&quot;: &quot;repository_id&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;minLength&quot;: 1
+      },
+      &quot;description&quot;: &quot;Repository ID; must not contain / or \\.&quot;
+    },
+    {
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;name&quot;: &quot;generation&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[0-9]+$&quot;
+      },
+      &quot;description&quot;: &quot;Current repository generation (decimal).&quot;
+    },
+    {
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;name&quot;: &quot;challenge&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[0-9a-f]{32}$&quot;
+      },
+      &quot;description&quot;: &quot;16 random bytes, hex encoded, fresh per attempt.&quot;
+    },
+    {
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;name&quot;: &quot;probe_mode&quot;,
+      &quot;required&quot;: false,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;enum&quot;: [
+          &quot;challenge-byte-v1&quot;
+        ]
+      },
+      &quot;description&quot;: &quot;Absent selects the legacy byte-zero range.&quot;
+    }
+  ]
+}</pre></details></section>
+<section id="peerReleasePoolStorageLock"><h2>DELETE <code>/api/v1/pool/storage/{repository_id}/lock</code></h2>
+<p>Release a probe lock lease</p><p>Served by the pool master. Releases the lease identified by caller, repository, generation, challenge and mode. Idempotent: an unknown or expired lease returns 204.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerReleasePoolStorageLock&quot;,
+  &quot;summary&quot;: &quot;Release a probe lock lease&quot;,
+  &quot;description&quot;: &quot;Served by the pool master. Releases the lease identified by caller, repository, generation, challenge and mode. Idempotent: an unknown or expired lease returns 204.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMemberCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool member \u2192 pool master&quot;,
+  &quot;responses&quot;: {
+    &quot;204&quot;: {
+      &quot;description&quot;: &quot;Released or not held.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or unverified client certificate, or the caller is not the admitted peer this route requires (see security).&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Missing generation, malformed challenge or unsupported probe_mode.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;name&quot;: &quot;repository_id&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;minLength&quot;: 1
+      },
+      &quot;description&quot;: &quot;Repository ID; must not contain / or \\.&quot;
+    },
+    {
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;name&quot;: &quot;generation&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[0-9]+$&quot;
+      },
+      &quot;description&quot;: &quot;Current repository generation (decimal).&quot;
+    },
+    {
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;name&quot;: &quot;challenge&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[0-9a-f]{32}$&quot;
+      },
+      &quot;description&quot;: &quot;16 random bytes, hex encoded, fresh per attempt.&quot;
+    },
+    {
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;name&quot;: &quot;probe_mode&quot;,
+      &quot;required&quot;: false,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;enum&quot;: [
+          &quot;challenge-byte-v1&quot;
+        ]
+      },
+      &quot;description&quot;: &quot;Absent selects the legacy byte-zero range.&quot;
+    }
+  ]
+}</pre></details></section>
+<section id="peerPublishPoolVMInventory"><h2>POST <code>/api/v1/pool/vms/inventory</code></h2>
+<p>Publish member VM inventory</p><p>Served by the pool master. The member publishes its complete VM inventory bound to its membership generation; the master stores it durably to re-adopt pool VM records and settle pending updates. host_id must equal the caller. On 409 with a membership body the member refreshes its membership once and republishes. Body at most 1 MiB.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerPublishPoolVMInventory&quot;,
+  &quot;summary&quot;: &quot;Publish member VM inventory&quot;,
+  &quot;description&quot;: &quot;Served by the pool master. The member publishes its complete VM inventory bound to its membership generation; the master stores it durably to re-adopt pool VM records and settle pending updates. host_id must equal the caller. On 409 with a membership body the member refreshes its membership once and republishes. Body at most 1 MiB.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMemberCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool member \u2192 pool master&quot;,
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Durably retained, but legacy owner adoption waits until every current ready member has reported.&quot;
+    },
+    &quot;204&quot;: {
+      &quot;description&quot;: &quot;Inventory recorded.&quot;
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid JSON or host_id mismatch.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or unverified client certificate, or the caller is not the admitted peer this route requires (see security).&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Method other than POST; Allow: POST.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Stale generation (JSON body with current membership), or membership unavailable/inventory refused (text).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolVMInventoryReply&quot;
+          }
+        },
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;description&quot;: &quot;JSON, at most 1 MiB.&quot;,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolVMInventory&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="peerPoolVMExecution"><h2>POST <code>/api/v1/pool/vms/{vm_id}</code></h2>
+<p>Admit a pool VM execution transition</p><p>Served by the pool master, serialized per master. The owner member asks the master to durably record a VM definition or execution transition before acting locally; the master writes its record before replying. Actions: define (create=true seeds a new record from a valid vm owned by the caller; otherwise spec_match reports whether vm matches the durable definition), start (defined/stopped → starting, epoch+1, returns a random permit), running (starting → running), stop (owner check only), stopped (owner proves stop; placement retained), reboot (requires running) and media (owner check only), update-reserve (reserve one exact next revision), update-commit and update-abort (settle it with exact local journal evidence). Only the recorded owner may transition a VM; there is no expiry or timeout cleanup, so unknown execution stays fenced and an unreachable host is never treated as stopped. Retries after a lost reply are reconciled against the durable record rather than repeated blindly. Body at most 1 MiB.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerPoolVMExecution&quot;,
+  &quot;summary&quot;: &quot;Admit a pool VM execution transition&quot;,
+  &quot;description&quot;: &quot;Served by the pool master, serialized per master. The owner member asks the master to durably record a VM definition or execution transition before acting locally; the master writes its record before replying. Actions: define (create=true seeds a new record from a valid vm owned by the caller; otherwise spec_match reports whether vm matches the durable definition), start (defined/stopped \u2192 starting, epoch+1, returns a random permit), running (starting \u2192 running), stop (owner check only), stopped (owner proves stop; placement retained), reboot (requires running) and media (owner check only), update-reserve (reserve one exact next revision), update-commit and update-abort (settle it with exact local journal evidence). Only the recorded owner may transition a VM; there is no expiry or timeout cleanup, so unknown execution stays fenced and an unreachable host is never treated as stopped. Retries after a lost reply are reconciled against the durable record rather than repeated blindly. Body at most 1 MiB.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMemberCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool member \u2192 pool master&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Request echoed with epoch and action acknowledgements.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolVMRequest&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Not a UUID, body vm_id mismatch, invalid JSON, invalid new definition, or unsupported action.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or unverified client certificate, or the caller is not the admitted peer this route requires (see security).&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Empty VM ID or one containing / or \\.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Method other than POST; Allow: POST.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Not the recorded owner, pending update, ineligible state, or definition/evidence mismatch with the durable record.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Execution state unreadable or persistence failed; reconcile before retrying.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;name&quot;: &quot;vm_id&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;format&quot;: &quot;uuid&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;description&quot;: &quot;JSON, at most 1 MiB.&quot;,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolVMRequest&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="peerPullStorageClusters"><h2>GET <code>/api/v1/pool/storage-cluster</code></h2>
+<p>Pull clustered-storage projection</p><p>Served by the pool master to members (not to itself). Returns every clustered-storage operation with its registration, the pool corosync authkey and secrets addressed to the caller; no passwords beyond those addressed secrets, and credential receipts are cleared. Read-only; members pull at startup and on the probe cadence and never start a VM from it or treat an unreachable master as permission.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerPullStorageClusters&quot;,
+  &quot;summary&quot;: &quot;Pull clustered-storage projection&quot;,
+  &quot;description&quot;: &quot;Served by the pool master to members (not to itself). Returns every clustered-storage operation with its registration, the pool corosync authkey and secrets addressed to the caller; no passwords beyond those addressed secrets, and credential receipts are cleared. Read-only; members pull at startup and on the probe cadence and never start a VM from it or treat an unreachable master as permission.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMemberCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool member \u2192 pool master&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Projections.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;items&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterProjection&quot;
+            }
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or unverified client certificate, or the caller is not the admitted peer this route requires (see security).&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Method other than GET or unknown sub-path.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;This Core is not the master, the caller is the master, or the cluster key/secret projection is unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="peerReportStorageClusterStatus"><h2>POST <code>/api/v1/pool/storage-cluster/status</code></h2>
+<p>Report member clustered-storage status</p><p>Served by the pool master. host_id must equal the caller; generation, membership_generation, cluster_id and config_digest are required. The master applies the report only to the matching current operation that acknowledges the current fence configuration, and may promote the operation; otherwise it is ignored and 204 is still returned. Repeats overwrite the member entry. Body at most 4 KiB.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerReportStorageClusterStatus&quot;,
+  &quot;summary&quot;: &quot;Report member clustered-storage status&quot;,
+  &quot;description&quot;: &quot;Served by the pool master. host_id must equal the caller; generation, membership_generation, cluster_id and config_digest are required. The master applies the report only to the matching current operation that acknowledges the current fence configuration, and may promote the operation; otherwise it is ignored and 204 is still returned. Repeats overwrite the member entry. Body at most 4 KiB.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMemberCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool member \u2192 pool master&quot;,
+  &quot;responses&quot;: {
+    &quot;204&quot;: {
+      &quot;description&quot;: &quot;Accepted.&quot;
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid JSON, host mismatch or missing generation/digest/cluster fields.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or unverified client certificate, or the caller is not the admitted peer this route requires (see security).&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Cluster state unreadable or save failed.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;description&quot;: &quot;JSON, at most 4 KiB.&quot;,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/ClusterMemberStatus&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="peerVerifyClusterFence"><h2>POST <code>/api/v1/pool/storage-cluster/verify</code></h2>
+<p>Ask a surviving member to verify a fence</p><p>Served by a pool member to the current master (PoolMasterCertificate); the master dials only a ready member&#x27;s advertised origin pinned to its membership certificate. target_host_id must equal the membership master host ID and differ from the serving host; config.pool_id must be this pool; request_id 1–128 characters. The survivor durably records the request before running native fence verification (bounded to two minutes). The request_id is the replay boundary: a replay with the same digest after success returns 204 without repeating any action; any other replay returns 409 and must be reconciled via the proof route. Body at most 1 MiB. `target_host_id` must be the calling master: the master verifies other targets locally and asks a surviving member only to prove the master&#x27;s own exclusion, which the master cannot prove itself.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerVerifyClusterFence&quot;,
+  &quot;summary&quot;: &quot;Ask a surviving member to verify a fence&quot;,
+  &quot;description&quot;: &quot;Served by a pool member to the current master (PoolMasterCertificate); the master dials only a ready member&#x27;s advertised origin pinned to its membership certificate. target_host_id must equal the membership master host ID and differ from the serving host; config.pool_id must be this pool; request_id 1\u2013128 characters. The survivor durably records the request before running native fence verification (bounded to two minutes). The request_id is the replay boundary: a replay with the same digest after success returns 204 without repeating any action; any other replay returns 409 and must be reconciled via the proof route. Body at most 1 MiB. `target_host_id` must be the calling master: the master verifies other targets locally and asks a surviving member only to prove the master&#x27;s own exclusion, which the master cannot prove itself.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool master \u2192 pool member&quot;,
+  &quot;responses&quot;: {
+    &quot;204&quot;: {
+      &quot;description&quot;: &quot;Fence exclusion verified.&quot;
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid JSON or request fields.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or unverified client certificate, or the caller is not the admitted peer this route requires (see security).&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Verification failed, configuration not received by the survivor, or request already recorded with another outcome.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;description&quot;: &quot;JSON, at most 1 MiB.&quot;,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/ClusterFencePeerRequest&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="peerGetClusterFenceProofs"><h2>GET <code>/api/v1/pool/storage-cluster/proof/{repository_id}</code></h2>
+<p>Read survivor fence proofs</p><p>Served by a pool member to the current master. Returns the proofs this survivor recorded for the repository (an empty array when there are none), so the master can reconcile an ambiguous verify outcome. Read-only; safe to retry. Older Cores may return `null` for none; clients must treat `null` and `[]` the same.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerGetClusterFenceProofs&quot;,
+  &quot;summary&quot;: &quot;Read survivor fence proofs&quot;,
+  &quot;description&quot;: &quot;Served by a pool member to the current master. Returns the proofs this survivor recorded for the repository (an empty array when there are none), so the master can reconcile an ambiguous verify outcome. Read-only; safe to retry. Older Cores may return `null` for none; clients must treat `null` and `[]` the same.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool master \u2192 pool member&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Recorded proofs.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;items&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterFenceStatus&quot;
+            }
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or unverified client certificate, or the caller is not the admitted peer this route requires (see security).&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Membership unavailable, caller not master, or malformed repository ID.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Cluster state unreadable.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;name&quot;: &quot;repository_id&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;minLength&quot;: 1
+      },
+      &quot;description&quot;: &quot;Repository ID; must not contain / or \\.&quot;
+    }
+  ]
+}</pre></details></section>
+<section id="schemas"><h2>Schemas and authentication</h2>
+<h3>securitySchemes</h3>
+<details id="PoolMemberCertificate"><summary>PoolMemberCertificate</summary><pre>{
+  &quot;type&quot;: &quot;mutualTLS&quot;,
+  &quot;description&quot;: &quot;Served only by the pool master (this Core holds the pool CA key and is the membership master). The client certificate must chain to the pool CA, its subject CN must be a membership host ID whose status is ready, and its SHA-256 must equal that member&#x27;s recorded certificate_sha256.&quot;
+}</pre></details>
+<details id="PoolMasterCertificate"><summary>PoolMasterCertificate</summary><pre>{
+  &quot;type&quot;: &quot;mutualTLS&quot;,
+  &quot;description&quot;: &quot;Served only by a pool member (not the master). The client certificate must chain to the pool CA, its subject CN must be the membership master host ID with ready status, and its SHA-256 must equal the master&#x27;s recorded certificate_sha256.&quot;
+}</pre></details>
+<h3>schemas</h3>
+<details id="ClusterFencePeerRequest"><summary>ClusterFencePeerRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;config&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterConfig&quot;
+    },
+    &quot;target_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;config&quot;,
+    &quot;target_host_id&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;agent.clusterFencePeerRequest&quot;
+}</pre></details>
+<details id="ClusterMemberStatus"><summary>ClusterMemberStatus</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterStatus&quot;
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;membership_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;cluster_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;config_digest&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;stage&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;updated_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;status&quot;,
+    &quot;generation&quot;,
+    &quot;membership_generation&quot;,
+    &quot;cluster_id&quot;,
+    &quot;config_digest&quot;,
+    &quot;stage&quot;,
+    &quot;updated_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;agent.clusterMemberStatus&quot;,
+  &quot;description&quot;: &quot;Member clustered-storage report. updated_at is replaced by the master clock on receipt.&quot;
+}</pre></details>
+<details id="ClusterSecretMaterial"><summary>ClusterSecretMaterial</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;credentials&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/StorageCredentials&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;ssh_private_key&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;ssh_known_hosts&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [],
+  &quot;x-go-type&quot;: &quot;agent.ClusterSecretMaterial&quot;
+}</pre></details>
+<details id="ClusterSecretReceipt"><summary>ClusterSecretReceipt</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;reference&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;cluster_request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;recipient_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;fence_target_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;created_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;reference&quot;,
+    &quot;request_id&quot;,
+    &quot;cluster_request_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;recipient_host_id&quot;,
+    &quot;kind&quot;,
+    &quot;created_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;agent.ClusterSecretReceipt&quot;
+}</pre></details>
+<details id="ISCSIStorageIdentity"><summary>ISCSIStorageIdentity</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;target_iqn&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;lun&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;wwid&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;filesystem_uuid&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;filesystem_type&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;gfs2_lock_table&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;gfs2_journals&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    }
+  },
+  &quot;required&quot;: [
+    &quot;target_iqn&quot;,
+    &quot;lun&quot;,
+    &quot;wwid&quot;,
+    &quot;filesystem_uuid&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ISCSIStorageIdentity&quot;
+}</pre></details>
+<details id="ISCSIStorageSource"><summary>ISCSIStorageSource</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;portal&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;target_iqn&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;lun&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;wwid&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;filesystem_uuid&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;mount_path&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;exclusive_target&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;mode&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;exclusive&quot;,
+        &quot;clustered_gfs2&quot;
+      ]
+    },
+    &quot;cluster_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;lock_table&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;eligible_host_ids&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;minItems&quot;: 3,
+      &quot;maxItems&quot;: 5
+    }
+  },
+  &quot;required&quot;: [
+    &quot;portal&quot;,
+    &quot;target_iqn&quot;,
+    &quot;lun&quot;,
+    &quot;wwid&quot;,
+    &quot;filesystem_uuid&quot;,
+    &quot;mount_path&quot;,
+    &quot;exclusive_target&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ISCSIStorageSource&quot;,
+  &quot;description&quot;: &quot;exclusive is the legacy single-writer profile and needs exclusive_target. clustered_gfs2 instead requires cluster_id, lock_table and three to five unique eligible hosts, rejects exclusive_target, and only accepts an existing GFS2 filesystem; Core never formats it.&quot;
+}</pre></details>
+<details id="LocalStorageIdentity"><summary>LocalStorageIdentity</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;filesystem_uuid&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;filesystem_uuid&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.LocalStorageIdentity&quot;
+}</pre></details>
+<details id="NFSStorageIdentity"><summary>NFSStorageIdentity</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;server&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;export&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;filesystem_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;New Core-observed identities use the NFSv4 kernel protocol FSID profile nfs4:&lt;mounted-server-address-hex&gt;:&lt;port-hex&gt;:&lt;fsid-major-hex&gt;:&lt;fsid-minor-hex&gt;. Core binds that profile to stat.Dev and one matching /proc/fs/nfsfs/volumes row, then verifies the requested source. Missing or ambiguous rows fail closed; a zero protocol FSID is valid. Address changes fail closed and are not NFS HA failover. Preserved legacy statfs identities remain representable, are not auto-upgraded, and fail closed.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;server&quot;,
+    &quot;export&quot;,
+    &quot;filesystem_id&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.NFSStorageIdentity&quot;
+}</pre></details>
+<details id="NFSStorageSource"><summary>NFSStorageSource</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;server&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;export&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;directory&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Validated existing relative subdirectory beneath the original NFS export; spaces are supported, traversal, backslashes and control characters are rejected.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;server&quot;,
+    &quot;export&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.NFSStorageSource&quot;
+}</pre></details>
+<details id="PeerAdvertiseRequest"><summary>PeerAdvertiseRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;origin&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Bare https:// origin: no user info, path, query or fragment.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;origin&quot;
+  ]
+}</pre></details>
+<details id="PeerJoinRequest"><summary>PeerJoinRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Untagged Go struct: JSON members use Go field names (case-insensitive on decode). Offer is the raw offer token, not the encoded offer.&quot;,
+  &quot;properties&quot;: {
+    &quot;Offer&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 4096
+    },
+    &quot;HostID&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;CSRPEM&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;PEM certificate request whose subject CN equals HostID and whose SHA-256 matches the offer.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;Offer&quot;,
+    &quot;HostID&quot;,
+    &quot;CSRPEM&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;agent.peerJoinRequest&quot;
+}</pre></details>
+<details id="PeerJoinResponse"><summary>PeerJoinResponse</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;certificate_pem&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;membership&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/PoolMembership&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;certificate_pem&quot;,
+    &quot;membership&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;agent.peerJoinResponse&quot;,
+  &quot;description&quot;: &quot;Signed member certificate (TLS client and server auth, two-year validity) and the master membership after admission.&quot;
+}</pre></details>
+<details id="PeerStorageClusterOperation"><summary>PeerStorageClusterOperation</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;digest&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;input_digest&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;membership_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;config&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterConfig&quot;
+    },
+    &quot;registration&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageRegistration&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;updated_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;members&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ClusterMemberStatus&quot;
+      }
+    },
+    &quot;activation&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterActivation&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;digest&quot;,
+    &quot;input_digest&quot;,
+    &quot;membership_generation&quot;,
+    &quot;config&quot;,
+    &quot;registration&quot;,
+    &quot;status&quot;,
+    &quot;updated_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;agent.storageClusterOperation&quot;
+}</pre></details>
+<details id="PoolMember"><summary>PoolMember</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;certificate_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;peer_origin&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;certificate_sha256&quot;,
+    &quot;generation&quot;,
+    &quot;status&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolMember&quot;
+}</pre></details>
+<details id="PoolMembership"><summary>PoolMembership</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;master_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;members&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolMember&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;pool_id&quot;,
+    &quot;master_host_id&quot;,
+    &quot;generation&quot;,
+    &quot;members&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolMembership&quot;
+}</pre></details>
+<details id="PoolStorageAccess"><summary>PoolStorageAccess</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;identity&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Core-canonical secret-free identity observed after member preparation.&quot;
+    },
+    &quot;readable&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;writable&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;qemu_writable&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;locking&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Member proved the shared non-blocking lock against the master for this generation.&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;repository_id&quot;,
+    &quot;host_id&quot;,
+    &quot;generation&quot;,
+    &quot;identity&quot;,
+    &quot;readable&quot;,
+    &quot;writable&quot;,
+    &quot;qemu_writable&quot;,
+    &quot;locking&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolStorageAccess&quot;
+}</pre></details>
+<details id="PoolStorageReservationRequest"><summary>PoolStorageReservationRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    }
+  },
+  &quot;required&quot;: [
+    &quot;operation_id&quot;,
+    &quot;generation&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;Authenticated member-to-master peer request. The master binds the reservation to the mTLS member identity, not a client host field.&quot;
+}</pre></details>
+<details id="PoolStorageTransfer"><summary>PoolStorageTransfer</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;storage&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageRegistration&quot;
+    },
+    &quot;credentials&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/StorageCredentials&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    }
+  },
+  &quot;required&quot;: [
+    &quot;storage&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;agent.poolStorageTransfer&quot;,
+  &quot;description&quot;: &quot;One master repository record addressed to the calling member: storage.host_id is rewritten to the caller and member_access is cleared. credentials is present only for SMB repositories and carries the secret over peer mTLS; the member stores it only in its own Core credential state.&quot;
+}</pre></details>
+<details id="PoolVMInventory"><summary>PoolVMInventory</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;vms&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/VMCreateSpec&quot;
+      }
+    },
+    &quot;storage&quot;: {
+      &quot;type&quot;: [
+        &quot;object&quot;,
+        &quot;null&quot;
+      ],
+      &quot;additionalProperties&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StorageIdentity&quot;
+      }
+    },
+    &quot;observed&quot;: {
+      &quot;type&quot;: [
+        &quot;object&quot;,
+        &quot;null&quot;
+      ],
+      &quot;additionalProperties&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    },
+    &quot;updates&quot;: {
+      &quot;type&quot;: [
+        &quot;object&quot;,
+        &quot;null&quot;
+      ],
+      &quot;additionalProperties&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/VMUpdateEvidence&quot;
+      }
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;generation&quot;,
+    &quot;vms&quot;,
+    &quot;storage&quot;,
+    &quot;observed&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;agent.poolVMInventory&quot;,
+  &quot;description&quot;: &quot;Complete, membership-generation-bound VM inventory of the reporting member. updates carries only exact successful local managed-journal evidence for a current revision.&quot;
+}</pre></details>
+<details id="PoolVMInventoryReply"><summary>PoolVMInventoryReply</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;membership&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/PoolMembership&quot;
+    }
+  },
+  &quot;required&quot;: [],
+  &quot;x-go-type&quot;: &quot;agent.poolVMInventoryReply&quot;
+}</pre></details>
+<details id="PoolVMRequest"><summary>PoolVMRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;action&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;define&quot;,
+        &quot;start&quot;,
+        &quot;running&quot;,
+        &quot;stop&quot;,
+        &quot;stopped&quot;,
+        &quot;reboot&quot;,
+        &quot;media&quot;,
+        &quot;update-reserve&quot;,
+        &quot;update-commit&quot;,
+        &quot;update-abort&quot;
+      ]
+    },
+    &quot;permit&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;create&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;vm&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/VMCreateSpec&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;spec_match&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;epoch&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;previous&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/VMCreateSpec&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;update&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/VMUpdateEvidence&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;update_accepted&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;update_revision&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    }
+  },
+  &quot;required&quot;: [],
+  &quot;x-go-type&quot;: &quot;agent.poolVMRequest&quot;,
+  &quot;description&quot;: &quot;Request and response share this shape: the master echoes the request after setting epoch and, per action, permit, spec_match, update_accepted and update_revision. Older masters omit acknowledgement fields; clients must treat a missing acknowledgement as unsafe.&quot;
+}</pre></details>
+<details id="SMBStorageIdentity"><summary>SMBStorageIdentity</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;server&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;share&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;filesystem_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Diagnostic CIFS filesystem ID; it is not durable across reconnects.&quot;
+    },
+    &quot;marker_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{32}$&quot;,
+      &quot;description&quot;: &quot;Core-created atomic durable share-root marker for new registrations. Core verifies it with the exact SMB source/options after reconnect. Absent only on preserved legacy records, which retain strict filesystem-ID failure behavior and are not auto-upgraded.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;server&quot;,
+    &quot;share&quot;,
+    &quot;filesystem_id&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.SMBStorageIdentity&quot;
+}</pre></details>
+<details id="SMBStorageSource"><summary>SMBStorageSource</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;server&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;share&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Ordinary share name: letters, numbers, internal spaces and ._$:()-; no leading/trailing whitespace or path/command/unit syntax.&quot;
+    },
+    &quot;directory&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Validated existing relative subdirectory below the SMB share, including spaces; never an SMB path. Traversal, backslashes and control characters are rejected.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;server&quot;,
+    &quot;share&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.SMBStorageSource&quot;
+}</pre></details>
+<details id="StorageAccess"><summary>StorageAccess</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;readable&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;writable&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;total_bytes&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;available_bytes&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;type&quot;: &quot;integer&quot;,
+          &quot;minimum&quot;: 0
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;effective_quota_bytes&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;type&quot;: &quot;integer&quot;,
+          &quot;minimum&quot;: 0
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;status&quot;,
+    &quot;readable&quot;,
+    &quot;writable&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageAccess&quot;
+}</pre></details>
+<details id="StorageCapabilities"><summary>StorageCapabilities</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;vm_disk&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;iso&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;thin&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;thick&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;shared&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;eligible_host_ids&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;vm_disk&quot;,
+    &quot;iso&quot;,
+    &quot;thin&quot;,
+    &quot;thick&quot;,
+    &quot;shared&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageCapabilities&quot;
+}</pre></details>
+<details id="StorageClusterActivation"><summary>StorageClusterActivation</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;operation_digest&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;config_digest&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;membership_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;committed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;operation_digest&quot;,
+    &quot;repository_id&quot;,
+    &quot;generation&quot;,
+    &quot;config_digest&quot;,
+    &quot;membership_generation&quot;,
+    &quot;committed_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;agent.storageClusterActivation&quot;
+}</pre></details>
+<details id="StorageClusterConfig"><summary>StorageClusterConfig</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;cluster_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;lock_table&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;device_path&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;mount_path&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;nodes&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterNode&quot;
+      },
+      &quot;minItems&quot;: 3,
+      &quot;maxItems&quot;: 5
+    },
+    &quot;fence_proofs&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterFenceStatus&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;cluster_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;repository_id&quot;,
+    &quot;generation&quot;,
+    &quot;lock_table&quot;,
+    &quot;device_path&quot;,
+    &quot;mount_path&quot;,
+    &quot;nodes&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageClusterConfig&quot;,
+  &quot;description&quot;: &quot;Core-owned clustered-GFS2 projection. Controller relay input never grants a caller-owned device path, mount path, proof, or secret; Core derives/verifies those native details.&quot;
+}</pre></details>
+<details id="StorageClusterFence"><summary>StorageClusterFence</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;redfish&quot;,
+        &quot;ipmilan&quot;,
+        &quot;virsh&quot;,
+        &quot;scsi_pr&quot;
+      ]
+    },
+    &quot;endpoint&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;target_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;credential_ref&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true
+    },
+    &quot;device_path&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;virsh_uri&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;For virsh, exactly qemu:///system or qemu+ssh://&lt;ssh_login&gt;@&lt;endpoint&gt;[:&lt;ssh_port&gt;]/system. The latter must match the pinned SSH fields; it rejects passwords, query strings, fragments and every other URI path. An omitted URI port is valid only when ssh_port is 22.&quot;
+    },
+    &quot;ssh_login&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;ssh_port&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;ssh_host_key_ref&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true
+    }
+  },
+  &quot;required&quot;: [
+    &quot;kind&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageClusterFence&quot;,
+  &quot;description&quot;: &quot;Closed Core fence profile. credential_ref and ssh_host_key_ref are opaque names for root-only Core secrets, never secret bytes; arbitrary commands and arguments are not accepted. virsh is development-only and remains unaccepted for native production use.&quot;
+}</pre></details>
+<details id="StorageClusterFenceStatus"><summary>StorageClusterFenceStatus</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Optional stable ID of the actual destructive fence attempt. A Core verifies this binding before accepting a peer receipt.&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;unverified&quot;,
+        &quot;passed&quot;,
+        &quot;failed&quot;,
+        &quot;uncertain&quot;
+      ]
+    },
+    &quot;target_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;exclusion_verified&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;config_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;config_digest&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;status&quot;,
+    &quot;exclusion_verified&quot;,
+    &quot;config_generation&quot;,
+    &quot;config_digest&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageClusterFenceStatus&quot;,
+  &quot;description&quot;: &quot;Core-recorded result of an actual fence/exclusion observation, bound to a request ID when destructive work was attempted and to an exact configuration generation and digest.&quot;
+}</pre></details>
+<details id="StorageClusterNode"><summary>StorageClusterNode</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;corosync_node_id&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;corosync_address&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;fence&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterFence&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;corosync_node_id&quot;,
+    &quot;corosync_address&quot;,
+    &quot;fence&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageClusterNode&quot;
+}</pre></details>
+<details id="StorageClusterProjection"><summary>StorageClusterProjection</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;operation&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/PeerStorageClusterOperation&quot;
+    },
+    &quot;registration&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageRegistration&quot;
+    },
+    &quot;auth_key&quot;: {
+      &quot;type&quot;: [
+        &quot;string&quot;,
+        &quot;null&quot;
+      ],
+      &quot;contentEncoding&quot;: &quot;base64&quot;
+    },
+    &quot;secrets&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterSecretProjection&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;operation&quot;,
+    &quot;registration&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;agent.storageClusterProjection&quot;,
+  &quot;description&quot;: &quot;Private peer projection of one clustered-storage operation. auth_key is the pool corosync authkey; secrets are addressed only to the calling member. Must never cross the Controller boundary.&quot;
+}</pre></details>
+<details id="StorageClusterSecretProjection"><summary>StorageClusterSecretProjection</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;receipt&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/ClusterSecretReceipt&quot;
+    },
+    &quot;material&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/ClusterSecretMaterial&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;receipt&quot;,
+    &quot;material&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;agent.StorageClusterSecretProjection&quot;
+}</pre></details>
+<details id="StorageClusterStatus"><summary>StorageClusterStatus</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;cluster_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;session_monitor_ready&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Authenticated member attestation that the fixed local transport-monitor wrapper and CLI are installed and passed a successful live exact portal/IQN session probe. It is distinct from aggregate GFS2 or cluster health, and is projected to Controller only after storage-cluster-session-monitor-v1 is acknowledged.&quot;
+    },
+    &quot;healthy&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;quorate&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;mounted&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;unconfigured&quot;,
+        &quot;pending&quot;,
+        &quot;blocked&quot;,
+        &quot;healthy&quot;,
+        &quot;failed&quot;
+      ]
+    },
+    &quot;fencing_verified&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;fences&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterFenceStatus&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;cluster_id&quot;,
+    &quot;repository_id&quot;,
+    &quot;healthy&quot;,
+    &quot;quorate&quot;,
+    &quot;mounted&quot;,
+    &quot;status&quot;,
+    &quot;fencing_verified&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageClusterStatus&quot;
+}</pre></details>
+<details id="StorageCredentials"><summary>StorageCredentials</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;username&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;secret&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true
+    },
+    &quot;ssh_private_key&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true
+    },
+    &quot;ssh_known_hosts&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true
+    }
+  },
+  &quot;required&quot;: [],
+  &quot;x-go-type&quot;: &quot;protocol.StorageCredentials&quot;,
+  &quot;description&quot;: &quot;Transient credential bytes only. The selected operation validates the applicable secret form; inventory, journals, results and diagnostics never carry these fields.&quot;
+}</pre></details>
+<details id="StorageIdentity"><summary>StorageIdentity</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;local&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/LocalStorageIdentity&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;nfs&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/NFSStorageIdentity&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;zfs&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/ZFSStorageIdentity&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;smb&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/SMBStorageIdentity&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;iscsi&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/ISCSIStorageIdentity&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    }
+  },
+  &quot;required&quot;: [],
+  &quot;x-go-type&quot;: &quot;protocol.StorageIdentity&quot;
+}</pre></details>
+<details id="StorageRegistration"><summary>StorageRegistration</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;path&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;queued&quot;,
+        &quot;dispatched&quot;,
+        &quot;succeeded&quot;,
+        &quot;failed&quot;,
+        &quot;needs_attention&quot;
+      ]
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;local&quot;,
+        &quot;nfs&quot;,
+        &quot;zfs&quot;,
+        &quot;smb&quot;,
+        &quot;iscsi&quot;
+      ]
+    },
+    &quot;source&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageSource&quot;
+    },
+    &quot;identity&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageIdentity&quot;
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;tombstone&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;credential_receipt&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true
+    },
+    &quot;credential_request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;credential_present&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;capabilities&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageCapabilities&quot;
+    },
+    &quot;access&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageAccess&quot;
+    },
+    &quot;member_access&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolStorageAccess&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;name&quot;,
+    &quot;path&quot;,
+    &quot;operation_id&quot;,
+    &quot;status&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageRegistration&quot;,
+  &quot;description&quot;: &quot;Core-owned repository configuration and observation. A repository has one selected host in this release; shared is a capability observation, never placement permission. Source identity, access, capacity and health are Core observations; a missing or replaced mount blocks writes and never falls back to a mountpoint. For ZFS, source.zfs.mount_path remains the existing dataset mount and path is the Core-owned /var/lib/nex-storage/&lt;repository-id&gt; bind alias used by VM disks; detach removes only that alias, never ZFS properties. Credentials remain Core-local and inventory reports only presence. A fresh Controller adopts these records from Inventory.managed.storage.&quot;
+}</pre></details>
+<details id="StorageSource"><summary>StorageSource</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;nfs&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/NFSStorageSource&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;zfs&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/ZFSStorageSource&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;smb&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/SMBStorageSource&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;iscsi&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/ISCSIStorageSource&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    }
+  },
+  &quot;required&quot;: [],
+  &quot;x-go-type&quot;: &quot;protocol.StorageSource&quot;
+}</pre></details>
+<details id="VMBoot"><summary>VMBoot</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;firmware&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;uefi&quot;,
+        &quot;bios&quot;
+      ],
+      &quot;description&quot;: &quot;uefi is the default and requires EFI firmware advertised by the host&#x27;s libvirt domain capabilities; bios stays selectable.&quot;
+    },
+    &quot;machine&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^([a-z0-9][a-z0-9._-]{0,31})?$&quot;,
+      &quot;description&quot;: &quot;Empty selects Core&#x27;s default machine type (q35).&quot;
+    },
+    &quot;media_boot_order&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;0 keeps the CD drive out of the boot order; any other value joins the disks&#x27; contiguous 1..N numbering. Every VM has the drive, so the order is kept while it is empty and an ISO can be ejected from a running guest.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;firmware&quot;,
+    &quot;machine&quot;,
+    &quot;media_boot_order&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.VMBoot&quot;,
+  &quot;description&quot;: &quot;Firmware, machine type and the install media&#x27;s place in the boot order. Boot order is per device (libvirt forbids mixing per-device boot with an os/boot device list), so at least one disk or the install media must carry a non-zero order.&quot;
+}</pre></details>
+<details id="VMCPU"><summary>VMCPU</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;count&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1,
+      &quot;maximum&quot;: 64,
+      &quot;description&quot;: &quot;vCPUs presented to the guest. Both sides require at least 1; Controller caps the request at 64 and refuses more than the host reports.&quot;
+    },
+    &quot;sockets&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;Sockets, or 0 with cores and threads for the default topology.&quot;
+    },
+    &quot;cores&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;Cores per socket, or 0 for the default topology.&quot;
+    },
+    &quot;threads&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;Threads per core, or 0 for the default topology.&quot;
+    },
+    &quot;model&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^(host-passthrough|host-model|[A-Za-z0-9][A-Za-z0-9._-]{0,63})$&quot;,
+      &quot;description&quot;: &quot;host-passthrough (the default) gives the guest the host CPU; host-model describes it for later migration. Any other value must appear in the assigned host&#x27;s current Inventory.cpu_models (usable named models only) and Core refuses it otherwise; named values use libvirt custom/exact mode with partial feature checking and fallback forbidden.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;count&quot;,
+    &quot;sockets&quot;,
+    &quot;cores&quot;,
+    &quot;threads&quot;,
+    &quot;model&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.VMCPU&quot;,
+  &quot;description&quot;: &quot;vCPU count, optional topology and CPU model. Sockets, cores and threads all 0 select the default topology of one socket, count cores and one thread; otherwise each must be at least 1 and sockets \u00d7 cores \u00d7 threads must equal count. JSON Schema cannot express that product, so Controller and Core both enforce it in protocol.ValidateVMSpec.&quot;
+}</pre></details>
+<details id="VMCreateSpec"><summary>VMCreateSpec</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Controller-assigned stable UUID; identity is preserved across Controller replacement and later migration.&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[^/\\u0000-\\u001f\\u007f-\\u009f\\ufffe\\uffff]+$&quot;,
+      &quot;description&quot;: &quot;Nonblank VM name, at most 200 UTF-8 bytes (the byte limit is additionally enforced by Controller and Core). Spaces, case, dots, punctuation and Unicode are preserved exactly. Slashes, control characters and XML-invalid U+FFFE/U+FFFF are rejected. Core checks uniqueness on the host, journals the name and reports it for Controller adoption; failed or uncertain creations retain their reservation. Upgrade Controller and Core together to use the expanded naming syntax.&quot;,
+      &quot;minLength&quot;: 1,
+      &quot;maxLength&quot;: 200
+    },
+    &quot;description&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 4096,
+      &quot;description&quot;: &quot;Free-text operator note, at most 4096 characters.&quot;
+    },
+    &quot;guest_os&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;&quot;,
+        &quot;linux&quot;,
+        &quot;windows&quot;,
+        &quot;other&quot;
+      ],
+      &quot;description&quot;: &quot;Guest OS hint recorded for display and guest-tools advice; empty leaves it unset. It installs nothing and does not change the VM devices: disk bus and NIC model are chosen per device.&quot;
+    },
+    &quot;cpu&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/VMCPU&quot;
+    },
+    &quot;memory&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/VMMemory&quot;
+    },
+    &quot;disks&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/VMDisk&quot;
+      },
+      &quot;minItems&quot;: 1,
+      &quot;maxItems&quot;: 8,
+      &quot;description&quot;: &quot;One to eight disks; names unique within the VM.&quot;
+    },
+    &quot;nics&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/VMNIC&quot;
+      },
+      &quot;maxItems&quot;: 8,
+      &quot;description&quot;: &quot;Zero to eight network interfaces.&quot;
+    },
+    &quot;boot&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/VMBoot&quot;
+    },
+    &quot;media_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Install ISO (Media.id), empty for none. The ISO must reside on a storage target this VM uses, and is required when boot.media_boot_order is non-zero.&quot;
+    },
+    &quot;start_after_create&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Honoured by the host inside the creation, after the definition is verified, so the creation itself has succeeded whether or not the flag is set: Core starts the guest exactly once and records the outcome in the journal entry&#x27;s start field. A failed automatic start leaves the VM defined and stopped as a normal managed VM (power, console and media work; a replacement Controller adopts it) and is reported by the host as its own outcome with ID &lt;operation-id&gt;:start, kind vm-power, status failed and error &#x27;VM created but not started: &lt;reason&gt;&#x27;, which Controller records in Task history. A creation interrupted at the start step reconciles by observing libvirt: running means started, otherwise that outcome reads &#x27;interrupted before the automatic start completed&#x27;. A failed or uncertain creation never boots. Controller issues no follow-on power request. Must be false in an edit.&quot;
+    },
+    &quot;autostart&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;libvirt autostart, set while the stopped guest is defined so the host starts this VM on boot. It is not a start.&quot;
+    },
+    &quot;revision&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;Definition revision: 0 at creation, current + 1 for each edit. Core refuses any other value, so a stale edit after Controller replacement fails instead of applying an old definition. Reported back in Inventory.managed.vms with the current definition.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;name&quot;,
+    &quot;description&quot;,
+    &quot;guest_os&quot;,
+    &quot;cpu&quot;,
+    &quot;memory&quot;,
+    &quot;disks&quot;,
+    &quot;nics&quot;,
+    &quot;boot&quot;,
+    &quot;media_id&quot;,
+    &quot;start_after_create&quot;,
+    &quot;autostart&quot;,
+    &quot;revision&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.VMCreateSpec&quot;,
+  &quot;description&quot;: &quot;The complete VM specification: Controller-assigned UUID and pool membership with separate host assignment, identity, CPU, memory, every disk and network interface, boot and install media, and the two lifecycle switches. Creation defines a stopped VM and never boots it. Dependencies must have succeeded on this host and pool. Both sides validate the shared bounds through protocol.ValidateVMSpec; Controller owns identity, reference existence, pool-wide MAC uniqueness and capacity.&quot;
+}</pre></details>
+<details id="VMDisk"><summary>VMDisk</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;storage_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1,
+      &quot;description&quot;: &quot;Registered storage that has succeeded on this VM&#x27;s host and pool. Core resolves it by resource ID, not by pool/host ID, so it survives Controller replacement.&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$&quot;,
+      &quot;description&quot;: &quot;Operator-facing disk name, unique within the VM. Letters, digits, dot, dash and underscore, starting with a letter or digit; it is not a path.&quot;
+    },
+    &quot;size_gib&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1,
+      &quot;maximum&quot;: 2048
+    },
+    &quot;bus&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;virtio&quot;,
+        &quot;sata&quot;,
+        &quot;scsi&quot;
+      ],
+      &quot;description&quot;: &quot;virtio needs guest drivers (built into Linux, virtio-win on Windows); sata and scsi work without them.&quot;
+    },
+    &quot;thin&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;true creates a sparse qcow2 that grows on use; false preallocates the full size.&quot;
+    },
+    &quot;boot_order&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;0 keeps the disk out of the boot order. Non-zero values are unique across every disk and boot.media_boot_order and number the boot devices from 1 with no gaps.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;storage_id&quot;,
+    &quot;name&quot;,
+    &quot;size_gib&quot;,
+    &quot;bus&quot;,
+    &quot;thin&quot;,
+    &quot;boot_order&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.VMDisk&quot;,
+  &quot;description&quot;: &quot;One virtual disk, created inside the VM&#x27;s own exclusive directory on its storage target. Disks are never shared or reused: Core checks exclusive ownership for every disk and free space per storage target, summing the disks that land on the same target.&quot;
+}</pre></details>
+<details id="VMMemory"><summary>VMMemory</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;mode&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;dedicated&quot;,
+        &quot;maximum&quot;
+      ],
+      &quot;description&quot;: &quot;dedicated preallocates and locks the ceiling in host RAM while running: memory and currentMemory at size_mib, no balloon, and memoryBacking with immediate allocation, locked and nosharepages. Stopped VMs release physical RAM but retain their Nex capacity commitment. QEMU overhead is locked too. Requires updated Core; existing VMs need full shutdown, a successful stopped vm-update save and start. Legacy dedicated live edits fail before device effects with a stop-and-save instruction. Upgrade, autostart or guest reboot alone does not rewrite old definitions. maximum caps without reserving: the same ceiling plus a virtio balloon with free page reporting, so the guest returns pages it frees. Reclaim requires the balloon driver running in the guest (built into Linux; virtio-win guest tools on Windows); without it the guest drifts to the ceiling and holds it. There is no pressure-driven reclaim daemon.&quot;
+    },
+    &quot;size_mib&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 512,
+      &quot;maximum&quot;: 262144,
+      &quot;description&quot;: &quot;Memory ceiling in MiB. Both sides require at least 512; Controller caps the request at 262144.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;mode&quot;,
+    &quot;size_mib&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.VMMemory&quot;,
+  &quot;description&quot;: &quot;Memory ceiling and how the host treats it. size_mib is the ceiling in both modes and host capacity preflight uses that ceiling in both modes: a VM that cannot reach its ceiling is refused. dedicated additionally counts against committed capacity; maximum reserves nothing and is allowed to oversubscribe.&quot;
+}</pre></details>
+<details id="VMNIC"><summary>VMNIC</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;network_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1,
+      &quot;description&quot;: &quot;Registered network that has succeeded on this VM&#x27;s host and pool, resolved by resource ID.&quot;
+    },
+    &quot;model&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;virtio&quot;,
+        &quot;e1000&quot;,
+        &quot;e1000e&quot;,
+        &quot;rtl8139&quot;,
+        &quot;vmxnet3&quot;
+      ],
+      &quot;description&quot;: &quot;Which network card the guest sees. virtio is paravirtualised: fastest and lowest host CPU, but the guest needs a driver (built into Linux, virtio-win on Windows). e1000 and e1000e emulate Intel gigabit cards nearly every OS already drives, for guests and installers that cannot see a virtio adapter, at higher host CPU. rtl8139 emulates a 100 Mbit card for guests too old for a gigabit driver; the limit is the emulated hardware. vmxnet3 is VMware&#x27;s paravirtualised adapter, for guests already carrying VMware drivers.&quot;
+    },
+    &quot;mac&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^(([0-9a-f][02468ace])(:[0-9a-f]{2}){5})?$&quot;,
+      &quot;description&quot;: &quot;Empty derives a stable MAC from the VM ID and the interface index (protocol.DerivedMAC: the 52:54:00 locally administered prefix, two octets of sha256(id) and the index), which never collides across a VM&#x27;s at most 8 interfaces. A manual address must be six octets in canonical lower-case colon form and unicast; the pattern encodes the cleared multicast bit as an even second hex digit. All-zero addresses are refused, addresses are unique within the VM, and Controller additionally enforces uniqueness across the pool by plain string comparison. The VM list reports the effective address, and an edit freezes every automatic address into the definition (drawn from the VM&#x27;s derived range at the first index the VM does not use), so interfaces keep their identity across later edits.&quot;
+    },
+    &quot;mtu&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1280,
+      &quot;maximum&quot;: 9216,
+      &quot;description&quot;: &quot;Interface MTU, or 0 for the network&#x27;s own. Accepted only when model is virtio: QEMU communicates an MTU to the guest through virtio&#x27;s host_mtu feature and libvirt sizes the host tap to match, while the emulated models have no equivalent and would leave the guest on its own default. A value on any other model is refused rather than silently applied to the host side only. The floor is the IPv6 minimum MTU and the ceiling the largest jumbo frame common NICs accept; every device along the path must agree or traffic is dropped without an error.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;network_id&quot;,
+    &quot;model&quot;,
+    &quot;mac&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.VMNIC&quot;,
+  &quot;description&quot;: &quot;One virtual network interface on a registered pool network. A VM may have none and at most 8.&quot;
+}</pre></details>
+<details id="VMUpdateEvidence"><summary>VMUpdateEvidence</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Untagged Go struct: JSON members use Go field names.&quot;,
+  &quot;properties&quot;: {
+    &quot;OperationID&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;Status&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;Previous&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/VMCreateSpec&quot;
+    },
+    &quot;Current&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/VMCreateSpec&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;OperationID&quot;,
+    &quot;Status&quot;,
+    &quot;Previous&quot;,
+    &quot;Current&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;vmhost.VMUpdateEvidence&quot;
+}</pre></details>
+<details id="ZFSStorageIdentity"><summary>ZFSStorageIdentity</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;pool_guid&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;dataset_guid&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;pool_guid&quot;,
+    &quot;dataset_guid&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSStorageIdentity&quot;
+}</pre></details>
+<details id="ZFSStorageSource"><summary>ZFSStorageSource</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;pool&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;dataset&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;mount_path&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Original existing ZFS dataset mount path. It rejects Unicode whitespace/control characters, percent and backslash because Core uses it as a systemd What value.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;pool&quot;,
+    &quot;dataset&quot;,
+    &quot;mount_path&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSStorageSource&quot;
+}</pre></details>
+</section></main></html>

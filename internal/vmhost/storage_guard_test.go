@@ -81,6 +81,55 @@ func TestStorageStartupDiskRefusesAliases(t *testing.T) {
 	}
 }
 
+func TestPoolVMStartPermitIsSingleUse(t *testing.T) {
+	state := t.TempDir()
+	const vm = "11111111-1111-4111-8111-111111111111"
+	if err := consumePoolVMStartPermit(state, vm); err == nil {
+		t.Fatal("shared VM started without a Core permit")
+	}
+	if err := WritePoolVMStartPermit(state, vm, strings.Repeat("a", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if err := consumePoolVMStartPermit(state, vm); err != nil {
+		t.Fatal(err)
+	}
+	if err := consumePoolVMStartPermit(state, vm); err == nil {
+		t.Fatal("stale permit admitted a second local/autostart execution")
+	}
+	if err := WritePoolVMStartPermit(state, vm, strings.Repeat("b", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(poolVMStartPermitPath(state, vm), []byte(`{"VMID":"`+vm+`","Permit":"`+strings.Repeat("b", 64)+`","BootID":"11111111-1111-4111-8111-111111111111"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := consumePoolVMStartPermit(state, vm); err == nil {
+		t.Fatal("permit from another boot was admitted")
+	}
+}
+
+func TestPoolVMStartPermitRejectsSameBootStaleEpoch(t *testing.T) {
+	state := t.TempDir()
+	const vm = "11111111-1111-4111-8111-111111111111"
+	if err := WritePoolVMStartPermitAdmission(state, "pool-1", "host-a", vm, 1, strings.Repeat("a", 64)); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := os.ReadFile(poolVMStartPermitPath(state, vm))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WritePoolVMStartPermitAdmission(state, "pool-1", "host-a", vm, 2, strings.Repeat("b", 64)); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a same-boot process crash restoring an older private permit after
+	// the master has issued a newer epoch.  The current admission record wins.
+	if err := os.WriteFile(poolVMStartPermitPath(state, vm), stale, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := consumePoolVMStartPermit(state, vm); err == nil {
+		t.Fatal("same-boot stale epoch permit was admitted")
+	}
+}
+
 func TestStorageGuardPreservesIndependentApplianceWithoutJournal(t *testing.T) {
 	ctx := context.Background()
 	state := t.TempDir()

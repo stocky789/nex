@@ -241,17 +241,249 @@ func TestEnrollWithReplacementController(t *testing.T) {
 		t.Fatalf("host did not generate its own identity: %+v", s.State)
 	}
 	s.State.Journal["op-old"] = JournalEntry{Status: "pending"}
+	s.State.StorageClusterProtocolReady = true
+	s.State.StorageClusterSessionMonitorProtocolReady = true
 	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", host); err == nil {
 		t.Fatal("replace-host accepted against a different Controller")
 	}
 	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", ""); err != nil {
 		t.Fatal("switching Controller refused:", err)
 	}
-	if s.State.HostID != host || s.State.PoolID != pool || s.State.PoolName != poolName || s.State.Controller != second.URL || s.State.TrustPEM != secondTrust || s.State.KeyPEM == oldKey || len(s.State.Journal) != 0 {
+	if s.State.HostID != host || s.State.PoolID != pool || s.State.PoolName != poolName || s.State.Controller != second.URL || s.State.TrustPEM != secondTrust || s.State.KeyPEM == oldKey || len(s.State.Journal) != 0 || s.State.StorageClusterProtocolReady || s.State.StorageClusterSessionMonitorProtocolReady {
 		t.Fatalf("replacement did not keep identity with a fresh credential: %+v", s.State)
 	}
 	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", ""); err == nil {
 		t.Fatal("duplicate enrollment with the same Controller accepted")
+	}
+}
+
+// A replacement response can be lost after the new Controller has accepted the
+// CSR.  The active Controller identity must stay usable on disk while the new
+// CSR remains pending, so retrying the exact request neither creates a hybrid
+// credential nor a second remote identity.
+func TestReplacementEnrollmentLostResponseKeepsActiveCredentialAndRetries(t *testing.T) {
+	first, firstTrust := issuingController(t, "")
+	s := testStore(t)
+	if err := Enroll(context.Background(), s, first.URL, firstTrust, "first-token", ""); err != nil {
+		t.Fatal(err)
+	}
+	oldController, oldTrust := s.State.Controller, s.State.TrustPEM
+	oldKey, oldCSR, oldCertificate := s.State.KeyPEM, s.State.CSRPEM, s.State.CertificatePEM
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca := &x509.Certificate{SerialNumber: big.NewInt(31), Subject: pkix.Name{CommonName: "replacement CA"}, IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour)}
+	caDER, err := x509.CreateCertificate(rand.Reader, ca, ca, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}))
+	calls := 0
+	var firstRequest protocol.EnrollRequest
+	second := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.EnrollRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+			return
+		}
+		calls++
+		if calls == 1 {
+			firstRequest = req
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			conn.Close()
+			return
+		}
+		if req != firstRequest {
+			t.Errorf("replacement retry changed request: %+v != %+v", req, firstRequest)
+		}
+		block, _ := pem.Decode([]byte(req.CSRPEM))
+		csr, err := x509.ParseCertificateRequest(block.Bytes)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		cert := &x509.Certificate{SerialNumber: big.NewInt(32), Subject: pkix.Name{CommonName: req.HostID}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, KeyUsage: x509.KeyUsageDigitalSignature}
+		der, err := x509.CreateCertificate(rand.Reader, cert, ca, csr.PublicKey, caKey)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		json.NewEncoder(w).Encode(protocol.EnrollResponse{HostID: req.HostID, PoolID: req.PoolID, PoolName: req.PoolName, CertificatePEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), CAPEM: caPEM})
+	}))
+	defer second.Close()
+	secondTrust := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: second.Certificate().Raw}))
+
+	if err := Enroll(context.Background(), s, second.URL, secondTrust, "replacement-token", ""); err == nil {
+		t.Fatal("lost replacement response accepted")
+	}
+	if s.State.Controller != oldController || s.State.TrustPEM != oldTrust || s.State.KeyPEM != oldKey || s.State.CSRPEM != oldCSR || s.State.CertificatePEM != oldCertificate || s.State.PendingKeyPEM == "" || s.State.PendingCSRPEM == "" {
+		t.Fatal("replacement failure left a hybrid active credential")
+	}
+	dir := s.dir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if s.State.Controller != oldController || s.State.TrustPEM != oldTrust || s.State.KeyPEM != oldKey || s.State.CertificatePEM != oldCertificate || s.State.PendingKeyPEM == "" {
+		t.Fatal("replacement failure was not durable")
+	}
+	if err := Enroll(context.Background(), s, second.URL, secondTrust, "replacement-token", ""); err != nil {
+		t.Fatalf("replacement retry failed: %v", err)
+	}
+	if calls != 2 || s.State.Controller != second.URL || s.State.TrustPEM != secondTrust || s.State.KeyPEM == oldKey || s.State.PendingKeyPEM != "" || s.State.PendingCSRPEM != "" {
+		t.Fatal("replacement retry did not atomically accept pending credential")
+	}
+}
+
+// A failed pre-publication save must not leave a generated replacement CSR in
+// memory only. The next in-process attempt must first save that exact pending
+// identity, so a lost response remains retryable after a restart.
+func TestReplacementEnrollmentPrePublishFailureDoesNotLeakUnsavedPendingCSR(t *testing.T) {
+	first, firstTrust := issuingController(t, "")
+	s := testStore(t)
+	if err := Enroll(context.Background(), s, first.URL, firstTrust, "first-token", ""); err != nil {
+		t.Fatal(err)
+	}
+	oldController, oldTrust := s.State.Controller, s.State.TrustPEM
+	calls := 0
+	var request protocol.EnrollRequest
+	second := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		conn.Close()
+	}))
+	defer second.Close()
+	secondTrust := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: second.Certificate().Raw}))
+
+	s.beforePublish = func() error { return errors.New("injected pre-publication failure") }
+	if err := Enroll(context.Background(), s, second.URL, secondTrust, "replacement-token", ""); err == nil {
+		t.Fatal("pre-publication failure accepted")
+	}
+	if calls != 0 || s.State.Controller != oldController || s.State.TrustPEM != oldTrust || s.State.PendingKeyPEM != "" || s.State.PendingCSRPEM != "" {
+		t.Fatal("pre-publication failure leaked an unsaved replacement attempt")
+	}
+
+	s.beforePublish = nil
+	if err := Enroll(context.Background(), s, second.URL, secondTrust, "replacement-token", ""); err == nil {
+		t.Fatal("lost replacement response accepted")
+	}
+	if calls != 1 || request.CSRPEM == "" || request.CSRPEM != s.State.PendingCSRPEM || s.State.Controller != oldController || s.State.TrustPEM != oldTrust {
+		t.Fatal("same-process retry did not persist the exact pending replacement identity")
+	}
+	pending := s.State.PendingCSRPEM
+	dir := s.dir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if reopened.State.PendingCSRPEM != pending || reopened.State.PendingKeyPEM == "" || reopened.State.Controller != oldController || reopened.State.TrustPEM != oldTrust {
+		t.Fatal("restart did not preserve the exact retry identity")
+	}
+}
+
+func TestReplacementAcceptPublishedSaveFailureKeepsPublishedStateForReconciliation(t *testing.T) {
+	first, firstTrust := issuingController(t, "")
+	s := testStore(t)
+	if err := Enroll(context.Background(), s, first.URL, firstTrust, "first-token", ""); err != nil {
+		t.Fatal(err)
+	}
+	oldController, oldTrust, oldKey, oldCertificate := s.State.Controller, s.State.TrustPEM, s.State.KeyPEM, s.State.CertificatePEM
+	key, csr, err := newKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.State.PendingKeyPEM, s.State.PendingCSRPEM = key, csr
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca := &x509.Certificate{SerialNumber: big.NewInt(41), Subject: pkix.Name{CommonName: "replacement CA"}, IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour)}
+	caDER, err := x509.CreateCertificate(rand.Reader, ca, ca, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode([]byte(csr))
+	request, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := &x509.Certificate{SerialNumber: big.NewInt(42), Subject: pkix.Name{CommonName: s.State.HostID}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, KeyUsage: x509.KeyUsageDigitalSignature}
+	der, err := x509.CreateCertificate(rand.Reader, certificate, ca, request.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}))
+	response := protocol.EnrollResponse{HostID: s.State.HostID, PoolID: s.State.PoolID, PoolName: s.State.PoolName, CertificatePEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), CAPEM: caPEM}
+	s.afterPublish = func() error { return errors.New("injected directory sync failure") }
+	err = acceptIdentity(s, response, key, csr, "https://replacement.example", caPEM, "", true)
+	if err == nil {
+		t.Fatal("replacement acceptance hid a final state save failure")
+	}
+	if !stateWasPublished(err) {
+		t.Fatal("post-rename failure was not classified as published")
+	}
+	if s.State.Controller == oldController || s.State.TrustPEM == oldTrust || s.State.KeyPEM == oldKey || s.State.CertificatePEM == oldCertificate || s.State.PendingKeyPEM != "" || s.State.PendingCSRPEM != "" {
+		t.Fatal("post-rename failure did not retain the published replacement state")
+	}
+	dir := s.dir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if reopened.State.Controller != s.State.Controller || reopened.State.TrustPEM != s.State.TrustPEM || reopened.State.KeyPEM != s.State.KeyPEM || reopened.State.CertificatePEM != s.State.CertificatePEM || reopened.State.PendingKeyPEM != "" || reopened.State.PendingCSRPEM != "" {
+		t.Fatal("post-rename failure left memory and durable state inconsistent")
+	}
+}
+
+func TestReplacementMalformedResponseDoesNotMutateJournalOrProtocolState(t *testing.T) {
+	first, firstTrust := issuingController(t, "")
+	s := testStore(t)
+	if err := Enroll(context.Background(), s, first.URL, firstTrust, "first-token", ""); err != nil {
+		t.Fatal(err)
+	}
+	s.State.Journal["managed"] = JournalEntry{Command: &protocol.Command{Kind: "refresh-inventory"}, Status: "succeeded", Acknowledged: false}
+	s.State.Journal["local"] = JournalEntry{Status: "pending"}
+	s.State.StorageProtocolReady = true
+	s.State.StorageClusterProtocolReady = true
+	s.State.StorageClusterSessionMonitorProtocolReady = true
+	key, csr, err := newKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = acceptIdentity(s, protocol.EnrollResponse{HostID: s.State.HostID, PoolID: s.State.PoolID, PoolName: s.State.PoolName, CertificatePEM: "malformed"}, key, csr, "https://replacement.example", "replacement trust", "", true)
+	if err == nil {
+		t.Fatal("malformed replacement response accepted")
+	}
+	if len(s.State.Journal) != 2 || s.State.Journal["managed"].Acknowledged || s.State.Journal["local"].Status != "pending" || !s.State.StorageProtocolReady || !s.State.StorageClusterProtocolReady || !s.State.StorageClusterSessionMonitorProtocolReady {
+		t.Fatal("malformed replacement response mutated active journal or protocol state")
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"nex.local/nex/internal/agent"
@@ -18,6 +19,18 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "cluster-iscsi-session" {
+		if err := runClusterISCSISession(os.Args[2:], os.Geteuid()); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "cluster-storage-ready" {
+		if err := runClusterStorageReady(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "storage-guard" {
 		flags := flag.NewFlagSet("storage-guard", flag.ExitOnError)
 		dir := flags.String("state-dir", "/var/lib/nex-core-agent", "private agent identity and journal directory")
@@ -102,4 +115,59 @@ func main() {
 	if err = server.ListenAndServeTLS(cert, key); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+var (
+	storageISCSISessionParameters = vmhost.StorageISCSISessionParameters
+	validateStorageISCSISession   = vmhost.ValidateStorageISCSISession
+)
+
+// runClusterISCSISession is the root-only, no-mutation OCF probe entry point.
+func runClusterISCSISession(args []string, euid int) error {
+	flags := flag.NewFlagSet("cluster-iscsi-session", flag.ContinueOnError)
+	portal := flags.String("portal", "", "canonical iSCSI portal")
+	target := flags.String("target", "", "exact iSCSI target IQN")
+	sessionID := flags.String("session-id", "", "Nex iSCSI session monitor identity")
+	validateOnly := flags.Bool("validate-only", false, "validate static monitor parameters without querying iSCSI")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("cluster-iscsi-session accepts no positional arguments")
+	}
+	if euid != 0 {
+		return fmt.Errorf("cluster-iscsi-session requires root")
+	}
+	canonicalPortal, wantID, err := storageISCSISessionParameters(*portal, *target)
+	if err != nil {
+		return fmt.Errorf("invalid iSCSI session parameters: %w", err)
+	}
+	if *portal != canonicalPortal {
+		return fmt.Errorf("iSCSI portal is not canonical")
+	}
+	if *sessionID != wantID {
+		return fmt.Errorf("iSCSI session identity does not match target and portal")
+	}
+	if *validateOnly {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	return validateStorageISCSISession(ctx, *portal, *target, *sessionID)
+}
+
+func runClusterStorageReady(args []string) error {
+	flags := flag.NewFlagSet("cluster-storage-ready", flag.ContinueOnError)
+	dir := flags.String("state-dir", "/var/lib/nex-core-agent", "private agent state directory")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("cluster-storage-ready accepts no positional arguments")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	// The embedded agent may already own this state directory. The gate
+	// intentionally reads a stable private snapshot without taking its lock.
+	return agent.ClusterStorageBootReadyFromDir(ctx, *dir)
 }

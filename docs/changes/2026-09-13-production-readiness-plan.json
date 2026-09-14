@@ -1,0 +1,9 @@
+{
+  "summary": "Record the requested production-readiness follow-up without granting unsupported sign-off. API impact: none; this is an acceptance inventory, not a runtime contract change.",
+  "paths": ["docs/plans/2026-09-12-concurrent-pool-storage.md", "docs/qa/2026-09-12-concurrent-pool-storage.md", "docs/BUG_LEDGER.md"],
+  "guide": {"impact": "none", "reason": "No operator workflow is introduced or changed by the gate inventory.", "pages": []},
+  "api": {"impact": "none", "reason": "Planning only; no Controller operation, Core command, result or client-facing API changes.", "pages": []},
+  "roadmap": {"impact": "none", "reason": "No milestone is completed or added; this enumerates the existing outstanding acceptance obligations.", "pages": []},
+  "state": {"owner": "none", "reason": "The acceptance inventory creates no durable product state."},
+  "verification": {"method": "Retained failed outage/replacement/install receipts separately from later accepted checks. Independently reviewed bounded evidence now includes the corrected Controller outage, strict fresh Controller adoption with six writers, task-history browser checks, seventh-ISO full BIOS install/persistence, tenth-ISO artifact/native wizard checks and exact three-Core rollout. Fresh CPU inventory passed; recurring repository deadlines remain visible and unresolved despite verified diagnostic reporting. Full Go race tests and 230 Python tests passed. Documentation and repository privacy checks passed. No production, physical hardware, hosted CI, unexecuted failure-matrix or full tenth-ISO installation sign-off was granted.", "evidence": ["docs/plans/2026-09-12-concurrent-pool-storage.md", "docs/qa/2026-09-12-concurrent-pool-storage.md"]}
+}

@@ -85,6 +85,17 @@ and transient host discovery; existing inventory carries automatic ISO registrat
 reasons. **Guide impact: updated** — delivered workflows and executed evidence are recorded in
 the storage, pool-join and Controller guides; outstanding checks stay explicitly open.
 
+**Concurrent storage priority, 2026-09-12:** project owner authorized implementation
+and a three-to-five-host lab for simultaneous NFS, SMB and iSCSI datastore access,
+with two VMs per host. The [concurrent storage design](2026-09-12-concurrent-pool-storage.md)
+brings forward native clustered-GFS2 iSCSI, required fencing/quorum and master-owned
+VM execution exclusion. Ordinary ext4/XFS iSCSI stays exclusive. Automatic VM HA,
+migration and failback remain separate gates. API impact: **changed/new contracts**
+for cluster setup/status, peer reconciliation, shared profiles and VM admission;
+guide impact: **updated** with implemented workflows and actual evidence before
+acceptance. This authorization is not evidence of working clustered storage; current status
+and open gates: [production-readiness handoff](2026-09-14-production-readiness-handoff.md).
+
 ## Build order: basics first
 
 Each milestone must work end to end before the next one expands the scope. The feature review is a source of follow-on features, not a requirement to build an enterprise feature set before Nex can run a VM.
@@ -341,7 +352,16 @@ Corosync supplies membership/quorum facilities; Pacemaker coordinates resource m
 
 ### Authority and outage rules
 
-Nex Controller holds configured pool membership and desired policy on behalf of the pool master, which persists them; the pool-local cluster layer owns current HA membership, quorum, and exclusive recovery decisions. Controller connectivity is not a quorum vote. The initial controller stays outside pool voting/fencing dependencies so a controller or WAN outage alone does not remove a pool's decision-making authority.
+The active pool master on Nex Core owns and persists pool membership, placement/recovery policy
+and operation decisions; Nex Controller only requests changes and displays Core's observations.
+The pool-local cluster layer supplies quorum, fencing and execution exclusion, and must be
+integrated with the active master as one authority, never a competing scheduler. Members execute
+authorized work, not independent relocation decisions. Controller connectivity is not a quorum
+vote; a Controller or WAN outage alone must not remove the pool's decision-making authority.
+The master is a transferable role, not a permanent dependency on one physical host. Before HA
+can operate through master failure, prove quorum-authorized succession, recovery of its durable
+records, and exclusion of stale-master commands. Without a provably valid master/ownership
+authority, block new starts and transfers and apply the tested no-quorum/self-fencing policy.
 
 Controller outage leaves running guests and established pool-local HA operating. Before HA exists, uncertainty results in alerts and restricted operations, never an automatic failover. With HA enabled, a missing heartbeat alone still cannot authorize a second VM start: the HA authority must establish quorum, required storage/capacity, and successful fencing of an uncertain previous owner.
 
@@ -351,46 +371,18 @@ Define and test no-quorum and fence-failure behavior before enabling HA, includi
 
 ### User guide requirement for every change and phase
 
-**Agreed 2026-09-08:** maintain a [living user guide](../guide/README.md) from the first ISO onward.
-Every change assesses guide and API documentation impact; applicable instructions ship alongside
-the behavior. Follow the [documentation contract and CI checks](../DOCUMENTATION.md). Each feature
-gate includes a walkthrough of its documented workflow against the actual implementation, relevant
-failure/recovery cases, and inspected evidence. Label simulations and untested limits honestly.
-Changed and removed features update existing instructions; internal changes may record no impact
-with a reason. Documentation and walkthrough work cannot be deferred to the final development phase.
-
-The source is portable Markdown with consistent page sections and navigation so a future website
-can render the same guide. Begin with current installer/host workflows; add Controller GUI, pools,
-VMs, protection, migrations, HA, and Docker pages only as those features become available.
-
-GitHub and Gitea workflow files run structural/link checks and diff-based guide/API assessments on
-pushes and PRs. Required branch checks and actual hosted execution must be verified after repository
-and runner setup; local checks do not establish hosted enforcement. CI detects missing records and
-documentation updates, while independent review checks whether applicability and evidence are honest.
-
-**API impact of the guide/CI slice: none** — contributor tooling and user instructions add no runtime
-Controller/Core contract. The existing API reference remains the API source of truth.
+**Agreed 2026-09-08:** maintain a [living user guide](../guide/README.md) from the first ISO onward,
+as portable Markdown a future website can render. Every phase gate includes the guide gate in
+[AGENTS.md](../../AGENTS.md#living-user-guide-and-documentation-gate) and
+[DOCUMENTATION.md](../DOCUMENTATION.md). Hosted enforcement of the documentation CI checks
+must be verified after repository and runner setup. API impact: none.
 
 ### API requirement for every change and phase
 
-**Agreed 2026-09-08:** every change must include the [required API impact check](../../AGENTS.md#required-api-impact-check)
-to determine whether Nex Controller and Nex Core need a new or changed interface, including commands,
-observations, results, and the client-facing API. Record `API impact: none | existing contract | changed contract | new contract`
-and the reason in each change summary and affected plan. Reuse existing contracts where sufficient.
-
-The [living API reference](../API.md) starts now and must grow with every implemented API call,
-function/command, event, and stream. Phase 1 must deliver version-controlled OpenAPI descriptions for
-HTTP APIs and a browsable reference generated from those descriptions, plus protocol documentation for
-agent messages and streams. Keep reference and implementation synchronized in the same change, with
-contract validation and coverage checks introduced alongside the first API. Do not defer this to Phase 8.
-
-Every phase gate additionally requires its API impact decision, both sides of required Controller/Core
-changes, compatibility and failure/recovery checks, and updated reference evidence. No-impact changes
-record why and run only relevant checks. Later phases extend the same reference as their APIs arrive.
-
-**API impact of this documentation change: none** — establishes contribution and delivery requirements;
-the current standalone installer has no implemented Nex Controller/Core API to alter. No runtime API
-tests apply. The generated API website remains a Phase 1 deliverable, not a claim of current functionality.
+**Agreed 2026-09-08:** every change and phase gate applies the
+[required API impact check](../../AGENTS.md#required-api-impact-check) and keeps the
+[living API reference](../API.md) current. Phase 1 delivers the OpenAPI descriptions, generated
+browsable reference and agent protocol documentation; later phases extend them. API impact: none.
 
 ### 0. Prove the supported host baseline
 
@@ -591,6 +583,14 @@ All these gates remain outstanding until implemented and executed.
 
 Snapshots are rollback points on the underlying storage and do not protect against losing that storage. Memory snapshots remain a later explicit capability; disk rollback is the initial guarantee. [Libvirt snapshot semantics](https://libvirt.org/formatsnapshot.html)
 
+**Technology coverage, project owner requirement, 2026-09-12:** VM disk snapshots must not
+require ZFS or Btrfs. Validate QEMU/libvirt qcow2 overlay-based snapshot lifecycles on eligible
+local, NFS, SMB and exclusive-host iSCSI-backed filesystem repositories; publish a disk-format,
+backend and installed-version capability matrix rather than assuming all combinations work.
+Disk-only, guest-quiesced and future memory snapshots are distinct capabilities. Storage-native
+ZFS/Btrfs snapshots are a separate later integration, described below; registering one of these
+filesystems today does not enable that integration.
+
 ### 6. Backups, scheduling, and restoration
 
 1. Add pool-level backup repositories, initially an external NFS-backed filesystem in a separate failure domain from primary VM storage. Separate repository credentials and permissions from guest access.
@@ -611,6 +611,71 @@ Snapshots are rollback points on the underlying storage and do not protect again
 
 **Gate:** back up a guest, make its original disks unavailable, restore to another compatible host/storage, boot it on an isolated network, and verify files/application data. Test corrupted/missing backups, full repository, interrupted jobs, retention, lost controller database, and snapshot-plus-backup interactions. Measure actual backup/restore time before promising RPO/RTO.
 
+#### Changed-block tracking and incremental backup follow-on
+
+**Agreed 2026-09-12; planned after verified full backup/restore, not in the first supported
+release.** Make changed-block tracking (CBT) explicit rather than treating it as an implied
+property of ZFS/Btrfs. Use libvirt disk checkpoints and QEMU dirty bitmaps to identify changed
+VM disk regions for incremental backups. Validate persistent qcow2 bitmaps and distinguish
+raw/transient tracking limits on the installed versions; neither an existing qcow2 image nor
+a snapshot means tracking was enabled or remains trustworthy.
+[QEMU dirty bitmaps](https://www.qemu.org/docs/master/interop/bitmaps.html),
+[libvirt incremental backup handling](https://www.libvirt.org/kbase/internals/incremental-backup.html).
+
+- Establish a verified full baseline, then publish validated incremental data and manifests
+  that identify their exact baseline, dependencies, disks and matching VM/firmware state.
+  Restores must depend only on retained backup material, not the original running VM or its
+  snapshot chain. Retention must protect every ancestor needed by a retained recovery point.
+- Track bitmap/checkpoint validity across backup failure, Core/QEMU restart, crash, disk resize,
+  snapshot/revert/consolidation, migration, HA and failback. Preserve continuity only where proven;
+  if tracking is absent, inconsistent or otherwise untrustworthy, block the incremental attempt
+  and establish a new full baseline with an explained operator-visible result. Never silently
+  interpret lost tracking as “nothing changed” or discard the last usable backup chain.
+- Keep bitmap/checkpoint manipulation on Core, under the active master's VM/disk ownership and
+  serialization rules. Preserve the existing explicit Controller backup-job scheduling/catalog
+  exception; it does not authorize Controller to manipulate host bitmaps or become an HA owner.
+  Recovery manifests and required keys must remain usable after loss of the original Core and
+  Controller catalog, following the existing catalog rebuild and key-custody requirements.
+- Present full/incremental selection, supported combinations, last successful backup and last
+  tested restore clearly. Discover safe defaults and explain any full-baseline fallback, missing
+  chain dependency or incompatible disk; do not expose bitmap identifiers as routine user input.
+
+**Acceptance — outstanding:** perform full plus multiple incremental backups of a multi-disk
+guest with identifiable writes, deletes and discards; restore selected recovery points on a
+clean host after making original disks and the Controller catalog unavailable. Verify disk and
+guest/application data, configuration and firmware state. Exercise corrupt/missing increments,
+retention/pruning, full repository, interrupted publication and the bitmap lifecycle events
+above, proving either correct continuity or safe full-baseline fallback. Require independent
+safety review, runnable regressions in both CI providers and native restore evidence per supported
+format/backend/version; a small transfer or successful backup task alone is not acceptance.
+
+#### Storage-native snapshot integration follow-on
+
+**Later, separately validated profiles:** include ZFS dataset/zvol and Btrfs subvolume snapshots
+in the roadmap alongside QEMU VM snapshots. Assess native send/receive for subsequent incremental
+off-host copies where supported; this is not the same mechanism as QEMU CBT and does not replace
+the full VM recovery manifest. The current storage-registration slice still does not create or
+alter ZFS pools/datasets or manage native snapshot lifecycles.
+[OpenZFS snapshots](https://openzfs.github.io/openzfs-docs/Basic%20Concepts/Datasets/Snapshots%20and%20Clones.html),
+[Btrfs subvolumes](https://btrfs.readthedocs.io/en/latest/Subvolumes.html).
+
+Before enabling native operations, define explicitly managed storage scope and protect unrelated
+data; a storage snapshot may cover multiple VMs, while nested Btrfs subvolumes are not captured
+recursively. Coordinate all VM disks, metadata and required guest quiescing; expose honest
+crash-consistent versus application-consistent limits. Do not assume access through NFS/SMB
+grants control over a remote NAS's snapshot APIs. Validate create/revert/delete, space exhaustion,
+retention dependencies, interrupted operations and clean-host restoration; test native transfer
+interruption and source loss before advertising send/receive protection. No native integration
+may bypass VM ownership, fencing or snapshot/backup concurrency checks.
+
+**API impact of these roadmap additions: none; guide impact: none** — no runtime capability
+changes. **Planned API impact: new/changed contracts** for snapshot/checkpoint capabilities,
+backup lifecycle requests and Core-reported validity/results: UI → Controller authorization/job
+orchestration within the existing backup exception → master-authorized Core disk work → durable
+Core observations and backup manifests. Specify permission/scope validation, failure/retry,
+cancellation, concurrency, reconnect and version compatibility on both sides; update API schemas,
+reference and runnable negative-path tests plus the operator guide in each implementation slice.
+
 ### 7. Migration and host maintenance
 
 Live migration over shared pool storage is part of the first supported release, not dependent on Ceph or HA. Shared disk access is necessary for this initial migration path, but CPU, networking, firmware, and runtime compatibility must also pass validation.
@@ -621,9 +686,136 @@ Live migration over shared pool storage is part of the first supported release, 
 4. Implement host evacuation using those same operations. Prevent migration during conflicting snapshot, backup, restore, or disk-consolidation work.
 5. Preserve VM UUID, pool ownership, disk references, and supported snapshot history. Reject unsupported combinations with an actionable reason.
 
+The active pool master owns the durable relocation decision and coordinates source/destination
+Core work; Controller loss must not interrupt an accepted move. Serialize migration, manual
+recovery and later HA/failback against the same VM ownership record. After an ambiguous cutover,
+reconcile both sides before another move or start; do not assume either success or rollback from
+a timeout. Return moves use the current authoritative disks, backing chains and firmware state,
+never an older copy left on the original host. HA restart after host death is a cold boot with
+possible guest/application recovery, not live migration or guaranteed uninterrupted service.
+
 **Gate:** migrate while a guest workload writes data; verify continuity and exactly one active execution owner. Disconnect the migration/control network mid-transfer and recover. Drain, reboot, and return a host to service.
 
 [Libvirt migration requirements and transports](https://libvirt.org/migration.html)
+
+#### Manual recovery after permanent host loss
+
+**Agreed with project owner, 2026-09-12; planned, not implemented.** An operator must be
+able to install a replacement Nex Core, connect it to the surviving pool/network storage,
+select recoverable VMs left by a permanently failed host, and boot them without recreating
+their configuration or restoring intact disks from backup. This is an explicit Phase 7
+recovery workflow and Phase 8 release rehearsal, independent of optional automatic HA.
+Phase 4 supplies pool authority, storage access and execution-ownership prerequisites.
+NFS, SMB and exclusive-host iSCSI each require their own passing recovery gate; current
+storage discovery or pool join does not provide this capability.
+
+1. **Preserve recoverable VMs before failure.** Core must publish a versioned, integrity-checked
+   recovery record with the surviving network storage, containing stable pool/VM identities,
+   VM configuration, all disk references and backing-chain relationships, network mappings,
+   and required firmware/NVRAM and supported vTPM state. Protect sensitive material with
+   authenticated access and recoverable key custody outside the failed host. Specify atomic
+   publication, configuration/data consistency, freshness and schema compatibility before
+   implementation. Disk files alone are not complete recoverable VMs; missing, stale or
+   unsupported state must be identified and block unsafe boot rather than guessed.
+2. **Recover pool authority, including master loss.** Cover failure of a member, the master,
+   and the only Core in a pool. A replacement Core gets its own host identity and recovers
+   the original pool identity and accepted VM identities from trusted Core-owned recovery
+   records. The master journal remains authoritative during normal operation; recover its
+   pool configuration, membership, storage registrations and credential custody from a
+   protected surviving recovery record before accepting mutations. The recovery design must
+   define authority transfer, freshness/rollback protection and exclusion of a returning old
+   master; neither an empty Controller database nor a live old Core may be prerequisites.
+   Do not turn recovery into ordinary creation of a second pool or a second VM identity.
+3. **Discover and preflight.** Through Controller, ask Core to inspect explicitly selected
+   storage and show recoverable VMs, their former owner, recovery-record status and blockers.
+   Validate all disks/backing chains, storage identity and permissions, CPU/runtime/firmware,
+   capacity, networking and required device mappings on the replacement. A VM with unavailable
+   local disks or passthrough state is not recovered merely because one disk survives remotely.
+4. **Prove exclusive ownership before boot.** Require explicit VM/target selection and
+   confirmation plus verified fencing or physical/storage isolation of the old execution
+   owner. An unreachable host, missing heartbeat, cleared lock or confirmation checkbox alone
+   is insufficient. Core durably transfers ownership and prevents stale old-host autostart,
+   local-console starts and competing recovery requests. Failed or uncertain exclusion blocks
+   boot; recovery must not introduce a second restart authority alongside later pool HA.
+5. **Handle each storage type safely.** NFS/SMB recovery reuses the surviving files only after
+   per-host identity/access and exclusive-execution checks. iSCSI recovery is a controlled
+   single-writer LUN handover: revoke/exclude the former initiator, verify the LUN/WWID and
+   filesystem identity, then authorize and mount it on the replacement. Never mount an ordinary
+   ext4/XFS LUN on two hosts, format it, or imply that this adds shared-block clustering or SAN
+   provisioning. Target-side isolation prerequisites and supported handover mechanisms must be
+   documented and tested; an unsupported target remains blocked, not silently treated as NFS.
+6. **Adopt, boot and report.** Core records recovered configuration and new host assignment
+   while preserving VM identity, then performs the confirmed boot and reports progress/results.
+   A fresh Controller adopts the same pool/VM records through normal inventory. Operations must
+   resume safely across Core/Controller restarts and lost responses without duplicate adoption
+   or execution. This is crash recovery, not restoration of RAM or a promise of application
+   consistency; show recovery limits and verify guest data after boot. Backups remain necessary
+   for damaged/missing disks and loss of the storage server itself.
+
+**Reliability and operator experience are acceptance requirements, not later polish.**
+Project owner emphasized both on 2026-09-12. Prefer the fewest clear steps that preserve
+all ownership and data-integrity checks; never trade safety for a one-click appearance.
+
+- **Make readiness visible before a failure.** Core reports recovery-record freshness,
+  completeness and missing prerequisites per VM. Show when it was checked, what needs
+  attention and how to correct it; do not label an untested or stale VM “protected”. Preserve
+  the last valid recovery record if publishing its replacement is interrupted.
+- **Guide the operator through one workflow.** Use a clearly named recovery entry point:
+  choose replacement host and storage → browse recognizable VM names and former owners →
+  review automatic checks and required network/device mappings → confirm ownership transfer
+  and boot. Discover and prefill safe values; do not require manual UUIDs, disk paths or VM
+  configuration reconstruction. Keep technical details available without making them the
+  default view. Explain any external NAS, key-recovery or fencing prerequisite before changes
+  begin; Nex must not imply it configured hardware or target access it cannot control.
+- **Explain blockers and consequences in plain language.** For each selected VM, show ready,
+  checking, blocked or unknown based on Core's result, with the specific cause and next action.
+  Identify the old/new host and affected disks at confirmation; state that recovery uses
+  existing data, does not format storage, and cannot preserve the lost guest's memory.
+  Recheck after remediation without making the operator start over or bypass a safety check.
+- **Make interruption unsurprising.** Show real Core-reported stages and per-VM outcomes,
+  not invented progress or blanket success for a partly recovered selection. Closing the
+  browser, refreshing or losing Controller connectivity must not lose accepted work; reconnect
+  to the same durable operation. Clearly distinguish safe retry, resumable work and a state
+  requiring investigation. Explain when cancellation is safe and what has already changed;
+  it must never silently undo a boot or release ownership. Keep secrets out of diagnostics.
+- **Prove reliability and usability together.** Repeat full recovery on each supported backend
+  and interrupt each state-changing stage, including record publication and ownership transfer;
+  verify retained good records, safe resumption, disk integrity and exactly one writable owner.
+  A first-time operator must complete the documented supported workflow without developer
+  coaching, routine Core SSH or hand-editing configuration. Test keyboard navigation, focus,
+  loading/empty/stale/error states and recovery after a corrected blocker. Record completion
+  time, confusing steps, retries and assistance required; fix material usability failures and
+  rerun before acceptance. Report VM boot separately from verified guest/application recovery.
+
+**Planned API impact: new contract** — GUI discovery/preflight/confirm/status → Controller
+administrator authorization and transient relay → authenticated Core recovery and pool-authority
+operations → durable Core outcomes and normal inventory/adoption. Reuse existing storage
+discovery, enrollment and operation contracts only where they cover the semantics; a directory
+listing is not VM adoption. Define scope/identity checks, metadata trust, actionable errors,
+idempotency, concurrent-attempt exclusion, cancellation boundaries, outage/reconnect behavior
+and Controller/Core version compatibility on both sides. Core owns recovery work and its
+durable record; Controller must not retain the only metadata copy or drive the recovery job.
+Update API/reference/contracts and the operator guide with runnable authorization, invalid-input,
+failure/retry and compatibility checks when implementing this slice.
+
+**Acceptance gate — all outstanding:** create a multi-disk guest on each supported NFS, SMB
+and iSCSI profile, write identifiable guest data, then make the original Core and its local
+state unavailable. Install a clean replacement Core and use the GUI to discover, select,
+adopt and boot the VM using surviving network storage and the documented recovery material
+only; no manual reconstruction of VM definitions. Repeat for a dead member, dead pool master
+and sole-host pool, including a fresh Controller with no prior pool inventory. Verify stable
+pool/VM identities, disk chains, firmware/NVRAM, network mapping and guest data. Test missing,
+corrupt, stale and incompatible metadata, missing disks/keys, inaccessible storage, incompatible
+hardware, concurrent recovery attempts, interrupted ownership transfer and Controller outage.
+Attempt a stale old-host/master return and local/autostart execution; prove exactly one writable
+owner and safe refusal on failed fencing. For iSCSI prove old-initiator access is denied before
+new writable access. Inspect GUI success, blocked, permission-denied and recovery states; record
+actual downtime/data integrity, backend limits and independent API/safety review. Do not mark
+the workflow supported until these gates pass; automatic HA remains Phase 9.
+
+**API impact of this planning change: none** — no runtime caller or contract is changed.
+**Guide impact: none** — no recovery control is available yet; this section specifies future
+implementation and verification, not instructions operators can execute today.
 
 #### Cross-site VM migration
 
@@ -674,10 +866,12 @@ cross-site automatic HA are separate, unagreed capabilities.
    follows from merely managing both sites through one Controller.
 
 **Planned API impact: new contract** — browser preflight/submit/status/cancel →
-Controller authorization, reservations and durable ownership transition → scoped
-source/destination Core prepare, transfer, validate, cutover and cleanup commands →
+Controller authorization and relay → source/destination pool masters' durable reservations
+and ownership handover → scoped Core prepare, transfer, validate, cutover and cleanup work →
 observed execution/storage state and resumable operation results. Reuse the Phase 7
-operation contract where it covers this flow; add destination-site/pool mappings and
+operation contract where it covers this flow; the source master coordinates until the
+durable destination-master handover, with no Controller-driven job or competing owner.
+Add destination-site/pool mappings and
 cross-pool ownership semantics together on Controller and Core. Define mutual peer
 authentication, short-lived transfer credentials scoped to the selected VM/disks,
 input/error validation, idempotent retries, cancellation boundaries, reconnect
@@ -704,7 +898,7 @@ operator migration/recovery instructions alongside its implementation.
 
 1. Test populated-host upgrades, controller schema migrations, and a defined controller/agent compatibility window. Keep updates explicitly on `trixie` until a separate major-upgrade path is validated.
 2. Require maintenance/drain or explicit shutdown before disruptive host upgrades. Keep a previous kernel and rescue-console path; do not describe APT as transactional rollback.
-3. Document host replacement/re-enrollment, controller recovery, backup restore, storage loss, and certificate recovery.
+3. Document host replacement/re-enrollment, controller recovery, backup restore, storage loss, and certificate recovery. Rehearse [manual recovery after permanent host loss](#manual-recovery-after-permanent-host-loss), including pool-master loss and replacement-Core adoption/boot from surviving NFS/SMB or exclusively handed-over iSCSI storage; do not substitute a healthy-source migration or backup restore for this gate.
 4. Expose task failures, backup age, low capacity, degraded storage, host loss, and certificate expiry in the UI; provide useful diagnostic bundles with secrets removed.
 5. Publish tested hardware/features, unsupported combinations, install/upgrade instructions, package manifests, checksums, and release notes.
 6. Add scoped operator/viewer roles, testing API and console access across site/pool boundaries; retain administrator-only control of host enrollment, storage credentials, and identity configuration.
@@ -756,6 +950,79 @@ recovery guidance with the feature.
 4. HA-managed guests must not also have independent libvirt autostart paths that can race recovery. Coordinate startup after power restoration and controller reconnection.
 5. Keep established pool HA functioning during controller outages. Controller redundancy is a distinct future feature.
 6. Validate quorum membership, resource-monitor intervals, redundant cluster communication where required, fence-device reachability, and no-quorum/fence-failure policy. Publish membership/quorum/resource/fencing status to Nex Controller for visibility without making its availability necessary for local recovery.
+
+**Master-controlled HA and optional failback — project owner requirement, 2026-09-12;
+planned, not implemented.** Reliability and understandable recovery take priority over feature
+count. The following are blocking requirements for HA, migration and disaster-recovery acceptance:
+
+- **One authority, including after master failure.** All policy changes, placement decisions,
+  recovery, evacuation and return moves are owned by the active pool master and persisted on
+  Core. Map the master role and its succession to the established quorum/fencing stack before
+  enabling HA; do not build an ad hoc election or let Controller, member agents, libvirt
+  autostart and the HA scheduler race each other. Test loss of the master during fencing,
+  migration cutover and failback. A new master must recover the same operation/ownership state
+  and reject stale-master/member commands before allowing further work. Never force a new
+  master merely because the old one stopped responding.
+- **Fencing must establish actual exclusion.** Validate the exact fence device, target identity,
+  credentials and affected host/storage paths. Successful request submission or a management
+  API acknowledgment is not proof that the old VM can no longer execute/write. Verify the
+  required power/storage exclusion, including every supported initiator/write path; failed,
+  delayed or ambiguous results block recovery. Test wrong-target refusal, device unreachability,
+  lost replies, power restoration and stale-host local/autostart attempts. Publish supported
+  fencing hardware/target combinations and limits; mocks or nested power-off tests alone do
+  not certify physical fencing. No “force” checkbox may bypass unproven writable ownership.
+- **Returning a host does not automatically move VMs.** Default to leaving successfully
+  recovered VMs on their current healthy host. Offer an explicit return action and a separate
+  opt-in automatic return policy tied to an operator-selected preferred host. Keep that policy,
+  host identity, stabilization interval and retry/hold state in the master's durable pool/VM
+  records so they survive Controller replacement and master succession. A replacement physical
+  host requires explicit remapping; matching a hostname does not establish identity.
+- **Failback uses the same safety checks as the initial move.** Require fresh ownership,
+  storage/network/firmware/CPU compatibility, spare capacity and stable host health before a
+  return. Respect maintenance mode and conflicting VM/storage work. Apply a tested stabilization
+  interval and bounded retry policy to prevent repeated host flapping from bouncing VMs.
+  Use validated live migration only where supported; otherwise disclose the required downtime
+  and obtain explicit permission for a stopped move rather than silently rebooting a VM.
+  Failed return attempts must preserve the current valid owner and data, or stop further
+  actions while an ambiguous ownership result is reconciled—never start both copies.
+- **Operators must understand the decision.** Show the current owner, preferred host, whether
+  return is manual or automatic, readiness/fencing evidence freshness, and the exact reason a
+  recovery/return is waiting or blocked. Before enabling HA/automatic return, show missing
+  prerequisites and expected restart/downtime behaviour. Allow holding/cancelling a pending
+  return at documented safe boundaries without disabling protection of the running VM.
+  Report per-VM progress, retry limits and the next safe action; distinguish a booted VM from
+  verified application recovery and never promise zero data loss or a recovery time without
+  measured evidence for that workload/profile.
+
+**Required failure matrix:** before acceptance, a named code owner traces every
+start/stop/move/retry path through the same Core ownership authority and an independent safety
+reviewer checks the evidence, under the [verification rules](../../AGENTS.md#verification-and-bug-memory).
+Unavailable disposable-lab or physical-fence prerequisites leave the affected gate outstanding.
+
+Repeat failover and opt-in return with a guest actively writing identifiable data on each
+supported backend, checking exactly one writable execution owner throughout, current disk/chain
+and firmware state, and guest/application integrity after recovery. Include abrupt host/master
+loss; asymmetric management, cluster and storage partitions; loss/restoration of quorum;
+unreachable, delayed, failed and misdirected fencing; stale observations/commands; process and
+Controller restarts; concurrent migration/recovery/return requests; insufficient capacity;
+storage identity changes; repeated host flapping; and return interrupted before, during and
+after ownership cutover. Also prove that return stays disabled by default, explicit return and
+opt-in automatic return obey prerequisites/downtime permissions, and the policy survives master
+and Controller replacement. Record exact versions, topology, fence hardware, repetitions,
+timings, assertions and untested limits. Independently review split-brain, data-loss and
+usability outcomes; any duplicate writer, unverified exclusion or unexplained ownership state
+blocks support for that profile. Keep single-host/manual recovery distinct from automatic HA:
+no healthy quorum/fence configuration means no automatic restart elsewhere.
+
+**Planned API impact: new/changed contracts** — UI policy/preflight/return requests → Controller
+authorization/relay → active-master durable policy and operation → scoped member/cluster work
+→ Core ownership, fencing, progress and outcome reports. Define master-identity/authority
+validation, permissions, safe retries, concurrency, cancellation/cutover boundaries, reconnect
+and version compatibility; update both Core and Controller contracts, reference and focused
+negative-path tests in the implementation slice. Core's durable master journal and surviving
+recovery records own the policy/operation state; a fresh Controller adopts it through inventory.
+**API impact of this planning change: none; guide impact: none** — no runtime feature changes;
+operator controls and verified guides remain future implementation work.
 
 **Gate:** power off a host, partition management and cluster networks separately, lose quorum/storage, interrupt fencing, stop Nex Controller, and reconnect stale nodes. Demonstrate no duplicate writable VM instance, continued local HA during controller-only loss, and safe refusal when ownership cannot be proven. [Pacemaker administration](https://clusterlabs.org/projects/pacemaker/doc/2.1/Pacemaker_Administration/pdf/Pacemaker_Administration.pdf)
 
@@ -826,7 +1093,8 @@ These are prioritized candidates, not all prerequisites for the first supported 
 | Next | Historical metrics and tuned alerts | Freshness/time semantics and bounded retention; simulated outage/low-space events reach the operator |
 | Next | Scoped API tokens and external login/MFA | Stable authorization/audit model; expiry, revocation, and scope isolation tested |
 | Later | Scheduled isolated backup boot tests and file-level restore | Independent full-VM restore proven; boot success not treated as application validation |
-| Later | Incremental/off-site backup copies and retention protection | Chain-aware recovery, bandwidth limits, key recovery, and source-loss tests |
+| Later | CBT-backed incremental/off-site backups and retention protection | [Changed-block tracking gate](#changed-block-tracking-and-incremental-backup-follow-on); bitmap continuity or safe full fallback, dependency-aware retention and clean-host restores |
+| Later | Storage-native ZFS/Btrfs snapshots and transfer evaluation | [Native snapshot gate](#storage-native-snapshot-integration-follow-on); explicitly managed scope, complete VM state and tested lifecycle/restore |
 | Later | Rolling updates and pool package compliance | Migration/evacuation and tested Debian upgrade/recovery path |
 | Later | Affinity, anti-affinity, HA admission, placement recommendations | Compatibility checks, capacity reservations, and HA safety; recommendations before automatic balancing |
 | Later | Windows customization, vTPM, OVA/VMDK onboarding | Guest-driver/firmware/state protection and conversion compatibility tests |
@@ -898,25 +1166,16 @@ connecting each pool master to it, with every setting coming across. Decisions:
   data (sites, administrator accounts and roles, audit history, enrollment tokens, the Controller
   CA and, from Phase 6, backup jobs) is backed up and restored separately; until that exists, it is re-created by hand and this is
   documented as a limit.
-- **Rule for every slice:** a new pool-scoped setting defines its host-side record and adoption
-  path in the same change (see `AGENTS.md`). A setting that lives only in the Controller database
-  leaves the slice open.
+- **Rule for every slice:** the [architecture invariant](../../AGENTS.md#the-architecture-invariant-nex-core-does-the-work-nex-controller-only-asks).
 - **Status:** implemented for storage registrations, networks, media and VM definitions
-  (`Inventory.managed`, automatic adoption with preserved IDs; Core resolves VM-create references
-  by resource ID). Open: pool membership and master role for multi-host pools, later policies,
-  and backup/restore of Controller-scoped data. The lost-Controller test in the Phase 6 gate becomes a **Controller
-  replacement gate** for the first supported release: destroy the Controller appliance, deploy a
-  fresh one, connect the master, and verify the pool's networks, storage, media, VMs and policies
-  return with their identities and that no duplicate resources or writers are created.
-  Enrollment: an enrolled host that targets a different Controller URL or trust now takes a
-  fresh identity there in place, keeping its state directory and journal (agent `enroll`,
-  local `POST /api/local/v1/enrollment`, and therefore **Add host**); the same Controller still
-  answers "already enrolled". Independent review (2026-09-09) confirmed adoption and trust
-  handling and found this enrollment gap, now closed by regression tests in
-  `internal/agent` and `internal/localcore`. `tests/integration/controller_replacement.py`
-  and `controller_replacement_debian.sh` prove the replacement end to end with real
-  processes for storage, networks, ISO records and VM definitions (Debian 13 libvirt/KVM
-  container; both CI workflows). Remaining review notes: same-Controller
+  (`Inventory.managed`, adoption with preserved IDs); an enrolled host pointed at a different
+  Controller takes a fresh identity there in place, keeping its journal. Evidence:
+  [controller replacement checks](../qa/pool-vlan-networks/checks.md). Open: pool membership and
+  master role for multi-host pools, later policies, and backup/restore of Controller-scoped data.
+  The lost-Controller test in the Phase 6 gate becomes a **Controller replacement gate** for the
+  first supported release: destroy the Controller appliance, deploy a fresh one, connect the
+  master, and verify the pool's networks, storage, media, VMs and policies return with their
+  identities and that no duplicate resources or writers are created. Known gaps: same-Controller
   re-enrollment under a new host record does not move records (use Re-enroll host);
   `needs_attention` VM creations are not in the journal report; silent skips of invalid
   journal entries have no audit entry yet.

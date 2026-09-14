@@ -2,31 +2,20 @@
 
 ## Status
 
-This page covers the **Phase 1 development build** of Nex Controller and the Nex Core
-agent. It provides administrator access, Sites → Pools (one master host + members) → Hosts,
-secure enrollment,
-observed inventory, health reporting, and read-only inventory refresh tasks.
-Current Nex Core media includes an embedded agent; deploying the bundled Controller
-from the local UI enrolls that host automatically. Other reachable hosts are added from
-the Controller with **Add host** (address and root password, fingerprint confirmation);
-the manual token procedure below is the fallback for hosts the Controller cannot reach.
-Matching development builds add [local storage, existing networks, ISO upload and
-VM creation](create-virtual-machine.md); that page has separate prerequisites and
-verification evidence. Pools are created automatically: each enrolled host becomes the **pool master** of its
-own pool, named after its hostname. Joining a second host to an existing pool as a
-member, changing the pool master and ejecting a member are planned for a later phase
-and are not available. Central power controls, consoles, backups, migration and HA
-remain later features.
+Development build of Nex Controller and the Nex Core agent: administrator access,
+Sites → Pools (one master host + members) → Hosts, secure enrollment, observed inventory,
+health reporting and read-only inventory refresh. Deploying the bundled Controller from a Core
+host's local UI enrolls that host automatically; other reachable hosts are added with **Add host**
+(address, root password, fingerprint confirmation), and the manual token procedure is the fallback
+for hosts the Controller cannot reach. Each enrolled host becomes the **pool master** of its own
+pool, named after its hostname. [VM creation](create-virtual-machine.md) has separate
+prerequisites. Changing the pool master and ejecting a member are not available.
 
-Use one Controller process with its SQLite database on local disk. That database is
-authoritative only for sites, administrator accounts, audit history, enrollment tokens, the
-Controller CA and, once they exist, backup jobs; everything about pools, hosts and VMs is
-re-adopted from the hosts (see **Replace a failed Controller** under
-[Troubleshooting](#troubleshooting)). This is a development
-lab workflow, not a supported production deployment or a hardware compatibility claim.
-Use a private management network or VPN and read the current
-[web-access security behavior](secure-web-access.md); new security-build verification
-is separate from the historical Phase 1 evidence below.
+Use one Controller process with its SQLite database on local disk. It is authoritative only for
+sites, administrator accounts, audit history, enrollment tokens, the Controller CA and backup
+jobs; pools, hosts and VMs are re-adopted from the hosts (see **Replace a failed Controller**
+under [Troubleshooting](#troubleshooting)). Use a private management network or VPN and read
+[web-access security behavior](secure-web-access.md).
 
 ## Prerequisites
 
@@ -231,9 +220,14 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
   do not use an insecure TLS bypass. Existing agent state intentionally rejects a changed
   Controller address or CA file.
 - **Enrollment fails or its response is lost:** retry with the same state directory and token
-  while it is valid so the persisted request identity can be reconciled. If the token has
-  expired, inspect Controller membership before issuing another token. Never clone the state
-  directory to a second host to make enrollment succeed.
+  while it is valid so the persisted request identity can be reconciled. During a replacement,
+  Core keeps the prior working credential and the same pending CSR until the new credential is
+  accepted, so do not delete or recreate the state directory between attempts. If the error says
+  the state was published but durability is uncertain, do not immediately submit another
+  enrollment: inspect the host's current local enrollment status and refresh its Controller
+  inventory first, then retry only after those observations show which identity is active. If
+  the token has expired, inspect Controller membership before issuing another token. Never clone
+  the state directory to a second host to make enrollment succeed.
 - **Add host: "host certificate fingerprint does not match":** the certificate presented
   during the add-host connection no longer matches the one you confirmed after **Connect**
   (the host was reimaged, its certificate rotated, or you are pointed at a different
@@ -263,6 +257,10 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
 - **Host is stale or disconnected:** check Controller reachability and both process logs from
   local access. A missed heartbeat means uncertain connectivity, not a stopped host or guest.
   Restore connectivity and wait for fresh observations; monitoring never authorizes VM restart.
+- **Task history says “Reobserved from Core history”:** this row is a historical Core outcome
+  adopted after reporting or reconnection. Its displayed time is when Controller re-observed it;
+  the original outcome time was not reported. It is not a new request and does not authorize a
+  retry by itself.
 - **Libvirt or a probe is degraded:** inspect the named capability, its error, and observation
   time. Check local permissions and service availability. A bounded probe timeout is distinct
   from Controller loss; independent reports can continue while that capability is unavailable.
@@ -319,79 +317,15 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
 
 ## Verification
 
-The [bug ledger local walkthrough](../qa/2026-09-12-bug-ledger.md) verifies immediate
-host/pool health reasons and the detail link with a real Core libvirt outage and
-recovery. Additional browser scenarios cover healthy, multiple affected checks,
-stale/unknown observations and revoked access using simulated reports.
+Recorded checks and their limits:
 
-**Replace a failed Controller (troubleshooting) — verified with real processes and libvirt:**
-the [pool VLAN network checks](../qa/pool-vlan-networks/checks.md) record runs with real
-`nex-controller` and `nex-core-agent` processes, including one in a Debian 13 container with
-real libvirt and KVM: storage, a network, an ISO record and a stopped VM created through
-Controller A all came back on a brand-new Controller B with the same IDs and names after one
-ordinary enrollment, with no command dispatched and no duplicates, and new work on the adopted
-resources succeeded. The appliance return, the failed task in **Tasks** and the
-`needs_attention` record for an unadoptable entry are covered by the Go checks named in the
-[API reference](../API.md#managed-vm-creation) and by the same replacement script, which
-seeds a deploy journal and a failed journal entry on the test host before Controller B starts
-(2026-09-10; see the change record for the run). The merged run of that script on commit
-c81a633, with CI's exact command, passed: Controller B, started empty with a different
-certificate, adopted the host and pool with their original IDs and pool name, plus the
-storage, network and ISO record with the same IDs and names under actor `system`, with no
-command and no duplicates, and a new ISO transfer on the adopted resources succeeded (result
-file kept outside the repository; see the change record). Not walked through: the browser **Add host**
-flow against a replacement Controller, the packaged agent on an installed host, and a real
-appliance deployment followed by a Controller replacement.
-
-**Pool master change verified (2026-09-09):** the [pool master checks](../qa/pool-master/checks.md)
-(simulated host, Chromium) and the [real lab run](../qa/pool-master/lab/checks.md) (real appliance,
-real agent enrollment through libvirt, in-place migration and a fresh deployment) cover steps 2, 3,
-5 and 8: the site empty state, the **Add host** form with a site-bound token, automatic pool
-creation with the **Pool master** panel and role badges, and re-enrollment keeping the host's
-pool. Joining a member, changing the master and ejecting are not implemented.
-
-**Add host by address (step 3) — verified in a real lab:** the
-[add host lab checks](../qa/simple-host-enrollment/lab/checks.md) record a Chromium walkthrough
-of this panel against the disposable nested-KVM lab: probe and fingerprint confirmation against
-the host's real certificate, wrong fingerprint, wrong password, already-enrolled and
-non-revoked re-enrollment errors, revoke and re-enroll through the panel with identity and pool
-retained, a fresh enrollment that created its pool with the host as master, a local service
-restart, and audit/log hygiene. Package upgrade, physical hardware and the manual fallback were
-not exercised there; see the checks page. The
-[implementation plan](../plans/2026-09-09-simple-host-enrollment.md#verification-status) lists
-the Go, contract and simulated browser checks.
-
-The [site selection walkthrough](../qa/site-selector/browser.md) verifies the
-searchable selector and pool-root tree using an explicitly simulated 500-site
-fixture, including deep links, empty/no-match states, keyboard and narrow layouts.
-The [combined UI report](../qa/host-isos/checks.md) records the matching build,
-existing Phase 1 regression and local Controller deployment evidence.
-
-The [Controller desktop layout walkthrough](../qa/controller-desktop-layout/checks.md)
-records verification of the current resource tree, menus, detail views, forms and
-responsive layout. Historical captures below show the previous layout.
-
-[Deployment usability checks](../qa/appliance/deployment-usability.md) record the current
-DHCP/password/power UI changes, simulated browser checks and artifact availability limits.
-
-The [security browser walkthrough](../qa/security/browser.md) separately verifies the new
-cookies, sign-out, throttling, CSP and accelerated idle-expiry recovery against real HTTPS
-services. Its virtualization is simulated; new package acceptance is tracked on the
-[security access page](secure-web-access.md).
-
-See the [Phase 1 walkthrough and verification limits](../qa/phase1/acceptance.md).
-The local process/browser walkthrough passed bootstrap/login, site/pool creation
-(pools were created by hand in that build),
-enrollment, inventory refresh, revoke confirmation, explicit re-enrollment, stale/error
-recovery, keyboard operation, and desktop/360px layouts. Its libvirt failure/stall inputs
-were simulated; the browser accepted a temporary self-signed lab certificate while the
-agent and API client verified trust. A separate local command walkthrough exercised bootstrap, enrollment,
-`status`, default-timing reporting, rotation, and both process restarts with native host
-observations and verified HTTPS. Site/pool/token creation in that command walkthrough
-used the API of that earlier build, not browser interaction.
-
-The [Debian/libvirt check](../qa/phase1/debian.md) separately exercised Debian 13 userspace,
-actual libvirt availability, failure, stall, recovery, and continued observations in a disposable
-container. It created no guests and shares the workstation kernel. Browser trust provisioning,
-real systemd deployment, KVM acceleration, guest survival, physical storage, and
-installer-to-agent integration remain outside this evidence.
+- [Phase 1 acceptance](../qa/phase1/acceptance.md) and [Debian/libvirt check](../qa/phase1/debian.md).
+- [Add host lab checks](../qa/simple-host-enrollment/lab/checks.md) — step 3 and revoke/re-enroll
+  in a nested-KVM lab; the manual fallback and package upgrade were not exercised.
+- [Pool master checks](../qa/pool-master/checks.md) and [lab run](../qa/pool-master/lab/checks.md).
+- [Pool VLAN network checks](../qa/pool-vlan-networks/checks.md) — Controller replacement with
+  real processes and libvirt. The browser **Add host** flow against a replacement Controller, the
+  packaged agent and an appliance deployment followed by replacement are not walked through.
+- [Health reasons walkthrough](../qa/2026-09-12-bug-ledger.md), [site selector](../qa/site-selector/browser.md),
+  [desktop layout](../qa/controller-desktop-layout/checks.md) and
+  [security browser walkthrough](../qa/security/browser.md).

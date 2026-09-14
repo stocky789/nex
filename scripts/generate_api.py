@@ -45,7 +45,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--check', action='store_true', help='Fail if committed HTML is stale')
     args = parser.parse_args()
-    for source, target in [('openapi.json', 'index.html'), ('local-openapi.json', 'local.html')]:
+    for source, target in [('openapi.json', 'index.html'), ('local-openapi.json', 'local.html'),
+                           ('peer-openapi.json', 'peer.html')]:
         contract = json.loads((ROOT / 'docs/api' / source).read_text())
         output = ROOT / 'docs/api' / target
         rendered = render(contract, source)

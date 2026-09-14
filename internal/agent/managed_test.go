@@ -188,6 +188,16 @@ func TestStorageDiscoveryRequiresThisCoreHostAndPool(t *testing.T) {
 	}
 }
 
+func TestStorageClusterRequiresThisCoreHostAndPool(t *testing.T) {
+	state := State{HostID: "host-1", PoolID: "pool-1"}
+	if !storageClusterScopeMatches(state, protocol.StorageClusterRequest{HostID: "host-1", PoolID: "pool-1", Action: "verify_fence"}) {
+		t.Fatal("matching clustered storage request rejected")
+	}
+	if storageClusterScopeMatches(state, protocol.StorageClusterRequest{HostID: "host-2", PoolID: "pool-1", Action: "status"}) || storageClusterScopeMatches(state, protocol.StorageClusterRequest{HostID: "host-1", PoolID: "pool-2", Action: "apply"}) || storageClusterScopeMatches(state, protocol.StorageClusterRequest{HostID: "host-1", PoolID: "pool-1", Action: "unknown"}) {
+		t.Fatal("cross-Core or unknown clustered storage request accepted")
+	}
+}
+
 func TestManagedSlowCommandKeepsReportingAndCancels(t *testing.T) {
 	bin := t.TempDir()
 	started := filepath.Join(bin, "started")
@@ -235,6 +245,22 @@ func TestManagedSlowCommandKeepsReportingAndCancels(t *testing.T) {
 	}
 	if s.State.Journal["slow-network"].Status == "succeeded" {
 		t.Fatal("cancelled command was incorrectly completed")
+	}
+}
+
+func TestClusteredISCSISharedStorageRequiresMembershipAndMasterRegistration(t *testing.T) {
+	shared := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: "member-1", Kind: protocol.StorageKindISCSI, Source: protocol.StorageSource{ISCSI: &protocol.ISCSIStorageSource{Mode: "clustered_gfs2"}}}
+	cmd := protocol.Command{Kind: "storage-register", Storage: &shared}
+	s := peerStore(t, "member-1", "pool-1")
+	if !commandReferencesRemoteStorage(context.Background(), s, cmd) {
+		t.Fatal("clustered iSCSI did not require membership for a shared storage command")
+	}
+	membership := protocol.PoolMembership{MasterHostID: "master-1"}
+	if !poolMemberStorageRegistrationDenied(membership, "member-1", &shared) {
+		t.Fatal("member direct clustered iSCSI registration was not refused")
+	}
+	if poolMemberStorageRegistrationDenied(membership, "master-1", &shared) {
+		t.Fatal("pool master clustered iSCSI registration was refused")
 	}
 }
 

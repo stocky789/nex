@@ -1,27 +1,33 @@
 # Host ISO browser acceptance
 
-The focused browser runner is `tests/integration/host_iso_browser.py`. API impact: existing contract; it reads the existing host, pool, storage, media and task records. It adds no Controller/Core endpoint or command. Guide changes and aggregate checks are owned by the parent change.
+Runner: `tests/integration/host_iso_browser.py`. Served app.js SHA-256 `fd82675f…887288` (full hashes in
+[checks.md](checks.md)). Captures are local only (`docs/qa/**/*.png` is gitignored).
 
 ## Disposable simulated run
-
-Run from the repository root with the installed Go toolchain and Playwright environment:
 
 ```sh
 GO="$PWD/.cache/toolchains/go/bin/go" .cache/phase1-qa-venv/bin/python tests/integration/host_iso_browser.py --evidence docs/qa/host-isos
 ```
 
-The final run passed against served JavaScript SHA-256 `fd82675f5553f6ccfbe3f07a2fa8cb7e46769975622b137cacec3baf19887288`; see [machine results](simulated-results.json). The runner launches a real disposable HTTPS Controller and simulated mTLS agent, registers synthetic storage and uploads a synthetic ISO. Completed transfer state comes from the Controller/agent report flow. Additional statuses, foreign host/pool rows, stale/revoked/old-agent/no-inventory states, and failed refresh are explicitly injected browser responses. They establish presentation behavior, not real storage correctness.
+Passed; see [results](simulated-results.json). A real HTTPS Controller and simulated mTLS agent registered synthetic
+storage and uploaded a synthetic ISO, so transfer completion came from the report flow. Other statuses, foreign host/pool rows,
+stale/revoked/old-agent/no-inventory and refresh failure are injected browser responses, which show presentation only.
 
-Checks cover empty-to-completed records; queued, dispatched, failed and attention labels; media filtering by both host and pool; missing storage and matching storage IDs from the wrong host or pool; retained records after refresh failure; Retry recovery; keyboard Storage navigation and task history; and a 360px document without horizontal overflow. The ISO table scrolls internally, and focusing the task link reveals its column before keyboard activation.
+Covered: empty → completed; queued/dispatched/failed/attention labels; filtering by host and pool; missing or
+foreign-ID storage; records kept on refresh failure; Retry; keyboard Storage and task history; 360 px without
+overflow (table scrolls internally; focusing the task link reveals it).
 
-Inspected captures include [desktop](simulated-statuses-desktop.png), [360px](simulated-statuses-360.png), [keyboard task column](simulated-task-keyboard-360.png), and [Controller error](simulated-controller-unavailable.png). The latest captures include the site picker. The test does not independently hold the initial workspace loading response. Transfer success is historical verification, not a continuous check that the file still exists; VM creation checks its selected media again.
+Inspected: `simulated-statuses-desktop.png`, `simulated-statuses-360.png`,
+`simulated-task-keyboard-360.png`, `simulated-controller-unavailable.png` (latest include the site picker).
+Not checked: the held initial loading response. Transfer success is historical, not a continuous existence check.
 
 ## Retained native lab
 
-Read-only verification uses `--config` with the private disposable lab configuration. It reads the existing actual host and ISO records, opens Storage through keyboard navigation, and captures desktop and 360px views. It does not upload media, register storage, or change guest state. The native run passed against the same final JavaScript hash; see [native results](native-results.json), [desktop](native-desktop.png) and [360px](native-360.png), visually inspected alongside the [open searchable site picker](native-site-picker.png). The native run also opened the picker, searched for the current site, and selected it with Enter without mutating records. The actual host showed Debian and Nex ISO records, exact byte sizes, the selected storage name/path and task links, with historical completed-transfer labels.
-
 ```sh
-.cache/phase1-qa-venv/bin/python tests/integration/host_iso_browser.py --config .cache/nex-fresh-install.s_h0lmf6/config.json --evidence docs/qa/host-isos
+.cache/phase1-qa-venv/bin/python tests/integration/host_iso_browser.py --config .cache/nex-fresh-install.<redacted>/config.json --evidence docs/qa/host-isos
 ```
 
-The private configuration supplies existing credentials without printing them. No native lab resources were changed by this runner, and the retained lab remains running.
+Read-only: no upload, registration or guest change. Passed against the same hash; see [results](native-results.json). The real host
+showed its Debian and Nex ISO records with exact bytes, storage name/path, task links and historical completed labels. The
+site picker was opened, searched and selected with Enter. Inspected: `native-desktop.png`, `native-360.png`,
+`native-site-picker.png`. The lab was left running.

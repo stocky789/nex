@@ -227,7 +227,12 @@ with (output / 'qemu.log').open('w') as log:
         capture('network-hostname')
         click(width - 60, footer)
         click(300, 194)
-        capture('disk')
+        disk_page = capture('disk')
+        # BUG-0153: the 800px content width used to crop both disk-page helper
+        # labels at the right edge. Both deliberate continuation lines must paint.
+        assert dark_pixels(disk_page, (160, 153, width - 20, 175)) > 100, 'Disk-selection explanation continuation is clipped'
+        assert dark_pixels(disk_page, (160, height - 146, 350, height - 125)) > 100, 'No-disk help continuation is clipped'
+        assert dark_pixels(disk_page, (350, height - 146, width - 20, height - 125)) < 10, 'No-disk help did not wrap before the right edge'
         click(width - 60, footer)
         review = capture('review')
         assert review.size == (width, height), 'Unexpected native GTK display'

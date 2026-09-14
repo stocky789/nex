@@ -1,25 +1,171 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Storage client delivery stays native and does not install ZFS modules."""
 from pathlib import Path
+import hashlib
 import importlib.util
 import os
 import subprocess
 import sys
 import tempfile
 import sqlite3
+import shutil
 import unittest
+import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
 CLIENTS = {"nfs-common", "libnfs-utils", "cifs-utils", "smbclient", "open-iscsi"}
+CLUSTERED_GFS2 = {"corosync", "dlm-controld", "gfs2-utils", "pacemaker", "pacemaker-cli-utils", "pcs",
+                  "fence-agents-redfish", "fence-agents-ipmilan", "fence-agents-virsh"}
+MATCHED_DLM_VERSION = "4.3.0-3+nex1"
 
 
 class StoragePackagingTests(unittest.TestCase):
+    def test_clustered_iscsi_ocf_probe_is_packaged_and_read_only(self):
+        wrapper = ROOT / "packaging/cluster-storage/cluster-iscsi-session"
+        text = wrapper.read_text()
+        build = (ROOT / "packaging/core-local/build-inside.sh").read_text()
+        installer = (ROOT / "installer/build.sh").read_text()
+        self.assertIn('SPDX-License-Identifier: AGPL-3.0-only', text)
+        self.assertIn('readonly core=/usr/lib/nex/nex-core-local', text)
+        self.assertIn('readonly timeout=/usr/bin/timeout', text)
+        self.assertIn("/usr/lib/ocf/resource.d/nex/cluster-iscsi-session", build)
+        self.assertIn("rebuild_iso_artifacts", installer)
+        self.assertIn("CORE_LOCAL_DEB", installer)
+        self.assertIn('cluster-iscsi-session --validate-only --portal', text)
+        self.assertIn('cluster-iscsi-session --portal', text)
+        self.assertIn('--kill-after=1s 1s "$core" cluster-iscsi-session --validate-only', text)
+        self.assertIn('--kill-after=1s 8s', text)
+        self.assertIn("[ \"$(/usr/bin/stat -c '%u:%a' \"$core\")\" = '0:755' ]", text)
+        self.assertIn('OCF_NOT_RUNNING=7', text)
+        self.assertIn('stop) exit "$OCF_SUCCESS"', text)
+        self.assertIn('validate-all) validate; exit $?', text)
+        self.assertNotIn('        validate || exit $?\n        check_session', text)
+        self.assertGreaterEqual(text.count('required_parameters || exit "$OCF_ERR_CONFIGURED"'), 2)
+        for forbidden in ('iscsiadm', 'login', 'logout', 'discovery', 'mount ', 'pcs ', 'cibadmin'):
+            self.assertNotIn(forbidden, text.lower())
+        result = subprocess.run(["sh", str(wrapper), "meta-data"], check=True,
+                                capture_output=True, text=True)
+        root = ET.fromstring(result.stdout)
+        self.assertEqual(root.tag, "resource-agent")
+        self.assertEqual(root.attrib.get("name"), "cluster-iscsi-session")
+        self.assertEqual({item.attrib["name"] for item in root.findall("./parameters/parameter")},
+                         {"portal", "target", "session_id"})
+        parameters = {item.attrib["name"]: item.attrib for item in root.findall("./parameters/parameter")}
+        self.assertEqual(parameters["portal"].get("unique"), "0")
+        self.assertEqual(parameters["target"].get("unique"), "0")
+        self.assertEqual(parameters["session_id"].get("unique"), "1")
+        monitor = root.find("./actions/action[@name='monitor']")
+        self.assertIsNotNone(monitor)
+        self.assertEqual(monitor.attrib.get("interval"), "5s")
+        # Stop is a no-op even for a non-root caller; it cannot issue a session query.
+        self.assertEqual(subprocess.run(["sh", str(wrapper), "stop"]).returncode, 0)
+
+    def test_iso_rebuilds_dlm_against_the_pinned_pacemaker_fencing_abi(self):
+        recipe = (ROOT / "packaging/cluster-storage/build-matched-dlm.sh").read_text()
+        dockerfile = (ROOT / "packaging/cluster-storage/Dockerfile").read_text()
+        build = (ROOT / "installer/build.sh").read_text()
+        late_install = (ROOT / "installer/late-install.sh").read_text()
+        self.assertIn('readonly dlm_version=4.3.0-3', recipe)
+        self.assertIn('readonly pacemaker_version=3.0.0-2', recipe)
+        self.assertIn('pacemaker-dev=3.0.0-2', dockerfile)
+        self.assertIn('libstonithd56 (= 3.0.0-2)', recipe)
+        self.assertIn('pacemaker-stonith-library-soname.patch', recipe)
+        self.assertIn('pacemaker-stonith-ng.h.original', recipe)
+        self.assertIn('pacemaker-stonith-ng.h.overlay', recipe)
+        self.assertIn('PACEMAKER_CFLAGS="-I$(CURDIR)/debian/nex-pacemaker-overlay', recipe)
+        self.assertIn('STONITH_LIBRARY "libstonithd.so.26"', recipe)
+        self.assertIn('STONITH_LIBRARY "libstonithd.so.56"', recipe)
+        self.assertNotIn('ln -s', recipe)
+        self.assertIn("dpkg-buildpackage -us -uc -b", recipe)
+        self.assertIn("dpkg-buildpackage -us -uc -S", recipe)
+        self.assertIn("dlopen(\"libstonithd.so.56\"", recipe)
+        self.assertIn('dlsym(library, "stonith_api_kick")', recipe)
+        self.assertNotIn("stonith_api_kick(", recipe)
+        self.assertNotIn("stonith_api_time(", recipe)
+        self.assertIn(f"dlm-controld_{MATCHED_DLM_VERSION}_amd64.deb", build)
+        self.assertIn('rm -f "$stage/nex/repo"/dlm-controld_*.deb', build)
+        self.assertIn('APT closure libstonithd56 does not match', build)
+        self.assertIn('dlm-pacemaker-abi', late_install)
+
     def test_installer_and_local_core_include_native_storage_clients(self):
         installer = set((ROOT / "installer/packages.txt").read_text().split())
         package = (ROOT / "packaging/core-local/build-inside.sh").read_text()
         self.assertTrue(CLIENTS <= installer)
         self.assertTrue(all(client in package for client in CLIENTS))
+
+    def test_clustered_gfs2_uses_native_packages_and_stays_disabled_until_configured(self):
+        installer = set((ROOT / "installer/packages.txt").read_text().split())
+        package = (ROOT / "packaging/core-local/build-inside.sh").read_text()
+        late_install = (ROOT / "installer/late-install.sh").read_text()
+        postinst = (ROOT / "packaging/core-local/postinst").read_text()
+        self.assertTrue(CLUSTERED_GFS2 <= installer)
+        self.assertIn("linux-image-amd64", installer)
+        # The ISO builder resolves Debian Depends with --no-install-recommends;
+        # Pacemaker pulls pacemaker-resource-agents then resource-agents, which
+        # supplies ocf:heartbeat:Filesystem. Do not add a redundant direct package.
+        iso_builder = (ROOT / "installer/build.sh").read_text()
+        self.assertIn('install "${packages[@]}"', iso_builder)
+        self.assertIn("pacemaker", installer)
+        self.assertIn("fence-agents-virsh", installer)
+        self.assertTrue(all(client in package for client in CLUSTERED_GFS2))
+        self.assertIn("systemctl disable corosync.service dlm.service pacemaker.service pcsd.service pcsd-ruby.service || true", late_install)
+        self.assertNotIn("systemctl enable --now corosync.service", late_install)
+        self.assertNotIn("systemctl start corosync.service", late_install)
+        self.assertIn('if [ ! -e "$root/etc/corosync/corosync.conf" ]; then', postinst)
+        self.assertIn('deb-systemd-helper disable "$unit"', postinst)
+        self.assertIn('deb-systemd-invoke stop "$unit" || true', postinst)
+        self.assertIn('exit 101', late_install)
+        self.assertLess(late_install.index('policy_rc_created='), late_install.index('apt_local install'))
+        self.assertIn('/usr/lib/nex/corosync-pristine', late_install)
+        self.assertIn('packaging/core-local/corosync-pristine "$pkg/usr/lib/nex/"', package)
+
+    def test_pristine_corosync_marker_never_adopts_a_modified_conffile(self):
+        helper = ROOT / "packaging/core-local/corosync-pristine"
+        with tempfile.TemporaryDirectory(prefix="nex-corosync-pristine-") as directory:
+            root = Path(directory)
+            config = root / "etc/corosync/corosync.conf"
+            config.parent.mkdir(parents=True)
+            config.write_text("cluster_name: debian\n")
+            stock_digest = hashlib.sha256(config.read_bytes()).hexdigest()
+            expected = subprocess.check_output(["md5sum", str(config)], text=True).split()[0]
+            status = root / "var/lib/dpkg/status"
+            status.parent.mkdir(parents=True)
+            status.write_text("Package: corosync\nStatus: install ok installed\nArchitecture: amd64\nVersion: 3.1.9-2+deb13u1\nMaintainer: Nex test\nDescription: test package\nConffiles:\n /etc/corosync/corosync.conf " + expected + "\n\n")
+            result = subprocess.run(["sh", str(helper), str(root)], capture_output=True, text=True)
+            marker = root / "var/lib/nex-core-agent/storage-cluster/corosync-unconfigured"
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(marker.read_text(), stock_digest + "\n")
+            config.write_text("cluster_name: administrator-managed\n")
+            result = subprocess.run(["sh", str(helper), str(root)], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(marker.read_text(), stock_digest + "\n")
+
+    def test_postinst_preserves_an_administrator_corosync_configuration(self):
+        for tool in ("dpkg-divert", "dpkg-query"):
+            if not shutil.which(tool):
+                self.skipTest(f"{tool} missing: Debian dpkg tools are required for this check")
+        with tempfile.TemporaryDirectory(prefix="nex-cluster-postinst-") as directory:
+            root = Path(directory)
+            for sub in ("usr/lib", "etc/corosync", "var/lib/dpkg", "bin"):
+                (root / sub).mkdir(parents=True)
+            (root / "usr/lib/os-release").write_text("ID=debian\nVERSION_CODENAME=trixie\n")
+            (root / "etc/os-release").symlink_to("../usr/lib/os-release")
+            admin = root / "etc/corosync/corosync.conf"
+            admin.write_text("totem { version: 2 }\n")
+            calls = root / "helper-calls"
+            helper = root / "bin/deb-systemd-helper"
+            helper.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$NEX_TEST_LOG"\n')
+            helper.chmod(0o755)
+            (root / "var/lib/dpkg/status").write_text(
+                "Package: nex-core-local\nStatus: install ok half-configured\nArchitecture: amd64\nVersion: 0.1.5~alpha1\n\n")
+            env = dict(os.environ, DPKG_ROOT=str(root), DPKG_ADMINDIR=str(root / "var/lib/dpkg"),
+                       NEX_TEST_LOG=str(calls), PATH=f"{root / 'bin'}:{os.environ['PATH']}")
+            subprocess.run(["sh", str(ROOT / "packaging/core-local/postinst"), "configure"],
+                           env=env, check=True, capture_output=True, text=True)
+            self.assertEqual(admin.read_text(), "totem { version: 2 }\n")
+            self.assertNotIn("corosync.service", calls.read_text() if calls.exists() else "")
 
     def test_storage_lab_installs_discovery_clients(self):
         lab = (ROOT / "tests/integration/bug_ledger_lab.py").read_text()
@@ -35,11 +181,16 @@ class StoragePackagingTests(unittest.TestCase):
         unit = (ROOT / "packaging/systemd/nex-core-agent.service").read_text()
         for path in ("/var/lib/nex-storage",
                      "/var/lib/nex-core-agent/storage-credentials",
+                     "/var/lib/nex-core-agent/storage-cluster",
                      "/etc/systemd/system",
                      "/var/lib/iscsi",
-                     "/run/lock/iscsi"):
+                     "/run/lock/iscsi",
+                     "/etc/corosync"):
             self.assertIn("ReadWritePaths=-" + path, unit)
         self.assertNotIn("ReadWritePaths=-/var/lib/nex-core-agent/storage\n", unit)
+        for path in ("/etc/corosync/authkey", "/var/lib/corosync", "/var/lib/pacemaker",
+                     "/var/log/pacemaker", "/run/corosync", "/run/pacemaker", "/run/dlm_controld"):
+            self.assertNotIn("ReadWritePaths=-" + path, unit)
 
     def test_packaged_qemu_prepare_hook_uses_the_local_core_guard(self):
         hook = (ROOT / "packaging/core-local/nex-storage-guard.sh").read_text()

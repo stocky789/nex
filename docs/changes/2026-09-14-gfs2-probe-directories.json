@@ -1,0 +1,38 @@
+{
+  "summary": "BUG-0167: Isolate native GFS2 access probes by host while retaining full validation. API impact: existing contract.",
+  "paths": [
+    "internal/vmhost/storage_native.go",
+    "internal/vmhost/storage_native_test.go",
+    "internal/vmhost/engine_run_test.go",
+    "internal/vmhost/engine.go",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-14-cluster-storage-reliability.md",
+    "docs/plans/2026-09-12-concurrent-pool-storage.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Internal diagnostic-probe layout only; operator workflows, resource settings and safety requirements are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: existing contract. The shared native QEMU access helper serves monitor, repository/cluster validation and VM/recovery callers; each retains its existing result and full safety checks. No Controller/Core or client-facing schema changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Reliability correction within the current storage milestone; no new published capability or phase completion.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Host-derived empty probe leaves and unique temporary probe files are regenerable filesystem artifacts, not durable settings, cached health or execution authority. Core-owned pool records and inventory/adoption remain unchanged."
+  },
+  "verification": {
+    "method": "The controlled five-pair native comparison supports directory contention as a contributor. Initial strict-path implementation passed unit/race/source checks and clean deployment, but the selected GFS root mode 2770 correctly selected its original full-probe fallback. That candidate passed 150 idle samples per member but retained six distinct deadlines during the all-six-writer overlap, despite payload integrity. Revised descriptor-anchored source supports the existing group-writable root without changing its permissions; independent source review passed. The revised old-root overlay failed as intended; fixed rename/replacement, held-filesystem/mount, ownership/mode, concurrency, cleanup and actual child-process cases plus full vmhost/agent normal/race suites passed. Candidate-bound actual libvirt-qemu native command-chain proof passed without skips on all three hosts, and the revised rollout passed independent audit. The following 150-sample idle window retained one distinct Core2 deadline across three polls; Core3 was healthy throughout. Revised loaded verification and repository reliability acceptance remain open.",
+    "evidence": [
+      "docs/qa/2026-09-14-cluster-storage-reliability.md"
+    ]
+  }
+}

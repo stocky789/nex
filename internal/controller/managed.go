@@ -390,7 +390,7 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		// A remote repository's configuration belongs to its master. Members may report
 		// their own access while reconnecting, but that observation must never replace
 		// the master's mirrored record or manufacture a second repository row.
-		if m.Membership != nil && m.Membership.Valid() == nil && m.Membership.PoolID == pool && m.Membership.MasterHostID != host && (s.Kind == protocol.StorageKindNFS || s.Kind == protocol.StorageKindSMB) {
+		if m.Membership != nil && m.Membership.Valid() == nil && m.Membership.PoolID == pool && m.Membership.MasterHostID != host && protocol.IsPoolSharedStorage(s) {
 			continue
 		}
 		if s.OperationID == "" {
@@ -789,11 +789,21 @@ func (c *Controller) readyStorageForHost(tx *sql.Tx, id, pool, host string) (pro
 		return cmd, fmt.Errorf("selected resource must be verified on the selected host and pool")
 	}
 	s := cmd.Storage
-	if s.HostID == host || (s.Kind != protocol.StorageKindNFS && s.Kind != protocol.StorageKindSMB) {
+	if s.HostID == host || !protocol.IsPoolSharedStorage(*s) {
 		return cmd, fmt.Errorf("selected resource must be verified on the selected host and pool")
 	}
+	if protocol.IsClusteredISCSI(*s) {
+		eligible := false
+		for _, member := range s.Source.ISCSI.EligibleHostIDs {
+			eligible = eligible || member == host
+		}
+		if !eligible {
+			return cmd, fmt.Errorf("selected resource must be verified on the selected host and pool")
+		}
+	}
+	now := time.Now()
 	for _, access := range s.MemberAccess {
-		if access.RepositoryID == s.ID && access.HostID == host && access.Generation == s.Generation && access.Identity != "" && access.Readable && access.Writable && access.QEMUWritable && access.Locking && access.Error == "" && !access.ObservedAt.IsZero() && time.Since(access.ObservedAt) <= c.cfg.StaleAfter {
+		if access.RepositoryID == s.ID && access.HostID == host && access.Generation == s.Generation && access.Identity != "" && access.Readable && access.Writable && access.QEMUWritable && access.Locking && access.Error == "" && !access.ObservedAt.IsZero() && !access.ObservedAt.After(now) && now.Sub(access.ObservedAt) <= c.cfg.StaleAfter {
 			return cmd, nil
 		}
 	}

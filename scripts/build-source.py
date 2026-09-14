@@ -20,7 +20,9 @@ FILES = ('go.mod', 'go.sum', 'LICENSE', 'NOTICE', 'Makefile',
          'web/package.json', 'web/package-lock.json', 'web/build.mjs', 'web/tsconfig.json',
          'docs/development.md', 'docs/controller-dependencies.md', 'docs/LICENSING.md',
          'appliance/Dockerfile', 'packaging/core-local/Dockerfile',
-         'packaging/core-local/core-local-setup', 'packaging/core-local/qemu-vnc-lossy',
+         'packaging/cluster-storage/Dockerfile',
+         'packaging/cluster-storage/cluster-iscsi-session',
+         'packaging/core-local/core-local-setup', 'packaging/core-local/corosync-pristine', 'packaging/core-local/qemu-vnc-lossy',
          'packaging/core-local/preinst',
          'packaging/core-local/postinst', 'packaging/core-local/prerm',
          'packaging/controller/Dockerfile', 'packaging/controller/run-controller',
@@ -32,6 +34,7 @@ TREES = {'cmd': {'.go'}, 'internal': {'.go', '.sql'}, 'web/src': {'.tsx', '.ts',
          'appliance': {'.py', '.sh', '.service', '.md'},
          'packaging/core-local': {'.py', '.sh', '.service', '.md', '.c', '.pam', '.example', '.gpg'},
          'packaging/controller': {'.py', '.sh', '.service', '.path', '.md'},
+         'packaging/cluster-storage': {'.sh'},
          'docs/api': {'.json', '.html', '.css'}}
 SCRIPTS = ('scripts/build-source.py', 'tests/test_build_source.py',
            'scripts/generate_api.py', 'tests/test_api_contract.py',
@@ -44,6 +47,9 @@ SCRIPTS = ('scripts/build-source.py', 'tests/test_build_source.py',
            'tests/integration/web_security.py',
            'tests/integration/appliance-lab.py', 'tests/integration/appliance-dhcp-boot.py',
            'tests/integration/core-local-package.sh',
+           'tests/integration/cluster_storage_workloads.py',
+           'tests/integration/cluster_ha_lab.py',
+           'tests/test_cluster_storage_workloads.py', 'tests/test_cluster_ha_lab.py',
            'scripts/apt-publish.py', 'tests/test_apt_publish.py')
 
 
@@ -87,6 +93,16 @@ def verify(data, integrity):
         raise ValueError('npm package integrity mismatch')
 
 
+def write_archive(target, output):
+    def public_metadata(info):
+        info.uid = info.gid = 0
+        info.uname = info.gname = ''
+        info.pax_headers = {}
+        return info
+    with tarfile.open(output, 'w:gz') as archive:
+        archive.add(target, arcname='nex-source', filter=public_metadata)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', default='dist/nex-source.tar.gz')
@@ -127,8 +143,7 @@ def main():
         manifest = {str(p.relative_to(target)): hashlib.sha256(p.read_bytes()).hexdigest()
                     for p in sorted(target.rglob('*')) if p.is_file()}
         (target / 'SOURCE-MANIFEST.json').write_text(json.dumps(manifest, indent=2) + '\n')
-        with tarfile.open(output, 'w:gz') as archive:
-            archive.add(target, arcname='nex-source')
+        write_archive(target, output)
     digest = hashlib.sha256(output.read_bytes()).hexdigest()
     output.with_suffix(output.suffix + '.sha256').write_text(f'{digest}  {output.name}\n')
     print(f'{output}: {digest}')

@@ -52,6 +52,14 @@ type State struct {
 	// authenticated Controller v2 preflight. It prevents a package upgrade from
 	// sending new storage fields to a strict v1 Controller.
 	StorageProtocolReady bool `json:"storage_protocol_ready,omitempty"`
+	// StorageClusterProtocolReady is Controller-connection scoped. It is set
+	// only by the explicit clustered-storage v2 acknowledgement and reset on
+	// reconnect/replacement before a report can carry clustered-storage data.
+	StorageClusterProtocolReady bool `json:"storage_cluster_protocol_ready,omitempty"`
+	// StorageClusterSessionMonitorProtocolReady is a narrower,
+	// Controller-connection-scoped acknowledgement for the additive member
+	// session-monitor report fields. It never represents native readiness.
+	StorageClusterSessionMonitorProtocolReady bool `json:"storage_cluster_session_monitor_protocol_ready,omitempty"`
 	// StorageProtocolLegacy records an explicit v2 rejection by a Controller only
 	// while Core has no v2 storage state. It preserves existing local management.
 	StorageProtocolLegacy bool                    `json:"storage_protocol_legacy,omitempty"`
@@ -59,9 +67,28 @@ type State struct {
 }
 
 type Store struct {
-	dir   string
-	lock  *os.File
-	State State
+	dir               string
+	lock              *os.File
+	poolStorageAccess map[string]map[string]protocol.PoolStorageAccess
+	beforePublish     func() error // test-only deterministic pre-rename failure hook
+	afterPublish      func() error // test-only deterministic post-rename failure hook
+	State             State
+}
+
+// publishedStateError means state.json was atomically renamed before the
+// durability confirmation failed. The current process must not revert its
+// in-memory State to the old value: the new file is already visible, while a
+// crash can still require retrying from the previously persisted pending state.
+type publishedStateError struct{ err error }
+
+func (e *publishedStateError) Error() string {
+	return "state was published but durability is uncertain; recheck host status: " + e.err.Error()
+}
+func (e *publishedStateError) Unwrap() error { return e.err }
+
+func stateWasPublished(err error) bool {
+	var published *publishedStateError
+	return errors.As(err, &published)
 }
 
 func OpenStore(dir string) (*Store, error) {
@@ -84,7 +111,7 @@ func OpenStore(dir string) (*Store, error) {
 		lock.Close()
 		return nil, errors.New("another agent process owns the state directory")
 	}
-	s := &Store{dir: dir, lock: lock, State: State{Journal: map[string]JournalEntry{}}}
+	s := &Store{dir: dir, lock: lock, poolStorageAccess: map[string]map[string]protocol.PoolStorageAccess{}, State: State{Journal: map[string]JournalEntry{}}}
 	path := filepath.Join(dir, "state.json")
 	if info, err = os.Lstat(path); err == nil {
 		if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
@@ -132,15 +159,28 @@ func (s *Store) Save() error {
 	if err = f.Close(); err != nil {
 		return err
 	}
+	if s.beforePublish != nil {
+		if err = s.beforePublish(); err != nil {
+			return err
+		}
+	}
 	if err = os.Rename(name, filepath.Join(s.dir, "state.json")); err != nil {
 		return err
 	}
+	if s.afterPublish != nil {
+		if err = s.afterPublish(); err != nil {
+			return &publishedStateError{err: err}
+		}
+	}
 	d, err := os.Open(s.dir)
 	if err != nil {
-		return err
+		return &publishedStateError{err: err}
 	}
 	defer d.Close()
-	return d.Sync()
+	if err = d.Sync(); err != nil {
+		return &publishedStateError{err: err}
+	}
+	return nil
 }
 
 // newUUID returns a random version 4 UUID in canonical lowercase form.

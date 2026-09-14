@@ -1,0 +1,9 @@
+{
+  "summary": "Strengthen planned master-controlled HA, fencing and opt-in failback with blocking reliability and independent acceptance gates. API impact: none for planning; future policy/authority contracts are explicitly required.",
+  "paths": ["docs/plans/2026-09-08-nex-platform.md", "website/src/routes/roadmap/+page.svelte"],
+  "guide": {"impact": "none", "reason": "No HA/failback controls are implemented. The plan requires clear operator prerequisites, confirmation and verified guides in the future slice.", "pages": []},
+  "api": {"impact": "none", "reason": "No runtime API changes. Planned UI/Controller/master/member flows now explicitly require authority validation, Core-owned policy, failure/retry and compatibility contracts.", "pages": []},
+  "roadmap": {"impact": "updated", "reason": "Add outstanding master-controlled opt-in failback and rigorous fencing/failure acceptance requirements under future HA, without claiming implementation.", "pages": ["website/src/routes/roadmap/+page.svelte"]},
+  "state": {"owner": "none", "reason": "Planning and roadmap text only. Future HA/return policy and operation records are explicitly Core/master-owned and recoverable independently of Controller."},
+  "verification": {"method": "Independent Terra review accepted master authority/succession, verified fencing, opt-in return, cross-site Core ownership and planned-only status. Documentation/privacy/diff checks passed; website check/build passed with zero Svelte errors/warnings. Primary Chromium walkthrough expanded the new roadmap items, confirmed Later status and inspected desktop/360px captures with no overflow, JavaScript errors or failed HTTP responses. No runtime HA, fencing or failback certification is claimed.", "evidence": ["docs/plans/2026-09-08-nex-platform.md", "website/src/routes/roadmap/+page.svelte"]}
+}

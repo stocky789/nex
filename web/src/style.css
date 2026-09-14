@@ -134,6 +134,12 @@ small { display: block; color: var(--muted); font-size: 11px; line-height: 1.5; 
 .confirm-dialog h2 { margin: 0 0 8px; font-size: 15px; }
 .confirm-dialog p { margin: 0 0 10px; }
 .confirm-dialog .actions { justify-content: flex-end; }
+.storage-browser { width: min(620px, calc(100vw - 32px)); }
+.storage-browser-path { padding: 6px 8px; border: 1px solid #c3cdd9; background: #f5f9ff; overflow-wrap: anywhere; }
+.storage-browser-list { max-height: min(48vh, 360px); margin: 10px 0; padding: 0; overflow: auto; border: 1px solid #c3cdd9; list-style: none; }
+.storage-browser-list li + li { border-top: 1px solid #e0e5ea; }
+.storage-browser-folder { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; border: 0; border-radius: 0; background: #fff; text-align: left; }
+.storage-browser-folder[aria-pressed="true"] { background: #dbe7ff; color: #10306b; }
 .shell { display: grid; grid-template-columns: 238px minmax(0, 1fr); flex: 1; min-height: 0; }
 aside { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-right: 4px solid #d3d6da; background: #fff; overflow: auto; }
 .nav-title { position: sticky; top: 0; z-index: 1; padding: 5px 9px; font-size: 12px; font-weight: 600; background: linear-gradient(#f9f9f9, #e6e6e6); border-bottom: 1px solid var(--line); }
@@ -202,9 +208,9 @@ tbody tr:hover { background: #eef4ff; }
 .strong { font-weight: 600; }
 .badge { display: inline-flex; align-items: center; gap: 5px; padding: 1px 4px; font-size: 11px; line-height: 1.5; color: #475569; background: #e2e8f0; white-space: nowrap; }
 .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.badge.fresh, .badge.healthy, .badge.ok, .badge.succeeded, .badge.up { color: #15803d; background: #dcfce7; }
-.badge.stale, .badge.degraded, .badge.timeout, .badge.dispatched, .badge.warning { color: #b45309; background: #fef3c7; }
-.badge.failed, .badge.error, .badge.revoked, .badge.down { color: #b91c1c; background: #fee2e2; }
+.badge.fresh, .badge.healthy, .badge.ok, .badge.succeeded, .badge.up, .badge.verified, .badge.passed { color: #15803d; background: #dcfce7; }
+.badge.stale, .badge.degraded, .badge.timeout, .badge.dispatched, .badge.warning, .badge.pending, .badge.awaiting_fencing, .badge.needs_attention, .badge.unverified, .badge.uncertain { color: #b45309; background: #fef3c7; }
+.badge.failed, .badge.error, .badge.revoked, .badge.down, .badge.blocked { color: #b91c1c; background: #fee2e2; }
 .badge.queued, .badge.uploading { color: #1d4ed8; background: #dbeafe; }
 .badge.cancelled { color: #475569; background: #e2e8f0; }
 .health-summary { display: grid; justify-items: start; gap: 3px; min-width: 220px; }
@@ -330,6 +336,18 @@ select option { padding: 5px 8px; }
 select option:hover, select option:focus-visible { background: #d4e3ff; }
 select option:checked { font-weight: 600; }
 .managed-actions { margin-bottom: 12px; }
+.cluster-credential { max-width: 500px; margin: 12px 10px; padding: 10px 12px; border: 1px solid #d8c28d; background: #fffdf5; }
+.cluster-credential h3 { margin: 0 0 6px; }
+.cluster-credential .notice { margin: 0; }
+.cluster-setup { margin: 12px 10px; padding: 10px 12px; border: 1px solid #d8c28d; background: #fffdf5; }
+.cluster-setup h3 { margin: 0 0 6px; }
+.cluster-source, .cluster-nodes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 16px; }
+.cluster-nodes { margin-top: 12px; }
+.cluster-nodes fieldset { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.cluster-nodes fieldset label:nth-last-child(-n + 2) { grid-column: 1 / -1; }
+.cluster-setup > button { margin-top: 12px; }
+@media (max-width: 1050px) { .cluster-source, .cluster-nodes { grid-template-columns: 1fr; } }
+@media (max-width: 700px) { .cluster-nodes fieldset { grid-template-columns: 1fr; } }
 .vm-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }
 .vm-wizard form { max-width: 680px; }
 /* Boot order: one row per device, its position in a counter and the move controls at the end. */

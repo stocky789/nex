@@ -87,16 +87,8 @@ writable VM execution.
 
 ## Verification
 
-The disposable two-Core lab completed authenticated join, master NFS/SMB registration with the
-selected discovered directories, stable member-ID mount/access/lock/QEMU checks, one member VM on
-each repository, in-use master-detach refusal, master-peer outage/recovery while the SMB VM ran,
-native permission failure/recovery, offline two-generation catch-up and unused-detach unmount.
-A fresh Controller database/TLS identity then re-adopted the same pool, storage IDs, credentials
-and VM definitions without re-entry; browser captures were inspected. See the exact methods and
-limits in [bug-ledger lab evidence](../qa/2026-09-12-bug-ledger.md#bug-0094-primary-native-pool-walkthrough).
-
-This does not establish the remaining Phase 4/HA scope: master change, member eject, network
-reconciliation, migration, HA/fencing, physical-hardware support and UEFI coverage remain outside
-this walkthrough.
+The join, member NFS/SMB access, outage recovery and fresh-Controller adoption were walked
+through on two disposable Cores. Master change, member eject, migration, HA and physical hardware
+were not. See [bug-ledger lab evidence](../qa/2026-09-12-bug-ledger.md#bug-0094-primary-native-pool-walkthrough).
 
 [Back to the user guide](README.md)

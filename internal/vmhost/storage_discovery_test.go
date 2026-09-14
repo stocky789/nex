@@ -84,12 +84,12 @@ func TestDiscoverStorageNativeSources(t *testing.T) {
 			if len(a) != 1 || !strings.Contains(a[0], "?uid=64055&gid=64055") {
 				t.Fatalf("nfs-ls args %q", a)
 			}
-			return []byte("-rw-r--r-- file\ndrwxrwxrwx discovered\n"), nil
+			return []byte("-rw-r--r-- 1 1000 1000 8 file\ndrwxrwxrwx 2 1000 1000 8 Team VMs\n"), nil
 		}
 		return nil, errors.New("unexpected")
 	}
 	g := DiscoverStorage(context.Background(), nfsDirectory)
-	if g.Status != "succeeded" || len(g.Candidates) != 1 || g.Candidates[0].Source.NFS.Directory != "discovered" {
+	if g.Status != "succeeded" || len(g.Candidates) != 1 || g.Candidates[0].Source.NFS.Directory != "Team VMs" {
 		t.Fatalf("NFS directory discovery %+v", g)
 	}
 	if !slices.Contains(calls[2], "nonpersistent") || slices.Contains(calls[2], "--login") {
@@ -102,6 +102,27 @@ func TestDiscoverStorageNativeSources(t *testing.T) {
 				t.Fatal("credential retained")
 			}
 		}
+	}
+}
+
+func TestDiscoverSMBDirectoriesSupportsSpacesWithoutCommandParsing(t *testing.T) {
+	oldRun := nativeRun
+	t.Cleanup(func() { nativeRun = oldRun })
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "smbclient":
+			if !slices.Contains(args, "//storage.example.test/VM Files$") || !slices.Contains(args, "Team VMs; quit") || !slices.Contains(args, "-D") || !slices.Contains(args, "-c") || !slices.Contains(args, "ls") {
+				t.Fatalf("SMB directory was not passed as a separate argument: %q", args)
+			}
+			return []byte("  Finance VMs                          D        0  Wed Jan 1 00:00:00 2026\n"), nil
+		}
+		return nil, errors.New("unexpected native command")
+	}
+	r := request(protocol.StorageKindSMB)
+	r.Path = "/VM Files$/Team VMs; quit"
+	g := DiscoverStorage(context.Background(), r)
+	if g.Status != "succeeded" || len(g.Candidates) != 1 || g.Candidates[0].Path != "/VM Files$/Team VMs; quit/Finance VMs" {
+		t.Fatalf("SMB directory discovery %+v", g)
 	}
 }
 func TestDiscoverStorageCancellationIsReported(t *testing.T) {

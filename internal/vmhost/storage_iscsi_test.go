@@ -105,6 +105,65 @@ func TestInspectISCSIRejectsClonedUUIDMountedFromAnotherLUN(t *testing.T) {
 	}
 }
 
+func TestInspectISCSIObservesClusteredGFS2Identity(t *testing.T) {
+	oldRun, oldClusterRun, oldAccess := nativeRun, clusterRun, inspectISCSIPathAccess
+	t.Cleanup(func() { nativeRun, clusterRun, inspectISCSIPathAccess = oldRun, oldClusterRun, oldAccess })
+	const uuid = "01234567-89ab-cdef-0123-456789abcdef"
+	path := "/var/lib/nex-storage/repo"
+	s := protocol.StorageRegistration{ID: "repo", Kind: protocol.StorageKindISCSI, Path: path, Source: protocol.StorageSource{ISCSI: &protocol.ISCSIStorageSource{Portal: "storage.example", TargetIQN: "iqn.2026-01.example:vm", WWID: "3600508b400105e210000900000490000", LUN: 4, FilesystemUUID: uuid, MountPath: path, Mode: "clustered_gfs2", ClusterID: "cluster", LockTable: "cluster:shared", EligibleHostIDs: []string{"host-1", "host-2", "host-3"}}}, Identity: protocol.StorageIdentity{ISCSI: &protocol.ISCSIStorageIdentity{TargetIQN: "iqn.2026-01.example:vm", WWID: "3600508b400105e210000900000490000", LUN: 4, FilesystemUUID: uuid, FilesystemType: "gfs2", GFS2LockTable: "cluster:shared", GFS2Journals: 3}}}
+	if _, err := validISCSI(s); err != nil {
+		t.Fatalf("test registration invalid: %v, path=%q expected=%q", err, path, remoteMountPath(s))
+	}
+	inspectISCSIPathAccess = func(string, string, bool) (storageAccess, error) {
+		return storageAccess{Path: path, Health: "healthy"}, nil
+	}
+	clusterRun = func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		switch name {
+		case "tunegfs2":
+			return []byte("Locking protocol: lock_dlm\nLock table: cluster:shared\n"), nil
+		case "gfs2_edit":
+			return []byte("journal0: a\njournal1: b\njournal2: c\njournal3: d\njournal4: e\n"), nil
+		default:
+			t.Fatalf("unexpected cluster command %q", name)
+			return nil, nil
+		}
+	}
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "lsblk":
+			return []byte(`{"blockdevices":[{"path":"/dev/sdb","type":"disk","wwn":"3600508b400105e210000900000490000","hctl":"7:0:0:4","children":[{"path":"/dev/sdb1","type":"part","uuid":"01234567-89ab-cdef-0123-456789abcdef","fstype":"gfs2"}]}]}`), nil
+		case "findmnt":
+			return []byte("/dev/sdb1 " + uuid + " gfs2 rw " + path + "\n"), nil
+		default:
+			t.Fatalf("unexpected command %q %q", name, args)
+			return nil, nil
+		}
+	}
+	got, err := inspectISCSI(context.Background(), s)
+	if err != nil || got.Observed.ISCSI == nil || got.Observed.ISCSI.FilesystemType != "gfs2" || got.Observed.ISCSI.GFS2LockTable != "cluster:shared" || got.Observed.ISCSI.GFS2Journals != 5 {
+		t.Fatalf("clustered GFS2 observation = %#v, %v", got.Observed, err)
+	}
+	clusterRun = func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("Locking protocol: lock_dlm\nLock table: another:table\n"), nil
+	}
+	if _, err = inspectISCSI(context.Background(), s); err == nil || !strings.Contains(err.Error(), "GFS2 lock") {
+		t.Fatalf("mismatched GFS2 metadata admitted: %v", err)
+	}
+}
+
+func TestDetachISCSIRefusesClusteredProfileBeforeNativeMutation(t *testing.T) {
+	oldRun := nativeRun
+	t.Cleanup(func() { nativeRun = oldRun })
+	nativeRun = func(context.Context, string, ...string) ([]byte, error) {
+		t.Fatal("clustered detach issued a native command")
+		return nil, nil
+	}
+	s := protocol.StorageRegistration{Kind: protocol.StorageKindISCSI, Source: protocol.StorageSource{ISCSI: &protocol.ISCSIStorageSource{Mode: "clustered_gfs2"}}}
+	if err := detachISCSI(context.Background(), s); err == nil || !strings.Contains(err.Error(), "coordinated") {
+		t.Fatalf("clustered detach = %v", err)
+	}
+}
+
 func TestPrepareISCSIRollsBackFailedDiscovery(t *testing.T) {
 	oldRun, oldMount, oldNodeRoot := nativeRun, storageMountRoot, iscsiNodeRoot
 	t.Cleanup(func() { nativeRun, storageMountRoot, iscsiNodeRoot = oldRun, oldMount, oldNodeRoot })
@@ -288,6 +347,139 @@ func TestISCSIChapRotationPreservesExistingCredentials(t *testing.T) {
 	got, err = os.ReadFile(path)
 	if err != nil || string(got) != string(old) {
 		t.Fatalf("failed rotation did not restore credentials: %q, %v", got, err)
+	}
+}
+
+func TestNexISCSINodeConfigIsIdempotentForUnchangedCredentials(t *testing.T) {
+	first := nexISCSINodeConfig([]byte("node.startup = manual\n"), "user", "secret")
+	second := nexISCSINodeConfig(first, "user", "secret")
+	if string(second) != string(first) {
+		t.Fatalf("unchanged owned iSCSI configuration drifted on replay:\nfirst=%q\nsecond=%q", first, second)
+	}
+}
+
+func TestConfigureISCSICHAPActiveLegacyWhitespaceIsNotCredentialRotation(t *testing.T) {
+	oldRun, oldRoot, oldCredentials, oldOwner := nativeRun, iscsiNodeRoot, storageCredentialRoot, iscsiOwnerRoot
+	t.Cleanup(func() {
+		nativeRun, iscsiNodeRoot, storageCredentialRoot, iscsiOwnerRoot = oldRun, oldRoot, oldCredentials, oldOwner
+	})
+	root := t.TempDir()
+	iscsiNodeRoot, storageCredentialRoot, iscsiOwnerRoot = filepath.Join(root, "nodes"), filepath.Join(root, "credentials"), filepath.Join(root, "owners")
+	if err := os.MkdirAll(storageCredentialRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	v := &protocol.ISCSIStorageSource{Portal: "storage.example:3260", TargetIQN: "iqn.2026-01.example:vm"}
+	path := iscsiNodePath(v)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	canonical := nexISCSINodeConfig([]byte("node.startup = manual\n"), "user", "secret")
+	legacy := []byte(strings.Replace(string(canonical), nexISCSINodeMarker, "\n"+nexISCSINodeMarker, 1))
+	if err := os.WriteFile(path, legacy, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(storageCredentialRoot, "receipt"), []byte("username=user\npassword=secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "iscsiadm" && len(args) > 1 && args[1] == "session" {
+			return []byte("Target: " + v.TargetIQN + "\nCurrent Portal: storage.example:3260,1\n"), nil
+		}
+		return nil, nil
+	}
+	if change, err := configureISCSICHAP(context.Background(), protocol.StorageRegistration{CredentialReceipt: "receipt", CredentialPresent: true}, v); err != nil || change.reconnect || change.path != "" {
+		t.Fatalf("legacy whitespace became active credential rotation: change=%+v err=%v", change, err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != string(legacy) {
+		t.Fatalf("legacy active config was rewritten: %q, %v", got, err)
+	}
+	if ownedISCSINodeAuthMatches(legacy, "user", "changed") {
+		t.Fatal("changed password was treated as harmless legacy whitespace")
+	}
+	mutual := append(append([]byte(nil), legacy...), []byte("node.session.auth.username_in = peer\n")...)
+	if ownedISCSINodeAuthMatches(mutual, "user", "secret") {
+		t.Fatal("mutual-auth configuration was treated as harmless legacy whitespace")
+	}
+}
+
+func TestConfigureISCSICHAPActiveSidecarOwnedMatchingAuthIsNoop(t *testing.T) {
+	oldRun, oldRoot, oldCredentials, oldOwner := nativeRun, iscsiNodeRoot, storageCredentialRoot, iscsiOwnerRoot
+	t.Cleanup(func() {
+		nativeRun, iscsiNodeRoot, storageCredentialRoot, iscsiOwnerRoot = oldRun, oldRoot, oldCredentials, oldOwner
+	})
+	root := t.TempDir()
+	iscsiNodeRoot, storageCredentialRoot, iscsiOwnerRoot = filepath.Join(root, "nodes"), filepath.Join(root, "credentials"), filepath.Join(root, "owners")
+	if err := os.MkdirAll(storageCredentialRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	v := &protocol.ISCSIStorageSource{Portal: "storage.example:3260", TargetIQN: "iqn.2026-01.example:vm", WWID: "3600508b400105e210000900000490000", FilesystemUUID: "01234567-89ab-cdef-0123-456789abcdef"}
+	path := iscsiNodePath(v)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	markerless := []byte("node.startup = manual\nnode.session.auth.authmethod = CHAP\nnode.session.auth.username = user\nnode.session.auth.password = secret\n")
+	if err := os.WriteFile(path, markerless, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(context.Background(), storageOwnerRootKey{}, iscsiOwnerRoot)
+	if err := writeNexISCSIOwner(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(storageCredentialRoot, "receipt"), []byte("username=user\npassword=secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "iscsiadm" && len(args) > 1 && args[1] == "session" {
+			return []byte("Target: " + v.TargetIQN + "\nCurrent Portal: storage.example:3260,1\n"), nil
+		}
+		return nil, nil
+	}
+	if change, err := configureISCSICHAP(ctx, protocol.StorageRegistration{CredentialReceipt: "receipt", CredentialPresent: true}, v); err != nil || change.reconnect || change.path != "" {
+		t.Fatalf("matching sidecar-owned active auth was not a no-op: change=%+v err=%v", change, err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != string(markerless) {
+		t.Fatalf("sidecar-owned node was rewritten: %q, %v", got, err)
+	}
+}
+
+func TestConfigureISCSICHAPActiveNoAuthAbsentOrNoneIsNoop(t *testing.T) {
+	oldRun, oldRoot, oldCredentials, oldOwner := nativeRun, iscsiNodeRoot, storageCredentialRoot, iscsiOwnerRoot
+	t.Cleanup(func() {
+		nativeRun, iscsiNodeRoot, storageCredentialRoot, iscsiOwnerRoot = oldRun, oldRoot, oldCredentials, oldOwner
+	})
+	root := t.TempDir()
+	iscsiNodeRoot, storageCredentialRoot, iscsiOwnerRoot = filepath.Join(root, "nodes"), filepath.Join(root, "credentials"), filepath.Join(root, "owners")
+	for _, tc := range []struct{ name, auth string }{{"absent", ""}, {"none", "node.session.auth.authmethod = None\n"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := &protocol.ISCSIStorageSource{Portal: "storage.example:3260", TargetIQN: "iqn.2026-01.example:" + tc.name, WWID: "3600508b400105e210000900000490000", FilesystemUUID: "01234567-89ab-cdef-0123-456789abcdef"}
+			path := iscsiNodePath(v)
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			original := []byte("node.startup = manual\n" + tc.auth)
+			if err := os.WriteFile(path, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.WithValue(context.Background(), storageOwnerRootKey{}, iscsiOwnerRoot)
+			if err := writeNexISCSIOwner(ctx, v); err != nil {
+				t.Fatal(err)
+			}
+			nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+				if name == "iscsiadm" && len(args) > 1 && args[1] == "session" {
+					return []byte("Target: " + v.TargetIQN + "\nCurrent Portal: storage.example:3260,1\n"), nil
+				}
+				return nil, nil
+			}
+			if change, err := configureISCSICHAP(ctx, protocol.StorageRegistration{}, v); err != nil || change.reconnect || change.path != "" {
+				t.Fatalf("active no-auth %s was not a no-op: change=%+v err=%v", tc.name, change, err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != string(original) {
+				t.Fatalf("active no-auth %s was rewritten: %q, %v", tc.name, got, err)
+			}
+		})
 	}
 }
 
@@ -821,5 +1013,98 @@ func TestPrepareISCSIRollbackRemovesEngineOwnerReceipt(t *testing.T) {
 	}
 	if _, err := os.Stat(iscsiOwnerPath(ctx, v)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("engine owner receipt remained after prepare rollback: %v", err)
+	}
+}
+
+func TestValidateStorageISCSISessionStrictReadOnly(t *testing.T) {
+	old := nativeRun
+	t.Cleanup(func() { nativeRun = old })
+	const portal = "Storage.Example:3260"
+	const target = "iqn.2026-09.example:shared"
+	sessionID, err := StorageISCSISessionID(portal, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureAt := func(observedPortal, sid, observedTarget, connection, session, daemon string) []byte {
+		// Captured Debian 13 `iscsiadm -m session -P 1` structure. It has
+		// no `tcp: [SID]` header; the transport and SID are fields below.
+		return []byte("Target: " + observedTarget + " (non-flash)\n" +
+			"\tCurrent Portal: " + observedPortal + ",1\n" +
+			"\tPersistent Portal: " + observedPortal + ",1\n" +
+			"\t\t**********\n\t\tInterface:\n\t\t**********\n" +
+			"\t\tIface Transport: tcp\n\t\tSID: " + sid + "\n" +
+			"\tiSCSI Connection State: " + connection + "\n" +
+			"\tiSCSI Session State: " + session + "\n" +
+			"\tInternal iscsid Session State: " + daemon + "\n")
+	}
+	fixture := func(sid, observedTarget, connection, session, daemon string) []byte {
+		return fixtureAt("storage.example:3260", sid, observedTarget, connection, session, daemon)
+	}
+	var calls [][]string
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string{name}, args...))
+		return fixture("7", target, "LOGGED IN", "LOGGED_IN", "NO CHANGE"), nil
+	}
+	if err := ValidateStorageISCSISession(context.Background(), portal, target, sessionID); err != nil {
+		t.Fatalf("ValidateStorageISCSISession() = %v", err)
+	}
+	if !reflect.DeepEqual(calls, [][]string{{"iscsiadm", "-m", "session", "-P", "1"}}) {
+		t.Fatalf("native commands = %#v, want read-only session inspection", calls)
+	}
+	// A separate portal is a distinct transport identity. Its good record must
+	// not be treated as this monitor's health, nor poison it.
+	nativeRun = func(context.Context, string, ...string) ([]byte, error) {
+		return append(fixture("7", target, "LOGGED IN", "LOGGED_IN", "NO CHANGE"), fixtureAt("other.example:3260", "8", target, "LOGGED IN", "LOGGED_IN", "NO CHANGE")...), nil
+	}
+	if err := ValidateStorageISCSISession(context.Background(), portal, target, sessionID); err != nil {
+		t.Fatalf("well-formed distinct alternate portal = %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		out  []byte
+	}{
+		{"missing", nil},
+		{"wrong-target", fixture("7", "iqn.2026-09.example:other", "LOGGED IN", "LOGGED_IN", "NO CHANGE")},
+		{"unknown", fixture("7", target, "Unknown", "LOGGED_IN", "NO CHANGE")},
+		{"recovering", fixture("7", target, "LOGGED IN", "LOGGED_IN", "REOPEN")},
+		{"missing-session-state", fixture("7", target, "LOGGED IN", "", "NO CHANGE")},
+		{"wrong-persistent-portal", []byte(strings.Replace(string(fixture("7", target, "LOGGED IN", "LOGGED_IN", "NO CHANGE")), "Persistent Portal: storage.example:3260,1", "Persistent Portal: other.example:3260,1", 1))},
+		{"non-tcp", []byte(strings.Replace(string(fixture("7", target, "LOGGED IN", "LOGGED_IN", "NO CHANGE")), "Iface Transport: tcp", "Iface Transport: iser", 1))},
+		{"malformed-sid", fixture("x", target, "LOGGED IN", "LOGGED_IN", "NO CHANGE")},
+		{"duplicate", append(fixture("7", target, "LOGGED IN", "LOGGED_IN", "NO CHANGE"), fixture("8", target, "LOGGED IN", "LOGGED_IN", "NO CHANGE")...)},
+		{"duplicate-field", append(fixture("7", target, "LOGGED IN", "LOGGED_IN", "NO CHANGE"), []byte("\tSID: 7\n")...)},
+		{"incomplete-alternate", append(fixture("7", target, "LOGGED IN", "LOGGED_IN", "NO CHANGE"), []byte("Target: "+target+" (non-flash)\n\tCurrent Portal: other.example:3260,1\n")...)},
+		{"duplicate-sid-alternate", append(fixture("7", target, "LOGGED IN", "LOGGED_IN", "NO CHANGE"), fixtureAt("other.example:3260", "7", target, "LOGGED IN", "LOGGED_IN", "NO CHANGE")...)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			nativeRun = func(context.Context, string, ...string) ([]byte, error) { return tc.out, nil }
+			if err := ValidateStorageISCSISession(context.Background(), portal, target, sessionID); err == nil {
+				t.Fatal("accepted unsafe iSCSI session output")
+			}
+		})
+	}
+	nativeRun = func(context.Context, string, ...string) ([]byte, error) {
+		return nil, errors.New("private native detail")
+	}
+	if err := ValidateStorageISCSISession(context.Background(), portal, target, sessionID); err == nil || strings.Contains(err.Error(), "private native detail") {
+		t.Fatalf("native error = %v, want bounded public error", err)
+	}
+}
+
+func TestStorageISCSISessionIDCanonicalizesDefaultPort(t *testing.T) {
+	withoutPort, err := StorageISCSISessionID("Storage.Example", "iqn.2026-09.example:shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	withPort, err := StorageISCSISessionID("storage.example:3260", "iqn.2026-09.example:shared")
+	if err != nil || withoutPort != withPort || len(withPort) != len("nex-iscsi-")+64 || !strings.HasPrefix(withPort, "nex-iscsi-") {
+		t.Fatalf("canonical session IDs = %q, %q, %v", withoutPort, withPort, err)
+	}
+	canonicalPortal, sessionID, err := StorageISCSISessionParameters("Storage.Example", "iqn.2026-09.example:shared")
+	if err != nil || canonicalPortal != "storage.example:3260" || sessionID != withPort {
+		t.Fatalf("StorageISCSISessionParameters() = %q, %q, %v", canonicalPortal, sessionID, err)
+	}
+	if _, err := StorageISCSISessionID("storage.example:0", "iqn.2026-09.example:shared"); err == nil {
+		t.Fatal("accepted invalid portal")
 	}
 }

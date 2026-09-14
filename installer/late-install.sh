@@ -6,6 +6,10 @@ set -eu
 mkdir -p /target/usr/share/doc/nex-core
 cp /cdrom/nex/docs/* /target/usr/share/doc/nex-core/
 cp /cdrom/nex/nex-source.tar.gz* /cdrom/nex/nex-gui-source.tar.gz* /target/usr/share/doc/nex-core/
+if [ -d /cdrom/nex/third-party/dlm-pacemaker-abi ]; then
+    mkdir -p /target/usr/share/doc/nex-core/third-party
+    cp -a /cdrom/nex/third-party/dlm-pacemaker-abi /target/usr/share/doc/nex-core/third-party/
+fi
 mkdir -p /target/var/cache/nex-install
 cp -a /cdrom/nex/repo /target/var/cache/nex-install/
 cp /cdrom/nex/packages.txt /target/var/cache/nex-install/
@@ -28,8 +32,32 @@ apt_local() {
 # system into something that resembles a Nex Core host.
 mkdir -p /etc/nex
 printf 'NEX_CORE=1\nINSTALLED_BY=nex-core-iso\n' > /etc/nex/core-release
+# Debian Installer normally supplies policy-rc.d for in-target package work.
+# Preserve it when present; otherwise suppress all maintainer-script starts while
+# the native cluster packages and Core package are configured.
+policy_rc_created=
+if [ ! -e /usr/sbin/policy-rc.d ]; then
+    install -d -m755 /usr/sbin
+    printf '%s\n' '#!/bin/sh' 'exit 101' > /usr/sbin/policy-rc.d
+    chmod 755 /usr/sbin/policy-rc.d
+    policy_rc_created=/usr/sbin/policy-rc.d
+    trap 'if [ -n "${policy_rc_created:-}" ]; then rm -f "$policy_rc_created"; fi' EXIT
+fi
 apt_local update
 apt_local install -y --no-install-recommends $(cat /var/cache/nex-install/packages.txt)
+if [ -n "$policy_rc_created" ]; then
+    rm -f "$policy_rc_created"
+    policy_rc_created=
+    trap - EXIT
+fi
+# Debian ships a sample Corosync conffile. Only its exact dpkg-recorded checksum
+# is safe to mark as replaceable by the first explicit Nex clustered-storage setup.
+# Any modified or active configuration remains untouched and unmarked.
+if /usr/lib/nex/corosync-pristine; then :; fi
+# These native clustered-storage components are present for an explicitly configured
+# Core pool only.  Do not let package installation create a cluster or start a
+# membership/recovery service on an ordinary host.
+systemctl disable corosync.service dlm.service pacemaker.service pcsd.service pcsd-ruby.service || true
 # nex-core-local's postinst diverts Debian's os-release symlink and writes the
 # Nex Core identity from its own package version; the console banners reuse it.
 . /etc/os-release

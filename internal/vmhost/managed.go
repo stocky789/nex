@@ -38,6 +38,17 @@ type ManagedEngine struct {
 	observe func(context.Context, managedJournal, string) error
 }
 
+// VMUpdateEvidence is read-only proof that a particular successful vm-update
+// advanced one locally journaled VM definition.  Pool ownership code uses the
+// exact predecessor and successor definitions to settle a previously approved
+// update without accepting an untrusted inventory rewrite.
+type VMUpdateEvidence struct {
+	OperationID string
+	Status      string
+	Previous    protocol.VMCreateSpec
+	Current     protocol.VMCreateSpec
+}
+
 func NewManaged(stateDir string) *ManagedEngine {
 	return &ManagedEngine{stateDir: stateDir, networkDir: "/etc/network"}
 }
@@ -127,6 +138,212 @@ func (e *ManagedEngine) journals() ([]managedJournal, error) {
 		out = append(out, j)
 	}
 	return out, nil
+}
+
+// SuccessfulVMUpdateEvidence returns the newest succeeded vm-update and its
+// exact succeeded predecessor. It never changes journal or native state. An
+// incomplete, duplicate, or unreadable history is not evidence for changing a
+// master-owned VM definition.
+func (e *ManagedEngine) SuccessfulVMUpdateEvidence(ctx context.Context, vmID string) (VMUpdateEvidence, error) {
+	if vmID == "" {
+		return VMUpdateEvidence{}, errors.New("VM identity is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return VMUpdateEvidence{}, err
+	}
+	js, err := e.journals()
+	if err != nil {
+		return VMUpdateEvidence{}, errors.New("managed VM journal is unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return VMUpdateEvidence{}, err
+	}
+	var current *managedJournal
+	for i := range js {
+		if err := ctx.Err(); err != nil {
+			return VMUpdateEvidence{}, err
+		}
+		j := &js[i]
+		if j.Result.Status != "succeeded" || j.Command.Kind != "vm-update" || j.Command.VM == nil || j.Command.VM.ID != vmID {
+			continue
+		}
+		if current == nil || j.Command.VM.Revision > current.Command.VM.Revision {
+			current = j
+			continue
+		}
+		if j.Command.VM.Revision == current.Command.VM.Revision {
+			return VMUpdateEvidence{}, errors.New("managed VM update evidence is ambiguous")
+		}
+	}
+	if current == nil {
+		return VMUpdateEvidence{}, errors.New("no succeeded VM update evidence")
+	}
+	// A pending or needs-attention definition can have crossed a native boundary
+	// without a conclusive result. Never settle an older update while that newer
+	// definition remains unresolved. Failed updates are intentionally excluded:
+	// the managed journal's existing revision semantics do not treat them as
+	// current definitions.
+	for i := range js {
+		if err := ctx.Err(); err != nil {
+			return VMUpdateEvidence{}, err
+		}
+		j := &js[i]
+		if j.Command.VM == nil || j.Command.VM.ID != vmID || (j.Command.Kind != "vm-create" && j.Command.Kind != "vm-update") || (j.Result.Status != "pending" && j.Result.Status != "needs_attention") {
+			continue
+		}
+		if j.Command.VM.Revision >= current.Command.VM.Revision {
+			return VMUpdateEvidence{}, errors.New("managed VM update evidence is superseded or unresolved")
+		}
+	}
+	// Keep this evidence aligned with the journal's authoritative definition
+	// projection. This is intentionally journal-only: the succeeded result was
+	// produced after the normal native definition observation, while this helper
+	// must not cause another native effect during master recovery.
+	authoritative, ok := currentDefinitions(js)[vmID]
+	if !ok || !reflect.DeepEqual(authoritative, *current.Command.VM) {
+		return VMUpdateEvidence{}, errors.New("managed VM update evidence is not the current definition")
+	}
+	var previous *managedJournal
+	for i := range js {
+		if err := ctx.Err(); err != nil {
+			return VMUpdateEvidence{}, err
+		}
+		j := &js[i]
+		if j.Result.Status != "succeeded" || (j.Command.Kind != "vm-create" && j.Command.Kind != "vm-update") || j.Command.VM == nil || j.Command.VM.ID != vmID || j.Command.VM.Revision != current.Command.VM.Revision-1 {
+			continue
+		}
+		if previous != nil {
+			return VMUpdateEvidence{}, errors.New("managed VM update predecessor is ambiguous")
+		}
+		previous = j
+	}
+	if previous == nil {
+		return VMUpdateEvidence{}, errors.New("managed VM update predecessor is unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return VMUpdateEvidence{}, err
+	}
+	return VMUpdateEvidence{OperationID: current.Command.OperationID, Status: current.Result.Status, Previous: *previous.Command.VM, Current: *current.Command.VM}, nil
+}
+
+// VMHasPoolSharedStorageHistory reports whether a successful durable VM
+// definition ever referenced a repository that was successfully registered as
+// pool-shared. It intentionally retains old registration journals after a
+// later detach: a formerly shared VM must not silently lose its master-owned
+// execution fence merely because its newest definition has local disks.
+// This is journal-only and performs no libvirt or storage observation.
+func (e *ManagedEngine) VMHasPoolSharedStorageHistory(ctx context.Context, vmID string) (bool, error) {
+	if vmID == "" {
+		return false, errors.New("VM identity is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	js, err := e.journals()
+	if err != nil {
+		return false, errors.New("managed VM journal is unavailable")
+	}
+	shared := map[string]bool{}
+	for i := range js {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		j := js[i]
+		if j.Result.Status == "succeeded" && j.Command.Kind == "storage-register" && j.Command.Storage != nil && protocol.IsPoolSharedStorage(*j.Command.Storage) {
+			shared[j.Command.Storage.ID] = true
+		}
+	}
+	for i := range js {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		j := js[i]
+		if j.Result.Status != "succeeded" || (j.Command.Kind != "vm-create" && j.Command.Kind != "vm-update") || j.Command.VM == nil || j.Command.VM.ID != vmID {
+			continue
+		}
+		for _, disk := range j.Command.VM.Disks {
+			if shared[disk.StorageID] {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// FailedVMUpdateEvidence proves that one exact vm-update failed without
+// replacing its predecessor. It derives that predecessor from the local
+// journal, so a member never needs a replicated master VM definition. A failed
+// result has the existing managed-journal meaning that no definition became
+// current; pending and needs-attention results are not safe failure evidence.
+func (e *ManagedEngine) FailedVMUpdateEvidence(ctx context.Context, vmID, operationID string, attempted protocol.VMCreateSpec) (VMUpdateEvidence, error) {
+	if vmID == "" || operationID == "" || attempted.ID != vmID || attempted.Revision < 1 || protocol.ValidateVMSpec(attempted) != nil {
+		return VMUpdateEvidence{}, errors.New("invalid VM update failure evidence request")
+	}
+	if err := ctx.Err(); err != nil {
+		return VMUpdateEvidence{}, err
+	}
+	js, err := e.journals()
+	if err != nil {
+		return VMUpdateEvidence{}, errors.New("managed VM journal is unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return VMUpdateEvidence{}, err
+	}
+	failed := false
+	var previous *protocol.VMCreateSpec
+	for i := range js {
+		if err := ctx.Err(); err != nil {
+			return VMUpdateEvidence{}, err
+		}
+		j := &js[i]
+		if j.Command.VM == nil || j.Command.VM.ID != vmID || (j.Command.Kind != "vm-create" && j.Command.Kind != "vm-update") {
+			continue
+		}
+		v := *j.Command.VM
+		if j.Command.Kind == "vm-update" && j.Command.OperationID == operationID {
+			// Execute records a failed update only while it remains in validating;
+			// once allocation, define, or live attachment may have crossed a
+			// native boundary it records needs_attention instead. Require that
+			// durable stage rather than trusting a failed label alone.
+			if j.Result.Status != "failed" || j.Stage != "validating" || !reflect.DeepEqual(v, attempted) {
+				return VMUpdateEvidence{}, errors.New("managed VM update failure evidence does not match the attempted definition")
+			}
+			failed = true
+			continue
+		}
+		if (j.Result.Status == "pending" || j.Result.Status == "needs_attention") && v.Revision >= attempted.Revision-1 {
+			return VMUpdateEvidence{}, errors.New("managed VM update failure evidence is superseded or unresolved")
+		}
+		if j.Result.Status == "succeeded" {
+			if v.Revision >= attempted.Revision {
+				return VMUpdateEvidence{}, errors.New("managed VM update failure evidence is superseded")
+			}
+			if v.Revision == attempted.Revision-1 {
+				if previous != nil {
+					return VMUpdateEvidence{}, errors.New("managed VM update predecessor is ambiguous")
+				}
+				candidate := v
+				previous = &candidate
+			}
+		}
+	}
+	if !failed {
+		return VMUpdateEvidence{}, errors.New("no matching failed VM update evidence")
+	}
+	if previous == nil {
+		return VMUpdateEvidence{}, errors.New("managed VM update predecessor is ambiguous or unavailable")
+	}
+	authoritative, ok := currentDefinitions(js)[vmID]
+	if !ok || !reflect.DeepEqual(authoritative, *previous) {
+		return VMUpdateEvidence{}, errors.New("managed VM update failure evidence is not the current definition")
+	}
+	if err := ctx.Err(); err != nil {
+		return VMUpdateEvidence{}, err
+	}
+	// For failed evidence Current names the exact attempted, unapplied definition;
+	// Previous is the still-current definition. This preserves one evidence type
+	// while making the abort binding explicit to the pool owner.
+	return VMUpdateEvidence{OperationID: operationID, Status: "failed", Previous: *previous, Current: attempted}, nil
 }
 func (e *ManagedEngine) readJournal(name string) (managedJournal, error) {
 	var j managedJournal
@@ -290,6 +507,107 @@ func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch f
 		j.Result.Error = err.Error()
 	}
 	return j.Result, e.save(j)
+}
+
+// CommitClusteredStorageRegistration records a Core-observed clustered GFS2
+// registration after bootstrap identity verification, before Pacemaker mounts it.
+// Normal storage-register prepares/mounts and is therefore intentionally unsuitable here.
+func CommitClusteredStorageRegistration(ctx context.Context, stateDir string, storage protocol.StorageRegistration) error {
+	if !protocol.IsClusteredISCSI(storage) || storage.ID == "" || storage.Generation == 0 || storage.Path == "" || storage.Identity.ISCSI == nil {
+		return errors.New("invalid clustered storage registration")
+	}
+	storage.Capabilities = storageCapabilities(storage)
+	e := NewManaged(stateDir)
+	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+		return err
+	}
+	lock, err := (&Engine{config: Config{StateDir: e.stateDir}}).lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock(lock)
+	js, err := e.journals()
+	if err != nil {
+		return err
+	}
+	for _, old := range js {
+		if old.Command.Storage != nil && old.Command.Storage.ID == storage.ID {
+			if old.Command.Storage.Generation != storage.Generation {
+				return errors.New("clustered storage registration generation conflicts with journal")
+			}
+			if old.Result.Status == "succeeded" && old.AppliedStorage != nil {
+				applied := *old.AppliedStorage
+				normalizeStorageCapabilities(&applied)
+				if reflect.DeepEqual(applied, storage) {
+					return nil
+				}
+			}
+			return errors.New("clustered storage registration conflicts with journal")
+		}
+	}
+	request := storage
+	request.Path = ""
+	request.Identity = protocol.StorageIdentity{}
+	source := *request.Source.ISCSI
+	source.MountPath = ""
+	request.Source.ISCSI = &source
+	command := protocol.Command{OperationID: "cluster-storage-" + storage.ID + "-" + strconv.FormatUint(storage.Generation, 10), Kind: "storage-register", Storage: &request}
+	if err := validateManaged(command); err != nil {
+		return err
+	}
+	return e.save(managedJournal{Command: command, AppliedStorage: &storage, Result: protocol.Result{OperationID: command.OperationID, Status: "succeeded", ObservedAt: time.Now().UTC()}, Stage: "clustered-bootstrap"})
+}
+
+// ClusteredStorageReceipt reads the committed clustered registration without
+// promotion, observation, mounting, or any other native effect. Callers use
+// it only as a crash-recovery receipt; unreadable journal state is distinct
+// from an absent registration and must remain fail-closed.
+func (e *ManagedEngine) ClusteredStorageReceipt(id string) (protocol.StorageRegistration, bool, error) {
+	if id == "" {
+		return protocol.StorageRegistration{}, false, errors.New("clustered storage receipt ID is required")
+	}
+	js, bad := e.readable()
+	if len(bad) != 0 {
+		return protocol.StorageRegistration{}, false, errors.New("managed storage receipt is unreadable")
+	}
+	storage, ok := storageProjection(js)[id]
+	if !ok {
+		return protocol.StorageRegistration{}, false, nil
+	}
+	if !protocol.IsClusteredISCSI(storage) {
+		return protocol.StorageRegistration{}, false, errors.New("managed storage receipt is not clustered iSCSI")
+	}
+	return storage, true, nil
+}
+
+// AppliedStorage lists the durable storage registrations this host has applied.
+// It is deliberately a journal projection only: unlike Applied, it does not
+// promote interrupted VM or media work, inspect credentials, or query libvirt.
+// Callers which need those observations must continue to use Applied.
+func (e *ManagedEngine) AppliedStorage() ([]protocol.StorageRegistration, []protocol.Check) {
+	js, bad := e.readable()
+	return appliedStorageProjection(js, bad)
+}
+
+func appliedStorageProjection(js []managedJournal, bad []string) ([]protocol.StorageRegistration, []protocol.Check) {
+	storage := make([]protocol.StorageRegistration, 0, len(js))
+	for _, s := range storageProjection(js) {
+		s.OperationID, s.Status, s.Error = "", "", ""
+		storage = append(storage, s)
+	}
+	for _, s := range storageTombstones(js) {
+		storage = append(storage, s)
+	}
+	journal := managedJournalCheck(bad, time.Now().UTC())
+	return storage, []protocol.Check{journal}
+}
+
+func managedJournalCheck(bad []string, observedAt time.Time) protocol.Check {
+	journal := protocol.Check{Name: "managed-journal", Status: "healthy", ObservedAt: observedAt}
+	if len(bad) > 0 {
+		journal.Status, journal.Error = "failed", "unreadable managed journal entries skipped: "+strings.Join(bad, "; ")
+	}
+	return journal
 }
 func managedResourceID(c protocol.Command) string {
 	switch c.Kind {
@@ -459,6 +777,14 @@ func validateManaged(c protocol.Command) error {
 	return nil
 }
 
+// ValidateManagedCommand applies the complete no-side-effect managed-command
+// validation used by Execute. Admission code uses it before reserving a remote
+// pool transition, so invalid resource references cannot leave a master-owned
+// pending update without a native journal from which to reconcile it.
+func ValidateManagedCommand(c protocol.Command) error {
+	return validateManaged(c)
+}
+
 // Privileged writes must never traverse a directory replaceable by an ordinary user.
 // Require ordinary execute permission so QEMU can traverse without special ACLs.
 func managedStoragePermissions(uid uint32, mode os.FileMode) bool {
@@ -510,6 +836,24 @@ func localStorage(path string, required uint64) error {
 // writable directory.  In particular, remote storage may not silently fall
 // back to an empty mountpoint after a mount/session is lost.
 func managedStorageReady(ctx context.Context, s protocol.StorageRegistration, required uint64) (storageAccess, error) {
+	if protocol.IsClusteredISCSI(s) {
+		config, ok := StorageClusterConfig(ctx)
+		if !ok {
+			return storageAccess{}, errors.New("clustered iSCSI requires Core cluster validation before VM use")
+		}
+		stateDir, ok := storageClusterStateDir(ctx)
+		if !ok {
+			return storageAccess{}, errors.New("clustered iSCSI requires the local Core state directory before VM use")
+		}
+		a, err := ValidateClusteredISCSIAt(ctx, stateDir, s, config)
+		if err != nil {
+			return storageAccess{}, err
+		}
+		if a.ReadOnly || a.Available < required {
+			return storageAccess{}, errors.New("clustered iSCSI is read-only or lacks reserve capacity")
+		}
+		return a, nil
+	}
 	a, err := storageInspect(ctx, s)
 	if err != nil {
 		return storageAccess{}, err
@@ -537,6 +881,7 @@ var (
 )
 
 type expectedStorageIdentityContextKey struct{}
+type storageClusterConfigContextKey struct{}
 type poolStorageExpectation struct {
 	identity   protocol.StorageIdentity
 	generation uint64
@@ -560,6 +905,22 @@ func WithPoolStorageExpectation(ctx context.Context, identity protocol.StorageId
 // Native preparation is provisional until readiness and capacity succeed; otherwise Core
 // tears the attachment down so a refused registration cannot leave sessions or mounts behind.
 func (e *ManagedEngine) managedStoragePrepare(ctx context.Context, s protocol.StorageRegistration, required uint64) (storageAccess, error) {
+	if protocol.IsClusteredISCSI(s) {
+		// The normal iSCSI path has a single-host ownership model.  Do not mount a
+		// GFS2 LUN until the cluster layer supplies its validated Core-owned config.
+		config, ok := StorageClusterConfig(ctx)
+		if !ok {
+			return storageAccess{}, errors.New("clustered iSCSI requires Core cluster preparation")
+		}
+		a, err := PrepareClusteredISCSI(ctx, filepath.Dir(e.stateDir), s, config)
+		if err != nil {
+			return storageAccess{}, err
+		}
+		if a.ReadOnly || a.Available < required {
+			return storageAccess{}, errors.New("clustered iSCSI is read-only or lacks reserve capacity")
+		}
+		return a, nil
+	}
 	credentialRoot := filepath.Join(filepath.Dir(e.stateDir), credentialDirectory)
 	prepared, err := storagePrepareAtFn(ctx, s, credentialRoot)
 	if err != nil {
@@ -598,6 +959,9 @@ func (e *ManagedEngine) registerStorage(ctx context.Context, j *managedJournal, 
 		requested.ID = j.AppliedStorage.ID
 	}
 	storageCorePaths(&requested)
+	if err := restoreClusteredRegistrationPath(ctx, &requested); err != nil {
+		return err
+	}
 	if requested.CredentialReceipt != "" {
 		if err := bindCredentialReceipt(filepath.Dir(e.stateDir), requested.CredentialReceipt, requested.ID, requested.PoolID, requested.HostID, requested.CredentialRequestID); err != nil {
 			return err
@@ -671,6 +1035,21 @@ func (e *ManagedEngine) registerStorage(ctx context.Context, j *managedJournal, 
 	return nil
 }
 
+// restoreClusteredRegistrationPath is the sole exception to public path
+// sanitization: members recover the GFS2 mount path only from the validated,
+// Core-private cluster profile carried in context.
+func restoreClusteredRegistrationPath(ctx context.Context, s *protocol.StorageRegistration) error {
+	if !protocol.IsClusteredISCSI(*s) {
+		return nil
+	}
+	config, ok := StorageClusterConfig(ctx)
+	if !ok || config.ValidFor(*s) != nil || s.Source.ISCSI == nil || s.Source.ISCSI.MountPath != config.MountPath {
+		return errors.New("clustered iSCSI needs the matching Core cluster configuration")
+	}
+	s.Path = config.MountPath
+	return nil
+}
+
 func storageRegistrationPath(s protocol.StorageRegistration) string {
 	if s.Path != "" {
 		return s.Path
@@ -696,7 +1075,31 @@ func storageCorePaths(s *protocol.StorageRegistration) {
 
 func storageCapabilities(s protocol.StorageRegistration) protocol.StorageCapabilities {
 	thick := s.StorageKind() == protocol.StorageKindLocal || s.StorageKind() == protocol.StorageKindNFS || s.StorageKind() == protocol.StorageKindISCSI
-	return protocol.StorageCapabilities{VMDisk: true, ISO: true, Thin: true, Thick: thick, EligibleHostIDs: []string{s.HostID}}
+	caps := protocol.StorageCapabilities{VMDisk: true, ISO: true, Thin: true, Thick: thick, EligibleHostIDs: []string{s.HostID}}
+	if protocol.IsClusteredISCSI(s) {
+		caps.Shared = true
+		caps.EligibleHostIDs = append([]string(nil), s.Source.ISCSI.EligibleHostIDs...)
+	}
+	return caps
+}
+
+func normalizeStorageCapabilities(s *protocol.StorageRegistration) {
+	if protocol.IsClusteredISCSI(*s) && !s.Capabilities.VMDisk {
+		s.Capabilities = storageCapabilities(*s)
+	}
+}
+
+func poolSharedVMStorage(s protocol.StorageRegistration) bool {
+	return protocol.IsPoolSharedStorage(s)
+}
+func managedUsesPoolSharedStorage(js []managedJournal, v protocol.VMCreateSpec) bool {
+	for _, disk := range v.Disks {
+		storage, err := managedStorage(js, disk.StorageID)
+		if err == nil && poolSharedVMStorage(storage) {
+			return true
+		}
+	}
+	return false
 }
 
 func managedStorageByID(ctx context.Context, js []managedJournal, id string, required uint64) (protocol.StorageRegistration, storageAccess, error) {
@@ -731,6 +1134,23 @@ func ensureVMStorage(ctx context.Context, js []managedJournal, v protocol.VMCrea
 }
 func managedVirsh(ctx context.Context, args ...string) ([]byte, error) {
 	return (&Engine{config: Config{VirshURI: "qemu:///system"}}).virsh(ctx, args...)
+}
+
+// ManagedVMState is a narrow local observation used to confirm a stop or start to
+// the pool master.  It does not authorize anything and treats an unavailable domain as unknown.
+func ManagedVMState(ctx context.Context, id string) (string, error) {
+	if !uuidPattern.MatchString(id) {
+		return "", errors.New("invalid VM identity")
+	}
+	b, err := managedVirsh(ctx, "domstate", id)
+	if err != nil {
+		return "", err
+	}
+	state := strings.TrimSpace(string(b))
+	if state != "running" && state != "shut off" {
+		return "", errors.New("VM state is not confirmable")
+	}
+	return state, nil
 }
 func verifyNetwork(ctx context.Context, n protocol.NetworkRegistration) error {
 	if n.Kind == "vlan" {
@@ -796,6 +1216,7 @@ func storageProjection(js []managedJournal) map[string]protocol.StorageRegistrat
 			if copy.Generation == 0 {
 				copy.Generation = 1
 			}
+			normalizeStorageCapabilities(&copy)
 			if copy.Generation > tombstone[copy.ID] {
 				if prior, ok := out[copy.ID]; !ok || copy.Generation >= prior.Generation {
 					out[copy.ID] = copy
@@ -1074,13 +1495,7 @@ func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []
 			}
 		}
 	}
-	for _, s := range storageProjection(js) {
-		s.OperationID, s.Status, s.Error = "", "", ""
-		out.Storage = append(out.Storage, s)
-	}
-	for _, s := range storageTombstones(js) {
-		out.Storage = append(out.Storage, s)
-	}
+	out.Storage, _ = appliedStorageProjection(js, nil)
 	if receipts, err := StorageCredentialReceipts(filepath.Dir(e.stateDir)); err == nil {
 		for i := range receipts {
 			receipts[i].RetireEligible = receipts[i].Status == "ready" && !storageCredentialAttached(js, receipts[i].Receipt)
@@ -1088,10 +1503,7 @@ func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []
 		out.CredentialReceipts = receipts
 	}
 	now := time.Now().UTC()
-	journal := protocol.Check{Name: "managed-journal", Status: "healthy", ObservedAt: now}
-	if len(bad) > 0 {
-		journal.Status, journal.Error = "failed", "unreadable managed journal entries skipped: "+strings.Join(bad, "; ")
-	}
+	journal := managedJournalCheck(bad, now)
 	vms := protocol.Check{Name: "managed-vms", Status: "healthy", ObservedAt: now}
 	if len(out.VMs) > 0 {
 		if defined := domains(ctx); defined == nil {
@@ -1135,6 +1547,84 @@ func nextStorageReconcile(js []managedJournal, now time.Time) *managedJournal {
 	for i := range js {
 		j := &js[i]
 		if (j.Result.Status != "pending" && j.Result.Status != "needs_attention") || !strings.HasPrefix(j.Command.Kind, "storage-") || now.Sub(j.Result.ObservedAt) < time.Minute {
+			continue
+		}
+		if due == nil || j.Result.ObservedAt.Before(due.Result.ObservedAt) || (j.Result.ObservedAt.Equal(due.Result.ObservedAt) && j.Command.OperationID < due.Command.OperationID) {
+			due = j
+		}
+	}
+	return due
+}
+
+// ReconcileRemoteVMCreateStopped settles one interrupted remote-storage creation only
+// after the caller has revalidated its pool execution admission.  It observes the durable
+// stopped definition; it never recreates disks, starts a guest, or changes pool permits.
+// Remote storage is deliberately excluded from Applied's generic promotion because that
+// report path cannot make the required current pool-owner and storage-readiness checks.
+func (e *ManagedEngine) ReconcileRemoteVMCreateStopped(ctx context.Context, validate func(context.Context, protocol.VMCreateSpec) error, beforeSettle func(protocol.VMCreateSpec) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	lock, err := (&Engine{config: Config{StateDir: e.stateDir}}).lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock(lock)
+	js, err := e.journals()
+	if err != nil {
+		return err
+	}
+	due := nextRemoteVMCreateReconcile(js, time.Now().UTC())
+	if due == nil {
+		return nil
+	}
+	// Re-read under the journal lock. A concurrent command may have settled it
+	// after selection, and a stale snapshot must never be promoted.
+	current, err := e.journals()
+	if err != nil {
+		return err
+	}
+	due = nextRemoteVMCreateReconcile(current, time.Now().UTC())
+	if due == nil {
+		return nil
+	}
+	j := *due
+	if err = validate(ctx, *j.Command.VM); err == nil {
+		if err = ctx.Err(); err != nil {
+			// Do not let a validation seam that returned after its deadline turn an
+			// ambiguous definition into a healthy outcome.
+			j.Result.Status, j.Result.Error = "needs_attention", err.Error()
+			j.Result.ObservedAt = time.Now().UTC()
+			return e.save(j)
+		}
+		err = e.observer()(ctx, j, "shut off")
+	}
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err == nil && beforeSettle != nil {
+		err = beforeSettle(*j.Command.VM)
+		if err == nil {
+			err = ctx.Err()
+		}
+	}
+	if err == nil {
+		j.Result.Status, j.Result.Error, j.Stage = "succeeded", "", "defined"
+		if j.Command.VM.StartAfterCreate && j.Start == "" {
+			j.Start = startInterrupted
+		}
+	} else {
+		j.Result.Status, j.Result.Error = "needs_attention", err.Error()
+	}
+	j.Result.ObservedAt = time.Now().UTC()
+	return e.save(j)
+}
+
+func nextRemoteVMCreateReconcile(js []managedJournal, now time.Time) *managedJournal {
+	var due *managedJournal
+	for i := range js {
+		j := &js[i]
+		if j.Command.Kind != "vm-create" || j.Command.VM == nil || (j.Stage != "defining" && j.Stage != "defined") || (j.Result.Status != "pending" && j.Result.Status != "needs_attention") || !promotionUsesRemoteStorage(js, *j) || now.Sub(j.Result.ObservedAt) < time.Minute {
 			continue
 		}
 		if due == nil || j.Result.ObservedAt.Before(due.Result.ObservedAt) || (j.Result.ObservedAt.Equal(due.Result.ObservedAt) && j.Command.OperationID < due.Command.OperationID) {
@@ -1461,6 +1951,9 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 			}
 			return storageDetachAt(ctx, current, filepath.Join(filepath.Dir(e.stateDir), credentialDirectory))
 		case "update":
+			if protocol.IsClusteredISCSI(current) {
+				return errors.New("clustered iSCSI updates require a coordinated Core cluster operation")
+			}
 			next := *v.Registration
 			next.ID, next.PoolID, next.HostID, next.Generation = current.ID, current.PoolID, current.HostID, current.Generation+1
 			storageCorePaths(&next)
@@ -2218,8 +2711,9 @@ func (e *ManagedEngine) create(ctx context.Context, j *managedJournal, js []mana
 	if _, err = managedVirsh(ctx, "define", domainPath); err != nil {
 		return errors.New("VM definition outcome uncertain; observation required before recovery")
 	}
-	// Autostart is a libvirt property of the defined domain, not a start: nothing here runs a guest.
-	if v.Autostart {
+	// Shared storage autostart is Core-coordinated: libvirt's own boot replay cannot
+	// prove current pool ownership.  The member worker later requests a fresh permit.
+	if v.Autostart && !managedUsesPoolSharedStorage(js, v) {
 		if _, err = managedVirsh(ctx, "autostart", v.ID); err != nil {
 			return errors.New("VM defined but autostart could not be enabled; inspect the VM on its host")
 		}
@@ -2463,7 +2957,8 @@ func (e *ManagedEngine) observeDefinition(ctx context.Context, j managedJournal,
 		}
 	}
 	info, err := managedVirsh(ctx, "dominfo", j.Command.VM.ID)
-	if err != nil || autostartEnabled(info) != j.Command.VM.Autostart {
+	wantAutostart := j.Command.VM.Autostart && !managedUsesPoolSharedStorage(js, *j.Command.VM)
+	if err != nil || autostartEnabled(info) != wantAutostart {
 		return errors.New("VM autostart is not confirmed as requested")
 	}
 	b, err := managedVirsh(ctx, "dumpxml", j.Command.VM.ID, "--inactive")
@@ -3303,7 +3798,7 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 			return errors.New("VM redefinition outcome uncertain; observation required before recovery")
 		}
 	}
-	if err = setAutostart(ctx, v); err != nil {
+	if err = setAutostart(ctx, v, js); err != nil {
 		return err
 	}
 	if err = e.observeDefinition(ctx, *j, observed); err != nil {
@@ -3334,9 +3829,9 @@ func allocateDisk(ctx context.Context, path string, d protocol.VMDisk) error {
 }
 
 // setAutostart makes libvirt's autostart flag match the definition; it never starts a guest.
-func setAutostart(ctx context.Context, v protocol.VMCreateSpec) error {
+func setAutostart(ctx context.Context, v protocol.VMCreateSpec, js []managedJournal) error {
 	args := []string{"autostart", v.ID}
-	if !v.Autostart {
+	if !v.Autostart || managedUsesPoolSharedStorage(js, v) {
 		args = []string{"autostart", "--disable", v.ID}
 	}
 	if _, err := managedVirsh(ctx, args...); err != nil {

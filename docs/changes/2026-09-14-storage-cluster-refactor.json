@@ -1,0 +1,54 @@
+{
+  "summary": "Refactor: remove unreleased legacy cluster-layout upgrade code and dead functions, consolidate duplicated atomic-write and trusted-path helpers, and move the Controller storage-cluster broker map onto the Controller. API impact: none.",
+  "paths": [
+    "internal/vmhost/storage_cluster.go",
+    "internal/vmhost/storage_cluster_test.go",
+    "internal/vmhost/storage_cluster_commit_test.go",
+    "internal/vmhost/storage_native.go",
+    "internal/vmhost/engine.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/storage_cluster_dependencies.go",
+    "internal/agent/storage_cluster.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_storage.go",
+    "internal/agent/pool_storage_test.go",
+    "internal/agent/storage_cluster_secrets.go",
+    "internal/agent/storage_cluster_boot.go",
+    "internal/agent/state.go",
+    "internal/controller/storage_cluster.go",
+    "internal/controller/controller.go",
+    "docs/qa/2026-09-14-cluster-storage-reliability.md",
+    "docs/guide/storage-repositories.md",
+    "docs/API.md",
+    "docs/changes/2026-09-14-storage-cluster-refactor.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The guide no longer describes an in-place upgrade of an older cluster CIB layout; a non-current CIB is refused and reported as requiring attention.",
+    "pages": [
+      "docs/guide/storage-repositories.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Reference wording only: docs/API.md drops the removed legacy-CIB upgrade. Endpoints, schemas, authentication and errors are unchanged; a non-current CIB is refused without a write as a foreign one already was.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Code-quality cleanup within current network storage scope.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable setting added or moved. Existing Core master records keep their formats; the Controller broker map is transient per-process state now scoped to its Controller."
+  },
+  "verification": {
+    "method": "Go vet, normal and race suites for agent, vmhost and controller; independent review; clean rebuild deployed to the disposable three-Core lab with idle health and SMB, NFS and clustered-iSCSI GFS2 workloads rerun, recorded in the QA follow-up.",
+    "evidence": [
+      "docs/qa/2026-09-14-cluster-storage-reliability.md"
+    ]
+  }
+}

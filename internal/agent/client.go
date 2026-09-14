@@ -131,7 +131,36 @@ func (e httpStatusError) Error() string {
 	return fmt.Sprintf("controller rejected request (HTTP %d)", e.Status)
 }
 
-func acceptIdentity(s *Store, r protocol.EnrollResponse, key, csr string, switching bool) error {
+func copyState(in State) State {
+	out := in
+	out.Journal = make(map[string]JournalEntry, len(in.Journal))
+	for id, entry := range in.Journal {
+		out.Journal[id] = entry
+	}
+	return out
+}
+
+// saveEnrollmentAttempt makes the exact credential and host identity that will
+// be sent durable before any enrollment request is issued. A pre-publication
+// failure must leave the caller's State unchanged: otherwise an in-process
+// retry could send a CSR which was never saved for a later retry after restart.
+func saveEnrollmentAttempt(s *Store, next State) error {
+	previous := s.State
+	s.State = next
+	if err := s.Save(); err != nil {
+		if !stateWasPublished(err) {
+			s.State = previous
+		}
+		return err
+	}
+	return nil
+}
+
+// acceptIdentity validates the remote result before changing State, then saves a
+// complete replacement State.  In particular, a replacement enrollment never
+// leaves a new key/trust paired with the old certificate when its response is
+// rejected or lost.
+func acceptIdentity(s *Store, r protocol.EnrollResponse, key, csr, controller, trust, serverName string, switching bool) error {
 	if r.HostID == "" {
 		return errors.New("controller returned an empty host identity")
 	}
@@ -159,34 +188,47 @@ func acceptIdentity(s *Store, r protocol.EnrollResponse, key, csr string, switch
 	if _, err = cert.Verify(x509.VerifyOptions{Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
 		return fmt.Errorf("invalid host certificate: %w", err)
 	}
+	next := copyState(s.State)
 	if switching {
 		// Managed work belongs to Core and keeps running after Controller replacement.
 		// Existing results are adopted from inventory, not sent as old transport replies.
-		for id, entry := range s.State.Journal {
+		for id, entry := range next.Journal {
 			if entry.Command == nil || !managedCommand(entry.Command.Kind) {
-				delete(s.State.Journal, id)
+				delete(next.Journal, id)
 				continue
 			}
 			entry.Acknowledged = true
-			s.State.Journal[id] = entry
+			next.Journal[id] = entry
 		}
 		// A replacement Controller must acknowledge v2 support before Core sends it
 		// any repository commands or inventory extensions.
-		s.State.StorageProtocolReady = false
-		s.State.StorageProtocolLegacy = false
+		next.StorageProtocolReady = false
+		next.StorageClusterProtocolReady = false
+		next.StorageClusterSessionMonitorProtocolReady = false
+		next.StorageProtocolLegacy = false
 	}
-	s.State.HostID = r.HostID
-	s.State.PendingHostID = ""
-	if s.State.PoolID == "" {
+	next.Controller, next.TrustPEM, next.ControllerServerName = controller, trust, serverName
+	next.HostID = r.HostID
+	next.PendingHostID = ""
+	if next.PoolID == "" {
 		// Older hosts adopt the pool identity the Controller holds for them.
-		s.State.PoolID, s.State.PoolName = r.PoolID, r.PoolName
+		next.PoolID, next.PoolName = r.PoolID, r.PoolName
 	}
-	s.State.KeyPEM = key
-	s.State.CSRPEM = csr
-	s.State.CertificatePEM = r.CertificatePEM
-	s.State.PendingKeyPEM = ""
-	s.State.PendingCSRPEM = ""
-	return s.Save()
+	next.KeyPEM = key
+	next.CSRPEM = csr
+	next.CertificatePEM = r.CertificatePEM
+	next.PendingKeyPEM = ""
+	next.PendingCSRPEM = ""
+	previous := s.State
+	s.State = next
+	if err := s.Save(); err != nil {
+		if stateWasPublished(err) {
+			return err
+		}
+		s.State = previous
+		return err
+	}
+	return nil
 }
 func Enroll(ctx context.Context, s *Store, controller, ca, token, replaceHost string) error {
 	if strings.TrimSpace(token) == "" {
@@ -205,52 +247,61 @@ func Enroll(ctx context.Context, s *Store, controller, ca, token, replaceHost st
 	if replaceHost != "" && replaceHost != s.State.HostID {
 		return errors.New("replacement host ID does not match local identity")
 	}
-	s.State.Controller = controller
-	s.State.TrustPEM = ca
-	c, err := client(s.State, false)
+	hostname, err := os.Hostname()
 	if err != nil {
 		return err
 	}
-	defer c.CloseIdleConnections()
-	key, csr := s.State.KeyPEM, s.State.CSRPEM
-	if replaceHost != "" {
-		key, csr = s.State.PendingKeyPEM, s.State.PendingCSRPEM
-	}
-	if switching {
-		key, csr = "", ""
+	next := copyState(s.State)
+	pending := replaceHost != "" || switching
+	key, csr := next.KeyPEM, next.CSRPEM
+	if pending {
+		// Keep the active identity on the old Controller until the new one
+		// proves it accepted this CSR. Pending credentials survive a lost
+		// response and make the retry byte-for-byte identical.
+		key, csr = next.PendingKeyPEM, next.PendingCSRPEM
 	}
 	if key == "" {
 		key, csr, err = newKey()
 		if err != nil {
 			return err
 		}
-		if replaceHost != "" {
-			s.State.PendingKeyPEM = key
-			s.State.PendingCSRPEM = csr
+		if pending {
+			next.PendingKeyPEM, next.PendingCSRPEM = key, csr
 		} else {
-			s.State.KeyPEM = key
-			s.State.CSRPEM = csr
-		}
-		if err = s.Save(); err != nil {
-			return err
+			next.KeyPEM, next.CSRPEM = key, csr
 		}
 	}
-	hostname, err := os.Hostname()
-	if err != nil {
-		return err
+	if switching {
+		// The replacement origin/trust is used only for this unauthenticated
+		// request until the Controller accepts the pending CSR.
+	} else {
+		// A first enrollment has no active certificate to preserve, so retaining
+		// its intended endpoint/trust makes its pending identity retryable.
+		next.Controller, next.TrustPEM = controller, ca
 	}
 	// Identity is host-owned: a first-time host mints its own host and pool identity and
 	// persists them before asking, so retries present the same IDs and every Controller,
 	// including a replacement, adopts the same IDs and pool name.
-	if s.State.HostID == "" && (s.State.PendingHostID == "" || s.State.PoolID == "") {
-		s.State.PendingHostID = cmp.Or(s.State.PendingHostID, newUUID())
-		if s.State.PoolID == "" {
-			s.State.PoolID, s.State.PoolName = newUUID(), hostname
-		}
-		if err = s.Save(); err != nil {
-			return err
+	if next.HostID == "" && (next.PendingHostID == "" || next.PoolID == "") {
+		next.PendingHostID = cmp.Or(next.PendingHostID, newUUID())
+		if next.PoolID == "" {
+			next.PoolID, next.PoolName = newUUID(), hostname
 		}
 	}
+	// This save intentionally occurs on every request, even when the pending
+	// key already exists. It makes retry identity a durable precondition of POST.
+	if err = saveEnrollmentAttempt(s, next); err != nil {
+		return err
+	}
+	candidate := s.State
+	if switching {
+		candidate.Controller, candidate.TrustPEM, candidate.ControllerServerName = controller, ca, ""
+	}
+	c, err := client(candidate, false)
+	if err != nil {
+		return err
+	}
+	defer c.CloseIdleConnections()
 	var r protocol.EnrollResponse
 	// Enrollment has no repository fields, so retain the v1 shape until the
 	// authenticated report preflight establishes Controller v2 support.
@@ -261,7 +312,7 @@ func Enroll(ctx context.Context, s *Store, controller, ca, token, replaceHost st
 	if replaceHost != "" && r.HostID != replaceHost {
 		return errors.New("replacement enrollment returned a different host; use a token targeting the revoked host")
 	}
-	return acceptIdentity(s, r, key, csr, switching)
+	return acceptIdentity(s, r, key, csr, controller, ca, candidate.ControllerServerName, switching)
 }
 func Rotate(ctx context.Context, s *Store) error {
 	c, err := client(s.State, true)
@@ -269,14 +320,15 @@ func Rotate(ctx context.Context, s *Store) error {
 		return err
 	}
 	defer c.CloseIdleConnections()
-	if s.State.PendingKeyPEM == "" {
-		s.State.PendingKeyPEM, s.State.PendingCSRPEM, err = newKey()
+	next := copyState(s.State)
+	if next.PendingKeyPEM == "" {
+		next.PendingKeyPEM, next.PendingCSRPEM, err = newKey()
 		if err != nil {
 			return err
 		}
-		if err = s.Save(); err != nil {
-			return err
-		}
+	}
+	if err = saveEnrollmentAttempt(s, next); err != nil {
+		return err
 	}
 	var r protocol.EnrollResponse
 	if err = post(ctx, c, s.State.Controller, "/api/v1/agent/rotate", protocol.RotateRequest{Version: protocol.LegacyVersion, CSRPEM: s.State.PendingCSRPEM}, &r); err != nil {
@@ -285,7 +337,7 @@ func Rotate(ctx context.Context, s *Store) error {
 	if r.HostID != s.State.HostID {
 		return errors.New("rotation changed host identity")
 	}
-	return acceptIdentity(s, r, s.State.PendingKeyPEM, s.State.PendingCSRPEM, false)
+	return acceptIdentity(s, r, s.State.PendingKeyPEM, s.State.PendingCSRPEM, s.State.Controller, s.State.TrustPEM, s.State.ControllerServerName, false)
 }
 func CertificateExpiry(s State) (time.Time, error) {
 	b, _ := pem.Decode([]byte(s.CertificatePEM))

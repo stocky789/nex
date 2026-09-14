@@ -2,9 +2,12 @@
 package controller
 
 import (
+	"encoding/json"
 	"net/http"
 	"nex.local/nex/internal/protocol"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestStorageRepositoryIsCoreAllocatedAndAdopted(t *testing.T) {
@@ -106,6 +109,110 @@ func TestStorageDiscoveryResultMustMatchOriginalHostAndPool(t *testing.T) {
 		}
 	default:
 		t.Fatal("valid scoped result was not delivered")
+	}
+}
+
+func TestStorageClusterResultMustMatchOriginalMasterAndPool(t *testing.T) {
+	c := &Controller{}
+	b := c.clusterBroker()
+	request := protocol.StorageClusterRequest{RequestID: "cluster-1", PoolID: "pool-1", HostID: "master-1", Action: "status"}
+	result := make(chan protocol.StorageClusterResult, 1)
+	b.pending[request.RequestID] = storageClusterPending{request: request, result: result}
+	if got := c.takeStorageClusters("master-1"); len(got) != 1 || got[0].RequestID != request.RequestID {
+		t.Fatalf("request was not scoped for its master: %+v", got)
+	}
+	c.completeStorageClusters("member-1", []protocol.StorageClusterResult{{RequestID: request.RequestID, PoolID: request.PoolID, HostID: "member-1", Status: "succeeded"}})
+	c.completeStorageClusters("master-1", []protocol.StorageClusterResult{{RequestID: request.RequestID, PoolID: "other-pool", HostID: "master-1", Status: "succeeded"}})
+	select {
+	case <-result:
+		t.Fatal("cross-scope clustered result accepted")
+	default:
+	}
+	c.completeStorageClusters("master-1", []protocol.StorageClusterResult{{RequestID: request.RequestID, PoolID: request.PoolID, HostID: "master-1", Status: "succeeded"}})
+	select {
+	case got := <-result:
+		if got.Status != "succeeded" {
+			t.Fatalf("valid scoped result lost: %+v", got)
+		}
+	default:
+		t.Fatal("valid scoped clustered result was not delivered")
+	}
+}
+
+func TestStorageClusterCredentialRefsAreBoundAndBounded(t *testing.T) {
+	valid := []protocol.StorageClusterCredentialRef{{RequestID: "credential-1", Kind: "chap", TargetHostID: "host-1"}}
+	if !clusterCredentialRefsValid(valid) {
+		t.Fatal("valid scoped credential reference rejected")
+	}
+	if clusterCredentialRefsValid([]protocol.StorageClusterCredentialRef{{RequestID: "credential-1", Kind: "chap", TargetHostID: "host-1"}, {RequestID: "credential-1", Kind: "fence_bmc", TargetHostID: "host-2"}}) {
+		t.Fatal("reused credential request accepted")
+	}
+	if clusterCredentialRefsValid([]protocol.StorageClusterCredentialRef{{RequestID: "credential-2", Kind: "unknown", TargetHostID: "host-1"}}) {
+		t.Fatal("unknown credential kind accepted")
+	}
+}
+
+func TestStorageClusterRelayDeliversCoreLifecycleStates(t *testing.T) {
+	for _, state := range []string{"queued", "awaiting_fencing", "verifying_fence", "applying", "healthy", "degraded", "succeeded", "failed", "needs_attention"} {
+		t.Run(state, func(t *testing.T) {
+			result := protocol.StorageClusterResult{Status: "succeeded", Operations: []protocol.StorageClusterOperation{{RequestID: "cluster-1", Status: state}}}
+			if !clusterResultValid(result) {
+				t.Fatalf("Core lifecycle state %q would be silently discarded", state)
+			}
+		})
+	}
+	if clusterResultValid(protocol.StorageClusterResult{Status: "succeeded", Operations: []protocol.StorageClusterOperation{{RequestID: "cluster-1", Status: "invented"}}}) {
+		t.Fatal("unknown Core lifecycle state accepted")
+	}
+}
+
+func TestStorageClusterRelayPassesObservedDegradedWithoutPrivateReceipt(t *testing.T) {
+	// A Core report is decoded into the public protocol shape before the transient
+	// broker sees it. Unknown/private fields must not survive a Controller relay.
+	var result protocol.StorageClusterResult
+	if err := json.Unmarshal([]byte(`{"request_id":"cluster-1","pool_id":"pool-1","host_id":"master-1","status":"succeeded","operations":[{"request_id":"cluster-1","status":"degraded","activation":"private-core-state"}]}`), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !clusterResultValid(result) {
+		t.Fatalf("observed degraded result was rejected: %+v", result)
+	}
+	c := &Controller{}
+	ch := make(chan protocol.StorageClusterResult, 1)
+	c.clusterBroker().pending[result.RequestID] = storageClusterPending{request: protocol.StorageClusterRequest{RequestID: result.RequestID, PoolID: result.PoolID, HostID: result.HostID, Action: "status"}, result: ch}
+	c.completeStorageClusters(result.HostID, []protocol.StorageClusterResult{result})
+	select {
+	case result = <-ch:
+		if len(result.Operations) != 1 || result.Operations[0].Status != "degraded" {
+			t.Fatalf("degraded observation was not relayed: %+v", result)
+		}
+	default:
+		t.Fatal("degraded observation was discarded")
+	}
+	public, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(public) == "" || strings.Contains(string(public), "activation") || strings.Contains(string(public), "private-core-state") {
+		t.Fatalf("private Core receipt leaked through relay payload: %s", public)
+	}
+}
+
+func TestStorageClusterMemberReportsKeepThreeIdentitiesAndRejectMalformedReferences(t *testing.T) {
+	config := protocol.StorageClusterConfig{ClusterID: "cluster-1", PoolID: "pool-1", RepositoryID: "repository-1", Generation: 7, Nodes: []protocol.StorageClusterNode{{HostID: "host-1"}, {HostID: "host-2"}, {HostID: "host-3"}}}
+	member := func(host string) protocol.StorageClusterMemberReport {
+		return protocol.StorageClusterMemberReport{HostID: host, Status: protocol.StorageClusterStatus{ClusterID: config.ClusterID, RepositoryID: config.RepositoryID, Status: "healthy", Healthy: true, Quorate: true, Mounted: true, FencingVerified: true}, Generation: config.Generation, MembershipGeneration: 9, ClusterID: config.ClusterID, ConfigDigest: config.Digest(), Stage: "health", UpdatedAt: time.Now().UTC()}
+	}
+	result := protocol.StorageClusterResult{Status: "accepted", Operations: []protocol.StorageClusterOperation{{RequestID: "cluster-request-1", MembershipGeneration: 9, Config: config, Status: "healthy", Members: []protocol.StorageClusterMemberReport{member("host-1"), member("host-2"), member("host-3")}}}}
+	if !clusterResultValid(result) {
+		t.Fatalf("three typed member reports rejected: %+v", result)
+	}
+	result.Operations[0].Members[2].HostID = "host-2"
+	if clusterResultValid(result) {
+		t.Fatal("duplicate member report identity accepted")
+	}
+	result.Operations[0].Members[2] = member("unknown-host")
+	if clusterResultValid(result) {
+		t.Fatal("member report outside configured nodes accepted")
 	}
 }
 

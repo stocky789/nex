@@ -31,6 +31,18 @@ Components: main
 Architectures: amd64
 Signed-By: /usr/share/keyrings/nex-archive-keyring.gpg
 APT
+    # Cluster packages are installed with Core so an explicit pool configuration
+    # has every native binary available. Only a host with no Corosync configuration
+    # at all is safe to disable here; an administrator or already configured Nex
+    # cluster must survive an upgrade untouched.
+    if [ ! -e "$root/etc/corosync/corosync.conf" ]; then
+        for unit in corosync.service dlm.service pacemaker.service pcsd.service pcsd-ruby.service; do
+            deb-systemd-helper disable "$unit"
+            if [ -z "$root" ] && [ -d /run/systemd/system ]; then
+                deb-systemd-invoke stop "$unit" || true
+            fi
+        done
+    fi
     # Nex Core's release identity is this package's version: the distribution and
     # the software Nex ships on it are one thing. Divert Debian's package-owned
     # symlink once so the local /etc file wins without touching /usr/lib/os-release.

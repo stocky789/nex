@@ -100,10 +100,11 @@ class APIContractTests(unittest.TestCase):
             elif go_type == 'time.Time':
                 self.assertEqual(schema['type'], 'string')
                 self.assertEqual(schema['format'], 'date-time')
-            elif go_type in ('string', 'bool', 'int', 'int64', 'uint64'):
+            elif go_type in ('string', 'bool', 'int', 'int64', 'uint16', 'uint32', 'uint64'):
                 self.assertEqual(schema['type'], {'bool': 'boolean', 'int': 'integer',
-                                                 'int64': 'integer', 'uint64': 'integer'}.get(go_type, go_type))
-                if go_type == 'uint64':
+                                                 'int64': 'integer', 'uint16': 'integer',
+                                                 'uint32': 'integer', 'uint64': 'integer'}.get(go_type, go_type))
+                if go_type in ('uint16', 'uint32', 'uint64'):
                     self.assertGreaterEqual(schema['minimum'], 0)
             else:
                 self.assertEqual(schema['$ref'], '#/components/schemas/' + go_type)
@@ -224,6 +225,93 @@ class LocalAPIContractTests(APIContractTests):
                          set(self.api['components']['schemas']['PowerRequest']['properties']))
 
 
+class PeerAPIContractTests(APIContractTests):
+    contract_file = 'peer-openapi.json'
+    reference_file = 'peer.html'
+    source_dir = 'internal/agent'
+
+    def go_source(self, *dirs):
+        return '\n'.join(p.read_text() for d in dirs for p in sorted((ROOT / d).glob('*.go'))
+                         if not p.name.endswith('_test.go'))
+
+    def test_all_runtime_api_routes_are_documented_and_implemented(self):
+        # Peer routes use prefix/suffix dispatch: path shapes come from handlers, methods from Core callers.
+        source = self.go_source('internal/agent', 'internal/localcore')
+        consts = dict(re.findall(r'const (\w+Path) = "([^"]+)"', source))
+        handled = set()
+        for line in source.splitlines():
+            if 'r.URL.Path' not in line or '|| strings.HasPrefix(r.URL.Path' in line:
+                continue  # Listener-level prefix dispatch forwards; the handler owns the route.
+            handled |= {consts[c] + s + ('{}' if s.endswith('/') else '')
+                        for c, s in re.findall(r'(\w+Path)\s*\+\s*"([\w/-]+)"', line)}
+            handled |= {consts[c] + '{}' + s for c, s in
+                        re.findall(r'TrimSuffix\(strings\.TrimPrefix\(r\.URL\.Path, (\w+Path)\), "([\w/-]+)"\)', line)}
+            handled |= {consts[c] + '{}' for c in re.findall(r':= strings\.TrimPrefix\(r\.URL\.Path, (\w+Path)\)$', line)}
+            handled |= {consts[c] for c in re.findall(r'r\.URL\.Path [!=]= (\w+Path)\b(?!\s*\+)', line)}
+            handled |= {consts[c].rstrip('/') for c in re.findall(r'r\.URL\.Path [!=]= strings\.TrimSuffix\((\w+Path), "/"\)', line)}
+            handled |= set(re.findall(r'r\.URL\.Path [!=]= "(/api/v1/pool/[^"]*)"', line))
+        called = set()
+        for method, expr in re.findall(r'NewRequestWithContext\(\w+, http\.Method(\w+), (.+?), (?:nil\)|bytes\.NewReader|strings\.NewReader)', source):
+            if re.fullmatch(r'\w+', expr):
+                expr = re.search(expr + r' := (.+)', source)[1]
+            path = ''
+            for token in re.sub(r'strings\.TrimRight\([\w.]+, "/"\)\s*\+', '', expr).split('+'):
+                token = token.strip()
+                if token.startswith('"'):
+                    path += token.strip('"').split('?')[0]
+                    if '?' in token:
+                        break
+                elif token in consts:
+                    path += consts[token]
+                elif m := re.fullmatch(r'strings\.TrimSuffix\((\w+), "/"\)', token):
+                    path += consts[m[1]].rstrip('/')
+                elif path:
+                    path += '{}'  # Identifier segment; a leading origin variable adds nothing.
+            if path.startswith('/api/v1/pool/'):
+                called.add((method.lower(), path))
+        documented = {(method, re.sub(r'{\w+}', '{}', path)) for path, methods in self.api['paths'].items()
+                      for method in methods}
+        self.assertTrue(handled and called, 'No peer routes found: update the coverage adapter if dispatch changes')
+        self.assertEqual({path for _, path in documented}, handled)
+        self.assertEqual(documented, called)
+
+    def test_protocol_fields_types_and_required_members_match(self):
+        # Protocol schemas are verbatim Controller-contract copies (checked against Go there);
+        # peer DTOs are checked for member names and emitted fields.
+        controller = json.loads((ROOT / 'docs/api/openapi.json').read_text())['components']['schemas']
+        inline = {'PeerAdvertiseRequest': ('internal/agent/peer.go', r'var v struct')}
+        for name, schema in self.api['components']['schemas'].items():
+            if name in controller:
+                self.assertEqual(schema, controller[name], name)
+                continue
+            if name in inline:
+                path, pattern = inline[name]
+                body = re.search(pattern + r'\s*{(.*?)}', (ROOT / path).read_text(), re.S)[1]
+            else:
+                package, go = schema['x-go-type'].split('.')
+                body = re.search(r'type ' + go + r' struct\s*{(.*?)}\n', self.go_source('internal/' + package), re.S)[1]
+            tags = re.findall(r'`json:"([^"]+)"`', body)
+            if tags:
+                fields = {tag.split(',')[0] for tag in tags}
+                emitted = {tag.split(',')[0] for tag in tags if 'omitempty' not in tag}
+            else:  # Untagged structs marshal with Go field names.
+                fields = emitted = set(re.findall(r'(?<![.\w\[\]*])[A-Z]\w*', body))
+            self.assertEqual(set(schema['properties']), fields, name)
+            self.assertEqual(set(schema['required']), emitted, name)
+
+    def test_session_cookie_and_lifetime_contract_matches_runtime(self):
+        pass  # Peer routes authenticate with pool-CA mutual TLS, never cookies.
+
+    def test_controller_request_fields_match(self):
+        pass  # Peer request DTOs are covered by test_protocol_fields_types_and_required_members_match.
+
+    def test_appliance_dto_fields_types_and_required_members(self):
+        pass  # Appliance DTOs are not part of the peer contract.
+
+    def test_addhost_dto_fields_types_and_required_members(self):
+        pass  # Add-host DTOs are Controller-only.
+
+
 class ApplianceReadinessContractTests(unittest.TestCase):
     def test_marker_producer_consumer_and_reference_match(self):
         api = json.loads((ROOT / 'docs/api/openapi.json').read_text())
@@ -259,9 +347,12 @@ class ManagedVMContractTests(unittest.TestCase):
         worker = (ROOT / 'internal/agent/managed.go').read_text()
         dispatch = re.search(r'func managedCommand\(.*?(?=\nfunc |\n//)', worker, re.S)[0]
         kinds = set(re.findall(r'"([a-z-]+)"', dispatch))
-        self.assertEqual(set(api['x-commands']), kinds)
-        self.assertEqual(set(schemas['Command']['properties']['kind']['enum']),
-                         kinds | {'refresh-inventory'})
+        # Core admits managed kinds plus the read-only kinds named beside managedCommand at admission.
+        admitted = kinds | set(re.findall(r'cmd\.Kind != "([a-z-]+)" && !managedCommand\(cmd\.Kind\)',
+                                          (ROOT / 'internal/agent/run.go').read_text()))
+        self.assertGreater(len(admitted), len(kinds), 'Core command admission adapter found no read-only kinds')
+        self.assertEqual(set(api['x-commands']), admitted)
+        self.assertEqual(set(schemas['Command']['properties']['kind']['enum']), admitted)
         self.assertEqual(schemas['Command']['properties']['kind']['enum'],
                          schemas['Operation']['properties']['kind']['enum'])
         vm = schemas['ManagedAppliance']

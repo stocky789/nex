@@ -14,9 +14,10 @@ import (
 // endpoint. The Controller may display a one-use offer but does not retain it or perform
 // the peer exchange.
 type poolJoinRequest struct {
-	MasterURL string `json:"master_url"`
-	PoolCAPEM string `json:"pool_ca_pem"`
-	Offer     string `json:"offer"`
+	MasterURL  string `json:"master_url"`
+	PoolCAPEM  string `json:"pool_ca_pem"`
+	Offer      string `json:"offer"`
+	PeerOrigin string `json:"peer_origin,omitempty"`
 }
 
 type poolJoinOfferRequest struct {
@@ -82,7 +83,7 @@ func (s *Service) joinPool(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &v) {
 		return
 	}
-	if !validHTTPSOrigin(v.MasterURL) || !x509.NewCertPool().AppendCertsFromPEM([]byte(v.PoolCAPEM)) || agent.ValidatePoolJoinOffer(v.Offer) != nil {
+	if !validHTTPSOrigin(v.MasterURL) || (v.PeerOrigin != "" && !validHTTPSOrigin(v.PeerOrigin)) || !x509.NewCertPool().AppendCertsFromPEM([]byte(v.PoolCAPEM)) || agent.ValidatePoolJoinOffer(v.Offer) != nil {
 		fail(w, http.StatusBadRequest, "master_url, pool_ca_pem and one-use offer are required")
 		return
 	}
@@ -111,6 +112,9 @@ func (s *Service) joinPool(w http.ResponseWriter, r *http.Request) {
 		}
 		fail(w, http.StatusConflict, err.Error())
 		return
+	}
+	if v.PeerOrigin != "" {
+		_ = agent.AdvertisePoolPeerOrigin(r.Context(), a.store, v.PeerOrigin)
 	}
 	if err = vmhost.RehomePoolScope(s.cfg.AgentStateDir+"/managed-vms", a.store.State.PoolID, a.store.State.HostID); err != nil {
 		handoffAgents.Lock()

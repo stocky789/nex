@@ -163,14 +163,94 @@ type ReportRequest struct {
 	Inventory          *Inventory               `json:"inventory,omitempty"`
 	Results            []Result                 `json:"results"`
 	StorageDiscoveries []StorageDiscoveryResult `json:"storage_discoveries,omitempty"`
+	StorageClusters    []StorageClusterResult   `json:"storage_clusters,omitempty"`
 }
 type ReportResponse struct {
-	Commands            []Command                 `json:"commands"`
-	AcknowledgedResults []string                  `json:"acknowledged_results"`
-	Consoles            []ConsoleRequest          `json:"consoles,omitempty"`
-	CredentialOffers    []StorageCredentialOffer  `json:"credential_offers,omitempty"`
-	StorageRepositories *StorageRepositorySupport `json:"storage_repositories,omitempty"`
-	StorageDiscoveries  []StorageDiscoveryRequest `json:"storage_discoveries,omitempty"`
+	Commands               []Command                 `json:"commands"`
+	AcknowledgedResults    []string                  `json:"acknowledged_results"`
+	Consoles               []ConsoleRequest          `json:"consoles,omitempty"`
+	CredentialOffers       []StorageCredentialOffer  `json:"credential_offers,omitempty"`
+	StorageRepositories    *StorageRepositorySupport `json:"storage_repositories,omitempty"`
+	StorageClusters        *StorageClusterSupport    `json:"storage_clusters_support,omitempty"`
+	StorageDiscoveries     []StorageDiscoveryRequest `json:"storage_discoveries,omitempty"`
+	StorageClusterRequests []StorageClusterRequest   `json:"storage_clusters,omitempty"`
+}
+
+// StorageClusterCapability acknowledges the proof request identifier. A Core
+// must receive StorageClusterSupport for this exact capability before it sends
+// clustered-storage results, so a strict older Controller never sees fields it
+// cannot decode.
+const StorageClusterCapability = "storage-clustered-iscsi-v2"
+
+// StorageClusterSessionMonitorCapability is an additive report-envelope
+// extension. A Core sends member session-monitor readiness only after the
+// Controller returns this exact acknowledgement. Keeping the negotiation in
+// the existing capability string makes both directions safe for strict older
+// decoders: older Controllers ignore the offered capability and acknowledge
+// only StorageClusterCapability; older Cores never offer it.
+const StorageClusterSessionMonitorCapability = "storage-cluster-session-monitor-v1"
+
+type StorageClusterSupport struct {
+	Capability string `json:"capability"`
+}
+
+// StorageClusterRequest and StorageClusterResult are transient Controller/Core
+// envelopes. The Core owns every operation and configuration they carry; the
+// Controller keeps neither after the report exchange finishes.
+type StorageClusterRequest struct {
+	RequestID          string                        `json:"request_id"`
+	PoolID             string                        `json:"pool_id"`
+	HostID             string                        `json:"host_id"`
+	FenceHostID        string                        `json:"fence_host_id,omitempty"`
+	FenceConfirmation  string                        `json:"fence_confirmation,omitempty"`
+	Action             string                        `json:"action"` // apply, status, or verify_fence
+	CredentialRequests []StorageClusterCredentialRef `json:"credential_requests,omitempty"`
+	Registration       StorageRegistration           `json:"registration,omitempty"`
+	Config             StorageClusterConfig          `json:"config,omitempty"`
+	ExpectedGeneration uint64                        `json:"expected_generation,omitempty"`
+}
+
+// StorageClusterCredentialRef names a Core-private, one-time handoff. It has
+// no secret or receipt: Core resolves it to a local opaque alias before native
+// configuration and distributes required peer material over pool mTLS.
+type StorageClusterCredentialRef struct {
+	RequestID    string `json:"request_id"`
+	Kind         string `json:"kind"` // chap, fence_bmc, or fence_ssh
+	TargetHostID string `json:"target_host_id"`
+}
+
+type StorageClusterOperation struct {
+	RequestID            string                       `json:"request_id"`
+	MembershipGeneration uint64                       `json:"membership_generation"`
+	Config               StorageClusterConfig         `json:"config"`
+	Status               string                       `json:"status"`
+	Error                string                       `json:"error,omitempty"`
+	UpdatedAt            time.Time                    `json:"updated_at"`
+	Members              []StorageClusterMemberReport `json:"members,omitempty"`
+}
+
+// StorageClusterMemberReport binds an observed health result to its exact
+// member and accepted configuration. The Controller can therefore present
+// per-member health without inferring identity from an unordered status slice.
+type StorageClusterMemberReport struct {
+	HostID               string               `json:"host_id"`
+	Status               StorageClusterStatus `json:"status"`
+	Generation           uint64               `json:"generation"`
+	MembershipGeneration uint64               `json:"membership_generation"`
+	ClusterID            string               `json:"cluster_id"`
+	ConfigDigest         string               `json:"config_digest"`
+	Stage                string               `json:"stage"`
+	UpdatedAt            time.Time            `json:"updated_at"`
+}
+
+type StorageClusterResult struct {
+	RequestID  string                    `json:"request_id"`
+	PoolID     string                    `json:"pool_id"`
+	HostID     string                    `json:"host_id"`
+	Status     string                    `json:"status"` // accepted, queued, succeeded, failed, needs_attention, stale
+	Error      string                    `json:"error,omitempty"`
+	ObservedAt time.Time                 `json:"observed_at"`
+	Operations []StorageClusterOperation `json:"operations,omitempty"`
 }
 
 // StorageRepositorySupport is the Controller-first v2 upgrade acknowledgement. A Core must

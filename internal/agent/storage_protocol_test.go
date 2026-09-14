@@ -2,9 +2,11 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,6 +82,179 @@ func TestStoragePreflightDoesNotFallbackWithRepositoryState(t *testing.T) {
 	}
 	if legacyStorageSafe(State{}, &protocol.ManagedState{Outcomes: []protocol.ManagedOutcome{{Kind: "storage-register", Status: "failed"}}}, true) {
 		t.Fatal("storage history allowed legacy fallback")
+	}
+}
+
+func TestClusteredStoragePreflightProtectsStrictOlderControllerAndReconnect(t *testing.T) {
+	type oldStatus struct {
+		ClusterID       string `json:"cluster_id"`
+		RepositoryID    string `json:"repository_id"`
+		Healthy         bool   `json:"healthy"`
+		Quorate         bool   `json:"quorate"`
+		Mounted         bool   `json:"mounted"`
+		Error           string `json:"error,omitempty"`
+		Status          string `json:"status"`
+		FencingVerified bool   `json:"fencing_verified"`
+	}
+	type oldMember struct {
+		HostID               string    `json:"host_id"`
+		Status               oldStatus `json:"status"`
+		Generation           uint64    `json:"generation"`
+		MembershipGeneration uint64    `json:"membership_generation"`
+		ClusterID            string    `json:"cluster_id"`
+		ConfigDigest         string    `json:"config_digest"`
+		Stage                string    `json:"stage"`
+		UpdatedAt            time.Time `json:"updated_at"`
+	}
+	type oldOperation struct {
+		RequestID            string      `json:"request_id"`
+		MembershipGeneration uint64      `json:"membership_generation"`
+		Config               any         `json:"config"`
+		Status               string      `json:"status"`
+		UpdatedAt            time.Time   `json:"updated_at"`
+		Members              []oldMember `json:"members,omitempty"`
+	}
+	type oldClusterResult struct {
+		RequestID  string         `json:"request_id"`
+		PoolID     string         `json:"pool_id"`
+		HostID     string         `json:"host_id"`
+		Status     string         `json:"status"`
+		ObservedAt time.Time      `json:"observed_at"`
+		Operations []oldOperation `json:"operations,omitempty"`
+	}
+	type oldReportRequest struct {
+		Capabilities    []string           `json:"capabilities,omitempty"`
+		Version         int                `json:"version"`
+		Sequence        uint64             `json:"sequence"`
+		Inventory       any                `json:"inventory,omitempty"`
+		Results         any                `json:"results"`
+		StorageClusters []oldClusterResult `json:"storage_clusters,omitempty"`
+	}
+	result := protocol.StorageClusterResult{RequestID: "cluster-1", PoolID: "pool-1", HostID: "host-1", Status: "accepted", ObservedAt: time.Now().UTC(), Operations: []protocol.StorageClusterOperation{{RequestID: "cluster-1", MembershipGeneration: 1, Status: "applying", UpdatedAt: time.Now().UTC(), Members: []protocol.StorageClusterMemberReport{
+		{HostID: "host-1", Generation: 1, MembershipGeneration: 1, ClusterID: "cluster-1", ConfigDigest: "digest", Stage: "health", UpdatedAt: time.Now().UTC(), Status: protocol.StorageClusterStatus{ClusterID: "cluster-1", RepositoryID: "repo-1", SessionMonitorReady: true, Status: "healthy"}},
+		{HostID: "host-1", Generation: 1, MembershipGeneration: 1, ClusterID: "cluster-1", ConfigDigest: "digest", Stage: "monitor", UpdatedAt: time.Now().UTC(), Status: protocol.StorageClusterStatus{ClusterID: "cluster-1", RepositoryID: "repo-1", SessionMonitorReady: true, Status: "pending"}},
+	}}}}
+	// This is the actual old strict-decoder failure: the additive field is
+	// rejected inside the nested member status, not by a generic JSON parser.
+	raw, err := json.Marshal(protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Results: []protocol.Result{}, StorageClusters: []protocol.StorageClusterResult{result}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rejected oldReportRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&rejected); err == nil || !strings.Contains(err.Error(), "session_monitor_ready") {
+		t.Fatalf("old strict schema did not reject the additive field: %v", err)
+	}
+	projected := storageClusterResultsForController([]protocol.StorageClusterResult{result}, false)
+	if got := result.Operations[0].Members; len(got) != 2 || !got[0].Status.SessionMonitorReady || got[1].Stage != "monitor" {
+		t.Fatalf("report projection mutated Core-owned member state: %+v", got)
+	}
+	if len(projected[0].Operations[0].Members) != 1 || projected[0].Operations[0].Members[0].Status.SessionMonitorReady {
+		t.Fatalf("legacy projection retained unsupported member data: %+v", projected)
+	}
+	raw, err = json.Marshal(protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Results: []protocol.Result{}, StorageClusters: projected})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoder = json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&rejected); err != nil {
+		t.Fatalf("old strict schema rejected legacy projection: %v", err)
+	}
+	oldReports := 0
+	_, identity := testManagedIdentity(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request oldReportRequest
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			t.Errorf("strict older Controller received an incompatible report: %v", err)
+			return
+		}
+		oldReports++
+		if oldReports == 1 {
+			if contains(request.Capabilities, protocol.StorageClusterCapability) || !contains(request.Capabilities, protocol.StorageClusterSessionMonitorCapability) || len(request.StorageClusters) != 0 {
+				t.Fatalf("new Core did not make an extension preflight: %+v", request)
+			}
+			json.NewEncoder(w).Encode(protocol.ReportResponse{StorageClusters: &protocol.StorageClusterSupport{Capability: protocol.StorageClusterCapability}})
+			return
+		}
+		if !contains(request.Capabilities, protocol.StorageClusterCapability) || len(request.StorageClusters) != 1 || len(request.StorageClusters[0].Operations[0].Members) != 1 || request.StorageClusters[0].Operations[0].Members[0].Stage != "health" {
+			t.Fatalf("old Controller received unprojected clustered result: %+v", request.StorageClusters)
+		}
+		json.NewEncoder(w).Encode(protocol.ReportResponse{})
+	}))
+	s := testStore(t)
+	s.State = identity
+	s.State.StorageProtocolReady = true
+	s.State.StorageClusterProtocolReady = true // persisted acknowledgement from a replaced Controller
+	result.PoolID, result.HostID = s.State.PoolID, s.State.HostID
+	appendStorageClusters(s, []protocol.StorageClusterResult{result})
+	if err := resetStorageClusterProtocol(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	if oldReports != 1 || !s.State.StorageClusterProtocolReady || s.State.StorageClusterSessionMonitorProtocolReady {
+		t.Fatalf("strict Controller acknowledgement was not recorded safely: reports=%d state=%+v", oldReports, s.State)
+	}
+	if err := report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	if oldReports != 2 || !s.State.StorageClusterProtocolReady || s.State.StorageClusterSessionMonitorProtocolReady {
+		t.Fatalf("old Controller acknowledgement was not safely retained: reports=%d state=%+v", oldReports, s.State)
+	}
+	// The withheld result remains available for a matching Controller after reconnect.
+	if err := resetStorageClusterProtocol(s); err != nil {
+		t.Fatal(err)
+	}
+	appendStorageClusters(s, []protocol.StorageClusterResult{result})
+	matchingReports := 0
+	_, matchingIdentity := testManagedIdentity(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request protocol.ReportRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		matchingReports++
+		if matchingReports == 1 {
+			if len(request.StorageClusters) != 0 || contains(request.Capabilities, protocol.StorageClusterCapability) || !contains(request.Capabilities, protocol.StorageClusterSessionMonitorCapability) {
+				t.Fatalf("matching Controller did not receive clean clustered preflight: %+v", request)
+			}
+			json.NewEncoder(w).Encode(protocol.ReportResponse{StorageClusters: &protocol.StorageClusterSupport{Capability: protocol.StorageClusterSessionMonitorCapability}})
+			return
+		}
+		if matchingReports == 2 && (!contains(request.Capabilities, protocol.StorageClusterCapability) || len(request.StorageClusters) != 1 || len(request.StorageClusters[0].Operations[0].Members) != 2 || !request.StorageClusters[0].Operations[0].Members[0].Status.SessionMonitorReady) {
+			t.Fatalf("matching Controller did not receive v2 cluster result after acknowledgement: %+v", request)
+		}
+		if matchingReports == 2 {
+			// A valid base acknowledgement is an explicit downgrade: the Core
+			// must stop serializing the additive member fields immediately.
+			json.NewEncoder(w).Encode(protocol.ReportResponse{StorageClusters: &protocol.StorageClusterSupport{Capability: protocol.StorageClusterCapability}})
+			return
+		}
+		if matchingReports != 3 || len(request.StorageClusters) != 1 || len(request.StorageClusters[0].Operations[0].Members) != 1 || request.StorageClusters[0].Operations[0].Members[0].Status.SessionMonitorReady {
+			t.Fatalf("Core did not apply base acknowledgement downgrade: %+v", request)
+		}
+		json.NewEncoder(w).Encode(protocol.ReportResponse{StorageClusters: &protocol.StorageClusterSupport{Capability: protocol.StorageClusterCapability}})
+	}))
+	s.State.Controller = matchingIdentity.Controller
+	if err := report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	if !s.State.StorageClusterProtocolReady || !s.State.StorageClusterSessionMonitorProtocolReady {
+		t.Fatal("matching Controller acknowledgement was not persisted")
+	}
+	if err := report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	if !s.State.StorageClusterProtocolReady || s.State.StorageClusterSessionMonitorProtocolReady {
+		t.Fatalf("base acknowledgement did not clear extension state: %+v", s.State)
+	}
+	appendStorageClusters(s, []protocol.StorageClusterResult{result})
+	if err := report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: time.Second}); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -88,12 +88,12 @@ func TestRemoteSelectedDirectoryDoesNotRequireLocalRootOwnership(t *testing.T) {
 	if err := os.Chmod(root, 0770); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(root, "discovered"), 0777); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "Team VMs", "2026"), 0777); err != nil {
 		t.Fatal(err)
 	}
 	base := storageAccess{Path: root, Identity: "nfs:root", FilesystemID: "fsid", Health: "healthy"}
-	got, err := remoteSubpathAccess(root, "discovered", base)
-	if err != nil || got.Path != filepath.Join(root, "discovered") || got.Identity != base.Identity {
+	got, err := remoteSubpathAccess(root, "Team VMs/2026", base)
+	if err != nil || got.Path != filepath.Join(root, "Team VMs", "2026") || got.Identity != base.Identity {
 		t.Fatalf("selected remote directory = %+v, %v", got, err)
 	}
 	if err := os.Symlink("/", filepath.Join(root, "link")); err != nil {
@@ -101,6 +101,13 @@ func TestRemoteSelectedDirectoryDoesNotRequireLocalRootOwnership(t *testing.T) {
 	}
 	if _, err := remoteSubpathAccess(root, "link", base); err == nil {
 		t.Fatal("remote symlink accepted")
+	}
+}
+
+func TestRemoteUnitPreservesOrdinarySMBShareName(t *testing.T) {
+	unit := string(remoteUnit("//smb.example.test/VM Files$", "/var/lib/nex-storage/repo-1", "cifs", "defaults"))
+	if !strings.Contains(unit, "What=//smb.example.test/VM Files$\n") {
+		t.Fatalf("SMB source was not preserved in mount unit: %q", unit)
 	}
 }
 

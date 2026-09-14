@@ -271,9 +271,26 @@ func (b *cappedOutput) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 func run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return runCommand(ctx, "", name, args...)
+}
+
+// runWithDir retains the normal bounded command behavior while anchoring a child's
+// working directory to a descriptor held by this process. The parent keeps dir open
+// until the child exits, so a renamed path cannot redirect the child.
+func runWithDir(ctx context.Context, dir *os.File, name string, args ...string) ([]byte, error) {
+	if dir == nil {
+		return nil, errors.New("working directory is unavailable")
+	}
+	output, err := runCommand(ctx, fmt.Sprintf("/proc/%d/fd/%d", os.Getpid(), dir.Fd()), name, args...)
+	runtime.KeepAlive(dir)
+	return output, err
+}
+
+func runCommand(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	cmd.WaitDelay = time.Second
 	var out, stderr cappedOutput
@@ -428,14 +445,22 @@ func (e *Engine) lock(ctx context.Context) (*os.File, error) {
 		}
 	}
 }
-func unlock(f *os.File) { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }
-func atomicWrite(path string, b []byte) error {
+func unlock(f *os.File)                       { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }
+func atomicWrite(path string, b []byte) error { return AtomicWrite(path, b, 0600) }
+
+// AtomicWrite replaces path with a fsynced temp file created 0600 in the same
+// directory, chmodded to mode before any data is written, then fsyncs the directory.
+func AtomicWrite(path string, b []byte, mode os.FileMode) error {
 	f, err := os.CreateTemp(filepath.Dir(path), ".write-")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(f.Name())
-	if _, err = f.Write(b); err == nil {
+	// Always set the mode: CreateTemp's 0600 is still subject to the umask.
+	if err = f.Chmod(mode); err == nil {
+		_, err = f.Write(b)
+	}
+	if err == nil {
 		err = f.Sync()
 	}
 	if ce := f.Close(); err == nil {

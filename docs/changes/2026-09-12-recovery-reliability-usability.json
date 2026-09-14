@@ -1,0 +1,9 @@
+{
+  "summary": "Make reliability and guided operator usability explicit acceptance requirements for planned host-loss recovery. API impact: none; planning clarification only.",
+  "paths": ["docs/plans/2026-09-08-nex-platform.md"],
+  "guide": {"impact": "none", "reason": "Recovery is not implemented. The plan strengthens future guide and first-time-operator walkthrough requirements without inventing available controls.", "pages": []},
+  "api": {"impact": "none", "reason": "No runtime callers or contracts change. Planned readiness, preflight and progress observations remain Core-owned and use the recovery contract work already required in this section.", "pages": []},
+  "roadmap": {"impact": "none", "reason": "Refines acceptance criteria for the manual recovery and rehearsal items already listed as outstanding on the roadmap; no milestone, status or separate capability is added.", "pages": []},
+  "state": {"owner": "none", "reason": "Documentation only; no durable state added. Planned readiness and recovery-operation results remain Core-owned rather than Controller-derived."},
+  "verification": {"method": "Review the added criteria against the existing recovery safety/API boundaries and planned-only status; run documentation, privacy and whitespace checks. Recovery fault injection and first-time-operator tests remain future acceptance work, not executed results.", "evidence": ["docs/plans/2026-09-08-nex-platform.md"]}
+}

@@ -16,6 +16,7 @@ type PoolMember struct {
 	Status            string    `json:"status"`
 	ObservedAt        time.Time `json:"observed_at"`
 	Error             string    `json:"error,omitempty"`
+	PeerOrigin        string    `json:"peer_origin,omitempty"`
 }
 
 // PoolMembership is retained by the master and copied to a member only after the member

@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+const clusterRelayWriteTimeout = 45 * time.Second
+
 func main() {
 	var cfg controller.Config
 	var listen, cert, key, passwordFile string
@@ -52,7 +54,10 @@ func main() {
 		log.Fatal(err)
 	}
 	defer c.Close()
-	server := &http.Server{Addr: listen, Handler: c.Handler(), TLSConfig: c.TLSConfig(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
+	// Cluster relay returns its bounded 30-second ambiguous outcome. Leave time
+	// for that response to cross TLS instead of expiring the socket at the same
+	// instant the handler writes it.
+	server := &http.Server{Addr: listen, Handler: c.Handler(), TLSConfig: c.TLSConfig(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: clusterRelayWriteTimeout, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go func() {

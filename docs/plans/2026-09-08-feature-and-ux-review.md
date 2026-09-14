@@ -7,12 +7,8 @@ not implemented or visually verified by this research.
 
 This supplements the [implementation plan](2026-09-08-nex-platform.md). It separates useful operator features from the minimum needed to get Nex working. Everything here is a Nex requirement or proposal; nothing here promises feature or licensing parity with anything else.
 
-Every feature, UI, and roadmap change must pass the [required API impact check](../../AGENTS.md#required-api-impact-check):
-trace the client-facing operation and required Nex Controller/Core commands and observations, reuse existing
-contracts where sufficient, and record whether an API must be created or changed. Update the
-[living API reference](../API.md) with implementation and check evidence in the same slice. These are
-acceptance requirements for every phase, including later features; a screen alone does not complete a workflow.
-The first API phase includes browsable generated documentation covering its implemented calls and commands.
+Every proposal here is subject to the [required API impact check](../../AGENTS.md#required-api-impact-check);
+a screen alone does not complete a workflow.
 
 **API impact: none** — this planning revision maps UX proposals to future phases; no implemented
 client-facing or Controller/Core interface changes. The planned operation flows are assessed below;

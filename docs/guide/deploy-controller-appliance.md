@@ -2,33 +2,15 @@
 
 ## Status
 
-This is the **2026-09-08 Controller appliance development slice**, with the newer
-`nex-core-local` package `0.1.0+managed1`, for explicitly selected
-disposable lab hosts. The host-local web service deploys a prepared Debian 13 virtual
-appliance and provides restricted local VM power recovery. No Controller installer ISO
-or interactive Debian installation is involved; the guest configures itself on first boot.
+Development workflow for explicitly selected disposable lab hosts. The host-local web service
+(`nex-core-local`, included in every Nex Core ISO) deploys a prepared Debian 13 virtual appliance
+that configures itself on first boot, and provides restricted local power recovery for that
+appliance. Take the current Core update before using root login. Deployment uses the `br0`
+bridge created by current GUI installations; hosts installed by an older ISO need a prepared
+management bridge. Login/session rules are described in [secure web access](secure-web-access.md).
 
-Every Nex Core ISO build includes the local-host package. On an existing Nex Core host,
-take the update before using root login. Its service discovers the default-route
-management IPv4 address and starts local access automatically. Controller deployment
-uses `br0` created by current GUI installations when a management NIC is selected.
-Hosts installed by an older ISO still require a prepared management bridge.
-The newer [web-security development changes](secure-web-access.md) alter login/session
-and new-password rules; their actual rebuilt-package walkthrough is separately recorded.
-The `0.1.0+usability1` signed appliance and matching host package include DHCP and
-relaxed Controller password validation. Earlier artifacts do not contain these changes.
-The `0.1.0+desktop1` appliance/package retains those behaviors and adds the
-Controller desktop layout: resource tree, menus, detail views and bottom task drawer.
-See the [desktop artifact rebuild](../qa/controller-desktop-rebuild/checks.md) for
-its historical hashes and checks. The `0.1.0+managed1` appliance/package also includes
-[managed VM creation](create-virtual-machine.md); the
-[fresh local installation report](../qa/fresh-install/checks.md) records its matching
-ISO, installation and deployment evidence. Rebuilding media does not
-update an already deployed Controller VM; its existing UI remains until that guest
-is deliberately updated through a separately verified procedure.
-Use a private management network or VPN, with no direct Internet exposure.
-General VM deletion, browser consoles, shared-storage control and automatic
-Controller failover remain outside this slice. This page does not establish Phase 3 acceptance.
+Rebuilding media does not update an already deployed Controller VM. Use a private management
+network or VPN, with no direct Internet exposure. Automatic Controller failover is not provided.
 
 ## Prerequisites
 
@@ -166,14 +148,11 @@ remain read-only here; manage them from Controller. Unknown ownership prevents l
 - **Waiting for network:** allow the guest to boot and obtain its DHCP lease. If it cannot
   find one usable address within five minutes, fix the DHCP/bridge connection and retry
   the original operation; do not create another Controller VM.
-- **Permission denied probing `qemu-vnc-lossy`:** this console regression is corrected in
-  source by restoring the standard emulator for new definitions. An updated Core build
-  does not repair an existing failed deployment or rewrite its saved definition. Keep its
-  operation and disks; inspect the recorded VM UUID, saved definition and actual libvirt
-  state before recovering that same appliance. **Retry deployment** only reconciles observed
-  state and cannot recreate a VM whose definition failed. Do not disable host security or
-  create a second appliance to bypass this error. Recovery of an affected host has not yet
-  been verified for this fix.
+- **Permission denied probing `qemu-vnc-lossy`:** an updated Core build fixes new definitions
+  but does not repair an existing failed deployment. Keep its operation and disks; inspect the
+  recorded VM UUID, saved definition and actual libvirt state before recovering that same
+  appliance. **Retry deployment** cannot recreate a VM whose definition failed. Do not disable
+  host security or create a second appliance to bypass this error.
 - **Controller DHCP address changed:** restart `nex-core-local` from the host console to
   refresh the address and reconnect the existing host identity, including ready deployments.
   Retry the original operation if it still needs attention; do not create another VM.
@@ -312,77 +291,27 @@ with the same care as host root.
 
 Restoration does not copy guest networking, automatically enroll the replacement host, or
 relocate the original appliance's inventory record. Verify actual placement and retain the
-original exclusion. The tested manual recovery restored Controller identity and host
-connectivity; it did not relocate the appliance inventory record or enroll the replacement host.
+original exclusion.
 
 ## Verification
 
-**Pool master change verified in a real lab (2026-09-09):** the
-[pool master lab run](../qa/pool-master/lab/checks.md) deployed a fresh appliance through this
-GUI with the site name only (no **Pool name** field), reached `ready` after the Controller inside
-the appliance was upgraded to the matching build, and recorded the automatic pool and adoption.
-Deploying with a packaged appliance image that still carries the previous Controller stops at
-**Needs attention** with a bootstrap rejection until the image is rebuilt. The recovery request
-format without a pool name is covered by unit tests only; treat it as unverified in a real lab.
+Recorded checks and their limits:
 
-The [fresh local installation](../qa/fresh-install/checks.md) records the
-`0.1.0+managed1` package and bundled appliance installed from one matching ISO.
-Stock root browser login, deployment through the local GUI, ready state,
-automatic host enrollment and protected appliance adoption passed on the new
-disposable host. The report separates native results from remaining coverage.
+- [Fresh local installation](../qa/fresh-install/checks.md) — ISO install, root login, deployment,
+  enrollment and appliance adoption.
+- [Pool master lab run](../qa/pool-master/lab/checks.md) — deployment without a pool name; the
+  recovery request without a pool name is unit-tested only.
+- [Appliance lab report](../qa/appliance/lab.md) with [final results](../qa/appliance/final/results.json),
+  including [export](../qa/appliance/final/export.json),
+  [replacement preparation](../qa/appliance/final/recovery-prepared.json),
+  [restored inventory](../qa/appliance/final/restored-inventory.json) and
+  [replacement-host reboot](../qa/appliance/final/replacement-host-reboot.txt) (historical
+  `0.1.0+lab6.1` artifacts).
+- Security build: [package](../qa/security/package.md), [nested-KVM lab](../qa/security/lab.md) and
+  [browser](../qa/security/browser.md) checks; separate-host restore was not rerun.
+- [Desktop rebuild](../qa/controller-desktop-rebuild/checks.md),
+  [deployment usability](../qa/appliance/deployment-usability.md),
+  [root login](../qa/appliance/root-auth.md) and [console URL](../qa/appliance/console-url.md).
 
-[Desktop-layout rebuild verification](../qa/controller-desktop-rebuild/checks.md)
-identifies the matching appliance, local package and ISO. Runtime and installation
-limits are recorded there; earlier deployment and recovery evidence remains tied to
-its original artifact version.
-
-[Deployment usability checks](../qa/appliance/deployment-usability.md) record the current
-DHCP/password/power UI changes, simulated browser checks and artifact availability limits.
-Unit tests cover firstboot applying the deploy password to the guest **root** console
-account; a live appliance console login walkthrough after deploy is not yet recorded.
-
-[Root-login verification](../qa/appliance/root-auth.md) records the current root-authentication
-package and browser checks, including password changes and account failure/recovery.
-Earlier appliance deployment/reboot results below apply to their named artifacts.
-
-The `0.1.0+security1` rebuild passed its [Debian package checks](../qa/security/package.md)
-and [actual nested-KVM deployment checks](../qa/security/lab.md): ready state,
-workspace enrollment/adoption, secret cleanup, Controller login, preserved VM identity,
-Controller/local-service outages and guest shutdown/cold start. Its
-[browser-security walkthrough](../qa/security/browser.md) separately exercises session/policy
-behavior with simulated virtualization. Security1 also passed an actual outer-host reboot:
-local management and the same appliance autostarted, and browser login, TLS/source/management
-identity and fresh host reporting were retained. The complete manual replacement restore and
-replacement-host reboot below remain historical `0.1.0+lab6.1` evidence; a separate-host
-restoration was not rerun on security1.
-The [appliance lab report](../qa/appliance/lab.md) separates early development fixes from
-the final clean run. Package `0.1.0+lab6.1` and its bundled image reached **ready / 100%**
-from a pristine disposable nested-KVM host without guest or VM-definition corrections.
-The [final recorded results](../qa/appliance/final/results.json) cover actual browser
-login/deployment, signature rejection, request authorization, preserved VM identity after
-refresh, Controller login and API adoption, bootstrap-secret cleanup, Controller/local-service
-outages, and confirmed guest shutdown/cold start. These checks used real HTTPS and libvirt;
-they did not mock virtualization. Network access used the disposable lab's bridge and
-loopback forwards, so physical management-LAN behavior is not established.
-
-The shipped recovery helper [exported consistent state and verified all six file hashes
-after copying it off-host](../qa/appliance/final/export.json). A separate clean host
-[prepared an empty replacement](../qa/appliance/final/recovery-prepared.json), restored the
-archive and passed original-credential browser login, original TLS fingerprint verification
-and [existing-host reconnection with preserved IDs](../qa/appliance/final/restored-inventory.json).
-The original VM remained shut off and excluded. The lab report describes the isolated
-network preparation and the placement limitation above; these results do not establish
-automatic failover or automatic relocation of the appliance's inventory record.
-
-Rebooting the separate replacement host also passed native appliance autostart and
-local-service startup. Post-reboot browser login, original TLS/source identity and fresh
-existing-host reconnection passed while the original VM stayed shut off and excluded.
-The report records the lab-only bridge-link startup correction and
-[actual host reboot observations](../qa/appliance/final/replacement-host-reboot.txt).
-
-Physical hardware, physical-LAN compatibility, complete
-redistribution clearance, hosted CI and full Phase 2/3 acceptance remain outside these
-results. Follow the report's remaining gates and independent review findings.
-
-[Console URL verification](../qa/appliance/console-url.md) records native Debian login-banner
-rendering and simulated management discovery, including remaining installed-boot limits.
+A live appliance console login after deploy is not recorded. Physical hardware, physical-LAN
+behavior and redistribution clearance are not established.

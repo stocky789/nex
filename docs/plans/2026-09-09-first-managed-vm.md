@@ -113,12 +113,8 @@ checks for host filtering, transfer states, empty/stale/error recovery and narro
 layout; independently review; verify the updated UI in the selected local lab.
 This adds visibility without expanding media distribution or guest lifecycle scope.
 
-The requested host ISO view and final single-dropdown site selector are now
-implemented and [verified in the selected local Controller](../qa/host-isos/checks.md).
-Final browser checks cover transfer/status isolation, the searchable 500-site
-fixture, keyboard focus and eight selector groups; all 16 existing Controller
-walkthrough groups also passed. The local UI/source update preserves the backend
-binary and is not a rebuilt installation/release image.
+Status: implemented and [verified](../qa/host-isos/checks.md); see the
+[desktop layout plan](2026-09-09-controller-desktop-layout.md#site-selection-at-scale--2026-09-09).
 
 ## Public URL ISO downloads — 2026-09-11
 
