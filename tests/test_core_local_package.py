@@ -229,6 +229,9 @@ class CoreLocalPackageTests(unittest.TestCase):
             # backfilled, so their next upgrade is not refused by preinst.
             self.assertEqual((root / 'etc/nex/core-release').read_text(),
                              'NEX_CORE=1\nINSTALLED_BY=package-upgrade\n')
+            grub_cfg = (root / 'etc/default/grub.d/nex-core.cfg').read_text()
+            self.assertIn('GRUB_DISTRIBUTOR="Nex Core"\n', grub_cfg)
+            self.assertIn('systemd.ssh_auto=no', grub_cfg)
 
     def test_postinst_keeps_the_installer_provenance_stamp(self):
         for tool in ('dpkg-divert', 'dpkg-query'):

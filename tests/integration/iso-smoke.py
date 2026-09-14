@@ -105,6 +105,8 @@ check_identity() {
     test -s /etc/debian_version
     ( . /usr/lib/os-release; test "$ID" = debian )
     grep -q Nex /etc/default/grub.d/nex-core.cfg
+    grep -Fq systemd.ssh_auto=no /etc/default/grub.d/nex-core.cfg
+    grep -Fq systemd.ssh_auto=no /proc/cmdline
     grep -q "Nex Core" /boot/grub/grub.cfg
     cat /etc/os-release
     echo NEX_SMOKE_IDENTITY_PASS

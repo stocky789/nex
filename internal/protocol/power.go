@@ -8,7 +8,8 @@ const PowerCapability = "vm-power-v1"
 const PowerQueueCapability = "vm-power-queue-v1"
 
 // VMPowerRequest asks the assigned host to change one VM's execution state. Shutdown and
-// reboot are ACPI requests the guest may ignore; force-stop cuts power immediately.
+// reboot are ACPI requests the guest may ignore; force-stop cuts power immediately;
+// force-reboot resets a running guest (virsh reset).
 type VMPowerRequest struct {
 	VMID             string `json:"vm_id"`
 	PoolID           string `json:"pool_id"`
@@ -20,7 +21,7 @@ type VMPowerRequest struct {
 // ValidPowerAction reports whether a is a supported power action.
 func ValidPowerAction(a string) bool {
 	switch a {
-	case "start", "shutdown", "reboot", "force-stop":
+	case "start", "shutdown", "reboot", "force-stop", "force-reboot":
 		return true
 	}
 	return false

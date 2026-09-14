@@ -1,0 +1,59 @@
+{
+  "summary": "Add force-reboot VM power action (hard guest reset via virsh reset when running). API impact: changed contract; POST /api/v1/vms/{id}/power and vm-power accept force-reboot.",
+  "paths": [
+    "internal/protocol/power.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/power_test.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_test.go",
+    "web/src/managed.tsx",
+    "web/src/main.tsx",
+    "tests/integration/phase1_browser.py",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/vm-power.md",
+    "docs/guide/manage-controller.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-15-force-reboot.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "docs/guide/vm-power.md and manage-controller.md list Force reboot beside Shut down / Reboot / Force stop, note hard reset vs ACPI reboot, and troubleshooting when soft reboot is ignored.",
+    "pages": [
+      "docs/guide/vm-power.md",
+      "docs/guide/manage-controller.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "API impact: changed contract. POST /api/v1/vms/{id}/power and vm-power allow action force-reboot; Core issues virsh reset when the VM is running; interrupt ambiguity matches reboot. docs/API.md and OpenAPI (docs/api/openapi.json) updated; docs/api/index.html regenerated.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ],
+    "contracts": [
+      "POST /api/v1/vms/{id}/power",
+      "vm-power",
+      "VMPowerRequest.action"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Extends existing VM power controls; no milestone scope or acceptance status change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable state; power is ephemeral host work against the existing managed VM journal."
+  },
+  "verification": {
+    "method": "Unit tests for force-reboot admission and Core reset path; python3 scripts/check_docs.py --worktree. Browser harness updated for the toolbar action; full disposable-lab walkthrough not claimed in this docs slice.",
+    "evidence": [
+      "internal/vmhost/power_test.go",
+      "internal/agent/pool_vm_test.go",
+      "tests/integration/phase1_browser.py"
+    ]
+  }
+}

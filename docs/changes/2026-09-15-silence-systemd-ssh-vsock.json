@@ -1,0 +1,38 @@
+{
+  "summary": "Silence systemd-ssh-generator AF_VSOCK console noise on Nex Core hosts without vsock. API impact: none; boot cmdline only, no Controller/Core API.",
+  "paths": [
+    "installer/late-install.sh",
+    "packaging/core-local/postinst",
+    "installer/check.sh",
+    "tests/integration/iso-smoke.py",
+    "tests/test_core_local_package.py",
+    "docs/changes/2026-09-15-silence-systemd-ssh-vsock.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No operator workflow or install steps change; only removes console spam from a Debian systemd generator.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. GRUB drop-in and package postinst do not add or change Controller/Core APIs.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Cosmetic boot console fix; no milestone status change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Host boot parameter only; not pool-scoped durable product state."
+  },
+  "verification": {
+    "method": "Ran installer/check.sh, focused packaging unit tests covering postinst GRUB drop-in, and repository privacy check. Full ISO reinstall smoke (iso-smoke.py) not re-run in this change.",
+    "evidence": [
+      "installer/check.sh",
+      "tests/test_core_local_package.py",
+      "tests/integration/iso-smoke.py"
+    ]
+  }
+}

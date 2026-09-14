@@ -87,7 +87,7 @@ func TestManagedPowerDependencies(t *testing.T) {
 func TestManagedPowerRequests(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	log := filepath.Join(t.TempDir(), "virsh.log")
-	fakeCommand(t, "virsh", `echo "$3 $4" >> "$VMHOST_LOG"; case "$3" in domstate) printf '%s\n' "$VMHOST_STATE";; start|shutdown|reboot|destroy) [ "$VMHOST_FAIL" = "$3" ] && exit 1; exit 0;; *) exit 2;; esac`)
+	fakeCommand(t, "virsh", `echo "$3 $4" >> "$VMHOST_LOG"; case "$3" in domstate) printf '%s\n' "$VMHOST_STATE";; start|shutdown|reboot|destroy|reset) [ "$VMHOST_FAIL" = "$3" ] && exit 1; exit 0;; *) exit 2;; esac`)
 	t.Setenv("VMHOST_LOG", log)
 	e := NewManaged(dir)
 	vm := "11111111-2222-4333-a444-555555555555"
@@ -109,6 +109,17 @@ func TestManagedPowerRequests(t *testing.T) {
 	if r, _ := e.Execute(context.Background(), command("p3", "reboot"), nil); r.Status != "succeeded" || calls() != "domstate "+vm+"\nreboot "+vm+"\n" {
 		t.Fatalf("reboot %+v", r)
 	}
+	if r, _ := e.Execute(context.Background(), command("p3b", "force-reboot"), nil); r.Status != "succeeded" || calls() != "domstate "+vm+"\nreset "+vm+"\n" {
+		t.Fatalf("force-reboot %+v", r)
+	}
+	t.Setenv("VMHOST_STATE", "shut off")
+	if r, _ := e.Execute(context.Background(), command("p3c", "force-reboot"), nil); r.Status != "failed" || !strings.Contains(r.Error, "not running") {
+		t.Fatalf("force-reboot when not running must refuse: %+v", r)
+	}
+	if got := calls(); got != "domstate "+vm+"\n" {
+		t.Fatalf("refused force-reboot must not call reset: %q", got)
+	}
+	t.Setenv("VMHOST_STATE", "running")
 	t.Setenv("VMHOST_FAIL", "shutdown")
 	if r, _ := e.Execute(context.Background(), command("p4", "shutdown"), nil); r.Status != "needs_attention" || r.Error == "" {
 		t.Fatalf("unconfirmed shutdown must remain uncertain: %+v", r)
@@ -134,7 +145,7 @@ func TestManagedPowerRequests(t *testing.T) {
 	if r, _ := e.Execute(context.Background(), command("p7", "force-stop"), nil); r.Status != "succeeded" {
 		t.Fatalf("interrupted force-stop with a stopped VM: %+v", r)
 	}
-	for _, tc := range []struct{ action, state, want string }{{"shutdown", "running", "needs_attention"}, {"shutdown", "shut off", "succeeded"}, {"reboot", "running", "needs_attention"}} {
+	for _, tc := range []struct{ action, state, want string }{{"shutdown", "running", "needs_attention"}, {"shutdown", "shut off", "succeeded"}, {"reboot", "running", "needs_attention"}, {"force-reboot", "running", "needs_attention"}} {
 		j := managedJournal{Command: command("p9-"+tc.action+tc.state[:3], tc.action), Result: protocol.Result{OperationID: "p9-" + tc.action + tc.state[:3], Status: "pending"}, Stage: "powering"}
 		b, _ := json.Marshal(j)
 		os.WriteFile(filepath.Join(dir, j.Command.OperationID+".json"), b, 0600)
@@ -230,6 +241,7 @@ func TestManagedPowerPostEffectFailureIsUncertain(t *testing.T) {
 	}{
 		{"shutdown", "running", "shut off", "succeeded"},
 		{"reboot", "running", "running", "needs_attention"},
+		{"force-reboot", "running", "running", "needs_attention"},
 		{"force-stop", "running", "shut off", "succeeded"},
 	} {
 		t.Run(tc.action, func(t *testing.T) {

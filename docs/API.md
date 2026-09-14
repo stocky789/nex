@@ -613,8 +613,15 @@ authenticated owner evidence of an exact successful *N* to *N+1* journal transit
 inferred inventory change. After a response-lost exact abort, the master retains one bounded
 `last_aborted_update` receipt solely to acknowledge that same authenticated abort; a different
 replay is refused, and the next reservation clears the receipt. Shared reboot is owner-authorized
-without inferring guest state. Shared media is explicitly refused: it changes the durable definition
-but has no matching journal-backed master transition. The master keeps this state in its Core
+without inferring guest state. A shared VM's media change takes the same transition: Core derives
+the next definition from its own journal and applies a `vm-media` request that would rewrite the
+definition (a different ISO, or an eject that clears one) as the `vm-update` at revision + 1 under
+the original operation ID, so the master reserves and commits the exact next revision. A redelivered
+operation reuses the command that attempt journaled rather than deriving a second revision. A media
+request that leaves the definition unchanged — re-inserting the ISO it already names, to reconnect a
+tray the guest emptied — keeps the `vm-media` path under the same owner admission as reboot, because
+it changes no durable state. Admission still refuses a raw `vm-media` command that would rewrite a
+shared VM's definition. The master keeps this state in its Core
 `pool-vms.json`; a replacement Controller adopts the committed Core inventory and holds no durable
 VM definition.
 
@@ -1319,8 +1326,8 @@ recovery remain independent of Controller availability. The
 API impact: **changed contract** — `POST /api/v1/vms/{id}/power`, `vm-power`,
 `VMPowerRequest.after_operation_id`, `vm-power-queue-v1`, and managed task outcome adoption.
 
-An administrator posts `{request_id, action}` with `start`, `shutdown`, `reboot` or
-`force-stop`. Authentication, same-Origin/CSRF, fresh assigned host, pool and capability
+An administrator posts `{request_id, action}` with `start`, `shutdown`, `reboot`,
+`force-reboot` or `force-stop`. Authentication, same-Origin/CSRF, fresh assigned host, pool and capability
 checks are unchanged. `request_id` replay returns the original operation; changed input
 under that ID is 409. With `vm-power-queue-v1`, another pending power, edit or media task
 no longer causes a busy refusal: Controller sends the latest pending operation ID as
@@ -1351,12 +1358,14 @@ body limit still applies. The existing 10,000-entry journal ceiling still requir
 when full; no automatic pruning or unbounded retry loop is added.
 
 Core journals the stage before its single libvirt request. Start and force-stop are
-idempotent against observed state; shutdown and reboot are ACPI requests. **Queue order
+idempotent against observed state; shutdown and reboot are ACPI requests; `force-reboot` is a
+hard guest reset (`virsh reset`) and is accepted only while the VM is running. **Queue order
 waits for earlier task completion, not guest shutdown:** an ACPI task can succeed while the
 guest remains running. Check observed state before requesting a subsequent state change.
 Paused or transitional states are refused as task errors. Interrupted requests reconcile
 by observation only, never by blindly issuing another power effect; ambiguous outcomes
-remain `needs_attention`. A libvirt power-call error or timeout after the request could have
+remain `needs_attention`, including after `force-reboot` when observation cannot confirm the
+reset completed (same interrupt ambiguity as reboot). A libvirt power-call error or timeout after the request could have
 taken effect is also uncertain, including when resuming a command before its first effect.
 
 API impact: **existing power contract** — for an exact locally managed, journal-owned pool VM,
@@ -1365,7 +1374,7 @@ admission is unavailable. The reducing-only exception still requires the normal 
 authorized power request, `ValidateManagedCommand`, and exact VM ID, pool ID and host ID matching
 the local Core record. It retains the local journal, native validation and native observation; it
 does not create a start permit or modify master ownership/placement state. It never applies to
-start, reboot, autostart, create, update or media changes, all of which remain fail-closed.
+start, reboot, force-reboot, autostart, create, update or media changes, all of which remain fail-closed.
 No successful result is a claim that the guest is stopped: a frozen GFS2 path can still make the
 native shutdown or destroy block or fail. On error or ambiguous outcome, Core retains the journal
 result and a fresh reconnect inventory is authoritative; it must not infer a stop, transfer
@@ -1490,7 +1499,20 @@ An eject first reads the CD drive from the domain definition — the live one wh
 running, the persistent one otherwise — and succeeds without calling `virsh` when the domain
 has no CD drive or the tray is already empty; a tray holding either a `<source file>` or a
 `<source dev>` counts as loaded. Nothing is attached to a VM without a drive just to eject
-from it.
+from it. When a running guest has emptied its own tray while the persistent definition still
+names the ISO, the eject clears that definition alone (`--config`, no `--live`), because
+`virsh` refuses an eject on a tray that already holds no media and a stale persistent source
+would re-attach the ISO at the next start. For the same reason, an interrupted eject of a
+running VM is reconciled as complete only when both the live tray and the persistent
+definition are empty. An insert always issues the change, so re-inserting the ISO the
+definition already names reconnects a tray the guest ejected. A live edit (`vm-update`)
+changes each side only where it differs from the wanted media.
+
+A VM on pool-shared storage takes the same media requests. Core applies a change that rewrites
+the durable definition as the master-reserved `vm-update` transition described under
+[Core pool peer join and repository observations](#core-pool-peer-join-and-repository-observations)
+and keeps the lighter path for a request that
+changes nothing, so the console and **Edit VM** reach the same durable record.
 
 Boot order is not changed by a media change, because `virsh change-media` does not change it:
 inserting does not give the CD drive a `bootindex`, and ejecting leaves every device's
@@ -1525,9 +1547,15 @@ attached but unanswered. Agents are asked after every VM was observed, oldest ca
 only while the probe deadline leaves room for a question. Loopback and link-local addresses
 are dropped, at most 32 addresses are reported, `os` is bounded to 4096 bytes and `hostname`
 and interface names to 200; Controller refuses a report beyond those limits or with an
-unknown `agent`/`clipboard` value. `agent` is `connected`, `unresponsive`, `disconnected` or
+unknown `agent`, `clipboard` or `media` value (an absent `media` is an older Core). `agent` is `connected`, `unresponsive`, `disconnected` or
 `no-channel`; `clipboard` is `ready`, `waiting` or `no-channel`; `resize` is true for a
-VirtIO display. The probe is separate from the libvirt state probe, so a slow guest never
+VirtIO display. The same live definition reports `media`: `loaded` when the CD drive's tray
+holds a `<source file>` or `<source dev>` and is not `tray='open'`, `empty` when the drive
+holds none, and `no-drive` when the VM has no CD drive; it is absent from Core builds that do
+not observe it. A guest owns its tray while it runs — a Debian installer ejects the disc it
+booted — so this is the only report of what the VM currently sees. It never changes the durable
+`media_id`, which only a media request changes, and the console uses the difference to offer
+the recorded ISO again. The probe is separate from the libvirt state probe, so a slow guest never
 delays VM power states, and facts are dropped when the VM leaves the running list. This is
 observation, not health: a connected agent proves nothing about guest applications.
 

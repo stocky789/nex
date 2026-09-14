@@ -16,6 +16,12 @@ func TestObserveGuest(t *testing.T) {
 	<channel type='unix'><target type='virtio' name='org.qemu.guest_agent.0' state='connected'/></channel>
 	<channel type='qemu-vdagent'><source><clipboard copypaste='yes'/></source><target type='virtio' name='com.redhat.spice.0' state='connected'/></channel>
 	<video><model type='virtio'/></video></devices></domain>`
+	const loaded = `<domain><devices>
+	<channel type='unix'><target type='virtio' name='org.qemu.guest_agent.0' state='connected'/></channel>
+	<channel type='qemu-vdagent'><source><clipboard copypaste='yes'/></source><target type='virtio' name='com.redhat.spice.0' state='connected'/></channel>
+	<disk device='disk' type='file'><source file='/var/lib/nex-storage/guest.qcow2'/><target dev='vda' bus='virtio'/></disk>
+	<disk device='cdrom' type='file'><source file='/var/lib/libvirt/images/debian.iso'/><target dev='sda' bus='sata'/><readonly/></disk>
+	<video><model type='virtio'/></video></devices></domain>`
 	fakeCommand(t, "virsh", `case "$3" in
 dumpxml) printf '%s\n' "$GUEST_XML";;
 qemu-agent-command) [ "$4" = --timeout ] || exit 3; [ -n "$GUEST_FAIL" ] && exit 1; printf '%s\n' "$5 $7" >> "$GUEST_LOG"
@@ -33,12 +39,17 @@ qemu-agent-command) [ "$4" = --timeout ] || exit 3; [ -n "$GUEST_FAIL" ] && exit
 		facts           bool
 		want            *protocol.GuestInfo
 	}{
-		{"legacy definition", legacy, "", true, &protocol.GuestInfo{Agent: "disconnected", Clipboard: "no-channel"}},
-		{"channels waiting", strings.ReplaceAll(full, "state='connected'", "state='disconnected'"), "", true, &protocol.GuestInfo{Agent: "disconnected", Clipboard: "waiting", Resize: true}},
-		{"attached without facts", full, "", false, &protocol.GuestInfo{Agent: "unresponsive", Clipboard: "ready", Resize: true}},
-		{"agent not answering", full, "1", true, &protocol.GuestInfo{Agent: "unresponsive", Clipboard: "ready", Resize: true}},
-		{"agent facts", full, "", true, &protocol.GuestInfo{Agent: "connected", OS: "Debian GNU/Linux 13 (trixie)", Hostname: "guest1", Clipboard: "ready", Resize: true,
+		{"legacy definition", legacy, "", true, &protocol.GuestInfo{Agent: "disconnected", Clipboard: "no-channel", Media: "no-drive"}},
+		{"channels waiting", strings.ReplaceAll(full, "state='connected'", "state='disconnected'"), "", true, &protocol.GuestInfo{Agent: "disconnected", Clipboard: "waiting", Resize: true, Media: "no-drive"}},
+		{"attached without facts", full, "", false, &protocol.GuestInfo{Agent: "unresponsive", Clipboard: "ready", Resize: true, Media: "no-drive"}},
+		{"agent not answering", full, "1", true, &protocol.GuestInfo{Agent: "unresponsive", Clipboard: "ready", Resize: true, Media: "no-drive"}},
+		{"agent facts", full, "", true, &protocol.GuestInfo{Agent: "connected", OS: "Debian GNU/Linux 13 (trixie)", Hostname: "guest1", Clipboard: "ready", Resize: true, Media: "no-drive",
 			Addresses: []protocol.GuestAddress{{Interface: "enp1s0", Address: "192.168.122.10/24"}, {Interface: "enp1s0", Address: "2001:db8::10/64"}}}},
+		// The live tray of a running VM, which a guest can open itself: the durable media_id
+		// stays as Nex recorded it, so only this observation can show the disc is gone.
+		{"disc loaded", loaded, "", false, &protocol.GuestInfo{Agent: "unresponsive", Clipboard: "ready", Resize: true, Media: "loaded"}},
+		{"guest ejected the disc", strings.ReplaceAll(loaded, `<source file='/var/lib/libvirt/images/debian.iso'/>`, ""), "", false, &protocol.GuestInfo{Agent: "unresponsive", Clipboard: "ready", Resize: true, Media: "empty"}},
+		{"tray opened with media still named", strings.ReplaceAll(loaded, `<target dev='sda' bus='sata'/>`, `<target dev='sda' bus='sata' tray='open'/>`), "", false, &protocol.GuestInfo{Agent: "unresponsive", Clipboard: "ready", Resize: true, Media: "empty"}},
 	}
 	for _, c := range cases {
 		t.Setenv("GUEST_XML", c.xml)

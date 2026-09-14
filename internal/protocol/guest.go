@@ -20,7 +20,21 @@ type GuestInfo struct {
 	// Resize is true when the VM has a VirtIO display, so the console can ask the guest
 	// to change its resolution to the browser's size.
 	Resize bool `json:"resize"`
+	// Media is the live CD drive of the running VM: "loaded" when its tray holds media,
+	// "empty" when the drive is there but holds none (a guest can open its own tray, for
+	// example when an installer ejects the disc it booted), "no-drive" when the VM has no
+	// CD drive. Empty from Core builds that do not observe it. It describes what the guest
+	// currently sees, never what Nex recorded; the durable media_id changes only through a
+	// media request.
+	Media string `json:"media,omitempty"`
 }
+
+// Media observations reported in GuestInfo.Media.
+const (
+	MediaLoaded  = "loaded"
+	MediaEmpty   = "empty"
+	MediaNoDrive = "no-drive"
+)
 
 // GuestAddress is one guest-reported IP address in CIDR form on a guest interface.
 type GuestAddress struct {

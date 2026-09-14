@@ -270,6 +270,26 @@ func (e *ManagedEngine) VMHasPoolSharedStorageHistory(ctx context.Context, vmID 
 	return false, nil
 }
 
+// JournaledCommand returns the command a previous execution durably recorded under
+// operationID. A redelivered request must be applied exactly as it was journaled: Execute
+// compares the whole command, so a caller that derives part of it from state the first
+// attempt already changed has to reuse what that attempt wrote instead of recomputing it.
+func (e *ManagedEngine) JournaledCommand(operationID string) (protocol.Command, bool) {
+	if operationID == "" {
+		return protocol.Command{}, false
+	}
+	js, err := e.journals()
+	if err != nil {
+		return protocol.Command{}, false
+	}
+	for i := range js {
+		if js[i].Command.OperationID == operationID {
+			return js[i].Command, true
+		}
+	}
+	return protocol.Command{}, false
+}
+
 // FailedVMUpdateEvidence proves that one exact vm-update failed without
 // replacing its predecessor. It derives that predecessor from the local
 // journal, so a member never needs a replicated master VM definition. A failed
@@ -3211,7 +3231,8 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protoc
 }
 
 // powerVM issues one libvirt power request. Start and stop requests are idempotent against
-// the observed state; shutdown and reboot are ACPI requests the guest decides how to honor.
+// the observed state; shutdown and reboot are ACPI requests the guest decides how to honor;
+// force-reboot issues virsh reset and requires a running guest.
 func powerVM(ctx context.Context, p protocol.VMPowerRequest) error {
 	state, err := managedVirsh(ctx, "domstate", p.VMID)
 	if err != nil {
@@ -3233,6 +3254,11 @@ func powerVM(ctx context.Context, p protocol.VMPowerRequest) error {
 			return errors.New("VM is not running; reboot needs a running guest")
 		}
 		command = "reboot"
+	case "force-reboot":
+		if current != "running" {
+			return errors.New("VM is not running; force-reboot needs a running guest")
+		}
+		command = "reset"
 	case "force-stop":
 		if current != "shut off" {
 			command = "destroy"
@@ -3251,6 +3277,8 @@ func powerVM(ctx context.Context, p protocol.VMPowerRequest) error {
 }
 
 // powerObserved reconciles an interrupted power request from the current state alone.
+// Reboot and force-reboot stay uncertain while still running: observation cannot prove the
+// reset completed. Force-stop and shutdown succeed only when the guest is shut off.
 func powerObserved(ctx context.Context, p protocol.VMPowerRequest) error {
 	state, err := managedVirsh(ctx, "domstate", p.VMID)
 	if err != nil {
@@ -3267,7 +3295,7 @@ func powerObserved(ctx context.Context, p protocol.VMPowerRequest) error {
 			return nil
 		}
 	}
-	// An ACPI request may or may not have reached the guest; only the guest's state can tell.
+	// An ACPI or reset request may or may not have taken effect; only the guest's state can tell.
 	return errors.New("power request was interrupted; VM is " + current + "; observe the guest and submit a new request")
 }
 
@@ -3299,10 +3327,21 @@ func (e *ManagedEngine) changeMedia(ctx context.Context, j *managedJournal, js [
 		return err
 	}
 	dev := ""
+	live := running
 	if req.Action == "eject" {
 		source, tray, err := cdromSource(ctx, req.VMID, running)
 		if err != nil {
 			return err
+		}
+		if running && source == "" {
+			// The guest opened its own tray: the running domain is already empty, but the
+			// persistent definition still names the ISO and would re-attach it at the next
+			// start. Clear that one, and only that one: virsh refuses an eject on a tray
+			// that already holds no media.
+			if source, tray, err = cdromSource(ctx, req.VMID, false); err != nil {
+				return err
+			}
+			live = false
 		}
 		if tray == "" || source == "" {
 			// Nothing to eject: do not attach a tray, or call virsh, just to remove from it.
@@ -3320,7 +3359,7 @@ func (e *ManagedEngine) changeMedia(ctx context.Context, j *managedJournal, js [
 		return err
 	}
 	args := []string{"change-media", req.VMID, dev, "--force"}
-	if running {
+	if live {
 		args = append(args, "--live")
 	}
 	args = append(args, "--config")
@@ -3490,6 +3529,15 @@ func mediaObserved(ctx context.Context, req protocol.VMMediaRequest, path string
 		want = path
 	}
 	if got == want {
+		if req.Action == "eject" && running {
+			// A guest can empty its own tray, so a live-empty drive alone does not prove
+			// the eject reached the persistent definition, which would otherwise re-attach
+			// the ISO at the next start.
+			persistent, _, err := cdromSource(ctx, req.VMID, false)
+			if err != nil || persistent != "" {
+				return errors.New("media change was interrupted; observe the CD drive and submit a new request")
+			}
+		}
 		return nil
 	}
 	return errors.New("media change was interrupted; observe the CD drive and submit a new request")
@@ -3913,8 +3961,21 @@ func (e *ManagedEngine) applyLive(ctx context.Context, id string, expected []byt
 	if cdrom == nil {
 		return errors.New("the VM has no CD drive; stop it and edit again to add one")
 	}
-	if diskFile(*cdrom) != mediaPath {
-		args := []string{"change-media", id, cdrom.Target.Dev, "--live", "--config", "--force"}
+	// The guest owns its tray while it runs: it can eject the disc the persistent definition
+	// still names, and it keeps one this definition no longer does. Each side is changed only
+	// where it differs, because virsh refuses an eject on a tray that is already empty.
+	liveMedia, _, err := cdromSource(ctx, id, true)
+	if err != nil {
+		return errors.New("cannot read the running VM's CD drive")
+	}
+	if diskFile(*cdrom) != mediaPath || liveMedia != mediaPath {
+		args := []string{"change-media", id, cdrom.Target.Dev, "--force"}
+		if liveMedia != mediaPath {
+			args = append(args, "--live")
+		}
+		if diskFile(*cdrom) != mediaPath {
+			args = append(args, "--config")
+		}
 		if mediaPath == "" {
 			args = append(args, "--eject")
 		} else {

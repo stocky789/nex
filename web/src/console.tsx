@@ -9,7 +9,7 @@ import "./console.css";
 // performs the authenticated request that yields the WebSocket URL for each attempt.
 // `guest` is the host's latest observation of the guest channels; it only decides which
 // hints the clipboard and display controls show, never whether input is allowed.
-export type Guest = { agent: string; os?: string; hostname?: string; addresses?: { interface: string; address: string }[] | null; clipboard: string; resize: boolean };
+export type Guest = { agent: string; os?: string; hostname?: string; addresses?: { interface: string; address: string }[] | null; clipboard: string; resize: boolean; media?: string };
 export type ConsoleMedia = { currentID?: string; currentName?: string; options: { id: string; name: string }[]; busy?: boolean; note?: string; onInsert: (id: string) => void; onEject: () => void };
 type Props = { name: string; open: () => Promise<string>; disabled?: string; guest?: Guest | null; popout?: string; media?: ConsoleMedia };
 type Phase = "idle" | "connecting" | "connected" | "closed";

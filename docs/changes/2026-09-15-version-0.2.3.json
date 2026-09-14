@@ -1,0 +1,35 @@
+{
+  "summary": "Bump the release version to 0.2.3 and move the systemd AF_VSOCK console quieting under its release notes. API impact: none; release metadata only.",
+  "paths": [
+    "CHANGELOG.md",
+    "tests/test_release_version.py",
+    "docs/changes/2026-09-15-version-0.2.3.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Release version and notes only; operator workflows are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Builds consume the existing changelog version resolver; no client-facing API, Controller operation, Core command or observed-state contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Release metadata only.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Release metadata does not create runtime state."
+  },
+  "verification": {
+    "method": "release-version.py --current resolves 0.2.3; release-version unit tests pass. No build, tag or publish performed.",
+    "evidence": [
+      "scripts/release-version.py",
+      "tests/test_release_version.py",
+      "CHANGELOG.md"
+    ]
+  }
+}

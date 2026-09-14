@@ -2,7 +2,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Nex Controller and Core API — 0.1.0</title>
 <link rel="stylesheet" href="reference.css">
-<main><h1>Nex Controller and Core API — 0.1.0</h1><p>Implemented development API for administrator inventory, enrollment, durable operations, appliance adoption and managed-VM creation. Capability-gated storage/network registration, bounded ISO transfer and stopped-VM provisioning use outbound authenticated Core reports. Browser VM consoles use single-use tickets, an outbound host tunnel and a same-origin WebSocket. Central VM power requests (start, shutdown, reboot, force-stop) are durable host operations.</p>
+<main><h1>Nex Controller and Core API — 0.1.0</h1><p>Implemented development API for administrator inventory, enrollment, durable operations, appliance adoption and managed-VM creation. Capability-gated storage/network registration, bounded ISO transfer and stopped-VM provisioning use outbound authenticated Core reports. Browser VM consoles use single-use tickets, an outbound host tunnel and a same-origin WebSocket. Central VM power requests (start, shutdown, reboot, force-stop, force-reboot) are durable host operations.</p>
 <p><a href="openapi.json">Download OpenAPI JSON</a>. This reference works offline; examples do not execute requests.</p>
 <nav aria-label="API operations"><ul>
 <li><a href="#getSession">GET /api/v1/session</a></li>
@@ -204,7 +204,7 @@
   &quot;result&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
-  &quot;semantics&quot;: &quot;Issue one libvirt start/shutdown/reboot/destroy for the named VM on this host. start and force-stop are idempotent against the observed state; shutdown and reboot are ACPI requests the guest may ignore; paused or transitional states are refused. The stage is journaled before the single request so an interruption is reconciled by observation only: succeeded when the observed state proves the outcome, otherwise needs_attention; never a second request. Queue-capable hosts (vm-power-queue-v1) persist FIFO command admission and check after_operation_id is a successful same-VM task before effects; no retry loop for genuine failures. Host-received queued commands survive restart/replacement and are reported as managed outcomes for passive adoption. Shutdown/reboot completion remains ACPI acceptance, not proof of guest shutdown.&quot;
+  &quot;semantics&quot;: &quot;Issue one libvirt start/shutdown/reboot/destroy/reset for the named VM on this host. start and force-stop are idempotent against the observed state; shutdown and reboot are ACPI requests the guest may ignore; force-reboot maps to virsh reset, is running-only, and shares reboot&#x27;s interrupt ambiguity; paused or transitional states are refused. The stage is journaled before the single request so an interruption is reconciled by observation only: succeeded when the observed state proves the outcome, otherwise needs_attention; never a second request. Queue-capable hosts (vm-power-queue-v1) persist FIFO command admission and check after_operation_id is a successful same-VM task before effects; no retry loop for genuine failures. Host-received queued commands survive restart/replacement and are reported as managed outcomes for passive adoption. Shutdown/reboot completion remains ACPI acceptance, not proof of guest shutdown.&quot;
 }</pre></section>
 <section><h2>vm-media</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -9963,7 +9963,8 @@
         &quot;start&quot;,
         &quot;shutdown&quot;,
         &quot;reboot&quot;,
-        &quot;force-stop&quot;
+        &quot;force-stop&quot;,
+        &quot;force-reboot&quot;
       ]
     },
     &quot;after_operation_id&quot;: {
@@ -10096,6 +10097,15 @@
     &quot;resize&quot;: {
       &quot;type&quot;: &quot;boolean&quot;,
       &quot;description&quot;: &quot;True when the VM has a VirtIO display, so the console can ask the guest to adopt the browser&#x27;s resolution (needs a virtio-gpu driver in the guest).&quot;
+    },
+    &quot;media&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;loaded&quot;,
+        &quot;empty&quot;,
+        &quot;no-drive&quot;
+      ],
+      &quot;description&quot;: &quot;The live CD drive of the running VM: loaded when its tray holds media, empty when the drive holds none (a guest can eject its own disc, for example an installer after the base system), no-drive when the VM has no CD drive. Absent from Core builds that do not observe it. It reports what the guest sees; the durable media_id changes only through a media request.&quot;
     }
   },
   &quot;required&quot;: [

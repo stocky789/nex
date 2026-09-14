@@ -50,19 +50,27 @@ host-local console and full-screen or separate-window views.
    so the host can add a CDROM tray. **Inserting ISO…** or **Ejecting ISO…** clears
    when the task succeeds or the host reports the requested tray contents. If the task
    fails or needs attention, its reason remains visible; inspect it in Recent tasks.
-3. Click inside the screen or select **Focus console** to give the VM keyboard focus.
+   This works the same for a VM whose disks are on pool-shared storage; the host records
+   the change on its pool master, so the ISO is still attached after the VM is re-adopted.
+3. A guest can eject its own disc: the Debian installer does after it has copied the base
+   system, and then asks you to reinsert it. The control shows the ISO Nex recorded with
+   **(ejected in the VM)** and says *The VM ejected the disc. Insert it again to reconnect
+   it.* Select the same ISO in the list to put it back in the drive, then continue in the
+   guest. Nex does not change what it recorded because a guest opened the tray, and does
+   not need the VM stopped.
+4. Click inside the screen or select **Focus console** to give the VM keyboard focus.
    Keys and mouse input go to the guest; the pointer is absolute in VMs created with the
    USB tablet device, so it does not drift. Use **Send Ctrl+Alt+Del** for that sequence
    and **Send key…** for combinations the browser would otherwise keep, such as
    Ctrl+Alt+F1–F7 (Linux text consoles), Ctrl+C (interrupt a command, mainly on the host
    console), Alt+Tab, Alt+F4, Ctrl+Esc, the Windows key and Escape.
-4. Choose how the display is shown with **View**: **Fit to window** scales it into the
+5. Choose how the display is shown with **View**: **Fit to window** scales it into the
    panel, **Actual size** shows it 1:1 with scrolling, and **Resize guest to window** asks
    the guest to change its resolution to the panel size. The last option is hidden for a VM
    whose host reports no VirtIO display, and takes effect in guests with a virtio-gpu
    driver (Linux, including text consoles; Windows with the virtio-win display driver).
    The View choice is remembered in this browser.
-5. Exchange text with the guest through **Clipboard**:
+6. Exchange text with the guest through **Clipboard**:
    - **Read my clipboard** loads the browser clipboard into the text box (the browser asks
      for permission once); you can also paste or type into the box.
    - **Paste into VM** places the text on the guest clipboard. It needs the
@@ -73,12 +81,12 @@ host-local console and full-screen or separate-window views.
    - Text copied inside the guest appears under **Latest text copied inside the VM**;
      select **Copy** to place it on your clipboard. The guest never writes your clipboard
      on its own.
-6. **Screenshot** downloads a PNG of the current display named after the VM. **View only**
+7. **Screenshot** downloads a PNG of the current display named after the VM. **View only**
    stops keyboard and mouse input while you watch. **Reconnect** ends the current stream
    and attaches again with a new ticket. **Full screen** enlarges the panel with its
    toolbar; press Escape or the button again to leave. **Open in new window** opens a
    console-only page (`#/console/<VM>`) in a separate tab or window.
-7. Leave the tab, select another resource, or close the page to end the console. The VM
+8. Leave the tab, select another resource, or close the page to end the console. The VM
    keeps running. If the link drops while the VM is still eligible, the console
    reconnects by itself every few seconds with a new ticket.
 
@@ -130,6 +138,11 @@ Leaving the console leaves the VM running. While a reconnect is pending the badg
 - **Keyboard input does not reach the VM:** click inside the screen first, and make sure
   **View only** is off. Browser shortcuts such as Ctrl+W are still handled by the
   browser; use the toolbar for Ctrl+Alt+Del and **Send key…** for other combinations.
+- **The guest asks you to reinsert the installation disc:** the guest ejected it itself.
+  **CD/DVD** shows the recorded ISO as **(ejected in the VM)**; select the same ISO to put it
+  back, then continue in the guest. **Eject** is still available and makes Nex's record match
+  the empty drive. If the list shows **Empty** instead, the host has not reported since the
+  guest ejected the disc; wait for the next report and try again.
 - **Paste into VM does nothing in the guest:** the guest has no running spice-vdagent, or
   the VM was created before clipboard support (**Channel missing** in its Guest tools
   panel). Install the [guest tools](guest-tools.md) or use **Type into VM**.

@@ -251,7 +251,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         lab.passed('browser keyboard File/View/Host/Help menus and Escape, menu creation, resource search with ancestors, collapsible tree and current selection, scoped General/Networking/Storage/Activity views, task dock and desktop shell')
         # Fixed toolbar: VM power buttons stay in place, greyed with a reason, until a VM is selected.
         toolbar = page.locator('.toolbar')
-        for name in ['Start', 'Shut down', 'Reboot', 'Force stop']:
+        for name in ['Start', 'Shut down', 'Reboot', 'Force stop', 'Force reboot']:
             button = toolbar.get_by_role('button', name=name, exact=True)
             expect(button).to_be_disabled()
             expect(button).to_have_attribute('title', 'Select a virtual machine in Resources.')
@@ -300,7 +300,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         expect(page.get_by_role('heading', name='Toolbar fixture', exact=True)).to_be_visible()
         expect(page.locator('#vm-power-status')).to_contain_text('Observed running · fresh')
         expect(toolbar.get_by_role('button', name='Start', exact=True)).to_be_disabled()
-        for name in ['Shut down', 'Reboot', 'Force stop']:
+        for name in ['Shut down', 'Reboot', 'Force stop', 'Force reboot']:
             expect(toolbar.get_by_role('button', name=name, exact=True)).to_be_enabled()
         expect(page.locator('.vm-power dialog')).not_to_be_visible()
         toolbar.get_by_role('button', name='Force stop', exact=True).click()
@@ -327,6 +327,15 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         expect(page.get_by_role('status')).to_contain_text('Force stop queued for Toolbar fixture')
         assert [r['action'] for r in power_requests] == ['force-stop', 'force-stop']
         assert power_requests[0]['request_id'] == power_requests[1]['request_id'], 'retry must reuse the request identity'
+        power_requests.clear()
+        toolbar.get_by_role('button', name='Force reboot', exact=True).click()
+        expect(dialog).to_contain_text('Force reboot Toolbar fixture?')
+        expect(dialog).to_contain_text('Hard-resets the guest immediately')
+        expect(dialog.get_by_role('button', name='Confirm force reboot', exact=True)).to_have_class(re.compile(r'\bdanger\b'))
+        dialog.get_by_role('button', name='Confirm force reboot', exact=True).click()
+        expect(dialog).not_to_be_visible()
+        expect(page.get_by_role('status')).to_contain_text('Force reboot queued for Toolbar fixture')
+        assert [r['action'] for r in power_requests] == ['force-reboot']
         # Start has no confirmation; a rejected Start opens the dialog as its error surface and retries from there.
         fixture_vm['state'] = 'shut off'
         power_requests.clear()
@@ -334,6 +343,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         toolbar.get_by_role('button', name='Refresh view', exact=True).click()
         expect(page.locator('#vm-power-status')).to_contain_text('Observed shut off')
         expect(toolbar.get_by_role('button', name='Force stop', exact=True)).to_be_disabled()
+        expect(toolbar.get_by_role('button', name='Force reboot', exact=True)).to_be_disabled()
         toolbar.get_by_role('button', name='Start', exact=True).click()
         expect(dialog).to_contain_text('Start Toolbar fixture?')
         expect(dialog.get_by_role('alert')).to_contain_text('host is unavailable')

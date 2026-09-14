@@ -63,7 +63,11 @@ systemctl disable corosync.service dlm.service pacemaker.service pcsd.service pc
 . /etc/os-release
 test "$ID" = nex-core
 mkdir -p /etc/default/grub.d
-printf '%s\n' 'GRUB_DISTRIBUTOR="Nex Core"' > /etc/default/grub.d/nex-core.cfg
+# Disable systemd's automatic AF_VSOCK SSH bind; without vsock it only spams the console.
+printf '%s\n' \
+    'GRUB_DISTRIBUTOR="Nex Core"' \
+    'GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT:+$GRUB_CMDLINE_LINUX_DEFAULT }systemd.ssh_auto=no"' \
+    > /etc/default/grub.d/nex-core.cfg
 update-grub
 mkdir -p /usr/share/nex-core /etc/ssh/sshd_config.d
 cp /var/cache/nex-install/package-manifest.tsv /usr/share/nex-core/

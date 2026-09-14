@@ -243,6 +243,91 @@ esac`)
 	}
 }
 
+// A guest can open its own tray: a Debian installer ejects the disc it booted after the base
+// system. The live drive is then empty while the persistent definition still names the ISO,
+// which would re-attach it at the next start. The eject must clear that definition (config
+// only, because virsh refuses an eject on an already-empty tray), and re-inserting the ISO the
+// definition still names must reconnect the live drive rather than report nothing to do.
+func TestManagedMediaAfterGuestEject(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(t.TempDir(), "virsh.log")
+	isoDir := t.TempDir()
+	isoPath := filepath.Join(isoDir, "media-1.iso")
+	body, media := managedTestISO()
+	if err := os.WriteFile(isoPath, body, 0444); err != nil {
+		t.Fatal(err)
+	}
+	vm := "11111111-2222-4333-a444-555555555555"
+	// The persistent definition holds the ISO; the running domain's tray is empty.
+	fakeCommand(t, "virsh", `echo "$*" >> "$VMHOST_LOG"
+case "$3" in
+domstate) printf '%s\n' running;;
+dumpxml)
+	case "$*" in
+	*--inactive*) printf '%s\n' "$VMHOST_XML_INACTIVE";;
+	*) printf '%s\n' "$VMHOST_XML";;
+	esac;;
+change-media)
+	case "$*" in *--live*--eject*) exit 1;; esac
+	exit 0;;
+*) exit 2;;
+esac`)
+	t.Setenv("VMHOST_LOG", log)
+	t.Setenv("VMHOST_XML", `<domain><devices><disk device="cdrom" type="file"><target dev="sda" bus="sata"/><readonly/></disk></devices></domain>`)
+	t.Setenv("VMHOST_XML_INACTIVE", `<domain><devices><disk device="cdrom" type="file"><source file="`+isoPath+`"/><target dev="sda" bus="sata"/><readonly/></disk></devices></domain>`)
+	e := NewManaged(dir)
+	spec := protocol.VMCreateSpec{
+		ID: vm, PoolID: "pool1", HostID: "host1", Name: "guest", MediaID: "media-1",
+		CPU: protocol.VMCPU{Count: 1, Model: "host-passthrough"}, Memory: protocol.VMMemory{Mode: "dedicated", SizeMiB: 512},
+		Disks: []protocol.VMDisk{{StorageID: "storage-1", Name: "system", SizeGiB: 10, Bus: "virtio", BootOrder: 1}},
+		Boot:  protocol.VMBoot{Firmware: "bios", MediaBootOrder: 2},
+	}
+	for _, j := range []managedJournal{
+		{Command: protocol.Command{OperationID: "st", Kind: "storage-register", Storage: &protocol.StorageRegistration{ID: "storage-1", PoolID: "pool1", HostID: "host1", Name: "local", Path: isoDir}}, Result: protocol.Result{OperationID: "st", Status: "succeeded"}},
+		{Command: protocol.Command{OperationID: "iso", Kind: "iso-import", Media: &media}, Result: protocol.Result{OperationID: "iso", Status: "succeeded"}, MediaPath: isoPath},
+		{Command: protocol.Command{OperationID: "create", Kind: "vm-create", VM: &spec}, Result: protocol.Result{OperationID: "create", Status: "succeeded"}, MediaPath: isoPath},
+	} {
+		b, _ := json.Marshal(j)
+		if err := os.WriteFile(filepath.Join(dir, j.Command.OperationID+".json"), b, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := func() string { b, _ := os.ReadFile(log); os.Remove(log); return string(b) }
+	command := func(op, action, mediaID string) protocol.Command {
+		return protocol.Command{OperationID: op, Kind: "vm-media", VMMedia: &protocol.VMMediaRequest{VMID: vm, PoolID: "pool1", HostID: "host1", Action: action, MediaID: mediaID}}
+	}
+
+	// Re-insert the ISO the definition still names: the live drive must be reconnected.
+	if r, err := e.Execute(context.Background(), command("again", "insert", "media-1"), nil); err != nil || r.Status != "succeeded" {
+		t.Fatalf("re-insert after a guest eject: %v %+v", err, r)
+	}
+	if got := calls(); !strings.Contains(got, "change-media "+vm+" sda --force --live --config "+isoPath+" --update") {
+		t.Fatalf("re-insert argv %q", got)
+	}
+
+	if r, err := e.Execute(context.Background(), command("clear", "eject", ""), nil); err != nil || r.Status != "succeeded" {
+		t.Fatalf("eject after a guest eject: %v %+v", err, r)
+	}
+	if got := calls(); !strings.Contains(got, "change-media "+vm+" sda --force --config --eject") || strings.Contains(got, "--live") {
+		t.Fatalf("eject must clear only the persistent definition: %q", got)
+	}
+	applied, _ := e.Applied(context.Background())
+	if len(applied.VMs) != 1 || applied.VMs[0].MediaID != "" {
+		t.Fatalf("journal after eject %+v", applied.VMs)
+	}
+
+	// Interrupted before the eject reached libvirt: the empty live tray alone is not proof,
+	// because the persistent definition would still re-attach the ISO at the next start.
+	j := managedJournal{Command: command("interrupted", "eject", ""), Result: protocol.Result{OperationID: "interrupted", Status: "pending"}, Stage: "changing-media"}
+	b, _ := json.Marshal(j)
+	if err := os.WriteFile(filepath.Join(dir, "interrupted.json"), b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := e.Execute(context.Background(), command("interrupted", "eject", ""), nil); r.Status == "succeeded" {
+		t.Fatalf("interrupted eject must not read an empty live tray as complete: %+v", r)
+	}
+}
+
 func TestManagedMediaInsertFromSeparateStorage(t *testing.T) {
 	dir := t.TempDir()
 	log := filepath.Join(t.TempDir(), "virsh.log")

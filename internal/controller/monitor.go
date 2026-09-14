@@ -95,6 +95,8 @@ func validateInventory(v *protocol.Inventory) error {
 		if g := vm.Guest; g != nil {
 			if !slices.Contains([]string{"connected", "unresponsive", "disconnected", "no-channel"}, g.Agent) ||
 				!slices.Contains([]string{"ready", "waiting", "no-channel"}, g.Clipboard) ||
+				// An empty media observation is an older Core that does not read the CD drive.
+				!slices.Contains([]string{"", protocol.MediaLoaded, protocol.MediaEmpty, protocol.MediaNoDrive}, g.Media) ||
 				len(g.OS) > 4096 || len(g.Hostname) > 200 || len(g.Addresses) > 32 {
 				return errors.New("invalid VM")
 			}

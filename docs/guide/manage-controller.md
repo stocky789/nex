@@ -62,8 +62,8 @@ under [Troubleshooting](#troubleshooting)). Use a private management network or 
    a fixed command toolbar across the top, a **Resources** pane on the left, and details for
    the selected resource on the right. The toolbar always shows the same buttons, in groups:
    **Back** and **Forward** move through pages you visited; **Create site**, **Add host** and
-   **New VM** create resources; **Start**, **Shut down**, **Reboot** and **Force stop**
-   control the selected VM (see [Control VM power](vm-power.md)); **Refresh view** at the
+   **New VM** create resources; **Start**, **Shut down**, **Reboot**, **Force reboot** and
+   **Force stop** control the selected VM (see [Control VM power](vm-power.md)); **Refresh view** at the
    right end reloads Controller's records. A button that does not apply to the selected
    resource is greyed out, and hovering it shows why, for example
    `Select a virtual machine in Resources.` Select **Create site** and enter its name. Do not

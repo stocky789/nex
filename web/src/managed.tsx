@@ -340,6 +340,7 @@ const powerActions = [
   { action: "shutdown", label: "Shut down", icon: "shutdown", when: (state: string) => state === "running", confirm: "Asks the guest to shut down (ACPI). A guest without ACPI support ignores it; use Force stop if it stays running." },
   { action: "reboot", label: "Reboot", icon: "reboot", when: (state: string) => state === "running", confirm: "Asks the guest to reboot (ACPI). A guest without ACPI support ignores it." },
   { action: "force-stop", label: "Force stop", icon: "stop", when: (state: string) => state === "running", confirm: "Cuts power immediately, like pulling the plug. Unsaved guest data is lost." },
+  { action: "force-reboot", label: "Force reboot", icon: "reboot", when: (state: string) => state === "running", confirm: "Hard-resets the guest immediately (like the reset button). Unsaved guest data is lost." },
 ] as const;
 
 // powerBlocker explains why central power requests are unavailable for a VM now; an empty
@@ -352,8 +353,8 @@ export function powerBlocker(vm: VM, host?: Host): string {
     : "";
 }
 
-// VMPower is the toolbar's power group: Start, Shut down, Reboot and Force stop for the selected
-// VM, greyed out with a reason when nothing is selected or the host cannot take the request.
+// VMPower is the toolbar's power group: Start, Shut down, Reboot, Force stop and Force reboot for
+// the selected VM, greyed out with a reason when nothing is selected or the host cannot take the request.
 // Requests are durable host tasks; the observed state, refreshed by host reports, tells what
 // actually happened. Confirmations use a native modal dialog so they work from the toolbar.
 export function VMPower({ vm, host, api, reload, busy, unavailable, onNotice, describedBy }: { vm?: VM; host?: Host; api: API; reload: () => Promise<void>; busy: boolean; unavailable: boolean; onNotice: (text: string) => void; describedBy?: string }) {
@@ -399,7 +400,7 @@ export function VMPower({ vm, host, api, reload, busy, unavailable, onNotice, de
         <h2 id="power-confirm-title">{pending.label} {vm.name}?</h2>
         {(pending.confirm || vm.protected) && <p>{pending.confirm}{vm.protected && " This is the Controller appliance: central management stops until it runs again; recover it from the host-local page."}</p>}
         {error && <p className="task-error" role="alert">{error}</p>}
-        <div className="actions"><button type="button" disabled={working} onClick={() => setPending(null)}>Cancel</button><button className={pending.action === "force-stop" ? "danger" : "primary"} disabled={working}>{working ? "Requesting…" : `Confirm ${pending.label.toLowerCase()}`}</button></div>
+        <div className="actions"><button type="button" disabled={working} onClick={() => setPending(null)}>Cancel</button><button className={pending.action === "force-stop" || pending.action === "force-reboot" ? "danger" : "primary"} disabled={working}>{working ? "Requesting…" : `Confirm ${pending.label.toLowerCase()}`}</button></div>
       </form>}
     </dialog>
   </div>;

@@ -147,6 +147,11 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 					}
 				} else {
 					memberStore := &Store{dir: dir, State: identity}
+					// Core decides from its own journal how a media change is applied: on a
+					// pool-shared VM one that rewrites the durable definition becomes the
+					// master-reserved vm-update transition, before any reservation,
+					// admission or storage fence sees the command.
+					cmd = PoolVMMediaCommand(ctx, memberStore, cmd)
 					reserved := false
 					membership, membershipErr := Membership(memberStore)
 					if membershipErr != nil && commandReferencesRemoteStorage(ctx, memberStore, cmd) {

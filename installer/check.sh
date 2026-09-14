@@ -59,6 +59,7 @@ assert all(p.replace('-', '').isalnum() for p in packages), 'Unexpected package 
 late = Path('installer/late-install.sh').read_text()
 assert 'Dir::Etc::sourceparts=-' in late and 'file:/var/cache/nex-install/repo' in late
 assert 'PermitRootLogin no' in late
+assert 'systemd.ssh_auto=no' in late
 assert 'nex-core-local.service' in late
 assert 'Local alpha: no Nex Controller' not in late
 assert r"Host: \n  Console: \l" in late
@@ -78,6 +79,7 @@ assert '\nchroot /target ' not in late, 'Raw chroot bypasses installer setup'
 post = Path('packaging/core-local/postinst').read_text()
 assert 'dpkg-divert --local --add --rename --divert /etc/os-release.debian /etc/os-release' in post
 assert 'ID=nex-core\nID_LIKE=debian\n' in post and "dpkg-query -W -f='${Version}' nex-core-local" in post
+assert 'systemd.ssh_auto=no' in post
 assert '0.1.0-alpha1' not in build + late and 'test "$ID" = nex-core' in late, 'One Nex Core version: the package'
 assert '> /usr/lib/os-release' not in late, 'Preserve upstream release metadata'
 print('PASS: shell syntax, interactive disk/account/network contract, package inputs, offline APT scope')

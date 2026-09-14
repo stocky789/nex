@@ -174,6 +174,30 @@ def main():
             page.get_by_role('button', name='Full screen', exact=True).click()
             page.wait_for_function('!document.fullscreenElement')
             checks.append('Fullscreen collapse increases screen height and restores toolbar/exit control')
+            # A guest can eject the disc Nex recorded: an installer does after the base system.
+            # The host reports the live tray, so the console must say the VM ejected it and keep
+            # the recorded ISO insertable instead of presenting it as still loaded.
+            vm['guest']['media'] = 'empty'
+            page.goto(url.replace('#/console/', '#/vms/'))
+            page.reload()  # A hash change keeps the earlier failure note in the client state.
+            page.get_by_role('button', name='Console', exact=True).click()
+            expect(page.locator('.console-screen')).to_have_attribute('data-phase', 'connected')
+            attach = page.get_by_label('Attach ISO', exact=True)
+            expect(attach.locator('option:checked')).to_have_text('demo-installer.iso (ejected in the VM)')
+            expect(page.get_by_role('status').filter(has_text='The VM ejected the disc')).to_be_visible()
+            page.screenshot(path=str(args.evidence / 'mock-media-guest-ejected.png'), full_page=True)
+            attach.select_option('iso-demo')
+            expect(page.get_by_role('status').filter(has_text='Inserting ISO…')).to_be_visible()
+            assert data['operations'][-1]['kind'] == 'vm-media', data['operations']
+            data['operations'][-1]['status'] = 'succeeded'
+            vm['guest']['media'] = 'loaded'
+            page.get_by_role('button', name='Refresh view', exact=True).filter(visible=True).click()
+            expect(attach.locator('option:checked')).to_have_text('demo-installer.iso')
+            expect(page.get_by_role('status').filter(has_text='The VM ejected the disc')).to_have_count(0)
+            expect(page.get_by_role('status').filter(has_text='Inserting ISO…')).to_have_count(0)
+            data['operations'].clear()
+            del vm['guest']['media']
+            checks.append('A guest-ejected tray is reported as ejected, the recorded ISO stays insertable, and reconnecting it clears the notice')
             page.goto(url)
             expect(page.locator('.console-screen')).to_have_attribute('data-phase', 'connected')
             page.screenshot(path=str(args.evidence / 'mock-connected.png'), full_page=True)

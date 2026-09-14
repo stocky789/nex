@@ -579,8 +579,8 @@ func poolVMCommandExecutionContext(ctx context.Context, s *Store, cmd protocol.C
 	return poolVMExecutionContext(ctx, s, v)
 }
 
-// isPoolVMStopOnly identifies the two reducing-only power requests.  Reboot
-// deliberately remains an execution admission: it can resume a writable VM.
+// isPoolVMStopOnly identifies the two reducing-only power requests.  Reboot and
+// force-reboot deliberately remain execution admissions: they can resume a writable VM.
 func isPoolVMStopOnly(cmd protocol.Command) bool {
 	return cmd.Kind == "vm-power" && cmd.Power != nil && (cmd.Power.Action == "shutdown" || cmd.Power.Action == "force-stop")
 }
@@ -778,8 +778,8 @@ func PoolVMHandler(s *Store) http.Handler {
 			record.State = "stopped"
 			state.VMs[id] = record
 			err = savePoolVMs(s, state)
-		case "reboot", "media":
-			if !ok || record.PendingUpdate != nil || record.HostID != member.HostID || (req.Action == "reboot" && record.State != "running") {
+		case "reboot", "force-reboot", "media":
+			if !ok || record.PendingUpdate != nil || record.HostID != member.HostID || ((req.Action == "reboot" || req.Action == "force-reboot") && record.State != "running") {
 				http.Error(w, "VM execution is not eligible for this action", http.StatusConflict)
 				return
 			}
@@ -795,6 +795,41 @@ func PoolVMHandler(s *Store) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(req)
 	})
+}
+
+// poolVMMediaChangesDefinition reports whether a media request would rewrite the durable VM
+// definition the pool master owns.  Re-inserting the ISO that definition already names does
+// not: it reconnects a tray, which is how an operator recovers a disc the guest ejected.
+func poolVMMediaChangesDefinition(v protocol.VMCreateSpec, req protocol.VMMediaRequest) bool {
+	return !reflect.DeepEqual(protocol.ApplyVMMedia(v, req.Action, req.MediaID), v)
+}
+
+// PoolVMMediaCommand expresses a shared VM's media change as the same durable prior→next
+// definition transition vm-update uses, so the master reserves the exact next revision
+// before this host applies it and its committed Spec cannot drift.  The operation keeps its
+// identity, so the Controller still tracks the media task it queued.  A local-only VM, and a
+// media request that leaves the definition unchanged, keep the lighter vm-media path.
+func PoolVMMediaCommand(ctx context.Context, s *Store, cmd protocol.Command) protocol.Command {
+	if cmd.Kind != "vm-media" || cmd.VMMedia == nil {
+		return cmd
+	}
+	// A redelivered operation is applied exactly as it was journaled.  The current
+	// definition already carries the first attempt's change, so deriving the next revision
+	// again would make one operation ID mean two different commands.
+	if journaled, ok := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).JournaledCommand(cmd.OperationID); ok {
+		return journaled
+	}
+	v, shared, err := poolSharedVM(ctx, s, cmd)
+	if err != nil || !shared || !poolVMMediaChangesDefinition(v, *cmd.VMMedia) {
+		return cmd
+	}
+	next := protocol.ApplyVMMedia(v, cmd.VMMedia.Action, cmd.VMMedia.MediaID)
+	next.Revision, next.StartAfterCreate = v.Revision+1, false
+	update := protocol.Command{OperationID: cmd.OperationID, Kind: "vm-update", VM: &next}
+	if vmhost.ValidateManagedCommand(update) != nil {
+		return cmd
+	}
+	return update
 }
 
 // AdmitPoolVMExecution must wrap every managed create/start/stop.  Its returned callback
@@ -834,16 +869,21 @@ func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (
 	case "vm-power":
 		action = cmd.Power.Action
 	case "vm-media":
-		// recordVMMedia changes the durable VM definition (MediaID and, on
-		// eject, media boot order). A simple owner permit would let that new
-		// revision diverge from the master's immutable Spec, so shared media
-		// remains fail-closed until it has the same prior→next journal-backed
-		// transition as vm-update. Local-only media is outside this pool path.
-		return nil, errors.New("shared VM media changes require a durable pool definition transition")
+		// recordVMMedia changes the durable VM definition (MediaID and, on eject,
+		// media boot order). A simple owner permit would let that new revision
+		// diverge from the master's immutable Spec, so a media change that rewrites
+		// the definition must arrive as the vm-update transition PoolVMMediaCommand
+		// produces, and is fail-closed here. What remains cannot change the master's
+		// Spec: it reconnects the tray to the ISO the definition already names, and
+		// needs the owner admission every other execution action takes.
+		if cmd.VMMedia == nil || poolVMMediaChangesDefinition(v, *cmd.VMMedia) {
+			return nil, errors.New("shared VM media changes require a durable pool definition transition")
+		}
+		action = "media"
 	default:
 		return func(protocol.Result, error) error { return nil }, nil
 	}
-	if action != "define" && action != "update-reserve" && action != "start" && action != "shutdown" && action != "force-stop" && action != "reboot" && action != "media" {
+	if action != "define" && action != "update-reserve" && action != "start" && action != "shutdown" && action != "force-stop" && action != "reboot" && action != "force-reboot" && action != "media" {
 		return func(protocol.Result, error) error { return nil }, nil
 	}
 	if cmd.Kind == "vm-power" && (action == "shutdown" || action == "force-stop") {
@@ -900,7 +940,7 @@ func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (
 			}
 			return nil
 		}
-		if cmd.Kind == "vm-power" && cmd.Power.Action == "reboot" {
+		if cmd.Kind == "vm-power" && (cmd.Power.Action == "reboot" || cmd.Power.Action == "force-reboot") {
 			// Reboot has no stopped/running acknowledgement: an ambiguous guest
 			// reboot must not be translated into a placement transition.
 			return nil
@@ -1110,8 +1150,8 @@ func poolVMLocal(s *Store, id, action string, permit *string, create bool, vm *p
 			return errors.New("VM execution owner mismatch")
 		}
 		r.State = "stopped"
-	case "reboot", "media":
-		if !ok || r.PendingUpdate != nil || r.HostID != s.State.HostID || (action == "reboot" && r.State != "running") {
+	case "reboot", "force-reboot", "media":
+		if !ok || r.PendingUpdate != nil || r.HostID != s.State.HostID || ((action == "reboot" || action == "force-reboot") && r.State != "running") {
 			return errors.New("VM execution is not eligible for this action")
 		}
 	default:

@@ -3,7 +3,7 @@
   "info": {
     "title": "Nex Controller and Core API",
     "version": "0.1.0",
-    "description": "Implemented development API for administrator inventory, enrollment, durable operations, appliance adoption and managed-VM creation. Capability-gated storage/network registration, bounded ISO transfer and stopped-VM provisioning use outbound authenticated Core reports. Browser VM consoles use single-use tickets, an outbound host tunnel and a same-origin WebSocket. Central VM power requests (start, shutdown, reboot, force-stop) are durable host operations."
+    "description": "Implemented development API for administrator inventory, enrollment, durable operations, appliance adoption and managed-VM creation. Capability-gated storage/network registration, bounded ISO transfer and stopped-VM provisioning use outbound authenticated Core reports. Browser VM consoles use single-use tickets, an outbound host tunnel and a same-origin WebSocket. Central VM power requests (start, shutdown, reboot, force-stop, force-reboot) are durable host operations."
   },
   "servers": [
     {
@@ -6962,7 +6962,8 @@
               "start",
               "shutdown",
               "reboot",
-              "force-stop"
+              "force-stop",
+              "force-reboot"
             ]
           },
           "after_operation_id": {
@@ -7095,6 +7096,15 @@
           "resize": {
             "type": "boolean",
             "description": "True when the VM has a VirtIO display, so the console can ask the guest to adopt the browser's resolution (needs a virtio-gpu driver in the guest)."
+          },
+          "media": {
+            "type": "string",
+            "enum": [
+              "loaded",
+              "empty",
+              "no-drive"
+            ],
+            "description": "The live CD drive of the running VM: loaded when its tray holds media, empty when the drive holds none (a guest can eject its own disc, for example an installer after the base system), no-drive when the VM has no CD drive. Absent from Core builds that do not observe it. It reports what the guest sees; the durable media_id changes only through a media request."
           }
         },
         "required": [
@@ -7444,7 +7454,7 @@
       "result": {
         "$ref": "#/components/schemas/Result"
       },
-      "semantics": "Issue one libvirt start/shutdown/reboot/destroy for the named VM on this host. start and force-stop are idempotent against the observed state; shutdown and reboot are ACPI requests the guest may ignore; paused or transitional states are refused. The stage is journaled before the single request so an interruption is reconciled by observation only: succeeded when the observed state proves the outcome, otherwise needs_attention; never a second request. Queue-capable hosts (vm-power-queue-v1) persist FIFO command admission and check after_operation_id is a successful same-VM task before effects; no retry loop for genuine failures. Host-received queued commands survive restart/replacement and are reported as managed outcomes for passive adoption. Shutdown/reboot completion remains ACPI acceptance, not proof of guest shutdown."
+      "semantics": "Issue one libvirt start/shutdown/reboot/destroy/reset for the named VM on this host. start and force-stop are idempotent against the observed state; shutdown and reboot are ACPI requests the guest may ignore; force-reboot maps to virsh reset, is running-only, and shares reboot's interrupt ambiguity; paused or transitional states are refused. The stage is journaled before the single request so an interruption is reconciled by observation only: succeeded when the observed state proves the outcome, otherwise needs_attention; never a second request. Queue-capable hosts (vm-power-queue-v1) persist FIFO command admission and check after_operation_id is a successful same-VM task before effects; no retry loop for genuine failures. Host-received queued commands survive restart/replacement and are reported as managed outcomes for passive adoption. Shutdown/reboot completion remains ACPI acceptance, not proof of guest shutdown."
     },
     "vm-media": {
       "transport": "POST /api/v1/agent/report response.commands",

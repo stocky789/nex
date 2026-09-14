@@ -1,0 +1,74 @@
+{
+  "summary": "Fix BUG-0184 and BUG-0185: Core reports the live CD tray of a running VM (GuestInfo.media) so the console shows a disc the guest ejected and offers the recorded ISO again, and a pool-shared VM's media change is applied as the master-reserved vm-update definition transition under the same operation ID. API impact: changed contract (GuestInfo gains media; vm-media on a shared VM is carried by the existing vm-update transition; no new route, command or capability).",
+  "paths": [
+    "CHANGELOG.md",
+    "internal/protocol/guest.go",
+    "internal/vmhost/guest.go",
+    "internal/vmhost/guest_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_update_test.go",
+    "internal/vmhost/media_test.go",
+    "internal/agent/managed.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_test.go",
+    "internal/controller/monitor.go",
+    "internal/controller/managed_test.go",
+    "web/src/console.tsx",
+    "web/src/main.tsx",
+    "tests/integration/console_controls_browser.py",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/vm-console.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/console-media-guest-eject/checks.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "docs/guide/vm-console.md describes what the console shows when a guest ejects its own disc and how to reconnect it, states that media changes work the same on pool-shared VMs, and adds the matching troubleshooting entry.",
+    "pages": [
+      "docs/guide/vm-console.md"
+    ],
+    "verification": [
+      "docs/qa/console-media-guest-eject/checks.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "API impact: changed contract. GuestInfo gains the observed media field (loaded|empty|no-drive), reported in vms[].guest and passed through by GET /api/v1/vms; a vm-media request that would rewrite a pool-shared VM's definition is applied by Core as the existing vm-update prior-to-next master transition under the same operation ID, so no route, command kind or capability changes; the Controller refuses an unknown media value the way it refuses an unknown agent or clipboard value. docs/API.md and the generated reference are updated in this change.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ],
+    "contracts": [
+      "GuestInfo",
+      "POST /api/v1/vms/{id}/media",
+      "vm-media",
+      "vm-update",
+      "POST /api/v1/pool/vms/{vm_id} (update-reserve, update-commit, update-abort, media)"
+    ],
+    "verification": [
+      "docs/qa/console-media-guest-eject/checks.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Defect fixes inside the existing VM media and pool VM execution slices; no milestone scope or completion status changes."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The media a VM holds stays in the Core managed journal of its host, and a pool-shared VM's media revision is committed to the pool master's durable VM record; the live tray is observation only and is never stored by the Controller.",
+    "record": "The owner host's managed-VM journal (current vm-create/vm-update definition, media_id) and the pool master's pool-vms.json record for that VM (Spec plus the reserved next revision).",
+    "recovery": "A fresh Controller adopts the host inventory (Inventory.managed.vms) and the master's committed pool VM record; refreshVM then mirrors the host's current definition, so the attached ISO and its revision come back from the hosts."
+  },
+  "verification": {
+    "method": "Simulated hosts only: a private virsh stand-in for Core engine and admission tests, and a mock API with simulated RFB for the browser check. Each new regression was also run with its fix reverted and failed. No guest installation, libvirt host, pool master, shared repository or hosted CI run was exercised.",
+    "evidence": [
+      "docs/qa/console-media-guest-eject/checks.md",
+      "internal/vmhost/media_test.go",
+      "internal/agent/pool_vm_test.go",
+      "tests/integration/console_controls_browser.py"
+    ]
+  }
+}

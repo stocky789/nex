@@ -32,6 +32,16 @@ type guestDomainXML struct {
 				Type string `xml:"type,attr"`
 			} `xml:"model"`
 		} `xml:"video"`
+		Disks []struct {
+			Device string `xml:"device,attr"`
+			Source *struct {
+				File string `xml:"file,attr"`
+				Dev  string `xml:"dev,attr"`
+			} `xml:"source"`
+			Target struct {
+				Tray string `xml:"tray,attr"`
+			} `xml:"target"`
+		} `xml:"disk"`
 	} `xml:"devices"`
 }
 
@@ -86,6 +96,21 @@ func observeGuest(ctx context.Context, virsh func(context.Context, ...string) ([
 		if v.Model.Type == "virtio" {
 			g.Resize = true
 		}
+	}
+	// The live tray, not the persistent definition: a guest that ejects its own disc
+	// disconnects the source here while Nex's durable media_id stays as it was. Reporting
+	// the difference is what lets the console offer the recorded ISO again; nothing about
+	// this observation changes the VM definition.
+	g.Media = protocol.MediaNoDrive
+	for _, disk := range d.Devices.Disks {
+		if disk.Device != "cdrom" {
+			continue
+		}
+		g.Media = protocol.MediaEmpty
+		if disk.Target.Tray != "open" && disk.Source != nil && (disk.Source.File != "" || disk.Source.Dev != "") {
+			g.Media = protocol.MediaLoaded
+		}
+		break
 	}
 	return g, nil
 }

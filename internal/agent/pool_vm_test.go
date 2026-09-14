@@ -270,6 +270,9 @@ func TestPoolVMUpdateReservationCommitsOnlyExactJournalEvidence(t *testing.T) {
 	if err := poolVMLocal(s, vm, "reboot", nil, false, nil, nil); err != nil {
 		t.Fatalf("owner reboot was not admitted: %v", err)
 	}
+	if err := poolVMLocal(s, vm, "force-reboot", nil, false, nil, nil); err != nil {
+		t.Fatalf("owner force-reboot was not admitted: %v", err)
+	}
 	if err := poolVMLocal(s, vm, "media", nil, false, nil, nil); err != nil {
 		t.Fatalf("owner media action was not admitted: %v", err)
 	}
@@ -301,6 +304,9 @@ func TestPoolVMUpdateReservationCommitsOnlyExactJournalEvidence(t *testing.T) {
 	s.State.HostID = "host-b"
 	if err := poolVMLocal(s, vm, "reboot", nil, false, nil, nil); err == nil {
 		t.Fatal("foreign Core reboot was admitted")
+	}
+	if err := poolVMLocal(s, vm, "force-reboot", nil, false, nil, nil); err == nil {
+		t.Fatal("foreign Core force-reboot was admitted")
 	}
 	if err := poolVMLocal(s, vm, "media", nil, false, nil, nil); err == nil {
 		t.Fatal("foreign Core media action was admitted")
@@ -837,7 +843,7 @@ func TestClusteredVMStopOnlyBypassesLostQuorumWithoutPermitOrOwnerChange(t *test
 		t.Fatalf("stop-only admission changed durable pool ownership: before=%#v after=%#v", before, after)
 	}
 
-	for _, action := range []string{"start", "reboot"} {
+	for _, action := range []string{"start", "reboot", "force-reboot"} {
 		command := stop
 		command.OperationID = action + "-1"
 		command.Power = &protocol.VMPowerRequest{VMID: vm.ID, PoolID: "pool-1", HostID: "host-a", Action: action}
@@ -859,10 +865,12 @@ func TestClusteredVMStopOnlyBypassesLostQuorumWithoutPermitOrOwnerChange(t *test
 	}
 }
 
-// A media command carries its VM identity in VMMedia rather than Command.VM.
-// It must therefore take the same shared-storage ownership path before the
-// managed engine can change a guest's persisted media definition.
-func TestSharedVMMediaUsesOwnerAdmissionBeforeExecution(t *testing.T) {
+// sharedMediaVMStore is a single-host pool master owning one VM on pool-shared storage whose
+// definition names an ISO.  Applied verifies durable VM definitions against libvirt, so a
+// minimal private virsh stand-in keeps these admission-path tests from weakening the
+// production fail-closed observation requirement.
+func sharedMediaVMStore(t *testing.T) (*Store, *protocol.VMCreateSpec) {
+	t.Helper()
 	s := peerStore(t, "host-a", "pool-1")
 	if err := savePoolPeer(s, poolPeerState{Membership: protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-a", Generation: 1, Members: []protocol.PoolMember{{HostID: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}}); err != nil {
 		t.Fatal(err)
@@ -871,13 +879,11 @@ func TestSharedVMMediaUsesOwnerAdmissionBeforeExecution(t *testing.T) {
 	appliedStorage := storage
 	appliedStorage.Identity.NFS = &protocol.NFSStorageIdentity{Server: "nfs.example.test", Export: "/exports", FilesystemID: "fs-test"}
 	vm := poolVMTestSpec("11111111-1111-4111-8111-111111111111", "host-a")
+	vm.MediaID = "media-1"
 	dir := filepath.Join(s.dir, "managed-vms")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	// Applied verifies durable VM definitions against libvirt.  A minimal
-	// private virsh stand-in makes this an admission-path test rather than
-	// weakening the production fail-closed observation requirement.
 	virshDir := t.TempDir()
 	virsh := filepath.Join(virshDir, "virsh")
 	if err := os.WriteFile(virsh, []byte("#!/bin/sh\ncase \"$*\" in\n  *domstate*) printf '%s\\n' 'shut off' ;;\n  *) printf '%s\\n' '"+vm.ID+"' ;;\nesac\n"), 0700); err != nil {
@@ -899,17 +905,107 @@ func TestSharedVMMediaUsesOwnerAdmissionBeforeExecution(t *testing.T) {
 	if err := poolVMLocal(s, vm.ID, "define", nil, true, vm, nil); err != nil {
 		t.Fatal(err)
 	}
+	return s, vm
+}
+
+func sharedMediaCommand(vm *protocol.VMCreateSpec, op, action, media string) protocol.Command {
+	return protocol.Command{OperationID: op, Kind: "vm-media", VMMedia: &protocol.VMMediaRequest{VMID: vm.ID, PoolID: vm.PoolID, HostID: vm.HostID, Action: action, MediaID: media}}
+}
+
+// A media command carries its VM identity in VMMedia rather than Command.VM.
+// It must therefore take the same shared-storage ownership path before the
+// managed engine can change a guest's persisted media definition.  A change to
+// the durable definition needs the master's prior→next transition, so a raw
+// vm-media command that would rewrite it stays fail-closed here.
+func TestSharedVMMediaUsesOwnerAdmissionBeforeExecution(t *testing.T) {
+	s, vm := sharedMediaVMStore(t)
 	next := *vm
 	next.Revision = 1
 	if err := poolVMLocalUpdate(s, vm.ID, "update-reserve", "update-1", vm, &next, nil); err != nil {
 		t.Fatal(err)
 	}
-	command := protocol.Command{OperationID: "media-1", Kind: "vm-media", VMMedia: &protocol.VMMediaRequest{VMID: vm.ID, PoolID: vm.PoolID, HostID: vm.HostID, Action: "eject"}}
+	command := sharedMediaCommand(vm, "media-1", "eject", "")
 	if _, shared, err := poolSharedVM(context.Background(), s, command); err != nil || !shared {
 		t.Fatalf("media did not resolve the managed shared VM: shared=%v err=%v", shared, err)
 	}
 	if _, err := AdmitPoolVMExecution(context.Background(), s, command); err == nil {
 		t.Fatalf("shared media bypassed pending owner admission: %v", err)
+	}
+}
+
+// BUG-0185: a console eject or library insert on a shared VM is applied as the same durable
+// prior→next definition transition vm-update uses, so the master reserves the exact next
+// revision and its committed Spec cannot drift from the host's definition.
+func TestSharedVMMediaChangeBecomesDurableDefinitionUpdate(t *testing.T) {
+	s, vm := sharedMediaVMStore(t)
+	command := sharedMediaCommand(vm, "media-1", "eject", "")
+	update := PoolVMMediaCommand(context.Background(), s, command)
+	if update.Kind != "vm-update" || update.OperationID != command.OperationID || update.VM == nil {
+		t.Fatalf("media change was not expressed as a definition transition: %+v", update)
+	}
+	if update.VM.Revision != vm.Revision+1 || update.VM.MediaID != "" || update.VM.Boot.MediaBootOrder != 0 || update.VM.ID != vm.ID {
+		t.Fatalf("unexpected next definition: %+v", update.VM)
+	}
+	finish, err := AdmitPoolVMExecution(context.Background(), s, update)
+	if err != nil || finish == nil {
+		t.Fatalf("durable media transition refused: %v", err)
+	}
+	state, err := loadPoolVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := state.VMs[vm.ID]
+	if record.PendingUpdate == nil || record.PendingUpdate.OperationID != command.OperationID || !reflect.DeepEqual(record.PendingUpdate.Next, *update.VM) {
+		t.Fatalf("master did not reserve the media revision: %+v", record.PendingUpdate)
+	}
+	if record.Spec.MediaID != "media-1" {
+		t.Fatalf("committed Spec changed before the host proved the update: %+v", record.Spec)
+	}
+}
+
+// Re-inserting the ISO the definition already names changes no durable state: it reconnects a
+// tray after a guest ejected the disc (BUG-0184), so it keeps the vm-media path and needs only
+// the owner admission every other execution action takes.
+func TestSharedVMMediaReinsertKeepsDefinitionAndIsAdmitted(t *testing.T) {
+	s, vm := sharedMediaVMStore(t)
+	command := sharedMediaCommand(vm, "media-2", "insert", "media-1")
+	if same := PoolVMMediaCommand(context.Background(), s, command); !reflect.DeepEqual(same, command) {
+		t.Fatalf("a reconnect of the recorded ISO must not become a definition update: %+v", same)
+	}
+	finish, err := AdmitPoolVMExecution(context.Background(), s, command)
+	if err != nil || finish == nil {
+		t.Fatalf("reconnecting the recorded ISO was refused: %v", err)
+	}
+	state, err := loadPoolVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record := state.VMs[vm.ID]; record.PendingUpdate != nil || record.Spec.MediaID != "media-1" {
+		t.Fatalf("tray reconnect changed the durable owner record: %+v", record)
+	}
+}
+
+// Execute compares a redelivered command byte for byte against the journal, so the transition
+// must be reused exactly, not derived again from a definition the first attempt already
+// changed.  Otherwise one operation ID would mean two different commands.
+func TestSharedVMMediaRedeliveryReusesJournaledCommand(t *testing.T) {
+	s, vm := sharedMediaVMStore(t)
+	command := sharedMediaCommand(vm, "media-1", "eject", "")
+	update := PoolVMMediaCommand(context.Background(), s, command)
+	if update.VM == nil {
+		t.Fatalf("media change was not expressed as a definition transition: %+v", update)
+	}
+	applied := *update.VM
+	b, err := json.Marshal(map[string]any{"command": update, "result": protocol.Result{OperationID: update.OperationID, Status: "succeeded"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(s.dir, "managed-vms", "media-1.json"), b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	again := PoolVMMediaCommand(context.Background(), s, command)
+	if again.Kind != "vm-update" || again.VM == nil || !reflect.DeepEqual(*again.VM, applied) {
+		t.Fatalf("redelivered media operation was not reused as journaled: %+v", again.VM)
 	}
 }
 

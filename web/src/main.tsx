@@ -148,6 +148,11 @@ export function taskTimestamp(operation: Pick<Operation, "id" | "host_id" | "req
 }
 const size = (value: number) =>
   `${(value / 1024 ** 3).toLocaleString(undefined, { maximumFractionDigits: 1 })} GiB`;
+// The recorded ISO alone does not prove a media change reached the VM: a guest that ejected
+// its own tray keeps the recorded media_id, so re-inserting it is applied only once the host
+// observes the disc back in the drive.
+const vmMediaApplied = (vm: VM | undefined, mediaID: string) =>
+  Boolean(vm?.spec) && (vm?.spec?.media_id || "") === mediaID && !(mediaID && vm?.guest?.media === "empty");
 function Brand() {
   return <span className="brand" role="img" aria-label="Nex Controller" />;
 }
@@ -465,7 +470,7 @@ function App() {
     const target = data.vms.find(v => v.id === mediaChange.vmID);
     if (task.status === "failed" || task.status === "needs_attention") {
       if (task !== mediaChange.operation) setMediaChange({ ...mediaChange, operation: task });
-    } else if (task.status === "succeeded" || (target?.spec && (target.spec.media_id || "") === mediaChange.mediaID)) {
+    } else if (task.status === "succeeded" || vmMediaApplied(target, mediaChange.mediaID)) {
       setMediaChange(null);
     }
   }, [mediaChange, data.operations, data.vms]);
@@ -497,20 +502,26 @@ function App() {
       const task = data.operations.find(o => o.id === mediaChange.operation.id) || mediaChange.operation;
       if (task.status === "failed" || task.status === "needs_attention") {
         note = task.error || "ISO change did not complete. Check Recent tasks.";
-      } else if (task.status !== "succeeded" && (!target.spec || (target.spec.media_id || "") !== mediaChange.mediaID)) {
+      } else if (task.status !== "succeeded" && !vmMediaApplied(target, mediaChange.mediaID)) {
         note = mediaChange.action === "insert" ? "Inserting ISO…" : "Ejecting ISO…";
       }
     }
     if (!host?.capabilities?.includes("vm-media-v1")) {
       return { currentID: target.spec?.media_id, currentName: data.media.find(m => m.id === target.spec?.media_id)?.name, options: [] as { id: string; name: string }[], busy: true, note: mediaNote || "This host cannot change media yet. Upgrade Nex Core.", onInsert: () => {}, onEject: () => {} };
     }
-    const options = data.media.filter(m => m.host_id === target.host_id && m.pool_id === target.pool_id && m.status === "succeeded" && m.id !== target.spec?.media_id).map(m => ({ id: m.id, name: m.name }));
+    const recorded = target.spec?.media_id || "";
+    const recordedName = data.media.find(m => m.id === recorded)?.name;
+    // A guest can open its own tray: Debian's installer ejects the disc it booted. The host
+    // reports the live drive, Nex keeps the ISO it recorded, and the operator gets it back by
+    // inserting it again, so it stays in the list while the tray is empty.
+    const ejectedInGuest = Boolean(recorded) && target.guest?.media === "empty";
+    const options = data.media.filter(m => m.host_id === target.host_id && m.pool_id === target.pool_id && m.status === "succeeded" && (ejectedInGuest || m.id !== recorded)).map(m => ({ id: m.id, name: m.name }));
     return {
-      currentID: target.spec?.media_id || undefined,
-      currentName: data.media.find(m => m.id === target.spec?.media_id)?.name,
+      currentID: recorded || undefined,
+      currentName: ejectedInGuest ? `${recordedName || "ISO"} (ejected in the VM)` : recordedName,
       options,
       busy: mediaBusy,
-      note,
+      note: note || (ejectedInGuest ? "The VM ejected the disc. Insert it again to reconnect it." : ""),
       onInsert: (id: string) => void changeVMMedia(target.id, "insert", id),
       onEject: () => void changeVMMedia(target.id, "eject"),
     };
@@ -633,7 +644,7 @@ function App() {
     setCreateVM(true);
     location.hash = `/pools/${pool.id}`;
   }
-  const powerStatus = vm && `Observed ${vm.state || "unknown"} · ${vm.freshness || "unknown"}. ${powerBlocker(vm, data.hosts.find(h => h.id === vm.host_id)) || "Use the toolbar to start, shut down, reboot or force stop this VM."}`;
+  const powerStatus = vm && `Observed ${vm.state || "unknown"} · ${vm.freshness || "unknown"}. ${powerBlocker(vm, data.hosts.find(h => h.id === vm.host_id)) || "Use the toolbar to start, shut down, reboot, force stop or force reboot this VM."}`;
   const submitName = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const name = String(new FormData(e.currentTarget).get("name")).trim();

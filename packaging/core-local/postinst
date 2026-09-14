@@ -64,6 +64,21 @@ RELEASE
     for banner in "$root/etc/motd" "$root/etc/issue"; do
         [ -f "$banner" ] && sed -i "s/^Nex Core [^ ]*/Nex Core $version/" "$banner" || true
     done
+    # Quiet systemd-ssh-generator when AF_VSOCK is unavailable (bare metal / no vsock).
+    install -d -m755 "$root/etc/default/grub.d"
+    grub_cfg=$root/etc/default/grub.d/nex-core.cfg
+    if [ ! -f "$grub_cfg" ] || ! grep -Fq 'systemd.ssh_auto=no' "$grub_cfg"; then
+        printf '%s\n' \
+            'GRUB_DISTRIBUTOR="Nex Core"' \
+            'GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT:+$GRUB_CMDLINE_LINUX_DEFAULT }systemd.ssh_auto=no"' \
+            > "$grub_cfg"
+        if [ -z "$root" ] &&
+           [ "$(stat -c %d:%i / 2>/dev/null || echo x)" = \
+             "$(stat -Lc %d:%i /proc/1/root 2>/dev/null || echo y)" ] &&
+           command -v update-grub >/dev/null 2>&1; then
+            update-grub || true
+        fi
+    fi
     # Enable in installer chroots too; native Debian policy controls starting services.
     # Write the local include always; reload the live profile only on the booted host.
     # Debian Installer's in-target sees the live kernel AppArmor flag (and often a

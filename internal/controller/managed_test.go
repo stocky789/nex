@@ -234,14 +234,30 @@ func TestManagedWorkflowScopeRetryAndMedia(t *testing.T) {
 		s.Boot.Firmware != "uefi" || s.Boot.Machine != "q35" || s.Boot.MediaBootOrder != 1 || s.MediaID != media.ID || s.GuestOS != "linux" {
 		t.Fatalf("created shape missing from VM list %+v", s)
 	}
-	// A running VM's guest observation is passed through from the fresh host report.
-	guest := &protocol.GuestInfo{Agent: "connected", OS: "Debian GNU/Linux 13 (trixie)", Hostname: "guest1", Addresses: []protocol.GuestAddress{{Interface: "enp1s0", Address: "192.168.122.10/24"}}, Clipboard: "ready", Resize: true}
+	// A running VM's guest observation is passed through from the fresh host report. The live
+	// CD drive travels with it: a guest can empty its own tray while the VM keeps the media
+	// Nex recorded, and only the host can report that difference.
+	guest := &protocol.GuestInfo{Agent: "connected", OS: "Debian GNU/Linux 13 (trixie)", Hostname: "guest1", Addresses: []protocol.GuestAddress{{Interface: "enp1s0", Address: "192.168.122.10/24"}}, Clipboard: "ready", Resize: true, Media: protocol.MediaEmpty}
+	inventory := func(g *protocol.GuestInfo) *protocol.Inventory {
+		return &protocol.Inventory{Hostname: "core", CPUCount: 8, MemoryBytes: 16 << 30, Checks: []protocol.Check{{Name: "libvirt", Status: "healthy", ObservedAt: time.Now().UTC()}}, VMs: []protocol.VM{{ID: created.VMID, Name: "guest1", State: "running", Guest: g}}}
+	}
 	sequence++
-	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: sequence, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Hostname: "core", CPUCount: 8, MemoryBytes: 16 << 30, Checks: []protocol.Check{{Name: "libvirt", Status: "healthy", ObservedAt: time.Now().UTC()}}, VMs: []protocol.VM{{ID: created.VMID, Name: "guest1", State: "running", Guest: guest}}}})
+	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: sequence, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: inventory(guest)})
 	read(t, a.call("GET", "/api/v1/vms", nil, nil, 200), &list)
 	if len(list) != 1 || list[0].State != "running" || !reflect.DeepEqual(list[0].Guest, guest) {
 		t.Fatalf("guest observation missing from VM list %#v", list[0].Guest)
 	}
+	if list[0].Spec == nil || list[0].Spec.MediaID != media.ID {
+		t.Fatalf("an ejected tray must not change the recorded media %#v", list[0].Spec)
+	}
+	// An unknown observation is refused like any other guest value; an older Core sends none.
+	unknown := *guest
+	unknown.Media = "exploding"
+	sequence++
+	a.call("POST", "/api/v1/agent/report", protocol.ReportRequest{Version: 1, Sequence: sequence, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: inventory(&unknown)}, cert, 400)
+	legacy := *guest
+	legacy.Media = ""
+	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: sequence, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: inventory(&legacy)})
 }
 func TestManagedAuthorizationAndActualBodyLimits(t *testing.T) {
 	a := newClient(t)

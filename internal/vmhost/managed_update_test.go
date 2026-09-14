@@ -156,7 +156,10 @@ func TestManagedApplyLiveReconcilesDevices(t *testing.T) {
 	actualPath := filepath.Join(t.TempDir(), "actual.xml")
 	os.WriteFile(actualPath, actual, 0600)
 	fakeCommand(t, "virsh", `echo "$@" >> "$MANAGED_CALLS"
-case "$*" in *dumpxml*) cat "`+actualPath+`";; esac`)
+case "$*" in
+*dumpxml*--inactive*) cat "`+actualPath+`";;
+*dumpxml*) cat "${MANAGED_LIVE_XML:-`+actualPath+`}";;
+esac`)
 	next := cur
 	next.Disks = append(next.Disks, protocol.VMDisk{StorageID: "s", Name: "data", SizeGiB: 5, Bus: "scsi"})
 	next.NICs = []protocol.VMNIC{{NetworkID: "n", Model: "e1000e", MAC: "52:54:00:aa:bb:cc"}, {NetworkID: "n", Model: "virtio", MAC: "52:54:00:00:00:01"}}
@@ -171,7 +174,7 @@ case "$*" in *dumpxml*) cat "`+actualPath+`";; esac`)
 	}
 	b, _ := os.ReadFile(calls)
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
-	want := []string{"dumpxml", "attach-device", "attach-device", "detach-device", "change-media"}
+	want := []string{"dumpxml", "attach-device", "attach-device", "detach-device", "dumpxml", "change-media"}
 	if len(lines) != len(want) {
 		t.Fatalf("calls:\n%s", b)
 	}
@@ -180,11 +183,34 @@ case "$*" in *dumpxml*) cat "`+actualPath+`";; esac`)
 			t.Fatalf("call %d %q, want %s", i, line, want[i])
 		}
 	}
-	if !strings.Contains(lines[4], "sda --live --config --force --eject") {
-		t.Fatalf("media eject argv: %s", lines[4])
+	if !strings.Contains(lines[5], "sda --force --live --config --eject") {
+		t.Fatalf("media eject argv: %s", lines[5])
 	}
 	if !strings.HasSuffix(lines[1], "--persistent") || !strings.HasSuffix(lines[3], "--persistent") {
 		t.Fatalf("device operations must persist: %s", b)
+	}
+	// The guest can empty its own tray: the live drive is then already in the wanted state
+	// and virsh refuses an eject on it, so only the persistent definition is changed.
+	livePath := filepath.Join(t.TempDir(), "live.xml")
+	live, err := managedDomainXML(cur, nets, []string{"/vm/disk-0.qcow2"}, []string{"vda"}, "sda", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(livePath, live, 0600)
+	t.Setenv("MANAGED_LIVE_XML", livePath)
+	os.Remove(calls)
+	if err = e.applyLive(context.Background(), cur.ID, expected, ""); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(calls)
+	media := ""
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if strings.Contains(line, "change-media") {
+			media = line
+		}
+	}
+	if !strings.Contains(media, "sda --force --config --eject") || strings.Contains(media, "--live") {
+		t.Fatalf("eject of a tray the guest already emptied: %q", b)
 	}
 	var got managedDomain
 	xml.Unmarshal(expected, &got)

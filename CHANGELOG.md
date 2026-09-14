@@ -6,12 +6,30 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.2.2` →
-> Debian `0.2.2`).
+> development software. Builds use the newest numbered changelog heading (`0.2.3` →
+> Debian `0.2.3`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.2.3] — 2026-09-15
+
+### Minor Feature
+
+- Added Force reboot for a hard guest reset from the Controller toolbar.
+
+### Bug Fixes
+
+- Local console no longer shows systemd AF_VSOCK SSH generator errors on hosts without vsock.
+- The console CD/DVD control now shows when the guest ejected the disc itself, as a Debian
+  installer does after it copies the base system, and offers the same ISO so you can put it
+  back without stopping the VM (BUG-0184).
+- Ejecting a disc the guest already removed also clears it from the VM's saved settings, so it
+  is not attached again at the next start (BUG-0184).
+- Eject and insert from the VM console work on VMs using pool-shared storage instead of failing
+  with *shared VM media changes require a durable pool definition transition*; the change is
+  recorded on the pool master like any other VM setting (BUG-0185).
 
 ## [0.2.2] — 2026-09-14
 
