@@ -1,0 +1,29 @@
+{
+  "summary": "Record unresolved issues: BUG-0184 guest installer eject empties the QEMU tray while Nex still shows the ISO inserted; BUG-0185 console CD/DVD eject and ISO-library insert fail on pool-shared VMs. API impact: none (documentation-only record of existing vm-media refusal; a later fix needs the existing vm-media contract plus a durable pool definition transition).",
+  "paths": [
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This records outstanding defects and does not change a documented operator workflow."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core or client-facing contract changes; this documentation records failures of the existing vm-media console path."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The defects do not change published milestone scope or completion status."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "This documentation-only record creates no durable product state."
+  },
+  "verification": {
+    "method": "Read-only code and operator-report trace. BUG-0184 follows guest CD eject vs live libvirt tray vs journaled media_id. BUG-0185 follows AdmitPoolVMExecution refusing vm-media on pool-shared VMs. No host behavior was changed or claimed verified.",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "internal/agent/pool_vm.go"
+    ]
+  }
+}
