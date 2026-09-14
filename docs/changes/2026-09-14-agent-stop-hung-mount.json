@@ -1,0 +1,35 @@
+{
+  "summary": "Correct independent review finding on aee8bdd: agent Run no longer waits for the member-only pool storage reconcile pass, which a hung remote mount could hold open and block agent stop, re-enrollment and service shutdown; masters never start that pass. The local handoff no longer cancels pending pool scope recovery when Run exits on its own. API impact: none.",
+  "paths": [
+    "docs/BUG_LEDGER.md",
+    "internal/agent/run.go",
+    "internal/localcore/handoff.go",
+    "docs/changes/2026-09-14-agent-stop-hung-mount.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Internal agent lifecycle correction; no operator workflow changes.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. No Controller, Core-local or peer contract changes; only agent goroutine lifecycle.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Review correction within the current storage milestone.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state added or changed."
+  },
+  "verification": {
+    "method": "go vet; go test -race ./internal/localcore passed 6 consecutive runs; go test -race ./... reported no failures. Hung-mount behaviour is reasoned from code review, not reproduced with a real hung NFS mount.",
+    "evidence": [
+      "internal/agent/run.go",
+      "internal/localcore/handoff.go"
+    ]
+  }
+}

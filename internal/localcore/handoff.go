@@ -232,9 +232,8 @@ func startHandoffAgent(ctx context.Context, dir string, a *runningAgent) {
 			if err != nil {
 				log.Printf("local agent stopped: %v", err)
 			}
-			// The agent has stopped; end and wait for scope recovery too, so a caller that
-			// re-enrolls after done never rewrites the store under it. Startup retries it.
-			cancel()
+			// Wait for scope recovery too, so a caller that re-enrolls after done never
+			// rewrites the store under it. A stop cancels agentCtx, which ends its retries.
 			<-rehomed
 		} else {
 			<-agentCtx.Done()

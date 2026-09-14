@@ -583,12 +583,15 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			scheduleClusterReconcile()
 			managed, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(probeCtx)
 			storage.Tick(probeCtx, managed.Storage)
+			// Only members reconcile from a master. The pass is not awaited by Run because a
+			// hung remote mount can outlive its deadline; a master never starts it.
+			if membership, err := Membership(s); err != nil || membership.MasterHostID == s.State.HostID {
+				return
+			}
 			if !poolReconcileRunning.CompareAndSwap(false, true) {
 				return
 			}
-			runWork.Add(1)
 			go func() {
-				defer runWork.Done()
 				defer poolReconcileRunning.Store(false)
 				// Each repository gets its own bounded deadline. A single shared
 				// deadline would let one slow NFS/SMB/GFS2 access check skip every
