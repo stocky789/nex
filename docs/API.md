@@ -555,6 +555,13 @@ managed local defaults into the accepted pool; a rehome failure is an honest joi
 not permission to repeat the join with another identity. Joining is refused while the member has
 managed VMs or remote storage, so this slice does not move workloads or storage during join.
 
+Every enrolled Core is a pool master until it joins another pool: at agent startup a Core with no
+membership record creates its pool CA and a one-member `PoolMembership` naming itself as the ready
+master, and reports it in `Inventory.managed.membership`. A single-host pool therefore follows the
+same master paths as a pool with members. A Core that is still the only member of its own pool may
+join another pool, which replaces that record; a master with members or a member of another pool
+may not. If the record cannot be written, pool storage and shared-VM operations stay refused.
+
 The master retains pool CA material, offers and `PoolMembership` in its Core peer state; `peer_origin`
 is an optional HTTPS advertisement recorded for an admitted member and shown as
 `PoolMember.peer_origin`, never inferred from Controller connectivity. The member

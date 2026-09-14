@@ -1,0 +1,35 @@
+{
+  "summary": "Let a shared-storage VM start on a single-host pool: VM inventory publication is skipped when the host has no pool peer record, while an invalid record still fails closed. API impact: none.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "internal/agent/pool_vm_inventory.go",
+    "internal/agent/pool_vm_test.go",
+    "docs/changes/2026-09-14-standalone-shared-vm-power.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Restores the documented VM power workflow on single-host pools; no instructions change.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. The vm-power command, result and the Core peer inventory route are unchanged; a host with no peer record simply has no master to publish to.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fix within the current storage milestone.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state added or changed; the VM owner record and start permit remain written locally by the existing single-host path."
+  },
+  "verification": {
+    "method": "Regression test fails before the fix (publish refused on a standalone host) and passes after; an invalid peer record still refuses; go vet and go test -race ./internal/agent pass. Not re-run on a lab host.",
+    "evidence": [
+      "internal/agent/pool_vm_test.go"
+    ]
+  }
+}

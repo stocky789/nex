@@ -1,0 +1,35 @@
+{
+  "summary": "Bump the release version to 0.2.2 and move the fixes made after the 0.2.1 commit (single-host pool master record BUG-0183, shared-VM start BUG-0182, shared storage registration without a host choice) under its release notes. API impact: none; release metadata only.",
+  "paths": [
+    "CHANGELOG.md",
+    "tests/test_release_version.py",
+    "docs/changes/2026-09-14-version-0.2.2.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Release version and notes only; operator workflows are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Builds consume the existing changelog version resolver; no client-facing API, Controller operation, Core command or observed-state contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Release metadata only.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Release metadata does not create runtime state."
+  },
+  "verification": {
+    "method": "release-version.py --current resolves 0.2.2; release-version unit tests, docs gate and privacy test pass. The 0.2.1 section keeps exactly the entries committed in 9530c24. No build, tag or publish performed.",
+    "evidence": [
+      "scripts/release-version.py",
+      "tests/test_release_version.py",
+      "CHANGELOG.md"
+    ]
+  }
+}

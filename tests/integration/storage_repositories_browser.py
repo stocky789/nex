@@ -159,7 +159,9 @@ def main():
             form.get_by_label("Repository type").select_option("nfs")
             form.get_by_label("Name", exact=True).fill("NFS fixtures")
             page.screenshot(path=str(args.evidence / "nfs-form.png"), full_page=True)
-            form.get_by_label("Host", exact=True).select_option("core-qa")
+            # Shared storage is recorded on the pool master; the form offers no host choice.
+            expect(form.get_by_label("Host", exact=True)).to_have_count(0)
+            expect(form.get_by_text("Pool master:", exact=False)).to_be_visible()
             form.get_by_role("button", name="Register and check access", exact=True).focus()
             page.keyboard.press("Enter")
             assert not submissions, submissions

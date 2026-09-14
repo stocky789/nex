@@ -1859,8 +1859,8 @@ Append resolved defects with their evidence and the approach to avoid.
 - Date: 2026-09-14. Status: fixed; focused and package tests pass locally; hosted CI rerun pending.
 - Symptom: `storage-register` for NFS failed on a single-host pool with "pool membership is unavailable for remote storage operation".
 - Root cause: the managed worker's fail-closed membership gate treated a missing pool peer record as unavailable membership. A standalone master has no peer record until it issues its first join offer, so every remote storage command was refused.
-- Fix: `remoteStorageMembershipUnavailable` in `internal/agent/managed.go` only fails closed when a peer record exists but is invalid, or for clustered iSCSI.
-- Regression: `TestStandaloneMasterMayRegisterRemoteStorageWithoutPeerRecord` in `internal/agent/managed_test.go`, run by `go test -race ./...` in both GitHub and Gitea phase1 workflows.
+- Fix: superseded by BUG-0183. The interim `remoteStorageMembershipUnavailable` special case was removed; every Core now records itself as its pool's master at startup.
+- Regression: `TestSingleHostCoreIsItsPoolMasterForRemoteStorage` in `internal/agent/managed_test.go`, run by `go test -race ./...` in both GitHub and Gitea phase1 workflows.
 - Avoid: using `Membership` errors as proof of a joined host; distinguish "never joined" from "joined but unreadable".
 
 ## BUG-0179 — SMB registration has no domain field and hides existing folders
@@ -1889,3 +1889,21 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: `verifyISO` in `internal/vmhost/managed.go` no longer checks permission bits; regular file, size and SHA-256 still prove the content is unchanged.
 - Regression: `TestReceiveISO…` case in `internal/vmhost/managed_test.go` accepts a 0600 ISO and refuses changed content; run by `go test -race ./...` in both GitHub and Gitea phase1 workflows.
 - Avoid: using permission bits as an integrity check on remote filesystems whose mount options fix file modes.
+
+## BUG-0182 — Shared-storage VM cannot start on a single-host pool
+
+- Date: 2026-09-14. Status: fixed; focused and package tests pass locally; hosted CI rerun pending; not re-run on a lab host.
+- Symptom: `vm-power` start of a VM on NFS/SMB storage failed with "pool membership is unavailable" on a pool with only its master.
+- Root cause: `AdmitPoolVMExecution` publishes VM inventory before every non-create shared VM command, and `publishPoolVMInventory` returned the `Membership` error when the host had no pool peer record. A standalone master has none until it issues a join offer. Same gap as BUG-0178; `poolVMRequestPeer` already treated a missing record as standalone.
+- Fix: superseded by BUG-0183. The interim skip in `publishPoolVMInventory` was removed; a single-host Core is now its pool's recorded master and publishes like any master.
+- Regression: `TestSingleHostPoolMasterPublishesSharedVMInventory` in `internal/agent/pool_vm_test.go`, run by `go test -race ./...` in both GitHub and Gitea phase1 workflows.
+- Avoid: calling `Membership` on standalone paths without first distinguishing "never joined" (no peer record) from "joined but unreadable"; check every shared-storage caller when fixing one.
+
+## BUG-0183 — Single-host pool had no recorded pool master
+
+- Date: 2026-09-14. Status: fixed; agent, local Core and Controller tests pass locally; hosted CI rerun pending; not run on a lab host.
+- Symptom: a pool with one host failed pool operations with "pool membership is unavailable" (BUG-0178 NFS/SMB registration, BUG-0182 shared-VM start), although a single-host pool's host is its pool master.
+- Root cause: Core created its pool CA and `PoolMembership` only when the master issued its first join offer. Until then there was no membership record, and pool paths each guessed what a missing record meant, some refusing and some treating the host as a separate standalone mode.
+- Fix: `EnsurePoolMembership` (`internal/agent/peer.go`) runs at agent startup and records an enrolled Core with no record as the ready master of its own one-member pool, sharing `initPoolMaster` with `CreatePoolJoinOffer`. `JoinPoolPeer` may replace a record where the Core is still its pool's only member. The no-record branches in `managed.go`, `pool_vm.go` and `pool_vm_inventory.go` were removed, so a missing or invalid record always fails closed. The periodic worker still replays local storage operations unless the pool has other members. `Run` now waits for its background ticker, storage-reconcile and cluster goroutines before returning: with a valid single-host membership they read host identity, and a re-enrollment that stops the agent could otherwise rewrite the store under them (found by `go test -race ./internal/localcore`). The local handoff (`internal/localcore/handoff.go`) likewise cancels and waits for its pool scope recovery goroutine before reporting the agent stopped.
+- Regression: `TestSingleHostCoreIsItsPoolMasterForRemoteStorage`, `TestSingleHostPoolMasterPublishesSharedVMInventory`, `TestSingleHostSharedVMStillUsesDurableOwnerAndPermit`, and `TestPoolPeerJoinRecoversLostResponse` (single-host masters joining); run by `go test -race ./...` in both GitHub and Gitea phase1 workflows.
+- Avoid: modelling a single-host pool as "standalone" or treating a missing membership record as a mode; create the record, then let every path use the one master rule.

@@ -924,14 +924,6 @@ func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (
 }
 
 func poolVMRequestPeer(ctx context.Context, s *Store, id, action string, permit *string, create bool, vm *protocol.VMCreateSpec, epoch *uint64) error {
-	if _, statErr := os.Stat(poolStatePath(s)); os.IsNotExist(statErr) {
-		// A host with no peer-state file has never joined another Core.  Materialize
-		// the same durable local owner record and one-use permit rather than skipping
-		// the fence; the libvirt hook still requires that permit.
-		return poolVMLocal(s, id, action, permit, create, vm, epoch)
-	} else if statErr != nil {
-		return statErr
-	}
 	membership, err := Membership(s)
 	if err != nil {
 		return err
@@ -982,11 +974,6 @@ func poolVMRequestPeer(ctx context.Context, s *Store, id, action string, permit 
 // definition revision has a two-step master record (reserve then journal-backed
 // commit), while power permits are one-use runtime admissions.
 func poolVMUpdateRequestPeer(ctx context.Context, s *Store, id, action, operationID string, previous, next *protocol.VMCreateSpec, evidence *vmhost.VMUpdateEvidence) error {
-	if _, statErr := os.Stat(poolStatePath(s)); os.IsNotExist(statErr) {
-		return poolVMLocalUpdate(s, id, action, operationID, previous, next, evidence)
-	} else if statErr != nil {
-		return statErr
-	}
 	membership, err := Membership(s)
 	if err != nil {
 		return err

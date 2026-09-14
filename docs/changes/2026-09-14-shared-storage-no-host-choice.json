@@ -1,0 +1,38 @@
+{
+  "summary": "Register storage no longer offers a Host choice for shared NFS, SMB and clustered iSCSI storage; the form shows the pool master, which records the repository for every host in the pool. Repository type now comes before Host. API impact: none.",
+  "paths": [
+    "CHANGELOG.md",
+    "web/src/storage.tsx",
+    "tests/integration/storage_repositories_browser.py",
+    "docs/guide/storage-repositories.md",
+    "docs/changes/2026-09-14-shared-storage-no-host-choice.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The registration step no longer asks for a host for shared storage and names the pool master instead.",
+    "pages": [
+      "docs/guide/storage-repositories.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. The form already sent the pool master's host_id for shared kinds; POST /api/v1/storage and the storage-register Core command are unchanged.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Usability correction within the current storage milestone.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "UI presentation only; no state added. Shared repository registrations remain recorded on the pool master's Core as before."
+  },
+  "verification": {
+    "method": "Web typecheck, unit tests and build; storage_repositories_browser.py against the built UI asserts no Host field and a visible Pool master line for NFS, and managed_vm_browser.py --simulated still registers local storage with a Host; form captures inspected. Not walked through against a lab Core.",
+    "evidence": [
+      "tests/integration/storage_repositories_browser.py",
+      "tests/integration/managed_vm_browser.py"
+    ]
+  }
+}

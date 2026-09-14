@@ -57,8 +57,10 @@ for production workloads. Use an explicitly selected disposable lab host.
 1. In **Resources**, select the pool for the selected Core host, then open **Storage**.
    The default **ISO** storage at `/var/lib/libvirt/images` may already be listed. It is a local
    directory registration and can hold both ISOs and VM disks.
-2. Select **Register storage**. In **Register VM storage**, enter a **Name**, select the
-   **Host**, then choose **Repository type**.
+2. Select **Register storage**. In **Register VM storage**, enter a **Name** and choose
+   **Repository type**. For local directory, ZFS and exclusive iSCSI storage, then select the
+   **Host** that owns it. Shared NFS, SMB and clustered iSCSI storage has no host choice: the form
+   shows the **Pool master**, which records the repository, and every host in the pool receives it.
 3. Browse the destination before entering paths manually:
 
    - **SMB3 share:** enter **SMB server**, **Account**, optional **Domain**, and **Password**, then select

@@ -309,6 +309,9 @@ func TestPoolVMUpdateReservationCommitsOnlyExactJournalEvidence(t *testing.T) {
 
 func TestPoolVMUpdateOutcomeRequiresMasterConfirmationAfterLocalSuccess(t *testing.T) {
 	s := peerStore(t, "host-a", "pool-1")
+	if err := EnsurePoolMembership(s); err != nil {
+		t.Fatal(err)
+	}
 	const vmID = "11111111-1111-4111-8111-111111111111"
 	previous := poolVMTestSpec(vmID, "host-a")
 	if err := poolVMLocal(s, vmID, "define", nil, true, previous, nil); err != nil {
@@ -359,6 +362,9 @@ func TestPoolVMUpdateOutcomeRequiresMasterConfirmationAfterLocalSuccess(t *testi
 
 func TestPoolVMFailedSharedToLocalOutcomeAbortsPendingReservation(t *testing.T) {
 	s := peerStore(t, "host-a", "pool-1")
+	if err := EnsurePoolMembership(s); err != nil {
+		t.Fatal(err)
+	}
 	previous := poolVMTestSpec("11111111-1111-4111-8111-111111111111", "host-a")
 	attempted := *previous
 	attempted.Revision = 1
@@ -709,6 +715,9 @@ func TestPoolVMRecoveryPeerRefusesOldMasterWithoutSpecAck(t *testing.T) {
 
 func TestSingleHostSharedVMStillUsesDurableOwnerAndPermit(t *testing.T) {
 	s := peerStore(t, "host-a", "pool-1")
+	if err := EnsurePoolMembership(s); err != nil {
+		t.Fatal(err)
+	}
 	const vm = "11111111-1111-4111-8111-111111111111"
 	if err := poolVMRequestPeer(context.Background(), s, vm, "define", nil, true, poolVMTestSpec(vm, "host-a"), nil); err != nil {
 		t.Fatal(err)
@@ -733,6 +742,9 @@ func TestSingleHostSharedVMStillUsesDurableOwnerAndPermit(t *testing.T) {
 
 func TestSharedVMCreateAcceptsRealHealthyManagedObservations(t *testing.T) {
 	s := peerStore(t, "host-a", "pool-1")
+	if err := EnsurePoolMembership(s); err != nil {
+		t.Fatal(err)
+	}
 	storage := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: "host-a", Name: "shared", Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/exports", Directory: "guests"}}, Generation: 1}
 	journal := map[string]any{"command": protocol.Command{OperationID: "register-1", Kind: "storage-register", Storage: &storage}, "result": protocol.Result{OperationID: "register-1", Status: "succeeded"}, "applied_storage": storage}
 	b, err := json.Marshal(journal)
@@ -970,5 +982,18 @@ func TestStorageRecheckReceivesCoreOwnedClusterContext(t *testing.T) {
 	}
 	if _, err := poolVMCommandExecutionContext(context.Background(), s, protocol.Command{Kind: "storage-recheck", StorageLifecycle: &protocol.StorageLifecycleRequest{Action: "recheck", RepositoryID: storage.ID, PoolID: "pool-1", HostID: "master-1"}}); err == nil {
 		t.Fatal("clustered storage recheck accepted a stale membership generation")
+	}
+}
+
+func TestSingleHostPoolMasterPublishesSharedVMInventory(t *testing.T) {
+	s := peerStore(t, "host-a", "pool-1")
+	if PublishPoolVMInventory(context.Background(), s) == nil {
+		t.Fatal("a Core without a membership record published pool VM inventory")
+	}
+	if err := EnsurePoolMembership(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := PublishPoolVMInventory(context.Background(), s); err != nil {
+		t.Fatalf("single-host pool master refused shared VM power: %v", err)
 	}
 }

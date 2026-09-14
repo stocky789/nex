@@ -33,6 +33,40 @@ type peerJoinResponse struct {
 	Membership     protocol.PoolMembership `json:"membership"`
 }
 
+// initPoolMaster makes this Core the ready master of its own pool. A Core that has not
+// joined another pool is always its pool's master; there is no separate standalone mode.
+func initPoolMaster(s *Store, state *poolPeerState) error {
+	var err error
+	state.CAPEM, state.CAKeyPEM, state.CertificatePEM, state.KeyPEM, err = newPoolCA(s.State.HostID)
+	if err != nil {
+		return err
+	}
+	hash, err := certificateHash(state.CertificatePEM)
+	if err != nil {
+		return err
+	}
+	state.Membership = protocol.PoolMembership{PoolID: s.State.PoolID, MasterHostID: s.State.HostID, Generation: 1, Members: []protocol.PoolMember{{HostID: s.State.HostID, CertificateSHA256: hash, Generation: 1, Status: "ready", ObservedAt: time.Now().UTC()}}}
+	return nil
+}
+
+// EnsurePoolMembership records an enrolled Core that has not joined another pool as the
+// master of its own single-host pool. Core startup calls it before any pool work runs.
+func EnsurePoolMembership(s *Store) error {
+	if s.State.HostID == "" || s.State.PoolID == "" {
+		return nil
+	}
+	poolPeerMu.Lock()
+	defer poolPeerMu.Unlock()
+	state, err := loadPoolPeer(s)
+	if err != nil || state.Membership.PoolID != "" {
+		return err
+	}
+	if err = initPoolMaster(s, &state); err != nil {
+		return err
+	}
+	return savePoolPeer(s, state)
+}
+
 // CreatePoolJoinOffer initializes a master-owned pool CA on first use and returns the
 // CA and a short-lived, single-use offer. masterURL must be the bare HTTPS peer origin.
 func CreatePoolJoinOffer(s *Store, masterURL, memberHostID, memberCSRPEM string) (poolCAPEM, offer string, err error) {
@@ -57,15 +91,9 @@ func CreatePoolJoinOffer(s *Store, masterURL, memberHostID, memberCSRPEM string)
 		return "", "", err
 	}
 	if state.Membership.PoolID == "" {
-		state.CAPEM, state.CAKeyPEM, state.CertificatePEM, state.KeyPEM, err = newPoolCA(s.State.HostID)
-		if err != nil {
+		if err = initPoolMaster(s, &state); err != nil {
 			return "", "", err
 		}
-		hash, hashErr := certificateHash(state.CertificatePEM)
-		if hashErr != nil {
-			return "", "", hashErr
-		}
-		state.Membership = protocol.PoolMembership{PoolID: s.State.PoolID, MasterHostID: s.State.HostID, Generation: 1, Members: []protocol.PoolMember{{HostID: s.State.HostID, CertificateSHA256: hash, Generation: 1, Status: "ready", ObservedAt: time.Now().UTC()}}}
 	} else if state.Membership.PoolID != s.State.PoolID || state.Membership.MasterHostID != s.State.HostID || state.CAKeyPEM == "" {
 		return "", "", errors.New("pool peer state does not match this master")
 	}
@@ -535,10 +563,14 @@ func JoinPoolPeer(ctx context.Context, s *Store, masterURL, poolCAPEM, offer str
 	if err != nil {
 		return err
 	}
-	if state.Membership.PoolID != "" && (state.Membership.PoolID != joined.Membership.PoolID || state.Membership.MasterHostID != joined.Membership.MasterHostID) {
+	// A Core that is still the only host of its own pool may join another; a master with
+	// members, or a member of a different pool, may not.
+	solo := state.Membership.MasterHostID == s.State.HostID && len(state.Membership.Members) == 1
+	if state.Membership.PoolID != "" && !solo && (state.Membership.PoolID != joined.Membership.PoolID || state.Membership.MasterHostID != joined.Membership.MasterHostID) {
 		return errors.New("host already belongs to another pool")
 	}
 	state.CAPEM, state.CertificatePEM, state.KeyPEM, state.Membership, state.MasterURL = poolCAPEM, joined.CertificatePEM, key, joined.Membership, u.String()
+	state.CAKeyPEM, state.Offers = "", map[string]poolJoinOffer{}
 	state.PendingKeyPEM, state.PendingCSRPEM = "", ""
 	state.PendingRehome = &poolRehome{PoolID: joined.Membership.PoolID, PoolName: decoded.PoolName}
 	if err = savePoolPeer(s, state); err != nil {

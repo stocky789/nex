@@ -406,25 +406,27 @@ func TestOversizedResultErrorDoesNotBlockHeartbeat(t *testing.T) {
 	}
 }
 
-func TestStandaloneMasterMayRegisterRemoteStorageWithoutPeerRecord(t *testing.T) {
+func TestSingleHostCoreIsItsPoolMasterForRemoteStorage(t *testing.T) {
 	s := peerStore(t, "host-1", "pool-1")
 	nfs := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: "host-1", Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/exports"}}}
 	cmd := protocol.Command{Kind: "storage-register", Storage: &nfs}
-	_, membershipErr := Membership(s)
-	if membershipErr == nil {
-		t.Fatal("fresh standalone host unexpectedly has membership")
+	if _, err := Membership(s); err == nil || !commandReferencesRemoteStorage(context.Background(), s, cmd) {
+		t.Fatal("a Core without a membership record must refuse remote storage")
 	}
-	if remoteStorageMembershipUnavailable(context.Background(), s, cmd, membershipErr) {
-		t.Fatal("standalone master NFS registration was refused for missing membership")
-	}
-	clustered := protocol.StorageRegistration{ID: "repo-2", PoolID: "pool-1", HostID: "host-1", Kind: protocol.StorageKindISCSI, Source: protocol.StorageSource{ISCSI: &protocol.ISCSIStorageSource{Mode: "clustered_gfs2"}}}
-	if !remoteStorageMembershipUnavailable(context.Background(), s, protocol.Command{Kind: "storage-register", Storage: &clustered}, membershipErr) {
-		t.Fatal("clustered iSCSI was admitted without membership")
-	}
-	if err := os.WriteFile(poolStatePath(s), []byte(`{}`), 0600); err != nil {
+	if err := EnsurePoolMembership(s); err != nil {
 		t.Fatal(err)
 	}
-	if _, membershipErr = Membership(s); membershipErr == nil || !remoteStorageMembershipUnavailable(context.Background(), s, cmd, membershipErr) {
-		t.Fatal("invalid pool peer record did not fail closed")
+	membership, err := Membership(s)
+	if err != nil || membership.PoolID != "pool-1" || membership.MasterHostID != "host-1" || len(membership.Members) != 1 {
+		t.Fatalf("single-host Core is not its pool master: %#v, %v", membership, err)
+	}
+	if poolMemberStorageRegistrationDenied(membership, "host-1", &nfs) {
+		t.Fatal("single-host pool master NFS registration was refused")
+	}
+	if err := EnsurePoolMembership(s); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := Membership(s); again.Members[0].CertificateSHA256 != membership.Members[0].CertificateSHA256 {
+		t.Fatal("startup replaced an existing membership record")
 	}
 }

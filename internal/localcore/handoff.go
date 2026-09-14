@@ -217,7 +217,9 @@ func startHandoffAgent(ctx context.Context, dir string, a *runningAgent) {
 	key, _ := filepath.Abs(dir)
 	go func() {
 		if a.hostID != "" {
+			rehomed := make(chan struct{})
 			go func() {
+				defer close(rehomed)
 				if err := agent.ResumePoolRehome(agentCtx, a.store); err != nil && agentCtx.Err() == nil {
 					log.Printf("pool scope recovery: %v", err)
 				} else if agentCtx.Err() == nil {
@@ -230,6 +232,10 @@ func startHandoffAgent(ctx context.Context, dir string, a *runningAgent) {
 			if err != nil {
 				log.Printf("local agent stopped: %v", err)
 			}
+			// The agent has stopped; end and wait for scope recovery too, so a caller that
+			// re-enrolls after done never rewrites the store under it. Startup retries it.
+			cancel()
+			<-rehomed
 		} else {
 			<-agentCtx.Done()
 		}

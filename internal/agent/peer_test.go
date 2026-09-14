@@ -30,6 +30,12 @@ func peerStore(t *testing.T, host, pool string) *Store {
 
 func TestPoolPeerJoinRecoversLostResponse(t *testing.T) {
 	master, member := peerStore(t, "master-1", "pool-1"), peerStore(t, "member-1", "other-pool")
+	// Every enrolled Core starts as the master of its own pool; a single-host master may join another.
+	for _, s := range []*Store{master, member} {
+		if err := EnsurePoolMembership(s); err != nil {
+			t.Fatal(err)
+		}
+	}
 	csr, err := PoolJoinCSR(member)
 	if err != nil {
 		t.Fatal(err)

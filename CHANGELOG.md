@@ -6,12 +6,23 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.2.1` →
-> Debian `0.2.1`).
+> development software. Builds use the newest numbered changelog heading (`0.2.2` →
+> Debian `0.2.2`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.2.2] — 2026-09-14
+
+### Bug Fixes
+
+- A single-host pool now records its host as the pool master, so pool storage and VM operations
+  work there exactly as on a pool with members (BUG-0183).
+- A VM on NFS or SMB storage can start on a single-host pool instead of failing with *pool
+  membership is unavailable* (BUG-0182).
+- Registering NFS, SMB or clustered iSCSI storage no longer asks for a host; the form names the
+  pool master, and every host in the pool receives the repository.
 
 ## [0.2.1] — 2026-09-14
 

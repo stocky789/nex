@@ -1,0 +1,49 @@
+{
+  "summary": "Record every enrolled Core as the master of its own single-host pool at agent startup, replacing the BUG-0178/BUG-0182 no-record special cases; a single-member master may still join another pool. API impact: existing contract.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "internal/agent/managed.go",
+    "internal/agent/managed_test.go",
+    "internal/agent/peer.go",
+    "internal/agent/peer_test.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_inventory.go",
+    "internal/agent/pool_vm_test.go",
+    "internal/agent/run.go",
+    "internal/localcore/handoff.go",
+    "docs/changes/2026-09-14-single-host-pool-master-record.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operators already see each host as its pool's master; storage and VM workflows are unchanged and now work on single-host pools as documented.",
+    "pages": []
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "API impact: existing contract. Inventory.managed.membership (existing field) is now reported by single-host Cores as a one-member pool with the host as ready master; the Controller already ignores membership whose master is the reporting host. The Core-local and peer join contracts are unchanged except that a single-member master may join. Documented in docs/API.md.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Aligns implementation with the existing pool master model.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The pool membership record and pool CA are Core-owned.",
+    "record": "pool-peer.json in the Core agent state directory on the pool master, created at agent startup.",
+    "recovery": "A fresh Controller adopts it from the master's Inventory.managed.membership report; Core recreates it at startup if absent."
+  },
+  "verification": {
+    "method": "go vet; go test -race ./internal/agent ./internal/localcore ./internal/controller. Regression tests refuse pool storage and inventory publication without a record and accept them once the single-host Core records itself as master; startup does not replace an existing record; both hosts in the join test start as single-host masters and the member still joins with lost-response recovery. The race detector found background work outliving an agent stop once single-host Cores have membership; Run now waits for its goroutines and the local handoff waits for scope recovery, and go test -race ./internal/localcore passed repeatedly afterwards. Not run on a lab host.",
+    "evidence": [
+      "internal/agent/managed_test.go",
+      "internal/agent/pool_vm_test.go",
+      "internal/agent/peer_test.go"
+    ]
+  }
+}

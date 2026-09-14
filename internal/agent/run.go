@@ -503,6 +503,11 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	if cfg.Heartbeat < 100*time.Millisecond || cfg.ProbeInterval < 100*time.Millisecond || cfg.ProbeTimeout < 10*time.Millisecond {
 		return errors.New("heartbeat/probe interval must be >=100ms and timeout >=10ms")
 	}
+	// A single-host pool is still a pool: record this Core as its master before any
+	// pool work. On failure pool operations stay refused; running VMs are unaffected.
+	if err := EnsurePoolMembership(s); err != nil {
+		log.Printf("pool membership could not be recorded; pool operations stay refused until it is")
+	}
 	c, err := client(s.State, true)
 	if err != nil {
 		return err
@@ -535,6 +540,10 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	storage := vmhost.NewStorageMonitor(cfg.ProbeTimeout)
 	var poolReconcileRunning atomic.Bool
 	var clusterReconcileRunning atomic.Bool
+	// Deferred before cancel so it runs after it: Run must not return while its background
+	// work still reads the store, because a caller may re-enroll and rewrite it next.
+	var runWork sync.WaitGroup
+	defer runWork.Wait()
 	probeCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	// Cluster work is Core-owned. Run it at startup and with the existing probe
@@ -543,7 +552,9 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		if !clusterReconcileRunning.CompareAndSwap(false, true) {
 			return
 		}
+		runWork.Add(1)
 		go func() {
+			defer runWork.Done()
 			defer clusterReconcileRunning.Store(false)
 			work, done := context.WithTimeout(probeCtx, 5*time.Minute)
 			defer done()
@@ -563,7 +574,9 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	}
 	scheduleClusterReconcile()
 	go m.WatchLibvirt(probeCtx)
+	runWork.Add(1)
 	go func() {
+		defer runWork.Done()
 		ticker := time.NewTicker(cfg.ProbeInterval)
 		defer ticker.Stop()
 		tickStorage := func() {
@@ -573,7 +586,9 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			if !poolReconcileRunning.CompareAndSwap(false, true) {
 				return
 			}
+			runWork.Add(1)
 			go func() {
+				defer runWork.Done()
 				defer poolReconcileRunning.Store(false)
 				// Each repository gets its own bounded deadline. A single shared
 				// deadline would let one slow NFS/SMB/GFS2 access check skip every

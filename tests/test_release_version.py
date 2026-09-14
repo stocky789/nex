@@ -87,7 +87,7 @@ class ResolveTests(unittest.TestCase):
     def test_real_changelog_parses_and_is_ordered_newest_first(self):
         versions = release.changelog_versions((ROOT / "CHANGELOG.md").read_text())
         self.assertIn("0.1.5-alpha1", versions)
-        self.assertEqual(versions[0], "0.2.1")
+        self.assertEqual(versions[0], "0.2.2")
         self.assertNotIn("Unreleased", versions)
 
 
