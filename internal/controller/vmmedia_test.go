@@ -79,7 +79,7 @@ func TestMediaRequestsAreAuthorizedDurableAndDispatched(t *testing.T) {
 	var createRaw string
 	a.c.db.QueryRow("SELECT command FROM managed_resources WHERE id=? AND kind='vm-create'", vm).Scan(&createRaw)
 	var mirrored protocol.Command
-	if err := json.Unmarshal([]byte(createRaw), &mirrored); err != nil || mirrored.VM == nil || mirrored.VM.MediaID != "" || mirrored.VM.Boot.MediaBootOrder != 0 {
+	if err := json.Unmarshal([]byte(createRaw), &mirrored); err != nil || mirrored.VM == nil || mirrored.VM.MediaID != "" || mirrored.VM.Boot.MediaBootOrder != 2 {
 		t.Fatalf("mirror after eject %+v raw %s err %v", mirrored.VM, createRaw, err)
 	}
 
@@ -133,8 +133,9 @@ func mediaLabFixture(t *testing.T) (*managedLab, protocol.Media) {
 
 // A VM created install-media-first (media_boot_order 1, disk boot_order 2, the shape vmSpec
 // returns when it is given install media) must stay adoptable after an eject, and the mirror
-// must keep the disk boot order the host's domain still holds: virsh change-media renumbers
-// nothing, so mirroring a renumbered order would publish a boot device the VM does not have.
+// must keep every boot order the host's domain still holds, the emptied CD drive's included:
+// virsh change-media renumbers nothing, so a renumbered mirror would publish a boot layout the
+// VM does not have and, on a pool-shared VM, refuse the eject of a running guest (BUG-0188).
 func TestMirrorVMMediaKeepsBootOrderOnEject(t *testing.T) {
 	l, media := mediaLabFixture(t)
 	spec := vmSpec(l.pool, l.host.HostID, "guest-media-first", l.storage, l.network, media.ID)
@@ -167,7 +168,7 @@ func TestMirrorVMMediaKeepsBootOrderOnEject(t *testing.T) {
 	if err := protocol.ValidateVMSpec(*mirrored.VM); err != nil {
 		t.Fatalf("post-eject mirrored spec fails validation, a fresh Controller could not adopt this VM: %v (%+v)", err, mirrored.VM)
 	}
-	if mirrored.VM.MediaID != "" || mirrored.VM.Boot.MediaBootOrder != 0 || mirrored.VM.Disks[0].BootOrder != 2 {
+	if mirrored.VM.MediaID != "" || mirrored.VM.Boot.MediaBootOrder != 1 || mirrored.VM.Disks[0].BootOrder != 2 {
 		t.Fatalf("eject must not renumber the mirrored boot order: %+v", mirrored.VM)
 	}
 }

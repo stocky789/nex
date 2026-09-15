@@ -73,7 +73,7 @@ esac`)
 		t.Fatalf("running eject argv %q", got)
 	}
 	applied, _ := e.Applied(context.Background())
-	if len(applied.VMs) != 1 || applied.VMs[0].MediaID != "" || applied.VMs[0].Boot.MediaBootOrder != 0 {
+	if len(applied.VMs) != 1 || applied.VMs[0].MediaID != "" || applied.VMs[0].Boot.MediaBootOrder != 2 {
 		t.Fatalf("journal after eject %+v", applied.VMs)
 	}
 

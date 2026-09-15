@@ -22,6 +22,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
+- Ejecting a disc from a running VM works again. On a VM that boots from its install media —
+  the default for VMs created with an ISO — **Eject** failed with *stop the VM first to change
+  the boot order*. An eject no longer touches the boot order at all: the empty CD drive keeps
+  its place, exactly as the host's own definition does, so the disc comes out while the guest
+  keeps running (BUG-0188).
 - Software updates work again on a host that has storage registered. Updating Nex Core or a
   Controller failed after the download with *refusing APT downgrade while version-2 storage
   state is retained*, even though the new package was newer and carried the required marker:

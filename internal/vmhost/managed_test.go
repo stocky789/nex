@@ -803,10 +803,10 @@ func TestManagedMediaInterruptedReconciliation(t *testing.T) {
 }
 
 // A VM created install-media-first (media_boot_order 1, disk boot_order 2, the shape
-// managedTestVM returns) keeps its disk boot order after an eject: virsh change-media leaves
-// every bootindex in the domain alone, so renumbering the record would make it describe a
-// domain that does not exist. The gap this leaves must still validate, or a replacement
-// Controller would skip adopting a still-running VM.
+// managedTestVM returns) keeps every boot order after an eject, the emptied CD drive's
+// included: virsh change-media leaves every bootindex in the domain alone, so renumbering the
+// record would make it describe a domain that does not exist — and would make the eject of a
+// running pool-shared VM a stop-first edit (BUG-0188).
 func TestManagedRecordVMMediaKeepsBootOrderOnEject(t *testing.T) {
 	e := NewManaged(t.TempDir())
 	v := managedTestVM()
@@ -829,8 +829,8 @@ func TestManagedRecordVMMediaKeepsBootOrderOnEject(t *testing.T) {
 	if err := protocol.ValidateVMSpec(got); err != nil {
 		t.Fatalf("post-eject spec fails validation, a fresh Controller could not adopt this VM: %v (%+v)", err, got)
 	}
-	if got.MediaID != "" || got.Boot.MediaBootOrder != 0 || got.Disks[0].BootOrder != 2 {
-		t.Fatalf("eject must not renumber the disk boot order libvirt still holds: %+v", got)
+	if got.MediaID != "" || got.Boot.MediaBootOrder != 1 || got.Disks[0].BootOrder != 2 {
+		t.Fatalf("eject must not renumber the boot order libvirt still holds: %+v", got)
 	}
 }
 func TestManagedVMInterruptedAllocationNeverReplays(t *testing.T) {

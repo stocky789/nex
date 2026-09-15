@@ -2662,7 +2662,7 @@
           },
           "media_id": {
             "type": "string",
-            "description": "Install ISO (Media.id), empty for none. The ISO must be imported and verified on the placement host; it may live on any storage that host can read and does not need to share a repository with the VM's disks. Required when boot.media_boot_order is non-zero."
+            "description": "Install ISO (Media.id), empty for none. The ISO must be imported and verified on the placement host; it may live on any storage that host can read and does not need to share a repository with the VM's disks. Every VM has the CD drive, so a non-zero boot.media_boot_order does not require media_id: an emptied drive keeps its place in the boot order."
           },
           "start_after_create": {
             "type": "boolean",

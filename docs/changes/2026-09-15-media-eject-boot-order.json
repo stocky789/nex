@@ -1,0 +1,73 @@
+{
+  "summary": "Fix BUG-0188: ejecting a disc from a running VM was refused with \"stop the VM first to change the boot order\". ApplyVMMedia recorded an eject as clearing boot.media_boot_order as well as media_id, and since BUG-0185 a pool-shared VM's media change is applied as the vm-update transition, where NeedsStop treats a changed boot order as stop-first. A media change now records media_id only, which is also what the host's domain holds: virsh change-media leaves every device's bootindex alone, the emptied CD drive's included. API impact: existing contract (POST /api/v1/vms/{id}/media, vm-media, vm-update); the reference is corrected where it contradicted this.",
+  "paths": [
+    "CHANGELOG.md",
+    "internal/protocol/vmmedia.go",
+    "internal/protocol/vmmedia_test.go",
+    "internal/protocol/managed.go",
+    "internal/agent/pool_vm_test.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/media_test.go",
+    "internal/controller/vmmedia_test.go",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/guide/vm-console.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/media-eject-boot-order/checks.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The documented behaviour was already correct (insert and eject work while the VM runs and the CD drive keeps its place in the boot order); the product contradicted it. Both pages that offer an eject gain a troubleshooting entry naming the message operators see on hosts older than 0.2.4, and the remedy (update Nex Core; stopping the VM is not required).",
+    "pages": [
+      "docs/guide/vm-console.md",
+      "docs/guide/edit-virtual-machine.md"
+    ],
+    "verification": [
+      "docs/qa/media-eject-boot-order/checks.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "API impact: existing contract. No route, command kind, capability or schema field changes. The vm-media request, the vm-update transition that carries it for a pool-shared VM, and the VMCreateSpec shape are unchanged; only the recorded value of boot.media_boot_order after an eject changes, back to what the host's domain holds and what the generated reference already described (\"Core records only media_id ... boot order values are never rewritten\"). docs/API.md and the OpenAPI descriptions that still claimed an eject clears media_boot_order, and that a non-zero media_boot_order requires media_id, are corrected in this change; the generated reference is rebuilt with scripts/generate_api.py.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html",
+      "docs/api/peer-openapi.json",
+      "docs/api/peer.html"
+    ],
+    "contracts": [
+      "POST /api/v1/vms/{id}/media",
+      "vm-media",
+      "vm-update",
+      "VMCreateSpec.boot.media_boot_order"
+    ],
+    "verification": [
+      "docs/qa/media-eject-boot-order/checks.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Defect fix inside the existing VM media slice; no milestone scope or completion status changes."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The media a VM holds and its boot order stay in the owner host's Core managed journal, and a pool-shared VM's media revision is committed to the pool master's durable VM record. The Controller keeps only its mirror of the host's current definition; this change makes that mirror match the domain instead of diverging from it.",
+    "record": "The owner host's managed-VM journal (current vm-create/vm-update definition: media_id and boot.media_boot_order) and, for a pool-shared VM, the pool master's pool-vms.json record for that VM (Spec plus the reserved next revision).",
+    "recovery": "A fresh Controller adopts the host inventory (Inventory.managed.vms) and the master's committed pool VM record; refreshVM mirrors the host's current definition, so the attached ISO and the CD drive's boot order come back from the hosts."
+  },
+  "verification": {
+    "method": "Simulated hosts only: a private virsh stand-in for the Core engine and admission tests. go test -race ./... plus focused runs; every regression named below was also run with the one-line fix reverted and failed, reproducing the reported message. No libvirt host, pool master, shared repository, guest or hosted CI run was exercised, and no browser check was run (this change touches no web source).",
+    "evidence": [
+      "docs/qa/media-eject-boot-order/checks.md",
+      "internal/protocol/vmmedia_test.go",
+      "internal/agent/pool_vm_test.go",
+      "internal/vmhost/media_test.go",
+      "internal/controller/vmmedia_test.go"
+    ]
+  }
+}

@@ -1193,8 +1193,9 @@ MAC uniqueness and host capacity stay with their owners.
   in canonical lower-case colon form, unicast and not all zero; that canonical form is what lets
   the host check uniqueness against its journal and domain definitions by plain string comparison.
 - **Boot order.** `0` means "not a boot device". Non-zero values are unique across every disk and
-  `boot.media_boot_order`; gaps are allowed (ejecting media leaves one), and at least one boot
-  device is required. A non-zero `media_boot_order` requires `media_id`. The install ISO must be
+  `boot.media_boot_order`; gaps are allowed, and at least one boot device is required. Every VM
+  has the CD drive, so `media_boot_order` does not require `media_id`: an empty drive keeps its
+  place in the boot order, which is what lets a running guest eject. The install ISO must be
   imported and verified on the placement host; it may live on any storage that host can read and
   does not need to share a repository with the VM's disks. Order is per device because libvirt
   forbids mixing
@@ -1516,11 +1517,13 @@ changes nothing, so the console and **Edit VM** reach the same durable record.
 
 Boot order is not changed by a media change, because `virsh change-media` does not change it:
 inserting does not give the CD drive a `bootindex`, and ejecting leaves every device's
-`bootindex` as it was. The journal and the Controller mirror therefore record only `media_id`,
-and an eject clears `media_id` with `media_boot_order` while leaving the disks' `boot_order`
-values exactly as the domain still holds them. `ValidateVMSpec` accordingly requires boot
-order values to be unique and positive but not contiguous, so a re-adopting Controller does not
-reject a VM whose eject left a gap.
+`bootindex` as it was, the drive's own included. The journal and the Controller mirror
+therefore record only `media_id`; an eject leaves the emptied drive at its `media_boot_order`
+and every disk at its `boot_order`, exactly as the domain still holds them. That is also what
+keeps an eject applicable to a running guest: a pool-shared VM applies its media change as the
+`vm-update` transition, where a changed boot order is a `NeedsStop` reason. `ValidateVMSpec`
+requires boot order values to be unique and positive but not contiguous, so a re-adopting
+Controller does not reject a VM whose order has a gap.
 
 An interrupted media change reconciles by observation. Core journals stage `changing-media`
 together with the resolved media path in a single write immediately before the `virsh` call,

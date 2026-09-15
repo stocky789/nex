@@ -143,6 +143,14 @@ Leaving the console leaves the VM running. While a reconnect is pending the badg
   back, then continue in the guest. **Eject** is still available and makes Nex's record match
   the empty drive. If the list shows **Empty** instead, the host has not reported since the
   guest ejected the disc; wait for the next report and try again.
+- **Eject fails with "stop the VM first to change the boot order":** the VM's host runs a
+  Nex Core older than 0.2.4, which recorded an eject as taking the CD drive out of the boot
+  order and so refused it on a running VM whose disc boots first. Ejecting never changes the
+  boot order: the empty drive keeps its place. Update Nex Core on that host from
+  [Software updates](software-updates.md), then eject with the VM running. Ejecting from a
+  stopped VM on the older version does work, but it takes that VM's CD drive out of the boot
+  order; set **CD drive boot order** again in [Edit VM](edit-virtual-machine.md) if you want
+  the drive to boot first.
 - **Paste into VM does nothing in the guest:** the guest has no running spice-vdagent, or
   the VM was created before clipboard support (**Channel missing** in its Guest tools
   panel). Install the [guest tools](guest-tools.md) or use **Type into VM**.

@@ -879,7 +879,9 @@ func sharedMediaVMStore(t *testing.T) (*Store, *protocol.VMCreateSpec) {
 	appliedStorage := storage
 	appliedStorage.Identity.NFS = &protocol.NFSStorageIdentity{Server: "nfs.example.test", Export: "/exports", FilesystemID: "fs-test"}
 	vm := poolVMTestSpec("11111111-1111-4111-8111-111111111111", "host-a")
-	vm.MediaID = "media-1"
+	// Install-media-first, the shape the create wizard produces when an ISO is chosen: the CD
+	// drive boots before the disk, so an eject that renumbered it would need a stop (BUG-0188).
+	vm.MediaID, vm.Boot.MediaBootOrder, vm.Disks[0].BootOrder = "media-1", 1, 2
 	dir := filepath.Join(s.dir, "managed-vms")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
@@ -943,8 +945,13 @@ func TestSharedVMMediaChangeBecomesDurableDefinitionUpdate(t *testing.T) {
 	if update.Kind != "vm-update" || update.OperationID != command.OperationID || update.VM == nil {
 		t.Fatalf("media change was not expressed as a definition transition: %+v", update)
 	}
-	if update.VM.Revision != vm.Revision+1 || update.VM.MediaID != "" || update.VM.Boot.MediaBootOrder != 0 || update.VM.ID != vm.ID {
+	if update.VM.Revision != vm.Revision+1 || update.VM.MediaID != "" || update.VM.Boot.MediaBootOrder != vm.Boot.MediaBootOrder || update.VM.ID != vm.ID {
 		t.Fatalf("unexpected next definition: %+v", update.VM)
+	}
+	// The transition must stay applicable to a running guest: ejecting a disc is not a reason
+	// to stop a VM, and Core's update path refuses any change NeedsStop reports (BUG-0188).
+	if stops, err := protocol.NeedsStop(*vm, *update.VM); err != nil || len(stops) != 0 {
+		t.Fatalf("eject of a running shared VM classified stop-first: %v %v", stops, err)
 	}
 	finish, err := AdmitPoolVMExecution(context.Background(), s, update)
 	if err != nil || finish == nil {

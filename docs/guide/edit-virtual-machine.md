@@ -71,12 +71,19 @@ stop and start), and a changed ISO is visible in the guest's CD drive. **Activit
 - **A field is greyed with "Stop the VM to change this":** that change needs a stopped guest.
   Shut the VM down with its [Power controls](vm-power.md), then edit.
 - **"stop the VM first to change …":** the VM was running when the request arrived and the
-  edit includes a change that needs it stopped; the message names the field.
+  edit includes a change that needs it stopped; the message names the field. Choosing
+  **No install media** is not such a change: if it reports *the boot order*, the host runs a
+  Nex Core older than 0.2.4 (see [Use the VM console](vm-console.md#troubleshooting)).
 - **"stop the VM and save its settings to apply the dedicated memory reservation before live editing":**
   this dedicated VM has an older memory definition. Shut it down, wait for **shut off**, then
   use **Edit → Save changes** with the same memory settings. After the task succeeds, start
   the VM. Its RAM is now physically allocated and locked while running. The rejected live edit
   makes no device changes; a guest reboot alone does not apply this correction.
+- **"VM disk assignment or boot order differs from requested ownership":** the VM's recorded
+  definition and its host disagree about a device. On a VM whose disc was ejected by a Nex Core
+  older than 0.2.4 this is the CD drive's boot order. Shut the VM down, then **Edit → Save
+  changes** once; set **CD drive boot order** in the same edit if you want the drive to boot
+  first again.
 - **"storage, size and provisioning cannot be changed after creation":** add a new disk
   instead, or plan a replacement VM; disk resize is not yet available.
 - **"a change or power request for this VM is still pending":** one request per VM is in

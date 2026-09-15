@@ -25,16 +25,15 @@ func ValidMediaAction(a string) bool {
 
 // ApplyVMMedia records an insert or eject in a VM spec. Both Core (recordVMMedia) and
 // Controller (mirrorVMMedia) call this so their mirrors of a media change cannot diverge.
-// Boot order is deliberately untouched: libvirt's change-media only swaps the CD drive's
-// source, and an attached tray carries no boot element, so a media change never alters any
-// device's bootindex on the host. Recording one here would make the durable record claim a
-// boot device the domain does not have. An eject drops the media boot order with the media,
-// leaving the disks' orders exactly as the domain still holds them, which is why
-// ValidateVMSpec accepts the gap that leaves.
+// Only media_id changes. libvirt's change-media swaps the CD drive's source and leaves every
+// device's bootindex alone, the drive's own included, so an eject leaves the empty drive in
+// the boot order and an insert never invents one. Recording an eject as a boot order change
+// would make the durable record describe a domain the host does not have, and, since a
+// pool-shared VM applies its media change as a vm-update, would make NeedsStop demand a stop
+// for every eject of a running install-media-first VM (BUG-0188).
 func ApplyVMMedia(v VMCreateSpec, action, mediaID string) VMCreateSpec {
 	if action == "eject" {
 		v.MediaID = ""
-		v.Boot.MediaBootOrder = 0
 		return v
 	}
 	v.MediaID = mediaID
