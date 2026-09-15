@@ -207,9 +207,9 @@ Use an explicitly selected disposable lab host.
         different repository from the VM's disks. The ISO is attached read-only as a SATA
         CD-ROM, so any guest installer can read it. Use **Open ISO library** if none is available.
       - **Boot order** — the list shows every disk and, when one is selected, the install
-        media. **Up** and **Down** reorder it, and Nex renumbers the devices from 1. The host
-        tries them in this order: put **Install media** first to install a guest. Removing
-        the ISO removes it from the order.
+        media. Install media is first by default. **Up** and **Down** reorder it, and Nex
+        renumbers the devices from 1. The host tries them in this order. Removing the ISO
+        removes it from the order.
    6. **Review** — every selection is listed for a last check, including the derived or
       manual MAC of each interface and the resolved boot order. Under **Lifecycle**:
       - **Start after creation** — the host starts the VM once, as the last step of the

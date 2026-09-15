@@ -19,7 +19,7 @@ const stubbed = code
   .replace('from "./managed"', 'from "data:text/javascript,"')
   .replace('from "./storage"', 'from "data:text/javascript,export const storageUsable=()=>true;"');
 writeFileSync(file, stubbed);
-const { restoredNICs, autoDiskName, topologyIssue, vmNameIssue } = await import(`file://${file}`);
+const { restoredNICs, autoDiskName, topologyIssue, vmNameIssue, bootKeys, renumber } = await import(`file://${file}`);
 
 // BUG-0062: a restored draft with nics: [] (every interface explicitly removed) must stay [],
 // not be replaced by the one-NIC blank template.
@@ -41,5 +41,28 @@ for (const name of ["", "  ", "a/b", "guest\nname", "guest\u007fname", "guest\u0
   assert.notEqual(vmNameIssue(name), "", name);
 }
 assert.equal(autoDiskName("pool", "東京 Débian 13.1", 0), "pool--d-bian-13.1");
+
+// Newly chosen install media (media_boot_order still 0) is first; restored explicit order is kept.
+const freshMedia = {
+  disks: [{ storage_id: "s1", name: "system", size_gib: 20, bus: "virtio", thin: true, boot_order: 1 }],
+  boot: { firmware: "uefi", machine: "", media_boot_order: 0 },
+  media_id: "iso-1",
+};
+assert.deepEqual(bootKeys(freshMedia), ["media", "disk-0"]);
+const numbered = renumber({
+  host_id: "", name: "", description: "", guest_os: "linux",
+  cpu: { count: 2, sockets: 0, cores: 0, threads: 0, model: "host-passthrough" },
+  memory: { mode: "dedicated", size_mib: 2048 },
+  nics: [], start_after_create: false, autostart: false,
+  ...freshMedia,
+});
+assert.equal(numbered.boot.media_boot_order, 1);
+assert.equal(numbered.disks[0].boot_order, 2);
+const restoredOrder = {
+  disks: [{ storage_id: "s1", name: "system", size_gib: 20, bus: "virtio", thin: true, boot_order: 1 }],
+  boot: { firmware: "uefi", machine: "", media_boot_order: 2 },
+  media_id: "iso-1",
+};
+assert.deepEqual(bootKeys(restoredOrder), ["disk-0", "media"]);
 
 console.log("vm-create.test.mjs: ok");

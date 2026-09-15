@@ -1,0 +1,38 @@
+{
+  "summary": "VM create wizard defaults install media ahead of disks in boot order when an ISO is first chosen. API impact: none — same create payload; only the Controller UI default order changes.",
+  "paths": [
+    "web/src/vm-create.tsx",
+    "web/src/vm-create.test.mjs",
+    "docs/guide/create-virtual-machine.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-15-vm-create-media-boot-first.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "create-virtual-machine.md now states install media is first by default instead of telling operators to move it up.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Create still sends the same boot.media_boot_order and disk boot_order fields; only the wizard's default ordering when media_id is set changes.",
+    "pages": [],
+    "contracts": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Default UX only; no milestone or acceptance gate change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable state; boot order remains host-owned on the VM definition once created."
+  },
+  "verification": {
+    "method": "npm --prefix web run test (vm-create.test.mjs asserts fresh media sorts first and renumbers to media=1/disk=2; restored explicit order preserved). python3 scripts/check_docs.py --worktree.",
+    "evidence": [
+      "web/src/vm-create.test.mjs"
+    ]
+  }
+}

@@ -81,13 +81,17 @@ export function topologyIssue(cpu: Draft["cpu"]): string {
 
 // bootKeys lists the boot devices in their current order; renumber writes that order back as the
 // contiguous 1..N the protocol requires, leaving a removed device or absent media at 0.
-function bootKeys(d: Draft) {
-  const at = (k: string) => (k === "media" ? d.boot.media_boot_order : d.disks[Number(k.slice(5))]?.boot_order) || 99;
+// Newly chosen install media (media_boot_order still 0) sorts first so an ISO is the default
+// first boot device; an empty tray is skipped by the firmware anyway.
+export function bootKeys(d: Pick<Draft, "disks" | "boot" | "media_id">) {
+  const at = (k: string) => k === "media"
+    ? (d.boot.media_boot_order || 0)
+    : (d.disks[Number(k.slice(5))]?.boot_order || 99);
   const keys = d.disks.map((_, i) => `disk-${i}`);
   if (d.media_id) keys.push("media");
   return keys.sort((a, b) => at(a) - at(b));
 }
-function renumber(d: Draft, keys = bootKeys(d)): Draft {
+export function renumber(d: Draft, keys = bootKeys(d)): Draft {
   return { ...d, disks: d.disks.map((disk, i) => ({ ...disk, boot_order: keys.indexOf(`disk-${i}`) + 1 })), boot: { ...d.boot, media_boot_order: d.media_id ? keys.indexOf("media") + 1 : 0 } };
 }
 
@@ -270,7 +274,7 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
         <fieldset>
           <legend>Boot order</legend>
           <ol className="boot-order">{order.map((k, i) => <li key={k}><span>{bootLabel(k)}</span><button type="button" disabled={busy || i === 0} aria-label={`Move ${bootLabel(k)} up in the boot order`} onClick={() => move(i, -1)}>Up</button><button type="button" disabled={busy || i === order.length - 1} aria-label={`Move ${bootLabel(k)} down in the boot order`} onClick={() => move(i, 1)}>Down</button></li>)}</ol>
-          <p className="help">The host tries these in order. Put the install media first to install a guest, then start from the disk afterwards.</p>
+          <p className="help">The host tries these in order. Install media is first by default; move the disk up after the guest is installed if you want.</p>
         </fieldset>
       </>}
       {step === 5 && <>

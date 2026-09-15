@@ -15,6 +15,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.2.4] — 2026-09-15
 
+### Minor Feature
+
+- When creating a VM, install media is first in the boot order by default.
+
 ### Bug Fixes
 
 - Software updates work again on a host that has storage registered. Updating Nex Core or a
