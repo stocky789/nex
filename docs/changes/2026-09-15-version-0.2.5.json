@@ -1,0 +1,32 @@
+{
+  "summary": "Bump the release version to 0.2.5 so the Core agent credential-offer fix (BUG-0189) and the SMB/NFS reliability fixes found in native lab testing (BUG-0190 remote mount retry, BUG-0191 exclusive disk check with an unmounted repository, BUG-0192 stuck shared VM update settling and blast radius) reach hosts; 0.2.4 is already tagged and published. API impact: none for the version bump itself; the fixes carry their own change records.",
+  "paths": [
+    "CHANGELOG.md",
+    "tests/test_release_version.py",
+    "docs/changes/2026-09-15-version-0.2.5.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Release version and notes only; the fixes that change operator behaviour update the guide in their own change records."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Release metadata only; no Controller, Core or client contract changes.",
+    "pages": [],
+    "contracts": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Patch release; no milestone or acceptance gate change."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state; the version is derived from the git tag and the newest CHANGELOG heading."
+  },
+  "verification": {
+    "method": "python3 -m unittest discover -s tests -p 'test_release_version.py' (newest heading resolves to 0.2.5); python3 scripts/check_docs.py --worktree; privacy unittest. Tagging, building and publishing are left to the project owner.",
+    "evidence": [
+      "tests/test_release_version.py"
+    ]
+  }
+}

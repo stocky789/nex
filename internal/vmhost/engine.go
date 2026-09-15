@@ -1370,6 +1370,11 @@ func (e *Engine) exclusiveDisk(ctx context.Context, j journal) error {
 						continue
 					}
 					other, err := os.Stat(attr.Value)
+					// Our disk exists with Nlink==1, so a nonexistent path cannot be that inode now;
+					// cross-repository duplicate backing is refused at registration, not here.
+					if errors.Is(err, os.ErrNotExist) {
+						continue
+					}
 					if err != nil {
 						return errors.New("other domain disk cannot be inspected for exclusive ownership")
 					}

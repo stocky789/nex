@@ -1,0 +1,46 @@
+{
+  "summary": "Core retries a Nex NFS/SMB mount unit that is inactive (for example after failing at boot because the file server was not ready): the one-minute worker queues a start with --no-block and Recheck starts it before verifying; an unmounted repository now reports 'remote storage is not mounted' (BUG-0190). API impact: existing contract \u2014 storage-recheck and POST /api/v1/storage/{id}/recheck keep request, response and authorization; recheck may now start the existing unchanged mount unit and uses a clearer error.",
+  "paths": [
+    "internal/vmhost/storage_mounts.go",
+    "internal/vmhost/storage_mounts_test.go",
+    "internal/vmhost/managed.go",
+    "internal/agent/managed.go",
+    "docs/API.md",
+    "docs/guide/storage-repositories.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-15-remote-mount-retry.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Storage repositories guide explains that Core retries an unmounted NFS/SMB repository about once a minute, that Recheck retries immediately, and what 'remote storage is not mounted' means. It also notes that a hand-stopped mount is started again, so detaching is how to keep a repository offline.",
+    "pages": [
+      "docs/guide/storage-repositories.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "API impact: existing contract. storage-recheck keeps its request, response, authorization and asynchronous result; Core may start the existing, unchanged Nex mount unit before verification, and the not-mounted error text changed. No new endpoint or field.",
+    "pages": [
+      "docs/API.md"
+    ],
+    "contracts": [
+      "POST /api/v1/storage/{id}/recheck",
+      "storage-recheck"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Reliability fix within the existing NFS/SMB repository slice."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable state; the repository registration journal and mount unit already live on Core and are unchanged by the retry."
+  },
+  "verification": {
+    "method": "go test -race ./internal/vmhost -run 'RemoteMount|Recheck|StartRemoteMounts|VerifyRemoteMount' (all three new tests failed before the fix); go test -race ./internal/vmhost ./internal/agent; python3 scripts/generate_api.py --check. Native: disposable lab, SMB server stopped while Core rebooted; mount failed at boot, repository reported 'remote storage is not mounted', then recovered to healthy about 20 s after the server returned with no manual mount or Recheck.",
+    "evidence": [
+      "internal/vmhost/storage_mounts_test.go"
+    ]
+  }
+}

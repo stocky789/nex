@@ -110,8 +110,18 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 		case <-ticker.C:
 			defaults()
 			memberStore := &Store{dir: dir, State: identity}
+			// Settle an unresolved remote-storage VM update from native observation on every
+			// pool host, single-host pools included, before publishing: an applied revision
+			// then reaches the master's commit through this round's inventory evidence.
+			if _, err := Membership(memberStore); err == nil {
+				if err := reconcileRemoteVMUpdate(ctx, memberStore, engine); err != nil {
+					log.Printf("remote VM update reconciliation did not complete; inspect the Core journal")
+				}
+			}
 			_ = PublishPoolVMInventory(ctx, memberStore)
 			ReconcilePoolVMAutostart(ctx, memberStore)
+			// Retry NFS/SMB mounts that failed at boot on every host, including joined pools.
+			engine.StartRemoteMounts(ctx)
 			// Joined pools reconcile remote repositories through the master-owned desired
 			// projection. Generic journal replay could otherwise bypass the peer mutation fence.
 			if membership, err := Membership(memberStore); err == nil && len(membership.Members) > 1 {
@@ -250,6 +260,21 @@ func reconcileRemoteVMCreateStopped(ctx context.Context, s *Store, engine *vmhos
 		// Suppress a later periodic autostart in this boot before exposing a recovered
 		// stopped VM to Applied. A prior claim is already the desired suppression.
 		_, err := ClaimPoolVMAutostartAttempt(s.dir, v.ID)
+		return err
+	})
+}
+
+// reconcileRemoteVMUpdate revalidates this Core's identity and pool execution context for
+// the update's VM before any observation. It deliberately does not use the define owner
+// check: the master refuses it while the update it would settle is still pending.
+func reconcileRemoteVMUpdate(ctx context.Context, s *Store, engine *vmhost.ManagedEngine) error {
+	work, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	return engine.ReconcileRemoteVMUpdate(work, func(ctx context.Context, v protocol.VMCreateSpec) error {
+		if v.ID == "" || v.PoolID != s.State.PoolID || v.HostID != s.State.HostID || protocol.ValidateVMSpec(v) != nil {
+			return errors.New("remote VM definition no longer matches this Core identity")
+		}
+		_, err := poolVMExecutionContext(ctx, s, v)
 		return err
 	})
 }

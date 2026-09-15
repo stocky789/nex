@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -16,6 +17,8 @@ import (
 )
 
 const nexMountMarker = "# Managed by Nex Core; do not edit\n"
+
+var errStorageNotMounted = errors.New("remote storage is not mounted")
 
 const nfsVolumesPath = "/proc/fs/nfsfs/volumes"
 
@@ -659,6 +662,10 @@ func verifyRemoteMount(ctx context.Context, path, source, fstype string, require
 			return errors.New("storage mount source does not match registration")
 		}
 	}
+	if len(parts) == 4 && parts[3] != path {
+		// findmnt --target reports the parent filesystem when nothing is mounted here.
+		return errStorageNotMounted
+	}
 	if len(parts) != 4 || parts[0] != source || parts[1] != fstype || parts[3] != path {
 		return errors.New("storage mount source does not match registration")
 	}
@@ -700,4 +707,66 @@ func detachRemote(ctx context.Context, s protocol.StorageRegistration) error {
 	}
 	_, err = nativeRun(ctx, "systemctl", "daemon-reload")
 	return err
+}
+
+// startRemoteMount starts the existing, unchanged Nex NFS/SMB mount unit only when systemd
+// reports it inactive or failed. It never restarts, rewrites, reloads, enables or reads
+// credentials; the read-only verification that follows decides whether the repository is usable.
+// systemctl is-active talks only to PID 1, so a hung hard NFS mount cannot block it.
+//
+// Recheck passes no flags and waits (bounded) so the operator sees the real result. The periodic
+// lane passes --no-block: systemd queues the mount job and returns at once, so an unreachable
+// server never holds the engine lock while commands wait.
+func startRemoteMount(ctx context.Context, s protocol.StorageRegistration, flags ...string) {
+	if k := s.StorageKind(); k != protocol.StorageKindNFS && k != protocol.StorageKindSMB {
+		return
+	}
+	unit, unitPath := remoteUnitPath(s)
+	if b, err := os.ReadFile(unitPath); err != nil || !strings.HasPrefix(string(b), nexMountMarker) {
+		return
+	}
+	if _, err := nativeRun(ctx, "systemctl", "is-active", "--quiet", unit); err == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	_, _ = nativeRun(ctx, "systemctl", append(append([]string{"start"}, flags...), unit)...)
+}
+
+// StartRemoteMounts retries registered NFS/SMB mounts that failed or were never started, for
+// example when Core booted before the file server. A repository with an unsettled storage
+// operation is left to ReconcileStorage.
+func (e *ManagedEngine) StartRemoteMounts(ctx context.Context) {
+	lock, err := (&Engine{config: Config{StateDir: e.stateDir}}).lock(ctx)
+	if err != nil {
+		return
+	}
+	defer unlock(lock)
+	js, err := e.journals()
+	if err != nil {
+		return
+	}
+	busy := map[string]bool{}
+	for _, j := range js {
+		if (j.Result.Status != "pending" && j.Result.Status != "needs_attention") || !strings.HasPrefix(j.Command.Kind, "storage-") {
+			continue
+		}
+		if v := j.Command.StorageLifecycle; v != nil {
+			busy[v.RepositoryID] = true
+		}
+		if v := j.Command.Storage; v != nil {
+			busy[v.ID] = true
+		}
+	}
+	projection := storageProjection(js)
+	ids := make([]string, 0, len(projection))
+	for id := range projection {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if !busy[id] {
+			startRemoteMount(ctx, projection[id], "--no-block")
+		}
+	}
 }

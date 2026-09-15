@@ -95,6 +95,12 @@ stop and start), and a changed ISO is visible in the guest's CD drive. **Activit
   part-way, and the persistent definition does not match the request. Inspect the VM on its
   host; stopping it and submitting the same edit again converges it, because a stopped edit
   redefines the whole VM.
+- **A change to a VM on shared storage (including a console CD/DVD insert or eject) shows
+  `needs_attention`:** wait. About a minute after its storage is healthy, the host checks the
+  VM and settles the change by itself: to `succeeded` if the change is in place, or to `failed`
+  if the stopped VM still has its previous settings, after which you can submit it again.
+  Until then only that VM refuses changes and power actions other than **Force stop**; other VMs
+  in the pool are not affected. If it stays `needs_attention`, inspect the VM on its host.
 - **The details still show the old values after `succeeded`:** wait for the host's next
   report; the mirror follows what the host reports as current.
 

@@ -109,6 +109,10 @@ type managedJournal struct {
 	MediaTarget string   `json:"media_target,omitempty"`
 	// Retained lists disk files an edit detached from the VM; edits never delete data.
 	Retained []string `json:"retained,omitempty"`
+	// UnappliedObserved marks a failed vm-update recorded after allocation or define only
+	// because the stopped VM's persistent definition was observed to still be exactly its
+	// predecessor (see ReconcileRemoteVMUpdate).
+	UnappliedObserved bool `json:"unapplied_observed,omitempty"`
 }
 
 func (e *ManagedEngine) save(j managedJournal) error {
@@ -324,8 +328,9 @@ func (e *ManagedEngine) FailedVMUpdateEvidence(ctx context.Context, vmID, operat
 			// Execute records a failed update only while it remains in validating;
 			// once allocation, define, or live attachment may have crossed a
 			// native boundary it records needs_attention instead. Require that
-			// durable stage rather than trusting a failed label alone.
-			if j.Result.Status != "failed" || j.Stage != "validating" || !reflect.DeepEqual(v, attempted) {
+			// durable stage rather than trusting a failed label alone. The one
+			// post-native exception is an update later observed still unapplied.
+			if j.Result.Status != "failed" || (j.Stage != "validating" && !j.UnappliedObserved) || !reflect.DeepEqual(v, attempted) {
 				return VMUpdateEvidence{}, errors.New("managed VM update failure evidence does not match the attempted definition")
 			}
 			failed = true
@@ -1671,6 +1676,111 @@ func nextRemoteVMCreateReconcile(js []managedJournal, now time.Time) *managedJou
 	return due
 }
 
+// ReconcileRemoteVMUpdate settles one unresolved remote-storage vm-update from native
+// observation after the caller has revalidated its pool execution identity. It never
+// defines, attaches, allocates or starts anything. The update succeeds when the persistent
+// definition and state match it; it fails only when a stopped VM's persistent definition is
+// still exactly its predecessor after allocation or define (proven unapplied); anything else
+// stays needs_attention. Like ReconcileRemoteVMCreateStopped, remote storage is excluded from
+// promote because the report path cannot make these checks.
+func (e *ManagedEngine) ReconcileRemoteVMUpdate(ctx context.Context, validate func(context.Context, protocol.VMCreateSpec) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	lock, err := (&Engine{config: Config{StateDir: e.stateDir}}).lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock(lock)
+	js, err := e.journals()
+	if err != nil {
+		return err
+	}
+	due := nextRemoteVMUpdateReconcile(js, time.Now().UTC())
+	if due == nil {
+		return nil
+	}
+	j := *due
+	err = validate(ctx, *j.Command.VM)
+	validated := err == nil
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err == nil {
+		err = e.observer()(ctx, j, updateState(j))
+	}
+	if err == nil {
+		err = ctx.Err()
+	}
+	switch {
+	case err == nil:
+		j.Result.Status, j.Result.Error, j.Stage = "succeeded", "", "defined"
+	case validated && ctx.Err() == nil && updateProvenUnapplied(ctx, js, j):
+		j.Result.Status, j.UnappliedObserved = "failed", true
+		j.Result.Error = "VM update was not applied; the VM keeps its previous definition: " + err.Error()
+	default:
+		j.Result.Status, j.Result.Error = "needs_attention", err.Error()
+	}
+	j.Result.ObservedAt = time.Now().UTC()
+	return e.save(j)
+}
+
+func nextRemoteVMUpdateReconcile(js []managedJournal, now time.Time) *managedJournal {
+	var due *managedJournal
+	for i := range js {
+		j := &js[i]
+		if j.Command.Kind != "vm-update" || j.Command.VM == nil || (!updateObservable(j.Stage) && j.Stage != "allocating") || (j.Result.Status != "pending" && j.Result.Status != "needs_attention") || !promotionUsesRemoteStorage(js, *j) || now.Sub(j.Result.ObservedAt) < time.Minute {
+			continue
+		}
+		// A later success of the same or a newer revision (for example an operator retry) owns
+		// the definition now; observing it would relabel this attempt's history.
+		superseded := false
+		for k := range js {
+			p := &js[k]
+			if p.Result.Status == "succeeded" && (p.Command.Kind == "vm-create" || p.Command.Kind == "vm-update") && p.Command.VM != nil && p.Command.VM.ID == j.Command.VM.ID && p.Command.VM.Revision >= j.Command.VM.Revision {
+				superseded = true
+				break
+			}
+		}
+		if superseded {
+			continue
+		}
+		if due == nil || j.Result.ObservedAt.Before(due.Result.ObservedAt) || (j.Result.ObservedAt.Equal(due.Result.ObservedAt) && j.Command.OperationID < due.Command.OperationID) {
+			due = j
+		}
+	}
+	return due
+}
+
+// updateProvenUnapplied reports whether an update interrupted at allocation or define left
+// the shut-off VM exactly on its single succeeded predecessor definition. A live attachment,
+// a running guest, a rename or any other difference stays ambiguous.
+func updateProvenUnapplied(ctx context.Context, js []managedJournal, j managedJournal) bool {
+	if (j.Stage != "allocating" && j.Stage != "defining") || len(j.Domain) == 0 {
+		return false
+	}
+	var previous *managedJournal
+	for i := range js {
+		p := &js[i]
+		if p.Result.Status != "succeeded" || (p.Command.Kind != "vm-create" && p.Command.Kind != "vm-update") || p.Command.VM == nil || p.Command.VM.ID != j.Command.VM.ID || p.Command.VM.Revision != j.Command.VM.Revision-1 {
+			continue
+		}
+		if previous != nil {
+			return false
+		}
+		previous = p
+	}
+	if previous == nil || len(previous.Domain) == 0 {
+		return false
+	}
+	state, err := managedVirsh(ctx, "domstate", j.Command.VM.ID)
+	if err != nil || strings.TrimSpace(string(state)) != "shut off" {
+		return false
+	}
+	b, err := managedVirsh(ctx, "dumpxml", j.Command.VM.ID, "--inactive")
+	return err == nil && validateManagedDefinition(b, previous.Domain) == nil && validateManagedDefinition(b, j.Domain) != nil
+}
+
 // managedIdentity is the resource ID and operator name a command addresses.
 func managedIdentity(c protocol.Command) (string, string) {
 	switch c.Kind {
@@ -1980,6 +2090,7 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 		}
 		switch v.Action {
 		case "recheck":
+			startRemoteMount(ctx, current)
 			_, err := managedStorageReady(ctx, current, 0)
 			return err
 		case "detach":

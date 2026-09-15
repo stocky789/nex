@@ -1,0 +1,54 @@
+{
+  "summary": "Core settles an unresolved remote-storage shared VM update from native observation in its one-minute worker (applied: succeeded and committed by the master; proven unapplied on a stopped VM: failed and aborted; otherwise needs_attention; entries superseded by a later succeeded revision are left alone), publishes pool VM inventory even when one VM lacks update evidence so only that VM stays blocked, and confirms rewritten console media updates with the pool owner (BUG-0192). API impact: existing contract \u2014 update-commit, update-abort and inventory Updates are reused with no wire or shape change.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/agent/managed.go",
+    "internal/agent/pool_vm_inventory.go",
+    "internal/agent/run.go",
+    "internal/agent/pool_vm_test.go",
+    "docs/API.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-15-shared-vm-update-settle.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Edit a virtual machine guide explains that an interrupted change to a VM on shared storage, including a console CD/DVD insert or eject, settles by itself about a minute after storage is healthy and blocks only that VM (Force stop still works).",
+    "pages": [
+      "docs/guide/edit-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "API impact: existing contract. No new endpoint, command or field on the wire; Core now settles an existing needs_attention vm-update through the existing update-commit (via inventory evidence) and update-abort peer transitions, and inventory publication no longer fails pool-wide for one VM. The managed journal gains an internal unapplied_observed marker that never leaves Core.",
+    "pages": [
+      "docs/API.md"
+    ],
+    "contracts": [
+      "vm-update",
+      "vm-media",
+      "pool VM inventory publication",
+      "update-commit",
+      "update-abort"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Reliability fix within the existing shared VM ownership slice."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Durable records stay on Core: the managed VM journal on the owning host (including the new unapplied_observed marker) and the pool-vms.json pending update on the pool master. A fresh Controller recovers the settled outcome through Core inventory and managed outcomes; no Controller state is added.",
+    "record": "Owning Core's managed VM journal under the agent state directory (managed-vms/<operation>.json, including the internal unapplied_observed marker) and the pool master's pool-vms.json record with its pending_update.",
+    "recovery": "A fresh Controller recovers the settled result from Core's managed inventory, VM definitions and managed outcomes after the host reconnects; nothing is stored in the Controller."
+  },
+  "verification": {
+    "method": "go test -race ./internal/agent ./internal/vmhost with the new regressions (each failed before its fix); go test -race ./...; python3 scripts/generate_api.py --check. Native: disposable lab, rebuilt agent; stuck ISO insert settled as applied, pool pending update cleared, start/force stop/eject succeeded through Nex on two shared VMs, and the stale Task history entry changed from needs_attention to succeeded after the outcome-kind correction.",
+    "evidence": [
+      "internal/agent/pool_vm_test.go",
+      "internal/vmhost/managed_test.go"
+    ]
+  }
+}

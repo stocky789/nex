@@ -368,6 +368,34 @@ func TestExclusiveDiskRejectsOtherDomainsAndHardlinks(t *testing.T) {
 	}
 }
 
+// Regression BUG-0191: an unrelated domain whose disk lives on an unmounted
+// repository must not block exclusive ownership of a disk on a healthy one.
+func TestExclusiveDiskSkipsMissingOtherDomainSources(t *testing.T) {
+	e := testEngine(t)
+	dir := t.TempDir()
+	disk := filepath.Join(dir, "disk.qcow2")
+	if err := os.WriteFile(disk, []byte("fake image"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	id := "5fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d"
+	other := "6fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d"
+	j := journal{Operation: Operation{VMID: id}, Disk: disk}
+	t.Setenv("VMHOST_IDS", id+"\n"+other)
+	fakeCommand(t, "virsh", `case "$3" in list) printf '%s\n' "$VMHOST_IDS";; dumpxml) printf '%s\n' "$VMHOST_XML";; *) exit 2;; esac`)
+	missing := `<source file="` + filepath.Join(dir, "missing", "disk-0.qcow2") + `"/>`
+	for _, tc := range []struct{ name, sources, want string }{
+		{"missing source", missing, ""},
+		{"not a directory", `<source file="` + disk + `/child"/>`, "cannot be inspected"},
+		{"missing then shared", missing + `<source file="` + disk + `"/>`, "another domain"},
+	} {
+		t.Setenv("VMHOST_XML", `<domain><devices><disk>`+tc.sources+`</disk></devices></domain>`)
+		err := e.exclusiveDisk(context.Background(), j)
+		if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+			t.Fatalf("%s: err=%v want %q", tc.name, err, tc.want)
+		}
+	}
+}
+
 func TestPowerStateChecksJobsOnlyForRunningGuests(t *testing.T) {
 	e := testEngine(t)
 	fakeCommand(t, "virsh", `case "$3" in domstate) printf '%s\n' "$VMHOST_STATE";; domjobinfo) if [ "$VMHOST_STATE" = 'shut off' ]; then exit 9; fi; printf '%s\n' "$VMHOST_JOB";; *) exit 2;; esac`)

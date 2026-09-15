@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,56 +19,77 @@ import (
 )
 
 // redeemStorageCredentials persists each secret before acknowledging it. A failed or lost
-// acknowledgement is safe: Core retries the same offer and SaveStorageCredential returns its
-// original receipt after a keyed replay check.
-func redeemStorageCredentials(ctx context.Context, s *Store, offers []protocol.StorageCredentialOffer) error {
+// acknowledgement is safe: the Controller never hands a delivered offer out again, so the
+// operator's request gets no receipt and retries after the offer expires; that new offer's
+// keyed replay check in SaveStorageCredential returns the original receipt.
+//
+// A refused offer belongs to one operator request, not to Core persistence. Log it and keep
+// redeeming the rest, so one stale or conflicting offer cannot stop the agent or the commands
+// delivered in the same report.
+func redeemStorageCredentials(ctx context.Context, s *Store, offers []protocol.StorageCredentialOffer) {
 	for _, offer := range offers {
-		if offer.Handle == "" || offer.HostID != s.State.HostID || offer.PoolID != s.State.PoolID || offer.RequestID == "" || (offer.RepositoryID == "" && offer.RegistrationRequestID == "") || time.Now().After(offer.ExpiresAt) {
-			return errors.New("invalid storage credential offer")
-		}
-		c, err := client(s.State, true)
-		if err != nil {
-			return err
-		}
-		path := "/api/v1/agent/storage/credentials/" + url.PathEscape(offer.Handle)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.State.Controller, "/")+path, nil)
-		if err != nil {
-			c.CloseIdleConnections()
-			return err
-		}
-		resp, err := c.Do(req)
-		if err != nil {
-			c.CloseIdleConnections()
-			return fmt.Errorf("credential handoff failed: %w", err)
-		}
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			c.CloseIdleConnections()
-			return fmt.Errorf("credential handoff rejected (HTTP %d)", resp.StatusCode)
-		}
-		var handoff protocol.StorageCredentialHandoff
-		err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&handoff)
-		resp.Body.Close()
-		c.CloseIdleConnections()
-		if err != nil || handoff.Offer != offer {
-			return errors.New("invalid storage credential handoff")
-		}
-		receipt, err := saveCredentialHandoff(s, handoff)
-		if err != nil {
-			return fmt.Errorf("storage credential persistence failed: %w", err)
-		}
-		ackPath := path + "/ack"
-		c, err = client(s.State, true)
-		if err != nil {
-			return err
-		}
-		err = post(ctx, c, s.State.Controller, ackPath, receipt, &protocol.StorageCredentialReceipt{})
-		c.CloseIdleConnections()
-		if err != nil {
-			return fmt.Errorf("credential receipt acknowledgement failed: %w", err)
+		if err := redeemStorageCredential(ctx, s, offer); err != nil {
+			log.Printf("storage credential request %q not redeemed: %v", offer.RequestID, err)
 		}
 	}
+}
+
+func redeemStorageCredential(ctx context.Context, s *Store, offer protocol.StorageCredentialOffer) error {
+	if offer.Handle == "" || offer.HostID != s.State.HostID || offer.PoolID != s.State.PoolID || offer.RequestID == "" || (offer.RepositoryID == "" && offer.RegistrationRequestID == "") || time.Now().After(offer.ExpiresAt) {
+		return errors.New("invalid storage credential offer")
+	}
+	c, err := client(s.State, true)
+	if err != nil {
+		return err
+	}
+	path := "/api/v1/agent/storage/credentials/" + url.PathEscape(offer.Handle)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.State.Controller, "/")+path, nil)
+	if err != nil {
+		c.CloseIdleConnections()
+		return err
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		c.CloseIdleConnections()
+		return fmt.Errorf("credential handoff failed: %w", withoutRequestURL(err))
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		c.CloseIdleConnections()
+		return fmt.Errorf("credential handoff rejected (HTTP %d)", resp.StatusCode)
+	}
+	var handoff protocol.StorageCredentialHandoff
+	err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&handoff)
+	resp.Body.Close()
+	c.CloseIdleConnections()
+	if err != nil || handoff.Offer != offer {
+		return errors.New("invalid storage credential handoff")
+	}
+	receipt, err := saveCredentialHandoff(s, handoff)
+	if err != nil {
+		return fmt.Errorf("storage credential persistence failed: %w", err)
+	}
+	ackPath := path + "/ack"
+	c, err = client(s.State, true)
+	if err != nil {
+		return err
+	}
+	err = post(ctx, c, s.State.Controller, ackPath, receipt, &protocol.StorageCredentialReceipt{})
+	c.CloseIdleConnections()
+	if err != nil {
+		return fmt.Errorf("credential receipt acknowledgement failed: %w", withoutRequestURL(err))
+	}
 	return nil
+}
+
+// withoutRequestURL drops the request URL a transport error repeats; it carries the one-shot
+// offer handle, which must not reach logs.
+func withoutRequestURL(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return urlErr.Err
+	}
+	return err
 }
 
 func clusterCredentialReceipt(s *Store, handoff protocol.StorageCredentialHandoff) (ClusterSecretReceipt, bool) {

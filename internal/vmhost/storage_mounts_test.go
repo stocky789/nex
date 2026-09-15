@@ -588,3 +588,141 @@ func TestSMBCredentialRotationRestoresWorkingUnitOnRestartFailure(t *testing.T) 
 		t.Fatalf("rotation did not reload and restart the restored unit: %#v", calls)
 	}
 }
+
+func remoteMountTestSetup(t *testing.T) (*[][]string, func(protocol.StorageRegistration) ([]byte, string)) {
+	t.Helper()
+	oldRun, oldMount, oldUnit := nativeRun, storageMountRoot, storageUnitRoot
+	t.Cleanup(func() { nativeRun, storageMountRoot, storageUnitRoot = oldRun, oldMount, oldUnit })
+	root := t.TempDir()
+	storageMountRoot, storageUnitRoot = filepath.Join(root, "mounts"), filepath.Join(root, "units")
+	calls := &[][]string{}
+	writeUnit := func(s protocol.StorageRegistration) ([]byte, string) {
+		_, unitPath := remoteUnitPath(s)
+		content := remoteUnit("//smb.example.test/vms", remoteMountPath(s), "cifs", smbMountOptions("/private/receipt", "64055", "64056"))
+		if err := os.MkdirAll(filepath.Dir(unitPath), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(unitPath, content, 0600); err != nil {
+			t.Fatal(err)
+		}
+		return content, unitPath
+	}
+	return calls, writeUnit
+}
+
+func TestStorageRecheckStartsInactiveRemoteMountUnit(t *testing.T) {
+	calls, writeUnit := remoteMountTestSetup(t)
+	s := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: "host-1", Name: "repo-1", Kind: protocol.StorageKindSMB, Source: protocol.StorageSource{SMB: &protocol.SMBStorageSource{Server: "smb.example.test", Share: "vms"}}, Generation: 1}
+	content, unitPath := writeUnit(s)
+	unit, _ := remoteUnitPath(s)
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		*calls = append(*calls, append([]string{name}, args...))
+		switch {
+		case name == "findmnt":
+			return []byte("/dev/vda1 ext4 rw,relatime /\n"), nil
+		case name == "id":
+			return []byte("64055\n"), nil
+		case name == "systemctl" && len(args) > 0 && args[0] == "is-active":
+			return nil, errors.New("inactive")
+		}
+		return nil, nil
+	}
+	e := NewManaged(filepath.Join(t.TempDir(), "managed"))
+	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.save(managedJournal{Command: protocol.Command{OperationID: "register-1", Kind: "storage-register", Storage: &s}, Result: protocol.Result{OperationID: "register-1", Status: "succeeded"}}); err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.StorageLifecycleRequest{Action: "recheck", RepositoryID: "repo-1", PoolID: "pool-1", HostID: "host-1"}
+	result, _ := e.Execute(context.Background(), protocol.Command{OperationID: "recheck-1", Kind: "storage-recheck", StorageLifecycle: &request}, nil)
+	if !strings.Contains(result.Error, "not mounted") {
+		t.Fatalf("recheck result = %+v", result)
+	}
+	started := false
+	for _, c := range *calls {
+		line := strings.Join(c, " ")
+		if line == "systemctl start "+unit {
+			started = true
+		}
+		for _, bad := range []string{"restart", "stop", "enable", "disable", "daemon-reload"} {
+			if c[0] == "systemctl" && len(c) > 1 && c[1] == bad {
+				t.Fatalf("recheck ran %q", line)
+			}
+		}
+	}
+	if !started {
+		t.Fatalf("recheck did not start inactive unit: %#v", *calls)
+	}
+	if got, err := os.ReadFile(unitPath); err != nil || string(got) != string(content) {
+		t.Fatalf("unit changed: %q, %v", got, err)
+	}
+}
+
+func TestStartRemoteMountsSkipsActiveBusyAndAdminUnits(t *testing.T) {
+	calls, writeUnit := remoteMountTestSetup(t)
+	smb := func(id string) protocol.StorageRegistration {
+		return protocol.StorageRegistration{ID: id, PoolID: "pool-1", HostID: "host-1", Name: id, Kind: protocol.StorageKindSMB, Source: protocol.StorageSource{SMB: &protocol.SMBStorageSource{Server: "smb.example.test", Share: "vms"}}, Generation: 1}
+	}
+	e := NewManaged(filepath.Join(t.TempDir(), "managed"))
+	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	units := map[string][]byte{}
+	for _, id := range []string{"inactive", "active", "busy", "admin"} {
+		s := smb(id)
+		if err := e.save(managedJournal{Command: protocol.Command{OperationID: "register-" + id, Kind: "storage-register", Storage: &s}, Result: protocol.Result{OperationID: "register-" + id, Status: "succeeded"}}); err != nil {
+			t.Fatal(err)
+		}
+		content, unitPath := writeUnit(s)
+		if id == "admin" {
+			content = []byte("[Mount]\nWhat=admin:/vms\n")
+			if err := os.WriteFile(unitPath, content, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		units[unitPath] = content
+	}
+	busy := protocol.StorageLifecycleRequest{Action: "recheck", RepositoryID: "busy", PoolID: "pool-1", HostID: "host-1"}
+	if err := e.save(managedJournal{Command: protocol.Command{OperationID: "recheck-busy", Kind: "storage-recheck", StorageLifecycle: &busy}, Result: protocol.Result{OperationID: "recheck-busy", Status: "pending"}}); err != nil {
+		t.Fatal(err)
+	}
+	activeUnit, _ := remoteUnitPath(smb("active"))
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		*calls = append(*calls, append([]string{name}, args...))
+		if name == "systemctl" && args[0] == "is-active" && args[len(args)-1] != activeUnit {
+			return nil, errors.New("inactive")
+		}
+		return nil, nil
+	}
+	e.StartRemoteMounts(context.Background())
+	inactiveUnit, _ := remoteUnitPath(smb("inactive"))
+	var got []string
+	for _, c := range *calls {
+		got = append(got, strings.Join(c, " "))
+	}
+	want := []string{"systemctl is-active --quiet " + activeUnit, "systemctl is-active --quiet " + inactiveUnit, "systemctl start --no-block " + inactiveUnit}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("calls = %#v, want %#v", got, want)
+	}
+	entries, _ := os.ReadDir(storageUnitRoot)
+	if len(entries) != len(units) {
+		t.Fatalf("unit files = %d, want %d", len(entries), len(units))
+	}
+	for path, content := range units {
+		if b, err := os.ReadFile(path); err != nil || string(b) != string(content) {
+			t.Fatalf("unit %s changed: %q, %v", path, b, err)
+		}
+	}
+}
+
+func TestVerifyRemoteMountReportsUnmountedParent(t *testing.T) {
+	oldRun := nativeRun
+	t.Cleanup(func() { nativeRun = oldRun })
+	nativeRun = func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("/dev/vda1 ext4 rw,relatime /\n"), nil
+	}
+	if err := verifyRemoteMount(context.Background(), "/var/lib/nex-storage/smb", "//smb.example.test/vms", "cifs", nil); !errors.Is(err, errStorageNotMounted) {
+		t.Fatalf("unmounted path error = %v", err)
+	}
+}

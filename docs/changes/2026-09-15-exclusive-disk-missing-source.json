@@ -1,0 +1,34 @@
+{
+  "summary": "The exclusive disk ownership check skips another domain's disk source that does not exist instead of refusing, so an unmounted repository no longer blocks changes to unrelated VMs; every other stat error still refuses (BUG-0191). API impact: none — Core-internal validation; command results and errors are unchanged apart from removing the false refusal.",
+  "paths": [
+    "internal/vmhost/engine.go",
+    "internal/vmhost/engine_test.go",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-15-exclusive-disk-missing-source.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No operator workflow changes; a VM edit or media change that was falsely refused now proceeds."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. vm-create, vm-update and media commands keep their payloads, results and error set; only a false internal refusal is removed.",
+    "pages": [],
+    "contracts": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fix within existing VM storage safety checks."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state added or changed."
+  },
+  "verification": {
+    "method": "go test -race ./internal/vmhost -run TestExclusiveDisk (new test failed before the fix with 'other domain disk cannot be inspected for exclusive ownership', passes after); go test -race ./internal/vmhost.",
+    "evidence": [
+      "internal/vmhost/engine_test.go"
+    ]
+  }
+}

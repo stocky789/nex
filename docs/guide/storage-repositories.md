@@ -101,7 +101,9 @@ for production workloads. Use an explicitly selected disposable lab host.
    it from **Storage**. Only healthy, writable, VM-disk-capable storage available on the placement
    host appears under **Select VM-ready storage**. An install ISO can live on a different
    repository from the VM's disks; see [Create a virtual machine](create-virtual-machine.md).
-7. Use **Recheck** after repairing a server, share, dataset, target or permission issue. A
+7. Use **Recheck** after repairing a server, share, dataset, target or permission issue. If an
+   NFS or SMB repository is not mounted, for example because Core started before the file server,
+   Core retries the mount about once a minute and **Recheck** retries it immediately. A
    name-only **Update** (without new CHAP fields) does not reconnect and is allowed while in use.
    **Host** and **Repository type** stay fixed. SMB updates always include account, optional domain and password.
    Changing a local path or any ZFS, NFS, SMB or iSCSI source detail reconnects the repository, so
@@ -256,6 +258,10 @@ A terminal `failed` task is not retried; fix the cause and submit a new request.
 - **Registration or Recheck fails:** read the Core error in the row and **Task history**. Check
   reachability, source identity, filesystem health, capacity, mount permissions and QEMU access,
   then **Recheck**. Do not create an empty local directory at an unavailable remote mount point.
+- **`remote storage is not mounted`:** the NFS or SMB server or share was unreachable when Core
+  tried to mount it. Restore the server or network; Core retries about once a minute, or select
+  **Recheck** to retry now. Core also mounts a registered repository again if its mount was stopped by
+  hand, so to keep a repository offline, detach it.
 - **A storage task is pending or needs attention:** fix the reported cause and wait for **Task
   history**. Do not register again, rotate or detach meanwhile. Then **Recheck**.
 - **NFS access fails:** confirm NFSv4, server/export path and UID/GID or root-squash policy. Do not

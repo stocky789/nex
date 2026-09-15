@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -319,4 +320,66 @@ func contains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// A refused credential offer (already redeemed, expired at the Controller, or conflicting with a
+// retained receipt) is a problem for that one request, not a Core persistence failure: the report
+// must finish and the remaining offers must still be redeemed.
+func TestReportSkipsRejectedCredentialOffersWithoutStopping(t *testing.T) {
+	expires := time.Now().Add(time.Minute).UTC()
+	gone := protocol.StorageCredentialOffer{Handle: "offer-gone", RequestID: "credential-gone", RegistrationRequestID: "register-gone", PoolID: "pool-1", HostID: "host-1", ExpiresAt: expires}
+	conflict := protocol.StorageCredentialOffer{Handle: "offer-conflict", RequestID: "credential-conflict", RegistrationRequestID: "register-conflict", PoolID: "pool-1", HostID: "host-1", ExpiresAt: expires}
+	good := protocol.StorageCredentialOffer{Handle: "offer-good", RequestID: "credential-good", RegistrationRequestID: "register-good", PoolID: "pool-1", HostID: "host-1", ExpiresAt: expires}
+	command := protocol.Command{OperationID: "storage-after-refused-offer", Kind: "storage-register", Storage: &protocol.StorageRegistration{
+		ID: "repo-1", PoolID: "pool-1", HostID: "host-1", Name: "nfs", Kind: protocol.StorageKindNFS,
+		Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example", Export: "/images"}},
+	}}
+	var mu sync.Mutex
+	acknowledged := map[string]bool{}
+	_, identity := testManagedIdentity(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/agent/report":
+			json.NewEncoder(w).Encode(protocol.ReportResponse{CredentialOffers: []protocol.StorageCredentialOffer{gone, conflict, good}, Commands: []protocol.Command{command}})
+		case "/api/v1/agent/storage/credentials/offer-gone":
+			http.Error(w, `{"error":"credential offer unavailable"}`, http.StatusNotFound)
+		case "/api/v1/agent/storage/credentials/offer-conflict":
+			json.NewEncoder(w).Encode(protocol.StorageCredentialHandoff{Offer: conflict, Credentials: protocol.StorageCredentials{Username: "operator", Secret: "replacement-secret"}})
+		case "/api/v1/agent/storage/credentials/offer-good":
+			json.NewEncoder(w).Encode(protocol.StorageCredentialHandoff{Offer: good, Credentials: protocol.StorageCredentials{Username: "operator", Secret: "test-secret"}})
+		case "/api/v1/agent/storage/credentials/offer-gone/ack", "/api/v1/agent/storage/credentials/offer-conflict/ack", "/api/v1/agent/storage/credentials/offer-good/ack":
+			var receipt protocol.StorageCredentialReceipt
+			if err := json.NewDecoder(r.Body).Decode(&receipt); err != nil {
+				t.Error(err)
+				return
+			}
+			mu.Lock()
+			acknowledged[r.URL.Path] = true
+			mu.Unlock()
+			json.NewEncoder(w).Encode(receipt)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	s := testStore(t)
+	s.State = identity
+	s.State.PoolID = good.PoolID
+	s.State.StorageProtocolReady = true
+	if _, err := vmhost.SaveStorageCredential(s.dir, protocol.StorageCredentialHandoff{Offer: conflict, Credentials: protocol.StorageCredentials{Username: "operator", Secret: "original-secret"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: time.Second}); err != nil {
+		t.Fatalf("a refused credential offer stopped the report: %v", err)
+	}
+	if _, ok := s.State.Journal[command.OperationID]; !ok {
+		t.Fatal("a command delivered with a refused credential offer was not applied")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !acknowledged["/api/v1/agent/storage/credentials/offer-good/ack"] || len(acknowledged) != 1 {
+		t.Fatalf("only the valid offer should be acknowledged: %v", acknowledged)
+	}
+	receipts, err := vmhost.StorageCredentialReceipts(s.dir)
+	if err != nil || len(receipts) != 2 {
+		t.Fatalf("expected the retained and the new receipt only: %+v %v", receipts, err)
+	}
 }

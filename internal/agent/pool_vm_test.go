@@ -1016,6 +1016,58 @@ func TestSharedVMMediaRedeliveryReusesJournaledCommand(t *testing.T) {
 	}
 }
 
+// BUG-0192: one shared VM update left needs_attention after its native define must block only
+// that VM. Before the fix it made every pool VM inventory publication fail, which refused
+// every shared-storage VM operation in the pool.
+func TestSharedVMUnresolvedUpdateDoesNotBlockPoolInventory(t *testing.T) {
+	ctx := context.Background()
+	s, vm := sharedMediaVMStore(t)
+	dir := filepath.Join(s.dir, "managed-vms")
+	writeJournal := func(op string, next *protocol.VMCreateSpec, status, stage string) {
+		t.Helper()
+		b, err := json.Marshal(map[string]any{"command": protocol.Command{OperationID: op, Kind: "vm-update", VM: next}, "result": protocol.Result{OperationID: op, Status: status}, "stage": stage})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(dir, op+".json"), b, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rev1 := *vm
+	rev1.Revision, rev1.MediaID = 1, ""
+	if err := poolVMLocalUpdate(s, vm.ID, "update-reserve", "update-1", vm, &rev1, nil); err != nil {
+		t.Fatal(err)
+	}
+	writeJournal("update-1", &rev1, "succeeded", "defined")
+	evidence, err := vmhost.NewManaged(dir).SuccessfulVMUpdateEvidence(ctx, vm.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = poolVMLocalUpdate(s, vm.ID, "update-commit", "update-1", nil, nil, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	rev2 := rev1
+	rev2.Revision, rev2.MediaID = 2, "media-1"
+	if err = poolVMLocalUpdate(s, vm.ID, "update-reserve", "update-2", &rev1, &rev2, nil); err != nil {
+		t.Fatal(err)
+	}
+	writeJournal("update-2", &rev2, "needs_attention", "defining")
+	if err = PublishPoolVMInventory(ctx, s); err != nil {
+		t.Fatalf("an unresolved update of one shared VM blocked pool inventory: %v", err)
+	}
+	start := protocol.Command{OperationID: "start-1", Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: vm.ID, PoolID: vm.PoolID, HostID: vm.HostID, Action: "start"}}
+	if _, err = AdmitPoolVMExecution(ctx, s, start); err == nil {
+		t.Fatal("VM with an unresolved update was admitted to start")
+	}
+	state, err := loadPoolVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record := state.VMs[vm.ID]; record.PendingUpdate == nil || record.PendingUpdate.OperationID != "update-2" || !reflect.DeepEqual(record.Spec, rev1) {
+		t.Fatalf("inventory changed the unresolved owner record: %+v", record)
+	}
+}
+
 func TestStorageRecheckReceivesCoreOwnedClusterContext(t *testing.T) {
 	s := clusterRecoveryStore(t)
 	storage := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: "master-1", Name: "shared", Path: "/var/lib/nex-storage/repo-1", Kind: protocol.StorageKindISCSI, Generation: 1}
@@ -1099,4 +1151,85 @@ func TestSingleHostPoolMasterPublishesSharedVMInventory(t *testing.T) {
 	if err := PublishPoolVMInventory(context.Background(), s); err != nil {
 		t.Fatalf("single-host pool master refused shared VM power: %v", err)
 	}
+}
+
+// BUG-0192: a console media change on a shared VM is journaled by the agent as vm-media while
+// the managed engine executes it as a vm-update under the same operation ID. Once Core settles
+// that update from native observation, the report path must confirm it with the master exactly
+// as it does for a vm-update entry instead of pinning it at needs_attention.
+func TestSharedVMRewrittenMediaOutcomeConfirmsWithPoolOwner(t *testing.T) {
+	sharedStorage := []protocol.StorageRegistration{{ID: "repo-1", Kind: protocol.StorageKindNFS}}
+	setup := func(t *testing.T, managed protocol.Command, status, stage string, unapplied bool) (*Store, *protocol.VMCreateSpec, protocol.Command) {
+		t.Helper()
+		s, vm := sharedMediaVMStore(t)
+		media := sharedMediaCommand(vm, "media-op", "eject", "")
+		next := *vm
+		next.Revision, next.MediaID = 1, ""
+		if err := poolVMLocalUpdate(s, vm.ID, "update-reserve", media.OperationID, vm, &next, nil); err != nil {
+			t.Fatal(err)
+		}
+		if managed.VM == nil && managed.Kind == "vm-update" {
+			managed.VM = &next
+		}
+		b, err := json.Marshal(map[string]any{"command": managed, "result": protocol.Result{OperationID: media.OperationID, Status: status}, "stage": stage, "unapplied_observed": unapplied})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(s.dir, "managed-vms", media.OperationID+".json"), b, 0600); err != nil {
+			t.Fatal(err)
+		}
+		s.State.Journal[media.OperationID] = JournalEntry{Command: &media, Status: "needs_attention"}
+		return s, vm, media
+	}
+	t.Run("applied", func(t *testing.T) {
+		s, vm, media := setup(t, protocol.Command{OperationID: "media-op", Kind: "vm-update"}, "succeeded", "defined", false)
+		evidence, err := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).SuccessfulVMUpdateEvidence(context.Background(), vm.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = poolVMLocalUpdate(s, vm.ID, "update-commit", media.OperationID, nil, nil, &evidence); err != nil {
+			t.Fatal(err)
+		}
+		got := confirmPoolVMUpdateOutcomes(context.Background(), s, []protocol.ManagedOutcome{{OperationID: media.OperationID, Kind: "vm-update", ID: vm.ID, Status: "succeeded"}}, sharedStorage)
+		if got[0].Status != "succeeded" || s.State.Journal[media.OperationID].Status != "succeeded" {
+			t.Fatalf("settled media update was not confirmed with the pool owner: %+v %#v", got, s.State.Journal[media.OperationID])
+		}
+		if got[0].Kind != "vm-media" {
+			t.Fatalf("settled media outcome must keep the requested kind the Controller tracks: %+v", got)
+		}
+		if entry := s.State.Journal[media.OperationID]; entry.Command.Kind != "vm-media" {
+			t.Fatalf("confirmation rewrote the agent journal command: %+v", entry.Command)
+		}
+	})
+	t.Run("unapplied", func(t *testing.T) {
+		s, vm, media := setup(t, protocol.Command{OperationID: "media-op", Kind: "vm-update"}, "failed", "defining", true)
+		got := confirmPoolVMUpdateOutcomes(context.Background(), s, []protocol.ManagedOutcome{{OperationID: media.OperationID, Kind: "vm-update", ID: vm.ID, Status: "failed"}}, sharedStorage)
+		if got[0].Status != "failed" || s.State.Journal[media.OperationID].Status != "failed" {
+			t.Fatalf("proven-unapplied media update was not aborted at the pool owner: %+v %#v", got, s.State.Journal[media.OperationID])
+		}
+		if got[0].Kind != "vm-media" {
+			t.Fatalf("aborted media outcome must keep the requested kind the Controller tracks: %+v", got)
+		}
+		state, err := loadPoolVMs(s)
+		if err != nil || state.VMs[vm.ID].PendingUpdate != nil || !poolVMRecordMatchesSpec(state.VMs[vm.ID], *vm) {
+			t.Fatalf("abort left the owner record pending or changed: %+v %v", state.VMs[vm.ID], err)
+		}
+	})
+	t.Run("mismatched managed command fails closed", func(t *testing.T) {
+		other := *poolVMTestSpec("22222222-1111-4111-8111-111111111111", "host-a")
+		other.Revision = 1
+		for name, managed := range map[string]protocol.Command{
+			"vm-media":   {OperationID: "media-op", Kind: "vm-media", VMMedia: &protocol.VMMediaRequest{VMID: "11111111-1111-4111-8111-111111111111", Action: "eject"}},
+			"foreign VM": {OperationID: "media-op", Kind: "vm-update", VM: &other},
+		} {
+			s, vm, media := setup(t, managed, "succeeded", "defined", false)
+			got := confirmPoolVMUpdateOutcomes(context.Background(), s, []protocol.ManagedOutcome{{OperationID: media.OperationID, Kind: "vm-update", ID: vm.ID, Status: "succeeded"}}, sharedStorage)
+			if got[0].Status != "needs_attention" || s.State.Journal[media.OperationID].Status != "needs_attention" {
+				t.Fatalf("%s: unmatched managed command was confirmed: %+v", name, got)
+			}
+			if got[0].Kind != "vm-media" {
+				t.Fatalf("%s: unmatched media outcome must stay on the Controller's vm-media task: %+v", name, got)
+			}
+		}
+	})
 }

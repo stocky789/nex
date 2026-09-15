@@ -630,6 +630,203 @@ func TestReconcileRemoteVMCreateStoppedObservesOnly(t *testing.T) {
 	}
 }
 
+// remoteUpdateEngine journals a succeeded NFS-backed revision 0 and an unresolved revision 1
+// update (the ISO ejected) in stage, age old. It returns both definitions and domains.
+func remoteUpdateEngine(t *testing.T, stage string, age time.Duration) (*ManagedEngine, protocol.VMCreateSpec, protocol.VMCreateSpec, []byte, []byte) {
+	t.Helper()
+	e := startEngine(t)
+	previous := managedTestVM()
+	next := previous
+	next.Revision, next.MediaID = 1, ""
+	nets := []protocol.NetworkRegistration{{Kind: "network", Source: "default"}}
+	previousDomain, err := testDomainXML(previous, nets, []string{"/remote/nex-vms/disk"}, "/remote/nex-media/m.iso")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextDomain, err := testDomainXML(next, nets, []string{"/remote/nex-vms/disk"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.StorageRegistration{ID: previous.Disks[0].StorageID, PoolID: previous.PoolID, HostID: previous.HostID, Name: "shared", Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/vms"}}}
+	remote := request
+	remote.Path, remote.Generation = "/remote", 1
+	for _, entry := range []managedJournal{
+		{Command: protocol.Command{OperationID: "storage", Kind: "storage-register", Storage: &request}, AppliedStorage: &remote, Result: protocol.Result{OperationID: "storage", Status: "succeeded", ObservedAt: time.Now().UTC()}, Stage: "registered"},
+		{Command: protocol.Command{OperationID: "create", Kind: "vm-create", VM: &previous}, Result: protocol.Result{OperationID: "create", Status: "succeeded", ObservedAt: time.Now().UTC()}, Stage: "defined", Domain: previousDomain},
+		{Command: protocol.Command{OperationID: "remote-update", Kind: "vm-update", VM: &next}, Result: protocol.Result{OperationID: "remote-update", Status: "needs_attention", Error: "other domain disk cannot be inspected for exclusive ownership", ObservedAt: time.Now().Add(-age)}, Stage: stage, Domain: nextDomain},
+	} {
+		if err := e.save(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return e, previous, next, previousDomain, nextDomain
+}
+
+// BUG-0192: an update whose define landed but whose observation failed is settled from a later
+// native observation only. Nothing is defined, attached, allocated or started again.
+func TestReconcileRemoteVMUpdateSettlesAppliedDefinition(t *testing.T) {
+	ctx := context.Background()
+	allow := func(context.Context, protocol.VMCreateSpec) error { return nil }
+	read := func(t *testing.T, e *ManagedEngine) managedJournal {
+		t.Helper()
+		j, err := e.readJournal("remote-update.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return j
+	}
+	t.Run("applied definition succeeds", func(t *testing.T) {
+		e, _, next, _, _ := remoteUpdateEngine(t, "defining", 2*time.Minute)
+		fakeCommand(t, "virsh", "exit 99")
+		observed := 0
+		e.observe = func(_ context.Context, got managedJournal, state string) error {
+			observed++
+			if got.Command.OperationID != "remote-update" || state != "shut off" {
+				t.Fatalf("unexpected observation %+v state=%q", got, state)
+			}
+			return nil
+		}
+		if err := e.ReconcileRemoteVMUpdate(ctx, func(_ context.Context, got protocol.VMCreateSpec) error {
+			if !reflect.DeepEqual(got, next) {
+				t.Fatalf("validated %+v", got)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if got := read(t, e); observed != 1 || got.Result.Status != "succeeded" || got.Result.Error != "" || got.Stage != "defined" || got.UnappliedObserved {
+			t.Fatalf("applied update = observed %d journal %+v", observed, got)
+		}
+		evidence, err := e.SuccessfulVMUpdateEvidence(ctx, next.ID)
+		if err != nil || evidence.OperationID != "remote-update" || !reflect.DeepEqual(evidence.Current, next) {
+			t.Fatalf("settled update evidence %+v err=%v", evidence, err)
+		}
+		if err = e.ReconcileRemoteVMUpdate(ctx, func(context.Context, protocol.VMCreateSpec) error {
+			t.Fatal("settled update revalidated")
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("entry superseded by a succeeded retry is left alone", func(t *testing.T) {
+		e, _, next, _, nextDomain := remoteUpdateEngine(t, "defining", 2*time.Minute)
+		retry := next
+		if err := e.save(managedJournal{Command: protocol.Command{OperationID: "retry-update", Kind: "vm-update", VM: &retry}, Result: protocol.Result{OperationID: "retry-update", Status: "succeeded", ObservedAt: time.Now().UTC()}, Stage: "defined", Domain: nextDomain}); err != nil {
+			t.Fatal(err)
+		}
+		e.observe = func(context.Context, managedJournal, string) error {
+			t.Fatal("superseded update observed")
+			return nil
+		}
+		if err := e.ReconcileRemoteVMUpdate(ctx, allow); err != nil {
+			t.Fatal(err)
+		}
+		if got := read(t, e); got.Result.Status != "needs_attention" || got.Stage != "defining" {
+			t.Fatalf("superseded update journal %+v", got)
+		}
+	})
+	t.Run("observation failure keeps needs_attention", func(t *testing.T) {
+		e, _, next, _, _ := remoteUpdateEngine(t, "defining", 2*time.Minute)
+		fakeCommand(t, "virsh", "exit 99")
+		e.observe = func(context.Context, managedJournal, string) error {
+			return errors.New("cannot observe persistent VM definition")
+		}
+		if err := e.ReconcileRemoteVMUpdate(ctx, allow); err != nil {
+			t.Fatal(err)
+		}
+		if got := read(t, e); got.Result.Status != "needs_attention" || got.Stage != "defining" || got.Result.Error != "cannot observe persistent VM definition" {
+			t.Fatalf("unobserved update journal %+v", got)
+		}
+		if _, err := e.FailedVMUpdateEvidence(ctx, next.ID, "remote-update", next); err == nil {
+			t.Fatal("unobserved update became failure evidence")
+		}
+	})
+	t.Run("recent entry is not observed", func(t *testing.T) {
+		e, _, _, _, _ := remoteUpdateEngine(t, "defining", 10*time.Second)
+		e.observe = func(context.Context, managedJournal, string) error { t.Fatal("recent update observed"); return nil }
+		if err := e.ReconcileRemoteVMUpdate(ctx, allow); err != nil {
+			t.Fatal(err)
+		}
+		if got := read(t, e); got.Result.Status != "needs_attention" {
+			t.Fatalf("recent update journal %+v", got)
+		}
+	})
+	t.Run("invalid admission is not observed", func(t *testing.T) {
+		e, _, _, _, _ := remoteUpdateEngine(t, "defining", 2*time.Minute)
+		e.observe = func(context.Context, managedJournal, string) error { t.Fatal("invalid admission observed"); return nil }
+		if err := e.ReconcileRemoteVMUpdate(ctx, func(context.Context, protocol.VMCreateSpec) error {
+			return errors.New("remote VM storage is not currently eligible")
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if got := read(t, e); got.Result.Status != "needs_attention" || !strings.Contains(got.Result.Error, "not currently eligible") {
+			t.Fatalf("invalid admission journal %+v", got)
+		}
+	})
+	t.Run("attaching entry observes a running guest", func(t *testing.T) {
+		e, _, _, _, _ := remoteUpdateEngine(t, "attaching", 2*time.Minute)
+		e.observe = func(_ context.Context, _ managedJournal, state string) error {
+			if state != "running" {
+				t.Fatalf("attaching update observed as %q", state)
+			}
+			return nil
+		}
+		if err := e.ReconcileRemoteVMUpdate(ctx, allow); err != nil {
+			t.Fatal(err)
+		}
+		if got := read(t, e); got.Result.Status != "succeeded" || got.Stage != "defined" {
+			t.Fatalf("attaching update journal %+v", got)
+		}
+	})
+}
+
+// BUG-0192: an update is failure evidence after a native boundary only when the stopped VM's
+// persistent definition is still exactly its predecessor and not the attempted one.
+func TestReconcileRemoteVMUpdateAbortsProvenUnappliedDefinition(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, stage, state string
+		predecessor        bool
+		want               string
+	}{
+		{"stopped predecessor definition proves unapplied", "defining", "shut off", true, "failed"},
+		{"allocation left the predecessor definition", "allocating", "shut off", true, "failed"},
+		{"attempted definition stays ambiguous", "defining", "shut off", false, "needs_attention"},
+		{"running guest stays ambiguous", "defining", "running", true, "needs_attention"},
+		{"live attachment stays ambiguous", "attaching", "shut off", true, "needs_attention"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, previous, next, previousDomain, nextDomain := remoteUpdateEngine(t, tc.stage, 2*time.Minute)
+			domain := nextDomain
+			if tc.predecessor {
+				domain = previousDomain
+			}
+			path := filepath.Join(t.TempDir(), "domain.xml")
+			if err := os.WriteFile(path, domain, 0600); err != nil {
+				t.Fatal(err)
+			}
+			fakeCommand(t, "virsh", `case "$3" in domstate) printf '%s\n' '`+tc.state+`';; dumpxml) cat '`+path+`';; *) exit 2;; esac`)
+			e.observe = func(context.Context, managedJournal, string) error {
+				return errors.New("VM definition differs from requested ownership or resources")
+			}
+			if err := e.ReconcileRemoteVMUpdate(ctx, func(context.Context, protocol.VMCreateSpec) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			got, err := e.readJournal("remote-update.json")
+			if err != nil || got.Result.Status != tc.want || got.UnappliedObserved != (tc.want == "failed") || got.Stage != tc.stage {
+				t.Fatalf("journal %+v err=%v", got, err)
+			}
+			evidence, err := e.FailedVMUpdateEvidence(ctx, next.ID, "remote-update", next)
+			if tc.want == "failed" && (err != nil || !reflect.DeepEqual(evidence.Previous, previous) || !reflect.DeepEqual(evidence.Current, next)) {
+				t.Fatalf("proven unapplied update evidence %+v err=%v", evidence, err)
+			}
+			if tc.want != "failed" && err == nil {
+				t.Fatal("ambiguous update became failure evidence")
+			}
+		})
+	}
+}
+
 func TestReconcileRemoteVMCreateStoppedRefusesInvalidAdmission(t *testing.T) {
 	e := startEngine(t)
 	v := managedTestVM()
@@ -1083,6 +1280,14 @@ func TestFailedVMUpdateEvidenceRequiresExactFailedCurrentHistory(t *testing.T) {
 		write(t, e, managedJournal{Command: protocol.Command{OperationID: "failed", Kind: "vm-update", VM: &attempted}, Result: protocol.Result{OperationID: "failed", Status: "failed"}, Stage: "defining"})
 		if _, err := e.FailedVMUpdateEvidence(context.Background(), attempted.ID, "failed", attempted); err == nil {
 			t.Fatal("post-native failure accepted")
+		}
+	})
+	t.Run("observed unapplied post-native stage is failed evidence", func(t *testing.T) {
+		e, previous, attempted := newEngine(t)
+		write(t, e, managedJournal{Command: protocol.Command{OperationID: "create", Kind: "vm-create", VM: &previous}, Result: protocol.Result{OperationID: "create", Status: "succeeded"}})
+		write(t, e, managedJournal{Command: protocol.Command{OperationID: "failed", Kind: "vm-update", VM: &attempted}, Result: protocol.Result{OperationID: "failed", Status: "failed"}, Stage: "defining", UnappliedObserved: true})
+		if got, err := e.FailedVMUpdateEvidence(context.Background(), attempted.ID, "failed", attempted); err != nil || !reflect.DeepEqual(got.Previous, previous) {
+			t.Fatalf("observed unapplied failure evidence %#v, %v", got, err)
 		}
 	})
 	t.Run("operation and attempted definition must match", func(t *testing.T) {

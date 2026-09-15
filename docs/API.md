@@ -591,7 +591,16 @@ whose operation ID, previous specification and current specification exactly mat
 record. A known failed journal result can abort the same pending transition only when it proves the
 same prior and next specifications. Timeout, `needs_attention`, post-native/ambiguous failure,
 missing evidence, stale owner, changed revision or malformed input retain the pending record and
-leave the command/report `needs_attention`.
+leave the command/report `needs_attention`. Core settles such an unresolved remote-storage update
+itself in its one-minute worker, on every pool host including a single-host master, once the entry
+is a minute old and the VM's pool, host and execution context revalidate. It only observes: when
+the persistent definition and state match the update, the journal records `succeeded` and the
+master commits it from the next inventory evidence; when a shut-off VM's persistent definition is
+still exactly its single succeeded predecessor after allocation or define, the journal records
+`failed` (proven unapplied) and the master aborts it; a live attachment, running guest, rename or
+any other difference stays `needs_attention`. It never defines, attaches, allocates or starts. An
+unresolved update blocks only its own VM: the owner still publishes that VM, without update
+evidence, and the rest of its pool VM inventory.
 
 For the first local-to-pool-shared update, when no master record exists yet, `Previous` is only a
 comparison value. The master seeds a record only from the authenticated owner's exact inventory
@@ -937,7 +946,10 @@ this release makes no NFS HA failover promise. Preserved older records that cont
 identity are not rewritten and fail closed instead of being silently upgraded.
 
 `POST /api/v1/storage/{id}/update`, `/recheck` and `/detach` carry a stable request ID, pool,
-host and expected generation. Update changes typed configuration; recheck only observes it;
+host and expected generation. Update changes typed configuration; recheck only observes it,
+except that recheck (and Core's one-minute periodic lane) starts an existing, unchanged Nex NFS/SMB
+mount unit when systemd reports it inactive, then verification decides health; an unmounted
+repository reports `remote storage is not mounted`;
 detach is refused while disks, retained disks, media or active work depend on it and never
 deletes backing data. HTTP `202` means Core work is queued. Retry an identical request ID to
 recover an interrupted client reply; a changed replay or stale generation is `409`. For a
@@ -946,7 +958,8 @@ intentionally not a cluster lifecycle: every generic update, including a rename,
 Core operation with `clustered iSCSI updates require a coordinated Core cluster operation`; generic
 detach fails with `clustered iSCSI detach requires a coordinated Core cluster teardown` before a
 native command. No coordinated update/teardown API exists in this slice. Recheck is observation
-only and does not authorize execution. Core blocks
+only and does not authorize execution; its only side effect is starting an inactive existing Nex
+NFS/SMB mount unit, never rewriting, reloading, restarting or enabling it. Core blocks
 disk, media and guest-start writes if its source identity has changed, a mount is missing,
 read-only or inaccessible, or capacity is insufficient. It never writes into an unmounted
 directory.

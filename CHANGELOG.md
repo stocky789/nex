@@ -6,12 +6,29 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.2.4` →
-> Debian `0.2.4`).
+> development software. Builds use the newest numbered changelog heading (`0.2.5` →
+> Debian `0.2.5`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.2.5] — 2026-09-15
+
+### Bug Fixes
+
+- A storage credential request that Nex Core refuses — for example one that reuses a request ID
+  already used for a different credential — no longer stops the Nex Core agent. The refusal was
+  treated as a fatal error, so the agent restarted repeatedly for several seconds; it now skips
+  that one request, which reports that it was not acknowledged, and keeps running (BUG-0189).
+- NFS and SMB storage that could not be mounted when Nex Core started, for example because the
+  NAS booted later, now comes back by itself within about a minute, and **Recheck** retries it
+  immediately. Storage that is not mounted says *remote storage is not mounted* (BUG-0190).
+- Changing a VM no longer fails with *other domain disk cannot be inspected for exclusive
+  ownership* just because a different VM's storage is temporarily unmounted (BUG-0191).
+- A VM change on shared storage that was interrupted, including a console CD/DVD insert or eject,
+  now settles by itself about a minute after its storage is healthy. Until then only that VM is
+  held back: other VMs in the pool can still start, stop and change media (BUG-0192).
 
 ## [0.2.4] — 2026-09-15
 

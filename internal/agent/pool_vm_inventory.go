@@ -167,12 +167,16 @@ func localPoolVMInventory(ctx context.Context, s *Store, generation uint64) (poo
 		// definition can nevertheless be the exact successor to a shared owner
 		// record. Ask the read-only journal helper in that case, but only require
 		// evidence when either side actually references shared storage.
+		// A VM without exact evidence (for example an unresolved newer update) is
+		// still published, without an Updates entry, at its highest succeeded
+		// revision, which the master already records; that VM's pending-update
+		// guards keep it blocked. If a published definition ever differed from the
+		// master record without evidence, the master would still refuse the whole
+		// publication, as before.
 		if vm.Revision > 0 {
 			evidence, err := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).SuccessfulVMUpdateEvidence(ctx, vm.ID)
 			if err == nil && reflect.DeepEqual(evidence.Current, vm) && (shared || vmUsesInventorySharedStorage(evidence.Previous, storage)) {
 				updates[vm.ID] = evidence
-			} else if shared {
-				return poolVMInventory{}, errors.New("managed VM update evidence is unavailable")
 			}
 		}
 	}

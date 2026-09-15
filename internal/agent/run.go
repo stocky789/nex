@@ -321,9 +321,7 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 			}
 		}
 	}
-	if err = redeemStorageCredentials(ctx, s, response.CredentialOffers); err != nil {
-		return persistenceError{fmt.Errorf("persist storage credential handoff: %w", err)}
-	}
+	redeemStorageCredentials(ctx, s, response.CredentialOffers)
 	if err = applyResponse(s, response); err != nil {
 		return persistenceError{fmt.Errorf("persist commands: %w", err)}
 	}
@@ -387,17 +385,28 @@ func confirmPoolVMUpdateOutcomes(ctx context.Context, s *Store, outcomes []proto
 	// trip. Older interrupted revisions cannot be confirmed against the current
 	// master definition and remain honestly uncertain without delaying reports.
 	candidates := make(map[string]int)
+	specs := make(map[string]*protocol.VMCreateSpec)
 	for i := range outcomes {
 		outcome := &outcomes[i]
-		if outcome.Kind != "vm-update" || (outcome.Status != "succeeded" && outcome.Status != "failed") {
+		if outcome.Kind != "vm-update" {
 			continue
 		}
 		entry, ok := s.State.Journal[outcome.OperationID]
-		if !ok || entry.Command == nil || entry.Command.Kind != "vm-update" || entry.Command.VM == nil {
+		if ok && entry.Command != nil && entry.Command.Kind == "vm-media" {
+			// A console media change applied as an update (BUG-0185) is the Controller's
+			// vm-media operation; it only accepts outcomes under that kind.
+			outcome.Kind = "vm-media"
+		}
+		if outcome.Status != "succeeded" && outcome.Status != "failed" {
+			continue
+		}
+		spec := poolVMUpdateSpec(s, entry)
+		if !ok || spec == nil {
 			outcome.Status = "needs_attention"
 			outcome.Error = "local VM update requires pool owner confirmation"
 			continue
 		}
+		specs[outcome.OperationID] = spec
 		// A terminal local result was already reported only after this same
 		// confirmation. Re-checking it would incorrectly turn an older completed
 		// revision into uncertainty after a later legitimate update.
@@ -408,15 +417,15 @@ func confirmPoolVMUpdateOutcomes(ctx context.Context, s *Store, outcomes []proto
 		// already-read storage projection plus read-only update evidence to
 		// recognize an update that removed its last shared disk without adding a
 		// new native observation to the report path.
-		shared := vmUsesPoolSharedStorage(*entry.Command.VM, storage)
+		shared := vmUsesPoolSharedStorage(*spec, storage)
 		var failedEvidence *vmhost.VMUpdateEvidence
 		if outcome.Status == "succeeded" {
-			evidence, err := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).SuccessfulVMUpdateEvidence(ctx, entry.Command.VM.ID)
-			if err == nil && reflect.DeepEqual(evidence.Current, *entry.Command.VM) {
+			evidence, err := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).SuccessfulVMUpdateEvidence(ctx, spec.ID)
+			if err == nil && reflect.DeepEqual(evidence.Current, *spec) {
 				shared = shared || vmUsesPoolSharedStorage(evidence.Previous, storage)
 			}
 		} else {
-			evidence, err := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).FailedVMUpdateEvidence(ctx, entry.Command.VM.ID, outcome.OperationID, *entry.Command.VM)
+			evidence, err := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).FailedVMUpdateEvidence(ctx, spec.ID, outcome.OperationID, *spec)
 			if err == nil {
 				failedEvidence = &evidence
 				shared = shared || vmUsesPoolSharedStorage(evidence.Previous, storage)
@@ -426,7 +435,7 @@ func confirmPoolVMUpdateOutcomes(ctx context.Context, s *Store, outcomes []proto
 			continue
 		}
 		if outcome.Status == "failed" {
-			if failedEvidence == nil || poolVMUpdateRequestPeer(ctx, s, entry.Command.VM.ID, "update-abort", outcome.OperationID, nil, nil, failedEvidence) != nil {
+			if failedEvidence == nil || poolVMUpdateRequestPeer(ctx, s, spec.ID, "update-abort", outcome.OperationID, nil, nil, failedEvidence) != nil {
 				outcome.Status = "needs_attention"
 				outcome.Error = "local VM update failure is pending pool owner confirmation"
 				continue
@@ -435,20 +444,19 @@ func confirmPoolVMUpdateOutcomes(ctx context.Context, s *Store, outcomes []proto
 			s.State.Journal[outcome.OperationID] = entry
 			continue
 		}
-		if prior, ok := candidates[entry.Command.VM.ID]; ok {
-			priorEntry := s.State.Journal[outcomes[prior].OperationID]
-			if priorEntry.Command.VM.Revision >= entry.Command.VM.Revision {
+		if prior, ok := candidates[spec.ID]; ok {
+			if specs[outcomes[prior].OperationID].Revision >= spec.Revision {
 				outcome.Status, outcome.Error = "needs_attention", "local VM update requires pool owner confirmation"
 				continue
 			}
 			outcomes[prior].Status, outcomes[prior].Error = "needs_attention", "local VM update requires pool owner confirmation"
 		}
-		candidates[entry.Command.VM.ID] = i
+		candidates[spec.ID] = i
 	}
 	for _, i := range candidates {
 		outcome := &outcomes[i]
-		entry := s.State.Journal[outcome.OperationID]
-		if err := poolVMRequestPeer(ctx, s, entry.Command.VM.ID, "define", nil, false, entry.Command.VM, nil); err != nil {
+		entry, spec := s.State.Journal[outcome.OperationID], specs[outcome.OperationID]
+		if err := poolVMRequestPeer(ctx, s, spec.ID, "define", nil, false, spec, nil); err != nil {
 			outcome.Status = "needs_attention"
 			outcome.Error = "local VM update succeeded but pool owner confirmation is pending"
 			continue
@@ -457,6 +465,25 @@ func confirmPoolVMUpdateOutcomes(ctx context.Context, s *Store, outcomes []proto
 		s.State.Journal[outcome.OperationID] = entry
 	}
 	return outcomes
+}
+
+// poolVMUpdateSpec returns the definition a local vm-update outcome must confirm. A shared
+// VM media change is journaled here as vm-media but executed by the managed engine as a
+// vm-update under the same operation ID (PoolVMMediaCommand); only that exact rewritten
+// transition for the same VM is accepted, and the agent journal command is never rewritten.
+func poolVMUpdateSpec(s *Store, entry JournalEntry) *protocol.VMCreateSpec {
+	switch {
+	case entry.Command == nil:
+		return nil
+	case entry.Command.Kind == "vm-update":
+		return entry.Command.VM
+	case entry.Command.Kind == "vm-media" && entry.Command.VMMedia != nil:
+		managed, ok := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).JournaledCommand(entry.Command.OperationID)
+		if ok && managed.Kind == "vm-update" && managed.VM != nil && managed.VM.ID == entry.Command.VMMedia.VMID {
+			return managed.VM
+		}
+	}
+	return nil
 }
 
 func vmUsesPoolSharedStorage(vm protocol.VMCreateSpec, storage []protocol.StorageRegistration) bool {
