@@ -1,0 +1,35 @@
+{
+  "summary": "Fix BUG-0186: the matched dlm-controld image used BuildKit-only COPY --chmod, so an ISO build on a Docker install without buildx failed after the appliance and Core package were already rebuilt. Plain COPY plus RUN chmod builds on both builders, and a check rejects BuildKit-only syntax in any Dockerfile. API impact: none.",
+  "paths": [
+    "packaging/cluster-storage/Dockerfile",
+    "tests/test_storage_packaging.py",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/iso/2026-09-15-core-0.2.3-build.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Build-tooling portability inside the release build; no operator workflow, GUI, CLI or installer behaviour changes, and the produced image is unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core or client-facing contract is involved: this changes how one build container copies a script, not any endpoint, command, event or schema.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "A build fix; no published milestone scope or completion status changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Build tooling only; it creates and stores no durable product state."
+  },
+  "verification": {
+    "method": "Reproduced by building the 0.2.3 ISO locally: the first run failed with 'the --chmod option requires BuildKit' after the appliance and Core package rebuild; with the fix, bash installer/build.sh completed and produced dist/nex-core-0.2.3-amd64.iso. The new check failed on the old Dockerfile and passes with the fix. Disposable QEMU boot-menu smoke and installer/check.sh passed; no installation, hardware, Secure Boot or hosted CI run is claimed.",
+    "evidence": [
+      "docs/qa/iso/2026-09-15-core-0.2.3-build.md",
+      "tests/test_storage_packaging.py",
+      "packaging/cluster-storage/Dockerfile"
+    ]
+  }
+}
