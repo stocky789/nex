@@ -6,12 +6,25 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.2.3` →
-> Debian `0.2.3`).
+> development software. Builds use the newest numbered changelog heading (`0.2.4` →
+> Debian `0.2.4`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.2.4] — 2026-09-15
+
+### Bug Fixes
+
+- Software updates work again on a host that has storage registered. Updating Nex Core or a
+  Controller failed after the download with *refusing APT downgrade while version-2 storage
+  state is retained*, even though the new package was newer and carried the required marker:
+  the safeguard misread the package manager's own install steps. Downgrades to a package
+  without that marker are still refused (BUG-0187).
+- Updating past this needs the fixed safeguard on the host first. A host still on 0.2.3 or
+  earlier shows the same message until it is reinstalled, or the hook is moved aside for one
+  upgrade as described in the software updates guide.
 
 ## [0.2.3] — 2026-09-15
 

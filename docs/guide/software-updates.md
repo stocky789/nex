@@ -54,6 +54,23 @@ Controller host page **Version** field; that package version is the only Nex Cor
   **Check** to read the host's current state.
 - If Core shows Installing after the service is already back, refresh **Updates**; completed
   installs clear themselves once the installed version matches available.
+- **"refusing APT downgrade while version-2 storage state is retained"** on a host that is
+  upgrading, not downgrading: that host still has the release whose downgrade guard read APT's
+  configure step as an unidentified package. The guard that runs is the installed one, so the
+  fixed package cannot install past it. On the host, move the hook aside, upgrade, and let the
+  new package restore it:
+
+  ```sh
+  sudo mv /etc/apt/apt.conf.d/91nex-core-storage-downgrade /root/
+  sudo apt update && sudo apt install --only-upgrade nex-core-local
+  ls /etc/apt/apt.conf.d/91nex-core-storage-downgrade
+  ```
+
+  The last command must list the file again: the new package writes it back, so the protection
+  against a real downgrade returns. A Controller VM shows the same message for
+  `nex-controller`; move `/etc/apt/apt.conf.d/91nex-controller-storage-downgrade` instead.
+  Do not remove `nex-core-local` to work around it: the guard deliberately refuses removal while
+  storage state exists.
 
 ## Verification
 

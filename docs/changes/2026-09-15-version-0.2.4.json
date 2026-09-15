@@ -1,0 +1,37 @@
+{
+  "summary": "Bump the release version to 0.2.4 so the APT downgrade-guard fix (BUG-0187) can reach hosts, and record it in the changelog with the note that a host still carrying the broken guard needs the documented recovery or a reinstall first. The release was built and published to the signed APT archive and the download tree. API impact: none; release metadata only.",
+  "paths": [
+    "CHANGELOG.md",
+    "tests/test_release_version.py",
+    "docs/changes/2026-09-15-version-0.2.4.json",
+    "docs/qa/iso/2026-09-15-core-0.2.4-build.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Release version and notes only. The operator recovery this release refers to is documented with the fix itself, in the software updates guide.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Builds consume the existing changelog version resolver; no client-facing API, Controller operation, Core command or observed-state contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Release metadata only.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Release metadata does not create runtime state."
+  },
+  "verification": {
+    "method": "scripts/release-version.py --current --format both resolves '0.2.4 0.2.4'; release-version unit tests pass. The release was then built and published: both packages carry the corrected downgrade guard and their storage-format-v2 markers, the guard as shipped in 0.2.3 refuses the real 0.2.4 package while the corrected one accepts it, and the package downloaded back from the public archive matches the built digest and contains the fix. No live host was upgraded and no ISO boot test was run for this version.",
+    "evidence": [
+      "docs/qa/iso/2026-09-15-core-0.2.4-build.md",
+      "scripts/release-version.py",
+      "tests/test_release_version.py",
+      "CHANGELOG.md"
+    ]
+  }
+}

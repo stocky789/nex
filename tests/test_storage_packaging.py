@@ -361,6 +361,24 @@ echo "live=$apparmor_live"
             (journals / "storage.json").write_text('{"command":{"storage":{"kind":"nfs"}}}')
             self.assertNotEqual(guard_result("--core", "/legacy.deb").returncode, 0)
             self.assertEqual(guard_result("--core", "/v2.deb").returncode, 0)
+            # Real APT sends one line per dpkg action: the unpack names the .deb and the
+            # matching configure of the same package carries **CONFIGURE**, with a removal
+            # carrying **REMOVE**. Captured from apt 3.0 on Debian 13; reading those pseudo
+            # filenames as an undetermined archive refused every upgrade on a host with
+            # storage state, which is the whole built-in updater.
+            def apt_hook(*actions):
+                lines = "".join(f"nex-core-local 0.2.2 amd64 none < 0.2.3 amd64 none {action}\n"
+                                for action in actions)
+                return subprocess.run([sys.executable, str(guard), "--core"],
+                                      input="VERSION 3\nAPT::Architecture=amd64\n\n" + lines,
+                                      text=True, capture_output=True, env=env)
+            upgrade = apt_hook("/v2.deb", "**CONFIGURE**")
+            self.assertEqual(upgrade.returncode, 0, upgrade.stderr)
+            self.assertEqual(apt_hook("**REMOVE**").returncode, 0)
+            # The protection itself must survive: the archive line still decides.
+            self.assertNotEqual(apt_hook("/legacy.deb", "**CONFIGURE**").returncode, 0)
+            # An action naming neither an archive nor a known pseudo-file stays fail-closed.
+            self.assertNotEqual(apt_hook("**SOMETHING-NEW**").returncode, 0)
             receipt = root / "var/lib/nex-core-agent/storage-credentials/receipt.json"
             receipt.parent.mkdir(parents=True)
             receipt.write_text('{}')

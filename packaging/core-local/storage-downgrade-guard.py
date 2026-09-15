@@ -67,16 +67,27 @@ def controller_has_v2_core(root):
         return True
 
 
+# APT names one line per dpkg action. The unpack line carries the .deb it is about to
+# install; the matching configure of that same package, and a removal, carry these
+# pseudo-filenames instead. They install no archive, so they are not a downgrade, and
+# refusing them blocked every upgrade on a host with storage state.
+APT_PSEUDO_FILES = ('**CONFIGURE**', '**REMOVE**')
+
+
 def target_archives(package):
     for line in sys.stdin:
         fields = line.split()
         if not fields or fields[0].split(':', 1)[0] != package:
+            continue
+        if fields[-1] in APT_PSEUDO_FILES:
             continue
         for field in reversed(fields[1:]):
             if field.endswith('.deb'):
                 yield field
                 break
         else:
+            # A line naming neither an archive nor a known pseudo-action is not
+            # understood; refuse rather than guess what is being installed.
             yield ''
 
 
