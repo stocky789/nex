@@ -13,5 +13,9 @@ RUN printf '%s\n' '#!/bin/sh' 'exit 101' > /usr/sbin/policy-rc.d \
  && dpkg-query -W -f='${Version}\n' pacemaker-dev | grep -Fx 3.0.0-2 \
  && rm -rf /var/lib/apt/lists/*
 
-COPY --chmod=755 build-matched-dlm.sh /usr/local/bin/build-matched-dlm
+# COPY --chmod is BuildKit-only syntax; a Docker install without buildx falls back to the
+# legacy builder and fails the ISO build here, after the appliance and Core package are
+# already rebuilt. Both builders take a plain COPY and a chmod.
+COPY build-matched-dlm.sh /usr/local/bin/build-matched-dlm
+RUN chmod 755 /usr/local/bin/build-matched-dlm
 ENTRYPOINT ["/usr/local/bin/build-matched-dlm"]

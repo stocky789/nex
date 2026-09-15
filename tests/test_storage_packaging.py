@@ -87,6 +87,12 @@ class StoragePackagingTests(unittest.TestCase):
         self.assertIn('rm -f "$stage/nex/repo"/dlm-controld_*.deb', build)
         self.assertIn('APT closure libstonithd56 does not match', build)
         self.assertIn('dlm-pacemaker-abi', late_install)
+        # BuildKit-only syntax breaks an ISO build on a Docker install without buildx, and
+        # only after the appliance and Core package have already been rebuilt.
+        for name in sorted(p.relative_to(ROOT).as_posix() for p in ROOT.glob('**/Dockerfile*')
+                           if 'node_modules' not in p.parts):
+            self.assertNotRegex((ROOT / name).read_text(), r'(?m)^(COPY|ADD|RUN)\s+--(chmod|chown|link|mount)',
+                                f'{name} needs BuildKit; the legacy builder cannot run it')
 
     def test_installer_and_local_core_include_native_storage_clients(self):
         installer = set((ROOT / "installer/packages.txt").read_text().split())
