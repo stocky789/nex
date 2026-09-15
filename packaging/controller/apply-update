@@ -11,12 +11,17 @@ reports progress back to the web UI.
 import json
 import os
 from pathlib import Path
+import re
+import stat
 import subprocess
 import sys
 import time
 
 STATE = Path('/var/lib/nex-controller')
 PENDING = Path('/var/lib/nex-controller/pending-update.json')
+# A consumed request stays visible to postinst (which must not restart the service mid-dpkg)
+# under a name the path unit does not watch.
+APPLYING = Path('/var/lib/nex-controller/applying-update.json')
 PROGRESS = STATE / 'update-progress.json'
 DEFAULT_REPO = 'https://nexvirtualization.com/apt'
 SERVICE = 'nex-controller.service'
@@ -47,7 +52,14 @@ def normalize_repo(repo):
 
 
 def fail(message):
-    write_progress('failed', 0, error=message)
+    try:
+        APPLYING.unlink(missing_ok=True)
+    except OSError:
+        pass
+    try:
+        write_progress('failed', 0, error=message)
+    except OSError:
+        pass
     print(message, file=sys.stderr)
     sys.exit(1)
 
@@ -64,18 +76,64 @@ def write_progress(phase, percent, message='', error=''):
         payload['message'] = message
     if error:
         payload['error'] = error
+    data = (json.dumps(payload) + '\n').encode()
     tmp = PROGRESS.with_suffix('.tmp')
-    tmp.write_text(json.dumps(payload) + '\n')
-    os.chmod(tmp, 0o600)
-    tmp.replace(PROGRESS)
+    # Root writes into a directory the Controller user can write: never follow or reuse a path
+    # it could plant, or root would overwrite (and hand over) any file a symlink points at.
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        # The Controller reads progress as the state directory's owner, not as root.
+        owner = os.stat(STATE, follow_symlinks=False)
+        os.fchown(fd, owner.st_uid, owner.st_gid)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, PROGRESS)
 
 
 def load_pending():
-    if not PENDING.is_file():
+    # Consume the request before reading or acting on it. The path unit also fires on
+    # PathExists=, so a request left behind by any failure would re-run this helper until
+    # systemd's start limit disables the path unit and every later Update click is ignored
+    # (BUG-0193). postinst still sees the renamed marker while this helper runs.
+    try:
+        PENDING.replace(APPLYING)
+    except FileNotFoundError:
         fail('no pending update')
-    data = json.loads(PENDING.read_text())
-    package = data.get('package') or 'nex-controller'
-    repo = normalize_repo(data.get('repo_url') or DEFAULT_REPO)
+    except OSError as error:
+        try:
+            PENDING.unlink(missing_ok=True)
+        except OSError:
+            pass
+        fail(f'invalid pending update request: {error}')
+    try:
+        # The Controller user can write this file: never follow a link or block on a FIFO.
+        fd = os.open(APPLYING, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ValueError('request is not a regular file')
+            raw = os.read(fd, 65537)
+        finally:
+            os.close(fd)
+        if len(raw) > 65536:
+            raise ValueError('request is too large')
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError('request is not an object')
+        package = data.get('package') or 'nex-controller'
+        repo = data.get('repo_url') or DEFAULT_REPO
+        # Root copies these into the APT source and apt-get arguments.
+        if package != 'nex-controller':
+            raise ValueError('only nex-controller can be updated')
+        if not isinstance(repo, str) or not re.fullmatch(r'https?://[^\s\x00-\x1f\x7f]+', repo):
+            raise ValueError('repo_url must be an http(s) URL without whitespace or control characters')
+    except (OSError, ValueError) as error:
+        fail(f'invalid pending update request: {error}')
+    repo = normalize_repo(repo)
     conf = Path('/etc/nex/updates.conf')
     try:
         conf.parent.mkdir(parents=True, exist_ok=True)
@@ -172,9 +230,22 @@ def main():
 
     write_progress('restarting', 98, message='Restarting service')
     ensure_service_running()
+    APPLYING.unlink(missing_ok=True)
+    # A click made while this run applied is satisfied by it; left in place it would re-run
+    # the helper and replace "Update complete" with "no newer … available".
     PENDING.unlink(missing_ok=True)
     write_progress('done', 100, message='Update complete')
 
 
+def run_helper():
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as error:
+        # An unexpected error must still release the request and bring the service back.
+        restart_then_fail(f'update helper error: {error}')
+
+
 if __name__ == '__main__':
-    main()
+    run_helper()

@@ -6,12 +6,26 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.2.5` →
-> Debian `0.2.5`).
+> development software. Builds use the newest numbered changelog heading (`0.2.6` →
+> Debian `0.2.6`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.2.6] — 2026-09-15
+
+### Minor Feature
+
+- Stopped VMs show muted in the **Resources** tree so they are easier to tell apart from running ones.
+
+### Bug Fixes
+
+- Updating the Nex Controller from **Updates** no longer gets stuck on *Update requested…* after an
+  earlier update attempt failed. A failed update used to leave its request behind, so the update
+  service retried in a loop until the system stopped starting it and ignored every later click;
+  the failure and its message now also show on the page. A Controller already stuck needs a short
+  manual upgrade first, described in the software updates guide (BUG-0193).
 
 ## [0.2.5] — 2026-09-15
 

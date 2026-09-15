@@ -73,7 +73,8 @@ under [Troubleshooting](#troubleshooting)). Use a private management network or 
    control shows only the selected site. The resource tree starts with that site's pools,
    and **Site overview** opens the selected site. A site without hosts shows
    **Add your first host** with an **Add host** button.
-   Pools contain hosts and VMs; the pool master host is suffixed **· master** in the tree. Expand or collapse pools using their arrows;
+   Pools contain hosts and VMs; the pool master host is suffixed **· master** in the tree.
+   Stopped VMs appear muted in the tree. Expand or collapse pools using their arrows;
    select a resource name to open it. **Search resources** filters within the selected
    site. Opening a direct pool, host or VM link selects its owning site automatically.
    Clear a search to restore its choices; switching sites changes the tree's scope.

@@ -46,6 +46,19 @@ Controller host page **Version** field; that package version is the only Nex Cor
 - "No newer … available" means apt found nothing to upgrade; the installed version is
   already the candidate.
 - Controller applies updates through a privileged helper; its update path unit must be enabled.
+- **Controller stays on `Update requested…`:** the update helper is not being started. On a
+  Controller running 0.2.5 or earlier, one failed update left its request behind and the retries
+  stopped the update trigger for good. That helper is also the one that runs your next update,
+  so upgrade the package directly on the Controller VM instead of selecting **Update** again:
+
+  ```sh
+  sudo rm -f /var/lib/nex-controller/pending-update.json
+  sudo systemctl reset-failed nex-controller-update.path nex-controller-update.service
+  sudo apt update && sudo apt install --only-upgrade nex-controller
+  ```
+
+  From 0.2.6 a failed update releases its request, reports apt's message on the page and never
+  stops the trigger, and installing the package clears a stuck request or trigger by itself.
 - Appliance images and new Core deploys include the update helper so **Update** works
   after deploy. Older Controller VMs without that helper need a redeploy (or a one-time
   `nex-controller` package install).

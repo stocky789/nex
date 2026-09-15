@@ -1,0 +1,39 @@
+{
+  "summary": "The Controller update helper consumes each GUI update request before reading it, reads it without following links or blocking and accepts only nex-controller from an http(s) URL without control characters, releases it on every failure including unexpected errors, writes progress through a symlink-safe file handed to the Controller's user, and clears requests queued during a successful apply; postinst restarts the service unless the helper is running, clears stale requests and their progress text, and resets a start-limited update path unit, so one failed update no longer wedges every later update (BUG-0193). API impact: none \u2014 the updates API and pending request format are unchanged.",
+  "paths": [
+    "packaging/controller/apply-update",
+    "packaging/controller/postinst",
+    "tests/test_distribution_packaging.py",
+    "docs/guide/software-updates.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-15-controller-update-wedge.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Software updates guide explains the stuck 'Update requested\u2026' state and the one-time recovery for Controllers on 0.2.5 or earlier.",
+    "pages": [
+      "docs/guide/software-updates.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. GET /api/v1/updates and POST /api/v1/updates/apply are unchanged; the Controller still writes the same pending-update.json; only the root helper's handling and file ownership change.",
+    "pages": [],
+    "contracts": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fix in the existing Controller update path."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No product state added; the request, marker and progress files are transient update plumbing on the Controller VM."
+  },
+  "verification": {
+    "method": "python3 -m unittest discover -s tests -p 'test_*.py' (each new test in ControllerUpdateHelperRecoveryTests failed against the unfixed helper or an earlier draft). Native, disposable Debian systemd VM: the published 0.2.5 package wedged as reported; the final 0.2.6 package cleared the wedge on install, rejected an injected repo_url without touching the APT source, and ran a normal failing request exactly once with the path unit staying active and readable progress; the preceding 0.2.6 build showed a planted symlink not followed and a stale marker cleared by reinstall.",
+    "evidence": [
+      "tests/test_distribution_packaging.py"
+    ]
+  }
+}

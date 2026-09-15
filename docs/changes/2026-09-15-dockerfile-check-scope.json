@@ -1,0 +1,32 @@
+{
+  "summary": "Limit the BuildKit-only Dockerfile check to repository Dockerfiles, skipping untracked scratch and output trees (.cache, .git, dist, vendor, node_modules), so a stale extracted source copy cannot fail it (BUG-0194). API impact: none \u2014 test-only.",
+  "paths": [
+    "tests/test_storage_packaging.py",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-15-dockerfile-check-scope.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Test-only change; no operator behaviour."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Only a repository check's file selection changes.",
+    "pages": [],
+    "contracts": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Test hygiene fix."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No product state."
+  },
+  "verification": {
+    "method": "The test passes with the stale .cache copy present and still fails for a temporary tracked Dockerfile using COPY --chmod; full python unittest discovery.",
+    "evidence": [
+      "tests/test_storage_packaging.py"
+    ]
+  }
+}

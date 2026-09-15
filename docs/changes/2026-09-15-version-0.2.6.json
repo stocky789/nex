@@ -1,0 +1,32 @@
+{
+  "summary": "Bump the release version to 0.2.6 so the Controller update wedge fix (BUG-0193) reaches Controllers; 0.2.5 is already published. API impact: none; release metadata only.",
+  "paths": [
+    "CHANGELOG.md",
+    "tests/test_release_version.py",
+    "docs/changes/2026-09-15-version-0.2.6.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Release version and notes only; the fix carries its own guide update."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Release metadata only; no Controller, Core or client contract changes.",
+    "pages": [],
+    "contracts": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Patch release; no milestone or acceptance gate change."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state; the version is derived from the git tag and the newest CHANGELOG heading."
+  },
+  "verification": {
+    "method": "python3 -m unittest discover -s tests -p 'test_release_version.py' (newest heading resolves to 0.2.5); python3 scripts/check_docs.py --worktree; privacy unittest. Tagging, building and publishing are left to the project owner.",
+    "evidence": [
+      "tests/test_release_version.py"
+    ]
+  }
+}

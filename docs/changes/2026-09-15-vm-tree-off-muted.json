@@ -1,0 +1,39 @@
+{
+  "summary": "Mute stopped VMs in the Resources tree (grey label and icon when observed shut off). API impact: none; display-only use of existing VM state/freshness.",
+  "paths": [
+    "web/src/main.tsx",
+    "web/src/style.css",
+    "docs/guide/manage-controller.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-15-vm-tree-off-muted.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "manage-controller.md notes that stopped VMs appear muted in the Resources tree.",
+    "pages": [
+      "docs/guide/manage-controller.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. UI only dims existing observed state (shut off + fresh); no Controller/Core contract change.",
+    "pages": [],
+    "contracts": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Cosmetic Resources-tree cue; no milestone scope change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable state; greying uses host-reported VM state already shown elsewhere."
+  },
+  "verification": {
+    "method": "Inspect Resources tree markup/CSS for vm-off when freshness is fresh and state is shut off; python3 scripts/check_docs.py --worktree.",
+    "evidence": [
+      "web/src/main.tsx",
+      "web/src/style.css"
+    ]
+  }
+}

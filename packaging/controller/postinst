@@ -44,11 +44,19 @@ APT
     deb-systemd-helper enable nex-controller-update.path
     if [ -d /run/systemd/system ]; then
         systemctl daemon-reload
-        # Do not restart here during apply-update; the helper starts after dpkg.
-        # First installs and manual dpkg still need the service up.
-        if [ ! -f /var/lib/nex-controller/pending-update.json ]; then
+        # A running update helper restarts the service itself after dpkg. Without a running
+        # helper (first install, manual apt, or a helper that was killed), any update request
+        # or marker is stale: this install supersedes it, and leaving it would make the path
+        # unit start the helper under this apt transaction (BUG-0193).
+        helper_state=$(systemctl show -p ActiveState --value nex-controller-update.service 2>/dev/null || true)
+        if [ "$helper_state" != activating ] && [ "$helper_state" != active ]; then
+            if [ -e /var/lib/nex-controller/pending-update.json ] || [ -e /var/lib/nex-controller/applying-update.json ]; then
+                rm -f /var/lib/nex-controller/pending-update.json /var/lib/nex-controller/applying-update.json /var/lib/nex-controller/update-progress.json
+            fi
             deb-systemd-invoke restart nex-controller.service || true
         fi
+        # A path unit that hit its start limit refuses start until reset (BUG-0193).
+        systemctl reset-failed nex-controller-update.path nex-controller-update.service 2>/dev/null || true
         deb-systemd-invoke start nex-controller-update.path || true
     fi
 fi

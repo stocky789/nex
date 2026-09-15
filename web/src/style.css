@@ -166,6 +166,9 @@ aside nav a.selected { background: #d4e3ff; border-color: #7ea6ff; color: #10306
 .tree-branch > summary .tree-node { display: inline-flex; flex: 1; min-width: 0; }
 .tree { margin-left: 10px; padding-left: 4px; border-left: 1px dotted #b7bdc5; }
 .tree .host-link { font-size: 12px; }
+.tree .host-link.vm-off { color: #8a8f96; }
+.tree .host-link.vm-off .resource-icon { filter: grayscale(1); opacity: .55; }
+.tree .host-link.vm-off.selected { color: #5a6a88; }
 .sidebar-foot { margin-top: auto; padding: 12px 10px; border-top: 1px solid #ddd; color: var(--muted); }
 .sidebar-foot p { margin: 5px 0 10px; font-size: 12px; }
 .sidebar-foot a { display: flex; align-items: center; gap: 6px; padding: 5px; font-size: 12px; margin-top: 2px; }

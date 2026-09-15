@@ -89,8 +89,11 @@ class StoragePackagingTests(unittest.TestCase):
         self.assertIn('dlm-pacemaker-abi', late_install)
         # BuildKit-only syntax breaks an ISO build on a Docker install without buildx, and
         # only after the appliance and Core package have already been rebuilt.
+        # Only repository Dockerfiles: untracked scratch trees (old extracted sources under
+        # .cache, build output, vendored modules) are not what an ISO build uses (BUG-0194).
+        skip = {'.cache', '.git', 'dist', 'vendor'}
         for name in sorted(p.relative_to(ROOT).as_posix() for p in ROOT.glob('**/Dockerfile*')
-                           if 'node_modules' not in p.parts):
+                           if 'node_modules' not in p.parts and p.relative_to(ROOT).parts[0] not in skip):
             self.assertNotRegex((ROOT / name).read_text(), r'(?m)^(COPY|ADD|RUN)\s+--(chmod|chown|link|mount)',
                                 f'{name} needs BuildKit; the legacy builder cannot run it')
 
