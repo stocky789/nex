@@ -270,7 +270,7 @@ export function VMDetails({ vm, hosts, storage, networks, media, api, reload, bu
   const host = hosts.find(h => h.id === vm.host_id);
   const [editing, setEditing] = useState(false);
   const blocker = editBlocker(vm, host);
-  return <><section className="panel"><div className="section-heading"><h2>VM details</h2><span className="actions">{status(vm.freshness)}{!editing && <button type="button" disabled={busy || unavailable || Boolean(blocker)} title={blocker || undefined} onClick={() => setEditing(true)}>Edit</button>}</span></div>
+  return <><section className="panel"><div className="section-heading"><h2>VM details</h2><span className="actions">{status(vm.freshness)}{!editing && <button type="button" disabled={busy || unavailable || Boolean(blocker)} title={blocker || undefined} onClick={() => setEditing(true)}>Edit</button>}{!editing && <VMDelete vm={vm} host={host} api={api} reload={reload} busy={busy} unavailable={unavailable} onNotice={onNotice} />}</span></div>
     {vm.freshness !== "fresh" && <p className="warning">Current execution state is unknown. Last reported state: {vm.state || "unknown"}. An unreachable host does not prove that this VM stopped.</p>}
     {editing && spec ? <VMEditor vm={vm} host={host} poolName={host?.hostname || ""} storage={storage} networks={networks} media={media} api={api} reload={reload} unavailable={unavailable} onNotice={onNotice} onClose={() => setEditing(false)} /> : <dl className="details"><dt>VM identity</dt><dd>{vm.id}</dd><dt>Assigned host</dt><dd><a href={`#/hosts/${vm.host_id}`}>{hosts.find(h => h.id === vm.host_id)?.hostname || vm.host_id}</a></dd><dt>Observed state</dt><dd>{vm.state || "unknown"}</dd><dt>Role</dt><dd>{vm.protected ? "Protected Controller appliance" : "Guest VM"}</dd>{spec && <>{spec.description && <><dt>Description</dt><dd>{spec.description}</dd></>}<dt>Guest OS</dt><dd>{guestNames[spec.guest_os] || "Not recorded"}</dd><dt>Virtual CPUs</dt><dd>{spec.cpu.count}<small>{topology(spec.cpu)} · {cpuNames[spec.cpu.model] || spec.cpu.model}</small></dd><dt>Memory</dt><dd>{spec.memory.size_mib} MiB<small>{spec.memory.mode === "dedicated" ? "Dedicated configured · locks host RAM while running on updated Nex Core. Existing VMs: upgrade Core, stop, then Edit → Save changes. Capacity stays committed when stopped." : "Maximum · a ceiling only; free pages return to the host when the guest reports them"}</small></dd><dt>Disks</dt><dd>{spec.disks?.length ? <ul className="plain">{spec.disks.map((d, i) => <li key={i}>{d.name} · {d.size_gib} GiB · {busNames[d.bus] || d.bus} · {d.thin ? "Thin" : "Thick"}{d.boot_order > 0 ? ` · boot ${d.boot_order}` : ""}<small>{storage.find(s => s.id === d.storage_id)?.name || d.storage_id}</small></li>)}</ul> : "None recorded"}</dd><dt>Networks</dt><dd>{spec.nics?.length ? <ul className="plain">{spec.nics.map((n, i) => <li key={i}>{networks.find(x => x.id === n.network_id)?.name || n.network_id} · {adapterNames[n.model] || n.model}{n.mtu ? ` · MTU ${n.mtu}` : ""}<small className="mono">{n.mac || "MAC derived from the VM identity"}</small></li>)}</ul> : "None"}</dd><dt>Install ISO</dt><dd>{spec.media_id ? media.find(m => m.id === spec.media_id)?.name || spec.media_id : "None · CD drive empty"}{spec.boot.media_boot_order > 0 && <small>CD drive boot order {spec.boot.media_boot_order}</small>}</dd><dt>Firmware</dt><dd>{spec.boot.firmware?.toUpperCase()}<small>Machine type {spec.boot.machine || "q35"}</small></dd><dt>Autostart</dt><dd>{spec.autostart ? "Starts when the host boots" : "Does not start when the host boots"}</dd></>}{vm.operation_id && <><dt>Creation task</dt><dd>{task(vm)}</dd></>}</dl>}
     {!vm.protected && !editing && <p className="panel-note">Creation provisions a stopped VM. Use Start in the toolbar to start it, then open the Console tab. Select Edit to change the VM; changes a running guest can take apply while it runs.</p>}
@@ -358,7 +358,7 @@ export function HostISOs({ host, media, storage, unavailable }: { host: Host; me
   </section>;
 }
 
-const powerActions = [
+export const powerActions = [
   { action: "start", label: "Start", icon: "start", when: (state: string) => state === "shut off", confirm: "" },
   { action: "shutdown", label: "Shut down", icon: "shutdown", when: (state: string) => state === "running", confirm: "Asks the guest to shut down (ACPI). A guest without ACPI support ignores it; use Force stop if it stays running." },
   { action: "reboot", label: "Reboot", icon: "reboot", when: (state: string) => state === "running", confirm: "Asks the guest to reboot (ACPI). A guest without ACPI support ignores it." },
@@ -427,4 +427,78 @@ export function VMPower({ vm, host, api, reload, busy, unavailable, onNotice, de
       </form>}
     </dialog>
   </div>;
+}
+
+export function deleteBlocker(vm: VM, host?: Host): string {
+  return vm.protected ? "The Controller appliance is managed from its host's local page, not deleted here."
+    : !host || host.revoked || host.connection !== "fresh" ? "Delete needs a freshly connected host."
+    : !host.capabilities?.includes("vm-delete-v1") ? "The host agent does not support deleting VMs; upgrade Nex Core."
+    : vm.freshness !== "fresh" ? "Current VM state is unknown; wait for a fresh host report."
+    : vm.state !== "shut off" ? "Stop the VM before deleting it."
+    : "";
+}
+
+// VMDelete confirms by typing the VM name and optionally wiping disk files on the host.
+export function VMDelete({ vm, host, api, reload, busy, unavailable, onNotice, openSignal, onOpenChange, showButton = true }: {
+  vm: VM; host?: Host; api: API; reload: () => Promise<void>; busy: boolean; unavailable: boolean;
+  onNotice: (text: string) => void; openSignal?: number; onOpenChange?: (open: boolean) => void; showButton?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [wipe, setWipe] = useState(false);
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+  const [working, setWorking] = useState(false);
+  const request = useRef("");
+  const dialog = useRef<HTMLDialogElement>(null);
+  const blocker = deleteBlocker(vm, host);
+  useEffect(() => {
+    if (openSignal && openSignal > 0) {
+      setError(""); setWipe(false); setName(""); setOpen(true);
+    }
+  }, [openSignal]);
+  useEffect(() => {
+    const element = dialog.current;
+    if (!element) return;
+    if (open && !element.open) element.showModal();
+    else if (!open && element.open) element.close();
+    onOpenChange?.(open);
+  }, [open, onOpenChange]);
+  async function submit() {
+    setWorking(true); setError("");
+    request.current ||= crypto.randomUUID();
+    try {
+      await api(`vms/${encodeURIComponent(vm.id)}`, "DELETE", { request_id: request.current, delete_disks: wipe });
+      request.current = "";
+      onNotice(`Delete queued for ${vm.name}. Follow its progress in Recent tasks.`);
+      setOpen(false);
+      if (location.hash === `#/vms/${vm.id}` || location.hash.startsWith(`#/console/${vm.id}`)) {
+        location.hash = `#/hosts/${vm.host_id}`;
+      }
+      await reload();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setWorking(false);
+    }
+  }
+  return <>
+    {showButton && <button type="button" className="danger" disabled={busy || working || unavailable || Boolean(blocker)} title={blocker || undefined}
+      onClick={() => { setError(""); setWipe(false); setName(""); setOpen(true); }}>Delete VM</button>}
+    <dialog ref={dialog} className="confirm-dialog" aria-labelledby="vm-delete-title" onCancel={e => { if (working) e.preventDefault(); }}
+      onClose={() => { setOpen(false); setError(""); setWipe(false); setName(""); }}>
+      {open && <form onSubmit={e => { e.preventDefault(); void submit(); }}>
+        <h2 id="vm-delete-title">Delete {vm.name}?</h2>
+        <p>Removes this VM from Nex and libvirt. Type the VM name to confirm.</p>
+        <label className="disk-wipe"><input type="checkbox" checked={wipe} onChange={e => setWipe(e.target.checked)} disabled={working} /> Permanently delete disks from storage</label>
+        <p className="help">{wipe ? "Disk files will be permanently removed from the host storage after the VM is undefined." : "Disk files stay on the host storage and are not deleted."}</p>
+        {error && <p className="task-error" role="alert">{error}</p>}
+        <label>VM name<input required autoFocus value={name} onChange={e => setName(e.target.value)} disabled={working}
+          pattern={vm.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} /></label>
+        <div className="actions">
+          <button type="button" disabled={working} onClick={() => setOpen(false)}>Cancel</button>
+          <button className="danger" disabled={working || name !== vm.name}>{working ? "Requesting…" : wipe ? "Delete VM and disks" : "Delete VM"}</button>
+        </div>
+      </form>}
+    </dialog>
+  </>;
 }

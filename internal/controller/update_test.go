@@ -17,11 +17,8 @@ func (l *managedLab) reportState(state string, managed *protocol.ManagedState, r
 	defaults := hostDefaults(l.host.HostID)
 	if managed != nil {
 		defaults.VMs = managed.VMs
-		for _, v := range managed.VMs {
-			inv_vm := protocol.VM{ID: v.ID, Name: v.Name, State: state}
-			defaults.MissingVMs = nil
-			_ = inv_vm
-		}
+		defaults.DeletedVMs = managed.DeletedVMs
+		defaults.MissingVMs = managed.MissingVMs
 	}
 	inv := &protocol.Inventory{ObservedAt: now, Hostname: "core", CPUCount: 8, CPUModels: []string{"Skylake-Server"}, MemoryBytes: 16 << 30, NICs: nics, Managed: defaults, Checks: []protocol.Check{{Name: "libvirt", Status: "healthy", ObservedAt: now}}}
 	for _, v := range defaults.VMs {

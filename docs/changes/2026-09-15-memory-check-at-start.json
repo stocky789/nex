@@ -1,0 +1,50 @@
+{
+  "summary": "Move the current-available-memory check (ceiling plus 2 GiB host reserve) from VM creation and stopped edits to starting a VM, so a VM that cannot start yet can still be created; every Core start (manual start, start_after_create, pool autostart) refuses before virsh start with a clear message (BUG-0195). API impact: changed contract \u2014 same requests and results; the available-memory refusal moved from vm-create and stopped vm-update to vm-power start and the automatic start after creation, with a new message.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/memory_start_test.go",
+    "docs/API.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/vm-power.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-15-memory-check-at-start.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Create VM and VM power guides explain that creation does not need the memory free, and what the start-time refusal means and how to resolve it.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/vm-power.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "API impact: changed contract. vm-create, vm-update and vm-power keep their requests, responses and authorization; the available-memory refusal moved from creation and stopped edits to starts, with the message 'insufficient available memory to start this VM including 2 GiB host reserve'. The Controller's total-memory check is unchanged.",
+    "pages": [
+      "docs/API.md"
+    ],
+    "contracts": [
+      "vm-create",
+      "vm-update",
+      "vm-power",
+      "POST /api/v1/vms",
+      "POST /api/v1/vms/{id}/power"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fix within existing VM capacity admission."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state added; the check reads the VM definition already in Core's managed journal and the host's current memory."
+  },
+  "verification": {
+    "method": "go test -race ./internal/vmhost ./internal/agent ./internal/controller with the four new memory tests (including an unresolved larger memory edit) (each failed against the previous code with only the test seams added); python3 scripts/generate_api.py --check. Native: disposable lab Core with 7508 MiB available of 7947 MiB \u2014 a 7691 MiB VM was created, its automatic and manual starts were refused with the new message while it stayed shut off, and a 512 MiB VM was created and started.",
+    "evidence": [
+      "internal/vmhost/memory_start_test.go"
+    ]
+  }
+}

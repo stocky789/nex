@@ -163,6 +163,27 @@ type VMCreateSpec struct {
 // UpdateCapability is reported by agents that apply vm-update commands.
 const UpdateCapability = "vm-update-v1"
 
+// DeleteCapability is reported by agents that apply vm-delete commands.
+const DeleteCapability = "vm-delete-v1"
+
+// VMDeleteRequest removes one managed VM definition from its assigned host. DeleteDisks
+// unlinks the guest disk files after undefine; when false the files are retained on storage.
+type VMDeleteRequest struct {
+	VMID        string `json:"vm_id"`
+	PoolID      string `json:"pool_id"`
+	HostID      string `json:"host_id"`
+	DeleteDisks bool   `json:"delete_disks"`
+}
+
+// VMTombstone tells Controllers a managed VM was intentionally deleted and should leave the
+// mirror. It is reported from Core's journal, not invented by Controller.
+type VMTombstone struct {
+	ID        string `json:"id"`
+	PoolID    string `json:"pool_id"`
+	HostID    string `json:"host_id"`
+	Tombstone bool   `json:"tombstone"`
+}
+
 // VMChange names one difference between two revisions that a running guest cannot take;
 // Core refuses the whole edit before any effect, and the form disables the field while running.
 func (c VMChange) Error() string { return "stop the VM first to change " + string(c) }

@@ -22,15 +22,17 @@ build**. Both are for local lab evaluation; the installer does not yet deliver a
 10. [Register resources and create a virtual machine](create-virtual-machine.md)
 11. [Edit a virtual machine](edit-virtual-machine.md)
    (change a VM in place on its General tab; live changes where the guest can take them).
-12. [Control VM power](vm-power.md)
-13. [Open a VM or host console](vm-console.md)
+12. [Delete a virtual machine](delete-virtual-machine.md)
+   (remove a stopped guest; keep or permanently delete disk files).
+13. [Control VM power](vm-power.md)
+14. [Open a VM or host console](vm-console.md)
    (toolbar with send keys, display scaling and resize, clipboard, typing, screenshots,
    CD/DVD insert/eject on VMs, and a Console tab on hosts).
-14. [Install guest tools and read guest information](guest-tools.md)
+15. [Install guest tools and read guest information](guest-tools.md)
    (QEMU guest agent and spice-vdagent; OS, hostname, addresses and clipboard readiness).
-15. [Check and apply software updates](software-updates.md)
+16. [Check and apply software updates](software-updates.md)
    (Controller and host-local package updates from a configured repo).
-16. [Publish a Nex Core release](publish-a-release.md)
+17. [Publish a Nex Core release](publish-a-release.md)
    (authorized maintainers; tag-driven ISO and package build, and website publication).
 
 Each procedure states its prerequisites, expected outcome, troubleshooting, and verification

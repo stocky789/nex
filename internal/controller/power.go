@@ -57,7 +57,7 @@ func (c *Controller) powerVM(w http.ResponseWriter, r *http.Request, user, csrf 
 	// Ask Core to run after the latest pending request for this VM. Core owns the
 	// durable queue and checks that prerequisite before any effects.
 	var after string
-	err = tx.QueryRow("SELECT o.id FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind IN ('vm-power','vm-update','vm-media') AND r.name=? AND o.status IN ('queued','dispatched') ORDER BY o.rowid DESC LIMIT 1", id).Scan(&after)
+	err = tx.QueryRow("SELECT o.id FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind IN ('vm-power','vm-update','vm-media','vm-delete') AND r.name=? AND o.status IN ('queued','dispatched') ORDER BY o.rowid DESC LIMIT 1", id).Scan(&after)
 	if err != nil && err != sql.ErrNoRows {
 		fail(w, 500, "power request lookup failed")
 		return

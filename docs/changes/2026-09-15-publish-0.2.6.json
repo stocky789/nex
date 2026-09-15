@@ -1,0 +1,31 @@
+{
+  "summary": "Record the Nex Core 0.2.6 ISO and package build (carrying BUG-0193) and its publication to the signed APT archive and the website download tree, with the public HTTPS verification. API impact: none \u2014 release evidence only.",
+  "paths": [
+    "docs/qa/iso/2026-09-15-core-0.2.6-build.md",
+    "docs/changes/2026-09-15-publish-0.2.6.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Release evidence only; operator install and update workflows are unchanged by publication."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Build and publication record; no Controller, Core or client contract changes.",
+    "pages": [],
+    "contracts": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Patch release publication; no milestone or acceptance gate change."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Release artifacts on the website host are distribution output, not product state."
+  },
+  "verification": {
+    "method": "Local build exit 0 and package versions checked with dpkg-deb; tracked source identical to commit 5c98a75; BUG-0193 fix markers checked in the Controller package's apply-update; publication verified over public HTTPS (InRelease, Packages listing both 0.2.6 packages with matching sizes, ISO sha256 equal to the build, latest serving 0.2.6) and both published packages re-downloaded with SHA-256 equal to the build.",
+    "evidence": [
+      "docs/qa/iso/2026-09-15-core-0.2.6-build.md"
+    ]
+  }
+}

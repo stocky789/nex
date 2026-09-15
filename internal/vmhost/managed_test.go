@@ -1581,7 +1581,7 @@ func TestManagedDiskAllocationArguments(t *testing.T) {
 	}
 }
 
-// Preflight refuses a VM whose ceiling the host cannot meet, in both memory modes.
+// A start refuses a VM whose ceiling available memory cannot meet, in both memory modes.
 func TestManagedCapacityUsesTheMemoryCeiling(t *testing.T) {
 	for _, mode := range []string{"dedicated", "maximum"} {
 		if !managedMemoryFits(6*1024*1024, protocol.VMMemory{Mode: mode, SizeMiB: 4096}) {

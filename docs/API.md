@@ -1189,8 +1189,18 @@ MAC uniqueness and host capacity stay with their owners.
   caps without reserving: the same ceiling plus a virtio balloon with free page reporting, so the
   guest returns pages it frees. Reclaim needs the balloon driver running in the guest (built into
   Linux; virtio-win guest tools on Windows) — without it a guest drifts to its ceiling and holds
-  it, and this slice has no pressure-driven reclaim daemon. Capacity preflight uses the ceiling
-  in both modes, so a VM that cannot reach its maximum is refused.
+  it, and this slice has no pressure-driven reclaim daemon. Creation and stopped `vm-update`
+  check CPU, KVM, machine capabilities and the total-memory dedicated promise, not memory free
+  right now. Core checks current available memory (`MemAvailable` at least the ceiling plus the
+  2 GiB host reserve, in both modes) only when it boots a shut-off VM — `vm-power` start,
+  `start_after_create` and Core-coordinated pool autostart — and refuses with `insufficient
+  available memory to start this VM including 2 GiB host reserve` before issuing `virsh start`.
+  A start of a running VM stays a no-op; a refused pool autostart is not retried in that boot.
+  A created VM whose automatic start is refused stays
+  defined and stopped, with `VM created but not started: <reason>` reported. Libvirt's own
+  autostart replay at host boot (non-shared VMs) is outside this check. API impact: **changed
+  contract** — same requests and results; the available-memory refusal moved from `vm-create`
+  and stopped `vm-update` to starting, with the message above (BUG-0195).
 - **`disks`.** One to eight. Each carries `storage_id`, a `name` unique within the VM
   (`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`; a name, not a path), `size_gib` 1–2048, `bus`
   `virtio|sata|scsi`, `thin` (`true` sparse, `false` preallocated) and `boot_order`. Disks are
@@ -1348,7 +1358,9 @@ no longer causes a busy refusal: Controller sends the latest pending operation I
 `after_operation_id` and returns 202. Older hosts retain the single-pending-request guard
 and its 409 upgrade message; requests carrying a prerequisite are withheld if a host
 stops advertising queue support. The browser closes confirmation after acceptance and
-shows the queued task; it does not retry in a loop.
+shows the queued task; it does not retry in a loop. A `start` that would boot a shut-off VM
+fails before `virsh start` when the host's available memory cannot meet the VM's ceiling plus
+the 2 GiB host reserve (see `memory` under VM creation); a start of a running VM is a no-op.
 
 Controller dispatch preserves database insertion order, independent of wall-clock changes.
 Core persists each command and a monotonic admission order in its private agent `state.json`
@@ -1434,6 +1446,24 @@ result is the host's word and a replaced Controller adopts the current definitio
 revision. Older Core without `vm-update-v1` is refused with 409 at request time.
 
 Evidence: [edit QA report](qa/vm-edit/checks.md).
+
+## VM deletion
+
+API impact: **new contract** — `deleteVM` (`DELETE /api/v1/vms/{id}`), the `vm-delete`
+command carrying `VMDeleteRequest` (`vm_id`, `pool_id`, `host_id`, `delete_disks`), the
+`vm-delete-v1` host capability, and `Inventory.managed.deleted_vms` tombstones.
+Authentication, authorization, validation, errors, asynchronous result, replay and outage
+behavior follow `powerVM` / `updateVM`.
+
+Flow: an administrator deletes a successfully created guest with a stable `request_id`.
+Controller refuses the Controller appliance, hosts without `vm-delete-v1`, unknown/stale
+observed state, and any state other than `shut off`; one edit, power, media or delete
+request may be in flight per VM. Core undefines the domain (`virsh undefine`, with
+`--nvram` for UEFI), then either records every disk path as retained (`delete_disks=false`)
+or unlinks those files (`delete_disks=true`). Succeeded deletes drop the VM from
+`Inventory.managed.vms` and emit a tombstone in `deleted_vms`; Controller deletes its
+`vm-create` mirror. HTTP `202` queues work; poll operations and the VM list for completion.
+Older Core without `vm-delete-v1` is refused with 409 at request time.
 
 ## Browser VM console
 
@@ -1635,7 +1665,7 @@ Choose exact operations and payloads when implementing the relevant phase.
 
 | Phase | Coverage to add as implemented |
 |---|---|
-| 2 (remaining) | Stopped-VM editing/deletion with disk retention (full VM creation, power requests and console streaming are implemented above) |
+| 2 (remaining) | Disk resize and related VM lifecycle follow-ups (creation, power, console, edit and deletion with optional disk wipe are implemented above) |
 | 3 | Installer/first-boot enrollment integration and package/version compatibility |
 | 4 | Multi-host pools (member join under the pool master, master change, member eject), shared NFS access per host, network changes and recovery, placement, maintenance and removal |
 | 5 | Snapshot create/list/revert/delete, disk/configuration coverage and interrupted-operation recovery |

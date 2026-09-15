@@ -14,8 +14,8 @@ The VM is created stopped. **Start after creation** makes the host start it once
 step of the same creation task, after it has verified the definition.
 
 After creation the VM can be changed in place; see [Edit a virtual machine](edit-virtual-machine.md).
-An existing disk's storage, size and provisioning cannot be changed, and deleting a VM is not
-yet available in this development build. Start the VM with its [Power controls](vm-power.md),
+An existing disk's storage, size and provisioning cannot be changed. To remove a stopped VM, see
+[Delete a virtual machine](delete-virtual-machine.md). Start the VM with its [Power controls](vm-power.md),
 then install the guest through [Open a VM console](vm-console.md).
 An adopted Controller appliance remains protected and is not recreated by this workflow.
 Use an explicitly selected disposable lab host.
@@ -49,8 +49,8 @@ Use an explicitly selected disposable lab host.
   internet access and public DNS resolution; use a direct HTTP or HTTPS ISO link without
   login credentials or a URL fragment. Private-network destinations and proxies are not supported.
   Select firmware supported by the guest; UEFI must be advertised by the host's libvirt
-  capabilities for KVM, x86-64 and q35. Allow 2 GiB of available memory for the host in
-  addition to the requested guest memory.
+  capabilities for KVM, x86-64 and q35. To start the VM, the host needs its memory size
+  available plus 2 GiB for itself; creating a stopped VM does not need that memory free.
   Upgrade Controller before Core; an older Controller rejects the new Core report fields.
 - For a Windows guest on a **VirtIO** or **SCSI** disk bus or a **VirtIO** network adapter:
   the virtio-win driver media, because Windows setup cannot see those devices without it.
@@ -250,9 +250,11 @@ Three limits to know before choosing **Maximum**:
   the guest counts as free comes back; pages it holds as file cache stay with the guest.
 - **Nothing grows or shrinks a guest under host memory pressure.** This build has no daemon
   that reclaims memory when the host runs short, and Nex does not balance memory between guests.
-- **The ceiling is checked in both modes.** The host must be able to meet the full size, plus
-  a 2 GiB reserve for itself, at creation time, so a VM that cannot reach its maximum is
-  refused. **Maximum** lets the ceilings of several VMs add up to more than the host has, and
+- **The ceiling is checked in both modes when the VM starts.** The host must have the full
+  size available, plus a 2 GiB reserve for itself, so a VM that cannot reach its maximum is
+  not started. Creation does not need that memory free, so you can create a VM now and start
+  it once memory is available. **Maximum** lets the ceilings of several VMs add up to more than
+  the host has, and
   nothing prevents them all from claiming it.
 
 Controller does not display live memory use per VM in this build. The VM's page shows the
@@ -350,9 +352,7 @@ failed and uncertain transfers show their own status.
   address, or choose another one (the host also checks the automatic addresses of its other
   VMs); or lower the dedicated size, free a dedicated VM, or use the **Maximum** memory mode.
 - **Resource or firmware validation fails on the host:** the host repeats the checks with its
-  real state, so a request Controller accepted can still fail. *insufficient available memory
-  including 2 GiB host reserve* means the host's currently available memory cannot meet the
-  ceiling — free memory or lower it. *insufficient free storage including reserve* means a
+  real state, so a request Controller accepted can still fail. *insufficient free storage including reserve* means a
   storage target cannot hold every disk placed on it plus its headroom. *UEFI firmware is not
   available on this host* means that host's libvirt does not advertise EFI for this machine
   type; choose BIOS or fix the host's firmware packages.
@@ -362,7 +362,10 @@ failed and uncertain transfers show their own status.
   start is not retried by itself. Inspect the reason, then start it from the
   [Power controls](vm-power.md). *interrupted before the automatic start completed* means the
   host was interrupted at that step and did not find the VM running afterwards; start it the
-  same way. A host running Nex Core from before this behaviour ignores the option and always
+  same way. *insufficient available memory to start this VM including 2 GiB host reserve*
+  means the host cannot currently give the VM its memory size plus 2 GiB for itself; free
+  memory on that host or lower the VM's memory, then start it. A host running Nex Core from
+  before this behaviour ignores the option and always
   leaves the VM stopped.
 - **Autostart could not be enabled:** the VM is defined but its autostart property was not
   set. The task says so. Inspect the VM on its host; the VM itself is intact.
@@ -388,8 +391,9 @@ failed and uncertain transfers show their own status.
 - **A task reports `failed` or `needs_attention`:** inspect its error and the selected
   host's actual resources. After correcting a definite failed storage/network check, submit
   a new registration; an uncertain registration retains its reservation. Failed or uncertain
-  VM creation keeps the VM name reserved, and this build has no VM retry/deletion action.
-  Never treat a failed task as proof that its disk or guest definition is absent.
+  VM creation keeps the VM name reserved; remove a stopped failed guest with
+  [Delete a virtual machine](delete-virtual-machine.md) when Core supports it. Never treat a
+  failed task as proof that its disk or guest definition is absent.
 - **Observed state is unknown or stale:** restore connectivity and wait for fresh libvirt
   observations. Controller loss does not stop resident VMs and does not authorize another
   writable instance. Retain host-local recovery access.

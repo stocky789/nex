@@ -1,0 +1,150 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+package vmhost
+
+import (
+	"context"
+	"nex.local/nex/internal/protocol"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestManagedDeleteRetainsOrWipesDisks(t *testing.T) {
+	vm := managedTestVM()
+	vm.MediaID = ""
+	disk := filepath.Join(t.TempDir(), "disk-0.qcow2")
+	if err := os.WriteFile(disk, []byte("guest-data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	seed := func(t *testing.T, e *ManagedEngine) {
+		t.Helper()
+		if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		create := protocol.Command{OperationID: "create-1", Kind: "vm-create", VM: &vm}
+		if err := e.save(managedJournal{
+			Command: create,
+			Result:  protocol.Result{OperationID: create.OperationID, Status: "succeeded"},
+			Stage:   "defined",
+			Disks:   []string{disk},
+			Targets: []string{"vda"}, MediaTarget: "sda",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command := func(op string, wipe bool) protocol.Command {
+		return protocol.Command{OperationID: op, Kind: "vm-delete", Delete: &protocol.VMDeleteRequest{VMID: vm.ID, PoolID: vm.PoolID, HostID: vm.HostID, DeleteDisks: wipe}}
+	}
+
+	t.Run("retain", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "state")
+		log := filepath.Join(t.TempDir(), "virsh.log")
+		fakeCommand(t, "virsh", `echo "$3 $4 $5" >> "$VMHOST_LOG"; case "$3" in
+domstate) echo 'shut off';;
+list) ;;
+undefine) [ "$5" = "--nvram" ] || exit 3; exit 0;;
+*) exit 2;; esac`)
+		t.Setenv("VMHOST_LOG", log)
+		e := NewManaged(dir)
+		seed(t, e)
+		r, err := e.Execute(context.Background(), command("del-retain", false), nil)
+		if err != nil || r.Status != "succeeded" {
+			t.Fatalf("retain delete: %+v %v", r, err)
+		}
+		if _, err := os.Stat(disk); err != nil {
+			t.Fatalf("disk must remain: %v", err)
+		}
+		applied, _ := e.Applied(context.Background())
+		if len(applied.VMs) != 0 || len(applied.DeletedVMs) != 1 || !applied.DeletedVMs[0].Tombstone || applied.DeletedVMs[0].ID != vm.ID {
+			t.Fatalf("applied after retain: %+v", applied)
+		}
+		js, _ := e.journals()
+		found := false
+		for _, j := range js {
+			if j.Command.Kind == "vm-delete" && len(j.Retained) == 1 && j.Retained[0] == disk {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("retained disk path missing from delete journal")
+		}
+		calls, _ := os.ReadFile(log)
+		if !strings.Contains(string(calls), "undefine "+vm.ID+" --nvram") {
+			t.Fatalf("undefine calls: %q", calls)
+		}
+	})
+
+	t.Run("wipe", func(t *testing.T) {
+		wipeDisk := filepath.Join(t.TempDir(), "nex-vms", vm.ID, "disk-0.qcow2")
+		if err := os.MkdirAll(filepath.Dir(wipeDisk), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(wipeDisk, []byte("guest-data"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(t.TempDir(), "state")
+		fakeCommand(t, "virsh", `case "$3" in
+domstate) echo 'shut off';;
+list) ;;
+undefine) exit 0;;
+*) exit 2;; esac`)
+		e := NewManaged(dir)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		create := protocol.Command{OperationID: "create-1", Kind: "vm-create", VM: &vm}
+		if err := e.save(managedJournal{
+			Command: create,
+			Result:  protocol.Result{OperationID: create.OperationID, Status: "succeeded"},
+			Stage:   "defined",
+			Disks:   []string{wipeDisk},
+			Targets: []string{"vda"}, MediaTarget: "sda",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		r, err := e.Execute(context.Background(), command("del-wipe", true), nil)
+		if err != nil || r.Status != "succeeded" {
+			t.Fatalf("wipe delete: %+v %v", r, err)
+		}
+		if _, err := os.Stat(wipeDisk); !os.IsNotExist(err) {
+			t.Fatalf("disk must be removed: %v", err)
+		}
+		applied, _ := e.Applied(context.Background())
+		if len(applied.VMs) != 0 || len(applied.DeletedVMs) != 1 {
+			t.Fatalf("applied after wipe: %+v", applied)
+		}
+	})
+
+	t.Run("refuse-running", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "state")
+		fakeCommand(t, "virsh", `case "$3" in domstate) echo running;; *) exit 2;; esac`)
+		e := NewManaged(dir)
+		seed(t, e)
+		r, err := e.Execute(context.Background(), command("del-run", false), nil)
+		if err != nil || r.Status != "failed" || !strings.Contains(r.Error, "stop the VM") {
+			t.Fatalf("running delete must refuse: %+v %v", r, err)
+		}
+		if _, err := os.Stat(disk); err != nil {
+			t.Fatal("refused delete must not touch disks")
+		}
+	})
+}
+
+func TestValidateManagedDelete(t *testing.T) {
+	vm := managedTestVM()
+	ok := protocol.Command{OperationID: "d1", Kind: "vm-delete", Delete: &protocol.VMDeleteRequest{VMID: vm.ID, PoolID: vm.PoolID, HostID: vm.HostID}}
+	if err := validateManaged(ok); err != nil {
+		t.Fatal(err)
+	}
+	bad := ok
+	bad.Delete = &protocol.VMDeleteRequest{VMID: "not-a-uuid", PoolID: vm.PoolID, HostID: vm.HostID}
+	if validateManaged(bad) == nil {
+		t.Fatal("invalid VM id accepted")
+	}
+	both := ok
+	both.Power = &protocol.VMPowerRequest{VMID: vm.ID, PoolID: vm.PoolID, HostID: vm.HostID, Action: "start"}
+	if validateManaged(both) == nil {
+		t.Fatal("two payloads accepted")
+	}
+}

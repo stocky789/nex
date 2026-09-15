@@ -526,7 +526,7 @@ func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch f
 		j.Result.Error = ""
 	} else {
 		j.Result.Status = "failed"
-		if errors.Is(err, ErrStorageRollbackUncertain) || errors.Is(err, errPowerRequestUncertain) || j.Stage == "allocating" || j.Stage == "defining" || j.Stage == "starting" || j.Stage == "attaching" {
+		if errors.Is(err, ErrStorageRollbackUncertain) || errors.Is(err, errPowerRequestUncertain) || j.Stage == "allocating" || j.Stage == "defining" || j.Stage == "starting" || j.Stage == "attaching" || j.Stage == "undefining" || j.Stage == "wiping" {
 			j.Result.Status = "needs_attention"
 		}
 		j.Result.Error = err.Error()
@@ -655,6 +655,8 @@ func managedResourceID(c protocol.Command) string {
 		return fmt.Sprintf("vm-update:%s:%d", c.VM.ID, c.VM.Revision)
 	case "vm-power":
 		return "power:" + c.OperationID
+	case "vm-delete":
+		return "vm-delete:" + c.OperationID
 	case "vm-media":
 		return "vm-media:" + c.OperationID
 	}
@@ -668,7 +670,7 @@ func validateManaged(c protocol.Command) error {
 		return errors.New("invalid operation ID")
 	}
 	count := 0
-	for _, present := range []bool{c.Storage != nil, c.Network != nil, c.Media != nil, c.VM != nil, c.Power != nil, c.VMMedia != nil, c.StorageLifecycle != nil, c.CredentialRetire != nil} {
+	for _, present := range []bool{c.Storage != nil, c.Network != nil, c.Media != nil, c.VM != nil, c.Power != nil, c.Delete != nil, c.VMMedia != nil, c.StorageLifecycle != nil, c.CredentialRetire != nil} {
 		if present {
 			count++
 		}
@@ -777,6 +779,15 @@ func validateManaged(c protocol.Command) error {
 		}
 		if p.AfterOperationID != "" && (!identifier.MatchString(p.AfterOperationID) || p.AfterOperationID == c.OperationID) {
 			return errors.New("invalid predecessor operation ID")
+		}
+	case "vm-delete":
+		if c.Delete == nil {
+			return errors.New("delete payload required")
+		}
+		d := c.Delete
+		id, pool, host = d.VMID, d.PoolID, d.HostID
+		if !uuidPattern.MatchString(d.VMID) {
+			return errors.New("invalid VM identity")
 		}
 	case "vm-media":
 		if c.VMMedia == nil {
@@ -1340,14 +1351,24 @@ func storageDependencies(js []managedJournal, id string) []string {
 		if j.Command.Media != nil && j.Command.Media.StorageID == id {
 			out = append(out, "ISO "+j.Command.Media.ID)
 		}
-		if len(j.Retained) == 0 || j.Command.VM == nil {
+		if len(j.Retained) == 0 {
+			continue
+		}
+		vmID := ""
+		switch {
+		case j.Command.VM != nil:
+			vmID = j.Command.VM.ID
+		case j.Command.Delete != nil:
+			vmID = j.Command.Delete.VMID
+		}
+		if vmID == "" {
 			continue
 		}
 		s, err := managedStorage(js, id)
 		if err == nil {
 			for _, path := range j.Retained {
 				if path == s.Path || strings.HasPrefix(path, s.Path+"/") {
-					out = append(out, "retained disk for VM "+j.Command.VM.ID)
+					out = append(out, "retained disk for VM "+vmID)
 					break
 				}
 			}
@@ -1487,6 +1508,7 @@ func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []
 	// Preserve local interrupted-operation recovery, but never let heartbeat reporting probe a
 	// remote repository. Remote entries remain uncertain until an explicit retry reconciles them.
 	js = e.promote(ctx, js, running)
+	deleted := managedDeletedVMs(js)
 	for _, j := range js {
 		c := j.Command
 		id, name := managedIdentity(c)
@@ -1522,7 +1544,10 @@ func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []
 			out.Media = append(out.Media, m)
 		case "vm-create", "vm-update":
 			// The current definition is the highest succeeded revision; the create entry is
-			// revision 0.
+			// revision 0. Succeeded deletes remove the VM from the reported inventory.
+			if deleted[c.VM.ID] {
+				break
+			}
 			replaced := false
 			for i, existing := range out.VMs {
 				if existing.ID == c.VM.ID {
@@ -1534,6 +1559,10 @@ func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []
 			}
 			if !replaced {
 				out.VMs = append(out.VMs, *c.VM)
+			}
+		case "vm-delete":
+			if j.Result.Status == "succeeded" && c.Delete != nil {
+				out.DeletedVMs = append(out.DeletedVMs, protocol.VMTombstone{ID: c.Delete.VMID, PoolID: c.Delete.PoolID, HostID: c.Delete.HostID, Tombstone: true})
 			}
 		}
 	}
@@ -1802,6 +1831,8 @@ func managedIdentity(c protocol.Command) (string, string) {
 		return c.VM.ID, c.VM.Name
 	case "vm-power":
 		return c.Power.VMID, ""
+	case "vm-delete":
+		return c.Delete.VMID, ""
 	case "vm-media":
 		return c.VMMedia.VMID, ""
 	}
@@ -2056,8 +2087,17 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 				return errors.New("predecessor VM operation not found on this host")
 			}
 		}
+		var memory *protocol.VMMemory
 		if c.Power.Action == "start" {
 			v, currentErr := managedCurrent(js, c.Power.VMID)
+			if currentErr == nil {
+				memory = &v.Command.VM.Memory
+			}
+			// An unresolved newer definition (for example a memory edit libvirt may already
+			// hold) is what could boot, so check its ceiling rather than the last success.
+			if newest, ok := currentDefinitions(js)[c.Power.VMID]; ok {
+				memory = &newest.Memory
+			}
 			if currentErr == nil && len(v.Disks) > 0 {
 				if err := ensureVMStorage(ctx, js, *v.Command.VM); err != nil {
 					return err
@@ -2070,7 +2110,7 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 		if err := e.save(*j); err != nil {
 			return err
 		}
-		return powerVM(ctx, *c.Power)
+		return powerVM(ctx, *c.Power, memory)
 	case "vm-media":
 		// changeMedia persists Stage "changing-media" itself, immediately before its virsh
 		// call: an interruption before that point issued nothing, so reconcile re-runs it.
@@ -2213,6 +2253,8 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 		return e.create(ctx, j, js)
 	case "vm-update":
 		return e.update(ctx, j, js)
+	case "vm-delete":
+		return e.deleteVM(ctx, j, js)
 	}
 	return errors.New("unsupported managed command")
 }
@@ -2589,7 +2631,7 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 }
 
 // managedMemoryFits applies the ceiling in both memory modes: a "maximum" VM reserves nothing
-// but must still be able to reach its ceiling, so preflight refuses what the host cannot meet.
+// but must still be able to reach its ceiling, so a start refuses what the host cannot meet now.
 func managedMemoryFits(availableKiB uint64, m protocol.VMMemory) bool {
 	return availableKiB >= uint64(m.SizeMiB+2048)*1024
 }
@@ -2609,15 +2651,31 @@ func dedicatedCommitted(js []managedJournal, except string) int {
 
 // currentDefinitions is every VM's current definition the journal still holds: the highest
 // revision among its non-failed vm-create and vm-update entries, pending and uncertain ones
-// included, because what is promised or reserved does not wait for a result.
+// included, because what is promised or reserved does not wait for a result. A succeeded
+// vm-delete removes the VM from the map.
 func currentDefinitions(js []managedJournal) map[string]protocol.VMCreateSpec {
 	out := map[string]protocol.VMCreateSpec{}
+	deleted := managedDeletedVMs(js)
 	for _, j := range js {
 		if (j.Command.Kind != "vm-create" && j.Command.Kind != "vm-update") || j.Command.VM == nil || j.Result.Status == "failed" {
 			continue
 		}
+		if deleted[j.Command.VM.ID] {
+			continue
+		}
 		if cur, ok := out[j.Command.VM.ID]; !ok || j.Command.VM.Revision > cur.Revision {
 			out[j.Command.VM.ID] = *j.Command.VM
+		}
+	}
+	return out
+}
+
+// managedDeletedVMs lists VMs with a succeeded vm-delete entry.
+func managedDeletedVMs(js []managedJournal) map[string]bool {
+	out := map[string]bool{}
+	for _, j := range js {
+		if j.Command.Kind == "vm-delete" && j.Result.Status == "succeeded" && j.Command.Delete != nil {
+			out[j.Command.Delete.VMID] = true
 		}
 	}
 	return out
@@ -2628,20 +2686,17 @@ func currentDefinitions(js []managedJournal) map[string]protocol.VMCreateSpec {
 func dedicatedFits(totalKiB uint64, committedMiB int, m protocol.VMMemory) bool {
 	return m.Mode != "dedicated" || uint64(committedMiB+m.SizeMiB+2048)*1024 <= totalKiB
 }
-func managedCapacity(ctx context.Context, v protocol.VMCreateSpec, js []managedJournal) error {
-	if runtime.GOARCH != "amd64" || v.CPU.Count > runtime.NumCPU() {
-		return errors.New("requires amd64 with sufficient host CPUs")
-	}
-	f, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0)
+
+// managedKVMDevice and managedMeminfo are the host files capacity and start checks read;
+// tests point them at fakes.
+var managedKVMDevice, managedMeminfo = "/dev/kvm", "/proc/meminfo"
+
+// hostMemory reads MemAvailable and MemTotal, in KiB.
+func hostMemory() (available, total uint64, err error) {
+	mem, err := os.ReadFile(managedMeminfo)
 	if err != nil {
-		return errors.New("KVM acceleration unavailable")
+		return 0, 0, err
 	}
-	f.Close()
-	mem, err := os.ReadFile("/proc/meminfo")
-	if err != nil {
-		return err
-	}
-	available, total := uint64(0), uint64(0)
 	for _, line := range strings.Split(string(mem), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) > 1 && fields[0] == "MemAvailable:" {
@@ -2651,8 +2706,23 @@ func managedCapacity(ctx context.Context, v protocol.VMCreateSpec, js []managedJ
 			total, _ = strconv.ParseUint(fields[1], 10, 64)
 		}
 	}
-	if !managedMemoryFits(available, v.Memory) {
-		return errors.New("insufficient available memory including 2 GiB host reserve")
+	return available, total, nil
+}
+
+func managedCapacity(ctx context.Context, v protocol.VMCreateSpec, js []managedJournal) error {
+	if runtime.GOARCH != "amd64" || v.CPU.Count > runtime.NumCPU() {
+		return errors.New("requires amd64 with sufficient host CPUs")
+	}
+	f, err := os.OpenFile(managedKVMDevice, os.O_RDWR, 0)
+	if err != nil {
+		return errors.New("KVM acceleration unavailable")
+	}
+	f.Close()
+	// Memory free right now is a start-time check (powerVM): a VM that cannot start yet can
+	// still be created or edited while stopped. The durable dedicated promise stays here.
+	_, total, err := hostMemory()
+	if err != nil {
+		return err
 	}
 	if !dedicatedFits(total, dedicatedCommitted(js, v.ID), v.Memory) {
 		return errors.New("dedicated memory exceeds what this host has left to promise; free a dedicated VM or use the maximum memory mode")
@@ -2889,7 +2959,7 @@ func (e *ManagedEngine) startCreated(ctx context.Context, j *managedJournal) err
 		return err
 	}
 	j.Start, j.Stage = "started", "started"
-	if err := powerVM(ctx, protocol.VMPowerRequest{VMID: j.Command.VM.ID, Action: "start"}); err != nil {
+	if err := powerVM(ctx, protocol.VMPowerRequest{VMID: j.Command.VM.ID, Action: "start"}, &j.Command.VM.Memory); err != nil {
 		// The create journal has historically exposed a stable concise start outcome;
 		// direct vm-power results retain the bounded native diagnostic for recovery.
 		var powerErr powerRequestError
@@ -3329,6 +3399,29 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protoc
 			j.Result.Error = err.Error()
 		}
 	}
+	if j.Command.Kind == "vm-delete" {
+		if j.Stage != "undefining" && j.Stage != "wiping" {
+			js, err := e.journals()
+			if err != nil {
+				return j.Result, err
+			}
+			if err = e.apply(ctx, &j, js, nil); err == nil {
+				j.Result.Status = "succeeded"
+				j.Result.Error = ""
+			} else {
+				j.Result.Status = "failed"
+				if j.Stage == "undefining" || j.Stage == "wiping" {
+					j.Result.Status = "needs_attention"
+				}
+				j.Result.Error = err.Error()
+			}
+		} else if err := deleteObserved(ctx, *j.Command.Delete, j); err == nil {
+			j.Result.Status = "succeeded"
+			j.Result.Error = ""
+		} else {
+			j.Result.Error = err.Error()
+		}
+	}
 	if j.Command.Kind == "iso-import" && j.MediaPath != "" {
 		if err := verifyISO(j.MediaPath, journalMedia(j)); err == nil {
 			j.Result.Status = "succeeded"
@@ -3341,10 +3434,147 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protoc
 	return j.Result, e.save(j)
 }
 
+// deleteVM removes a stopped managed VM from libvirt. Disk files are retained unless
+// DeleteDisks is set; retained paths stay in the journal so storage detach still sees them.
+func (e *ManagedEngine) deleteVM(ctx context.Context, j *managedJournal, js []managedJournal) error {
+	req := j.Command.Delete
+	if managedDeletedVMs(js)[req.VMID] {
+		return errors.New("VM is already deleted on this host")
+	}
+	cur, err := managedCurrent(js, req.VMID)
+	if err != nil {
+		return err
+	}
+	if cur.Command.VM.PoolID != req.PoolID || cur.Command.VM.HostID != req.HostID {
+		return errors.New("VM pool or host does not match this host's record")
+	}
+	for _, old := range js {
+		if old.Command.OperationID == j.Command.OperationID || (old.Result.Status != "pending" && old.Result.Status != "needs_attention") {
+			continue
+		}
+		id, _ := managedIdentity(old.Command)
+		if id == req.VMID && (old.Command.Kind == "vm-create" || old.Command.Kind == "vm-update" || old.Command.Kind == "vm-power" || old.Command.Kind == "vm-media" || old.Command.Kind == "vm-delete") {
+			return errors.New("a change, power, media or delete request for this VM is still unresolved")
+		}
+	}
+	state, err := managedVirsh(ctx, "domstate", req.VMID)
+	if err != nil {
+		return errors.New("VM not found or its state cannot be established on this host")
+	}
+	if observed := strings.TrimSpace(string(state)); observed != "shut off" {
+		return errors.New("stop the VM before deleting it; observed state is " + observed)
+	}
+	paths := managedDeleteDiskPaths(js, cur)
+	j.Retained = append([]string{}, paths...)
+	j.Stage = "undefining"
+	if err = e.save(*j); err != nil {
+		return err
+	}
+	args := []string{req.VMID}
+	if cur.Command.VM.Boot.Firmware == "uefi" {
+		args = append(args, "--nvram")
+	}
+	if _, err = managedVirsh(ctx, append([]string{"undefine"}, args...)...); err != nil {
+		return err
+	}
+	if req.DeleteDisks {
+		j.Stage = "wiping"
+		if err = e.save(*j); err != nil {
+			return err
+		}
+		if err = wipeManagedDisks(paths); err != nil {
+			return err
+		}
+		j.Retained = nil
+	}
+	defined := domains(ctx)
+	if defined == nil {
+		return errors.New("libvirt did not list domains after undefine; inspect the host before retrying")
+	}
+	if defined[strings.ToLower(req.VMID)] {
+		return errors.New("VM domain is still defined after undefine")
+	}
+	return nil
+}
+
+func managedDeleteDiskPaths(js []managedJournal, cur managedJournal) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(path string) {
+		if path == "" || seen[path] {
+			return
+		}
+		seen[path] = true
+		out = append(out, path)
+	}
+	for _, path := range cur.Disks {
+		add(path)
+	}
+	for _, j := range js {
+		if j.Result.Status != "succeeded" {
+			continue
+		}
+		switch {
+		case j.Command.VM != nil && j.Command.VM.ID == cur.Command.VM.ID:
+			for _, path := range j.Retained {
+				add(path)
+			}
+		case j.Command.Delete != nil && j.Command.Delete.VMID == cur.Command.VM.ID:
+			for _, path := range j.Retained {
+				add(path)
+			}
+		}
+	}
+	return out
+}
+
+func wipeManagedDisks(paths []string) error {
+	dirs := map[string]bool{}
+	for _, path := range paths {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("delete disk %s: %w", path, err)
+		}
+		dirs[filepath.Dir(path)] = true
+	}
+	for dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) > 0 {
+			continue
+		}
+		_ = os.Remove(dir)
+	}
+	return nil
+}
+
+// deleteObserved reconciles an interrupted delete: the domain must be gone, and when disks
+// were requested for wipe every recorded path must be absent.
+func deleteObserved(ctx context.Context, req protocol.VMDeleteRequest, j managedJournal) error {
+	defined := domains(ctx)
+	if defined == nil {
+		return errors.New("libvirt did not list domains after an interrupted delete")
+	}
+	if defined[strings.ToLower(req.VMID)] {
+		return errors.New("VM domain is still defined after an interrupted delete")
+	}
+	if !req.DeleteDisks {
+		return nil
+	}
+	for _, path := range j.Retained {
+		if _, err := os.Stat(path); err == nil {
+			return errors.New("disk file still present after an interrupted wipe: " + path)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
 // powerVM issues one libvirt power request. Start and stop requests are idempotent against
 // the observed state; shutdown and reboot are ACPI requests the guest decides how to honor;
-// force-reboot issues virsh reset and requires a running guest.
-func powerVM(ctx context.Context, p protocol.VMPowerRequest) error {
+// force-reboot issues virsh reset and requires a running guest. A start that would boot a
+// shut-off guest is refused unless available memory meets memory's ceiling plus the host
+// reserve; memory is nil only when the managed journal holds no definition for the VM.
+func powerVM(ctx context.Context, p protocol.VMPowerRequest, memory *protocol.VMMemory) error {
 	state, err := managedVirsh(ctx, "domstate", p.VMID)
 	if err != nil {
 		return errors.New("VM not found or its state cannot be established on this host")
@@ -3380,6 +3610,15 @@ func powerVM(ctx context.Context, p protocol.VMPowerRequest) error {
 	}
 	if current != "running" && current != "shut off" {
 		return errors.New("VM is " + current + "; resolve that state before a power request")
+	}
+	if command == "start" && memory != nil {
+		available, _, err := hostMemory()
+		if err != nil {
+			return err
+		}
+		if !managedMemoryFits(available, *memory) {
+			return errors.New("insufficient available memory to start this VM including 2 GiB host reserve")
+		}
 	}
 	if _, err = managedVirsh(ctx, command, p.VMID); err != nil {
 		return powerRequestError{action: p.Action, cause: err}

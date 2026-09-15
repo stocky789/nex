@@ -6,9 +6,9 @@ This development workflow changes an existing VM's definition from its **General
 Nex Controller: name, description and guest OS hint; vCPUs, topology and CPU model; memory
 mode and size; disks and network interfaces (add and remove); firmware, machine type, boot
 order and install ISO; and autostart. What a running guest can take is applied while it runs;
-the rest waits for the VM to be stopped and the form says so per field. Deleting a VM,
-resizing a disk, moving a disk to other storage and moving a VM to another host are not
-available in this build.
+the rest waits for the VM to be stopped and the form says so per field. Deleting a VM is
+covered in [Delete a virtual machine](delete-virtual-machine.md). Resizing a disk, moving a
+disk to other storage and moving a VM to another host are not available in this build.
 
 ## Prerequisites
 

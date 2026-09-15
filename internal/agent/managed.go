@@ -19,7 +19,7 @@ import (
 
 func managedCommand(kind string) bool {
 	switch kind {
-	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "iso-import", "vm-create", "vm-update", "vm-power", "vm-media", "pool-member-join", "pool-storage-reconcile":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "iso-import", "vm-create", "vm-update", "vm-power", "vm-delete", "vm-media", "pool-member-join", "pool-storage-reconcile":
 		return true
 	}
 	return false
@@ -339,6 +339,10 @@ func commandHost(cmd protocol.Command) string {
 	case "vm-power":
 		if cmd.Power != nil {
 			return cmd.Power.HostID
+		}
+	case "vm-delete":
+		if cmd.Delete != nil {
+			return cmd.Delete.HostID
 		}
 	case "vm-media":
 		if cmd.VMMedia != nil {

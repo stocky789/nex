@@ -60,6 +60,9 @@ type ManagedState struct {
 	// MissingVMs names entries of VMs whose persistent domain libvirt no longer lists; the
 	// journal still holds them, but a Controller must not adopt them as live guests.
 	MissingVMs []string `json:"missing_vms,omitempty"`
+	// DeletedVMs are intentional vm-delete tombstones so a Controller drops its mirror; this is
+	// not the same as MissingVMs (accidental undefine while the journal still expects the VM).
+	DeletedVMs []VMTombstone `json:"deleted_vms,omitempty"`
 	// Appliances are the Controller appliance VMs this host deployed and owns.
 	Appliances []Appliance `json:"appliances,omitempty"`
 	// Outcomes are journal entries that ended failed or needs_attention: task history a
@@ -143,6 +146,7 @@ type Command struct {
 	Media            *Media                          `json:"media,omitempty"`
 	VM               *VMCreateSpec                   `json:"vm,omitempty"`
 	Power            *VMPowerRequest                 `json:"power,omitempty"`
+	Delete           *VMDeleteRequest                `json:"delete,omitempty"`
 	VMMedia          *VMMediaRequest                 `json:"vm_media,omitempty"`
 	StorageLifecycle *StorageLifecycleRequest        `json:"storage_lifecycle,omitempty"`
 	CredentialRetire *StorageCredentialRetireRequest `json:"credential_retire,omitempty"`

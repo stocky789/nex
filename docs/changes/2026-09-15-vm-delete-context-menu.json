@@ -1,0 +1,77 @@
+{
+  "summary": "Add VM delete (keep or wipe disks) and Resources tree context menu for power/console/delete. API impact: new contract DELETE /api/v1/vms/{id}, vm-delete / vm-delete-v1, deleted_vms tombstones.",
+  "paths": [
+    "internal/protocol/protocol.go",
+    "internal/protocol/managed.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/delete_test.go",
+    "internal/agent/managed.go",
+    "internal/agent/run.go",
+    "internal/controller/controller.go",
+    "internal/controller/delete.go",
+    "internal/controller/delete_test.go",
+    "internal/controller/managed.go",
+    "internal/controller/power.go",
+    "internal/controller/update_test.go",
+    "web/src/managed.tsx",
+    "web/src/main.tsx",
+    "web/src/style.css",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/API.md",
+    "docs/guide/delete-virtual-machine.md",
+    "docs/guide/README.md",
+    "docs/guide/vm-power.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/manage-controller.md",
+    "docs/plans/2026-09-10-vm-edit.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-15-vm-delete-context-menu.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "New delete-virtual-machine guide; create/edit/power/manage-controller/README updated for delete and Resources context menu.",
+    "pages": [
+      "docs/guide/delete-virtual-machine.md",
+      "docs/guide/README.md",
+      "docs/guide/vm-power.md",
+      "docs/guide/edit-virtual-machine.md",
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/manage-controller.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "API impact: new contract. DELETE /api/v1/vms/{id} with request_id and delete_disks; vm-delete command and vm-delete-v1 capability; ManagedState.deleted_vms tombstones; docs/API.md and OpenAPI updated; docs/api/index.html regenerated.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ],
+    "contracts": [
+      "DELETE /api/v1/vms/{id}",
+      "vm-delete",
+      "vm-delete-v1",
+      "ManagedState.deleted_vms"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Closes the recorded Phase 2 deletion follow-up from the edit plan; no milestone acceptance status change claimed without lab gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "vm-delete journal entry and retained disk paths (or proven absence after wipe) live on the pool master; a fresh Controller recovers absence from inventory and deleted_vms tombstones.",
+    "record": "managed journal vm-delete + Retained paths; Inventory.managed.deleted_vms tombstone removes Controller vm-create mirror"
+  },
+  "verification": {
+    "method": "go test Core delete + Controller delete suites; python3 -m unittest tests.test_api_contract; npm --prefix web run typecheck; python3 scripts/check_docs.py --worktree. Disposable libvirt wipe/retain walkthrough not claimed.",
+    "evidence": [
+      "internal/vmhost/delete_test.go",
+      "internal/controller/delete_test.go",
+      "tests/test_api_contract.py"
+    ]
+  }
+}

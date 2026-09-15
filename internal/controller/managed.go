@@ -126,6 +126,8 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 		return v
 	case cmd.Power != nil:
 		return map[string]any{"vm_id": cmd.Power.VMID, "action": cmd.Power.Action, "operation": op}
+	case cmd.Delete != nil:
+		return map[string]any{"vm_id": cmd.Delete.VMID, "delete_disks": cmd.Delete.DeleteDisks, "operation": op}
 	case cmd.VMMedia != nil:
 		return map[string]any{"vm_id": cmd.VMMedia.VMID, "action": cmd.VMMedia.Action, "media_id": cmd.VMMedia.MediaID, "operation": op}
 	case cmd.StorageLifecycle != nil:
@@ -516,6 +518,11 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 	for _, id := range m.MissingVMs {
 		missing[id] = true
 	}
+	for _, tomb := range m.DeletedVMs {
+		if err = c.mirrorVMTombstone(tx, pool, host, tomb); err != nil {
+			return err
+		}
+	}
 	for _, s := range m.VMs {
 		if ok, err := held(s.ID, "vm-create"); err != nil || ok {
 			if err != nil {
@@ -719,7 +726,7 @@ func (c *Controller) adoptAppliances(tx *sql.Tx, host, pool string, inv *protoco
 
 func managedKind(kind string) bool {
 	switch kind {
-	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "iso-import", "vm-create", "vm-update", "vm-power", "vm-media":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "iso-import", "vm-create", "vm-update", "vm-power", "vm-delete", "vm-media":
 		return true
 	}
 	return false
@@ -1042,7 +1049,7 @@ func (c *Controller) updateVM(w http.ResponseWriter, r *http.Request, user, csrf
 		return
 	}
 	var pending int
-	if err = tx.QueryRow("SELECT count(*) FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind IN ('vm-update','vm-power','vm-media') AND r.name=? AND o.status IN ('queued','dispatched')", id).Scan(&pending); err != nil {
+	if err = tx.QueryRow("SELECT count(*) FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind IN ('vm-update','vm-power','vm-media','vm-delete') AND r.name=? AND o.status IN ('queued','dispatched')", id).Scan(&pending); err != nil {
 		fail(w, 500, "pending request lookup failed")
 		return
 	}

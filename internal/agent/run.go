@@ -243,10 +243,10 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	// A v2 report without the repository capability is the Controller-first
 	// preflight. It carries no v2 storage data and cannot receive storage work.
 	version := protocol.Version
-	capabilities := []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability}
+	capabilities := []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.DeleteCapability}
 	if s.State.StorageProtocolLegacy {
 		version = protocol.LegacyVersion
-		capabilities = []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.MediaCapability, protocol.UpdateCapability}
+		capabilities = []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.MediaCapability, protocol.UpdateCapability, protocol.DeleteCapability}
 		// A strict v1 decoder must not see v2 managed storage/receipt fields.
 		legacy := *inv
 		legacy.Managed = nil

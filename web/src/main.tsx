@@ -8,7 +8,7 @@ import {
 } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
-import { HostISOs, ManagedVMs, VMDetails, VMPower, powerBlocker, type VM, type Storage, type Network, type Media } from "./managed";
+import { HostISOs, ManagedVMs, VMDetails, VMPower, VMDelete, powerActions, powerBlocker, deleteBlocker, type VM, type Storage, type Network, type Media } from "./managed";
 import { Console } from "./console";
 import { Icon } from "./icons";
 
@@ -289,6 +289,10 @@ function App() {
   const [resourceSearch, setResourceSearch] = useState("");
   const [selectedSiteID, setSelectedSiteID] = useState("");
   const [tab, setTab] = useState("General");
+  const [vmMenu, setVmMenu] = useState<{ vm: VM; x: number; y: number } | null>(null);
+  const [menuPower, setMenuPower] = useState<{ vm: VM; item: typeof powerActions[number] } | null>(null);
+  const [menuDeleteSignal, setMenuDeleteSignal] = useState(0);
+  const [menuDeleteVM, setMenuDeleteVM] = useState<VM | null>(null);
   const [form, setForm] = useState<
     "site" | "enroll" | "revoke" | null
   >(null);
@@ -586,6 +590,20 @@ function App() {
     });
   }, [session, kind]);
   useEffect(() => {
+    if (!vmMenu) return;
+    const close = () => setVmMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    const onPointer = (e: PointerEvent) => {
+      if (!(e.target instanceof Element) || !e.target.closest(".context-menu")) close();
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onPointer, true);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onPointer, true);
+    };
+  }, [vmMenu]);
+  useEffect(() => {
     const change = () => {
       setRoute(location.hash.slice(1) || "/");
       setSearch("");
@@ -817,7 +835,8 @@ function App() {
               <summary aria-label={`Expand or collapse ${p.name}`}><a className={`tree-node ${kind === "pools" && id === p.id ? "selected" : ""}`} aria-current={kind === "pools" && id === p.id ? "page" : undefined} href={`#/pools/${p.id}`}><Icon kind="pool" />{p.name}</a></summary>
               <div className="tree">{data.hosts.filter(h => h.pool_id === p.id && (matchResource(p.name) || matchResource(h.hostname) || data.vms.some(v => v.host_id === h.id && v.pool_id === p.id && matchResource(v.name)))).map(h =>
                 <div key={h.id}><a className={`host-link ${host?.id === h.id ? "selected" : ""}`} aria-current={host?.id === h.id ? "page" : undefined} href={`#/hosts/${h.id}`}><Icon kind="host" />{h.hostname}{p.master_host_id === h.id && " · master"}<span className={`connection-dot ${h.connection}`} title={h.connection} aria-label={`Connection ${h.connection}`} /></a>
-                <div className="tree">{data.vms.filter(v => v.pool_id === p.id && v.host_id === h.id && (matchResource(p.name) || matchResource(h.hostname) || matchResource(v.name))).map(v => <a className={`host-link ${vm?.id === v.id ? "selected" : ""} ${v.freshness === "fresh" && v.state === "shut off" ? "vm-off" : ""}`} key={v.id} aria-current={vm?.id === v.id ? "page" : undefined} href={`#/vms/${v.id}`}><Icon kind="vm" />{v.name}</a>)}</div></div>
+                <div className="tree">{data.vms.filter(v => v.pool_id === p.id && v.host_id === h.id && (matchResource(p.name) || matchResource(h.hostname) || matchResource(v.name))).map(v => <a className={`host-link ${vm?.id === v.id ? "selected" : ""} ${v.freshness === "fresh" && v.state === "shut off" ? "vm-off" : ""}`} key={v.id} aria-current={vm?.id === v.id ? "page" : undefined} href={`#/vms/${v.id}`}
+                  onContextMenu={e => { e.preventDefault(); setVmMenu({ vm: v, x: e.clientX, y: e.clientY }); }}><Icon kind="vm" />{v.name}</a>)}</div></div>
               )}</div>
             </details>)}
             {navigationSite && !navigationPools.length && <p className="empty">{resourceSearch ? "No matching resources in this site." : "No hosts in this site."}</p>}
@@ -1446,6 +1465,59 @@ function App() {
           </details>}
         </main>
       </div>
+      {vmMenu && (() => {
+        const target = vmMenu.vm;
+        const targetHost = data.hosts.find(h => h.id === target.host_id);
+        const powerGate = powerBlocker(target, targetHost);
+        const deleteGate = deleteBlocker(target, targetHost);
+        const consoleGate = consoleBlocker(target, targetHost);
+        const closeMenu = () => setVmMenu(null);
+        return <ul className="context-menu" role="menu" style={{ left: Math.min(vmMenu.x, window.innerWidth - 180), top: Math.min(vmMenu.y, window.innerHeight - 260) }}
+          onContextMenu={e => e.preventDefault()}>
+          {powerActions.map(item => {
+            const disabled = busy || Boolean(error) || Boolean(powerGate) || !item.when(target.state);
+            return <li key={item.action} role="none"><button type="button" role="menuitem" className={item.action.startsWith("force-") ? "danger" : undefined}
+              disabled={disabled} title={powerGate || (!item.when(target.state) ? `Unavailable while ${target.state || "unknown"}` : undefined)}
+              onClick={() => {
+                closeMenu();
+                location.hash = `#/vms/${target.id}`;
+                if (item.confirm) setMenuPower({ vm: target, item });
+                else void (async () => {
+                  try {
+                    await api(`vms/${encodeURIComponent(target.id)}/power`, "POST", { request_id: crypto.randomUUID(), action: item.action });
+                    setNotice(`${item.label} queued for ${target.name}. Follow its progress in Recent tasks.`);
+                    await reload();
+                  } catch (e) { setNotice((e as Error).message); }
+                })();
+              }}><Icon kind={item.icon} />{item.label}</button></li>;
+          })}
+          <li role="none"><hr /></li>
+          <li role="none"><button type="button" role="menuitem" disabled={Boolean(consoleGate)} title={consoleGate || undefined}
+            onClick={() => { closeMenu(); location.hash = `#/console/${target.id}`; }}>Open console</button></li>
+          <li role="none"><button type="button" role="menuitem" className="danger" disabled={busy || Boolean(error) || Boolean(deleteGate)} title={deleteGate || undefined}
+            onClick={() => { closeMenu(); setMenuDeleteVM(target); setMenuDeleteSignal(s => s + 1); }}><Icon kind="stop" />Delete…</button></li>
+        </ul>;
+      })()}
+      {menuPower && <dialog className="confirm-dialog" open aria-labelledby="menu-power-title"
+        onClose={() => setMenuPower(null)}
+        onCancel={() => setMenuPower(null)}>
+        <form onSubmit={e => { e.preventDefault(); void (async () => {
+          try {
+            await api(`vms/${encodeURIComponent(menuPower.vm.id)}/power`, "POST", { request_id: crypto.randomUUID(), action: menuPower.item.action });
+            setNotice(`${menuPower.item.label} queued for ${menuPower.vm.name}. Follow its progress in Recent tasks.`);
+            setMenuPower(null);
+            await reload();
+          } catch (err) { setNotice((err as Error).message); }
+        })(); }}>
+          <h2 id="menu-power-title">{menuPower.item.label} {menuPower.vm.name}?</h2>
+          {(menuPower.item.confirm || menuPower.vm.protected) && <p>{menuPower.item.confirm}{menuPower.vm.protected && " This is the Controller appliance: central management stops until it runs again; recover it from the host-local page."}</p>}
+          <div className="actions"><button type="button" onClick={() => setMenuPower(null)}>Cancel</button>
+            <button className={menuPower.item.action.startsWith("force-") ? "danger" : "primary"}>Confirm {menuPower.item.label.toLowerCase()}</button></div>
+        </form>
+      </dialog>}
+      {menuDeleteVM && <VMDelete vm={menuDeleteVM} host={data.hosts.find(h => h.id === menuDeleteVM.host_id)} api={api} reload={reload}
+        busy={busy} unavailable={Boolean(error)} onNotice={setNotice} openSignal={menuDeleteSignal} showButton={false}
+        onOpenChange={open => { if (!open) setMenuDeleteVM(null); }} />}
       <footer className="statusbar"><span>{loading ? "Loading inventory…" : error ? "Controller request failed · inventory may be out of date" : "Observed state · refreshes every 10 seconds"}</span><span>{data.hosts.length} hosts · {data.hosts.filter((h) => h.connection === "fresh").length} fresh connections</span><a href="/source">Nex source code</a></footer>
     </div>
   );

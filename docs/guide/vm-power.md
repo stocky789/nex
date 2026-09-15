@@ -7,7 +7,8 @@ virtual machine from Nex Controller. Each request becomes a durable task for the
 assigned host; the host's next report shows the resulting state. Shut down and Reboot are
 ACPI requests that a guest without ACPI support, such as a firmware boot menu, ignores.
 Force reboot is a hard guest reset, not ACPI. Editing a VM is covered in
-[Edit a virtual machine](edit-virtual-machine.md); deleting VMs is not yet available.
+[Edit a virtual machine](edit-virtual-machine.md); deletion is covered in
+[Delete a virtual machine](delete-virtual-machine.md).
 
 ## Prerequisites
 
@@ -67,6 +68,12 @@ records `vm-power` with the administrator.
 - **Task reports `failed`:** read its error. Common causes are a VM in a paused or
   transitional state, or a prerequisite that failed before the power request was issued.
   Inspect the VM on its host before retrying.
+- **Start fails with *insufficient available memory to start this VM including 2 GiB host
+  reserve*:** the host's currently available memory cannot meet the VM's memory size plus
+  2 GiB for the host. No start was issued and the VM stays stopped. Stop or shrink other VMs
+  on that host, or edit this VM to a smaller memory size, then start it again.
+  A pool autostart refused this way is not retried until the host boots again; start the VM
+  yourself once memory is available.
 - **Task reports `needs_attention`:** the host was interrupted, or the libvirt call failed or timed out
   after the request could have taken effect, and the observed state cannot confirm the outcome (for example a reboot or force-reboot, or a shutdown of a VM
   still running). Check the VM's current state and submit a new request; Nex never

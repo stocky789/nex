@@ -6,12 +6,28 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.2.6` →
-> Debian `0.2.6`).
+> development software. Builds use the newest numbered changelog heading (`0.2.7` →
+> Debian `0.2.7`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.2.7] — 2026-09-15
+
+### Minor Feature
+
+- Delete a stopped guest VM from **General** or by right-clicking it in **Resources**. You can keep
+  the disk files on the host or permanently delete them.
+- Right-click a VM in **Resources** for Start, Shut down, Reboot, Force reboot, Force stop, Open
+  console, and Delete.
+
+### Bug Fixes
+
+- Creating a VM, or changing a stopped one, no longer fails with *insufficient available memory
+  including 2 GiB host reserve* just because the host is short of free memory at that moment.
+  Free memory is now checked when the VM starts, so it is created and stays stopped, and starting
+  it explains that there is not enough memory available (BUG-0195).
 
 ## [0.2.6] — 2026-09-15
 

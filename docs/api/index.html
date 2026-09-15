@@ -60,6 +60,7 @@
 <li><a href="#hostConsoleStream">GET /api/v1/hosts/{id}/console/{ticket}</a></li>
 <li><a href="#mediaVM">POST /api/v1/vms/{id}/media</a></li>
 <li><a href="#updateVM">PUT /api/v1/vms/{id}</a></li>
+<li><a href="#deleteVM">DELETE /api/v1/vms/{id}</a></li>
 <li><a href="#downloadMedia">POST /api/v1/media/download</a></li>
 </ul></nav>
 <section><h2>refresh-inventory</h2><pre>{
@@ -205,6 +206,17 @@
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
   &quot;semantics&quot;: &quot;Issue one libvirt start/shutdown/reboot/destroy/reset for the named VM on this host. start and force-stop are idempotent against the observed state; shutdown and reboot are ACPI requests the guest may ignore; force-reboot maps to virsh reset, is running-only, and shares reboot&#x27;s interrupt ambiguity; paused or transitional states are refused. The stage is journaled before the single request so an interruption is reconciled by observation only: succeeded when the observed state proves the outcome, otherwise needs_attention; never a second request. Queue-capable hosts (vm-power-queue-v1) persist FIFO command admission and check after_operation_id is a successful same-VM task before effects; no retry loop for genuine failures. Host-received queued commands survive restart/replacement and are reported as managed outcomes for passive adoption. Shutdown/reboot completion remains ACPI acceptance, not proof of guest shutdown.&quot;
+}</pre></section>
+<section><h2>vm-delete</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;capability&quot;: &quot;vm-delete-v1&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/VMDeleteRequest&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Undefine a stopped managed VM. Requires observed shut off. delete_disks=false retains qcow2 paths in the journal; delete_disks=true unlinks them after undefine. UEFI guests use virsh undefine --nvram. Succeeded deletes omit the VM from Applied.vms and emit DeletedVMs tombstones for Controller mirror removal. Interrupted undefine/wipe is reconciled by observation only.&quot;
 }</pre></section>
 <section><h2>vm-media</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -4898,6 +4910,135 @@
     }
   }
 }</pre></details></section>
+<section id="deleteVM"><h2>DELETE <code>/api/v1/vms/{id}</code></h2>
+<p>Delete a stopped guest VM on its assigned host</p><p>Implemented in development product 0.2.6, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different body under the same id is 409. Body delete_disks=false retains guest disk files on storage after undefine; delete_disks=true unlinks them after undefine. Requires observed shut off with fresh host report, vm-delete-v1 on the host, and refuses the Controller appliance. One vm-update, vm-power, vm-media or vm-delete request per VM may be in flight. Core journals the delete, reports a DeletedVMs tombstone, and Controller drops its vm-create mirror. Poll operations for the result; HTTP 202 is not proof the domain is gone.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;deleteVM&quot;,
+  &quot;summary&quot;: &quot;Delete a stopped guest VM on its assigned host&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.2.6, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different body under the same id is 409. Body delete_disks=false retains guest disk files on storage after undefine; delete_disks=true unlinks them after undefine. Requires observed shut off with fresh host report, vm-delete-v1 on the host, and refuses the Controller appliance. One vm-update, vm-power, vm-media or vm-delete request per VM may be in flight. Core journals the delete, reports a DeletedVMs tombstone, and Controller drops its vm-create mirror. Poll operations for the result; HTTP 202 is not proof the domain is gone.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.2.6&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;VM UUID.&quot;
+    },
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/DeleteVMRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Delete queued for the VM&#x27;s host.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/DeleteVMResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Replay of an existing request_id with the same body.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/DeleteVMResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed JSON, unknown field, or invalid request_id.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;VM not found as a successfully created guest.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Controller appliance; host not fresh/revoked/outside pool or without vm-delete-v1; request_id reused with different input; another edit/power/media/delete pending; VM not observed shut off; or freshness unknown.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller persistence or internal failure.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
 <section id="downloadMedia"><h2>POST <code>/api/v1/media/download</code></h2>
 <p>Download a public ISO URL on Nex Core</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. JSON rejects unknown fields and bodies over 1 MiB. Supply a stable request_id, verified storage_id, .iso basename name and public HTTP(S) url (at most 4096 characters; no userinfo or fragment). Controller queues iso-import on the selected storage host; it never fetches or stages URL bytes. New requests require a fresh active host with managed-vm-v1 and iso-download-v1. Identical retries return the original operation even while the host is unavailable; changed payload returns 409. Core validates public destinations on every DNS lookup and redirect without Controller credentials or environment proxies, bounds streaming to destination free space with a reserve, verifies ISO9660 and computes size/SHA-256 before publishing. Initial size_bytes=0 and sha256 empty; successful host inventory supplies verified metadata. URL is omitted from client responses and inventory. Poll media and operations for completion. Host journal owns download recovery; ambiguous interrupted imports require attention. Older hosts do not receive URL commands; uploading a local file remains available.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
@@ -5615,6 +5756,7 @@
         &quot;vm-create&quot;,
         &quot;vm-update&quot;,
         &quot;vm-power&quot;,
+        &quot;vm-delete&quot;,
         &quot;vm-media&quot;,
         &quot;pool-member-join&quot;,
         &quot;pool-storage-reconcile&quot;
@@ -5670,6 +5812,17 @@
           &quot;type&quot;: &quot;null&quot;
         }
       ]
+    },
+    &quot;delete&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/VMDeleteRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;vm-delete payload.&quot;
     },
     &quot;vm_media&quot;: {
       &quot;anyOf&quot;: [
@@ -5784,6 +5937,18 @@
               ],
               &quot;properties&quot;: {
                 &quot;power&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;delete&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;delete&quot;: {
                   &quot;not&quot;: {
                     &quot;type&quot;: &quot;null&quot;
                   }
@@ -5962,6 +6127,18 @@
             },
             {
               &quot;required&quot;: [
+                &quot;delete&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;delete&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
                 &quot;vm_media&quot;
               ],
               &quot;properties&quot;: {
@@ -6047,6 +6224,18 @@
                   }
                 }
               }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;delete&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;delete&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
             }
           ]
         }
@@ -6123,6 +6312,18 @@
                   }
                 }
               }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;delete&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;delete&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
             }
           ]
         }
@@ -6194,6 +6395,18 @@
               ],
               &quot;properties&quot;: {
                 &quot;power&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;delete&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;delete&quot;: {
                   &quot;not&quot;: {
                     &quot;type&quot;: &quot;null&quot;
                   }
@@ -6284,6 +6497,94 @@
       &quot;if&quot;: {
         &quot;properties&quot;: {
           &quot;kind&quot;: {
+            &quot;const&quot;: &quot;vm-delete&quot;
+          }
+        },
+        &quot;required&quot;: [
+          &quot;kind&quot;
+        ]
+      },
+      &quot;then&quot;: {
+        &quot;required&quot;: [
+          &quot;delete&quot;
+        ],
+        &quot;properties&quot;: {
+          &quot;delete&quot;: {
+            &quot;not&quot;: {
+              &quot;type&quot;: &quot;null&quot;
+            }
+          }
+        },
+        &quot;not&quot;: {
+          &quot;anyOf&quot;: [
+            {
+              &quot;required&quot;: [
+                &quot;storage&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;storage&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;network&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;network&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;media&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;media&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;vm&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;vm&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;power&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;power&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      &quot;if&quot;: {
+        &quot;properties&quot;: {
+          &quot;kind&quot;: {
             &quot;const&quot;: &quot;vm-update&quot;
           }
         },
@@ -6346,6 +6647,18 @@
               ],
               &quot;properties&quot;: {
                 &quot;power&quot;: {
+                  &quot;not&quot;: {
+                    &quot;type&quot;: &quot;null&quot;
+                  }
+                }
+              }
+            },
+            {
+              &quot;required&quot;: [
+                &quot;delete&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;delete&quot;: {
                   &quot;not&quot;: {
                     &quot;type&quot;: &quot;null&quot;
                   }
@@ -6603,6 +6916,7 @@
         &quot;vm-create&quot;,
         &quot;vm-update&quot;,
         &quot;vm-power&quot;,
+        &quot;vm-delete&quot;,
         &quot;vm-media&quot;,
         &quot;pool-member-join&quot;,
         &quot;pool-storage-reconcile&quot;
@@ -9774,6 +10088,17 @@
       &quot;maxItems&quot;: 10000,
       &quot;description&quot;: &quot;IDs of entries in vms whose persistent domain libvirt no longer lists (for example after an out-of-band undefine). The journal still holds them; Controller records each as a needs_attention operation instead of adopting it, and the host&#x27;s managed-vms check reports failed. Omitted when libvirt lists every VM or cannot answer.&quot;
     },
+    &quot;deleted_vms&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/VMTombstone&quot;
+      },
+      &quot;maxItems&quot;: 10000,
+      &quot;description&quot;: &quot;Intentional VM deletions from succeeded vm-delete journal entries. Controller deletes its vm-create mirror for each tombstone. Distinct from missing_vms (accidental undefine while the journal still expects the VM).&quot;
+    },
     &quot;appliances&quot;: {
       &quot;type&quot;: [
         &quot;array&quot;,
@@ -10341,5 +10666,97 @@
   ],
   &quot;additionalProperties&quot;: false,
   &quot;description&quot;: &quot;The complete desired definition of an existing VM plus a stable request_id. Disks are matched to the current definition by name (storage, size and provisioning of an existing disk cannot change); interfaces by MAC, so send existing interfaces with the address the VM list reports and leave mac empty only for new ones.&quot;
+}</pre></details>
+<details id="DeleteVMRequest"><summary>DeleteVMRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Nonblank after trimming whitespace; at most 200 UTF-8 bytes; no CR, LF, or NUL. Persist before sending; the same id replays the same operation.&quot;
+    },
+    &quot;delete_disks&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;When true, Core unlinks the guest disk files after undefine. When false (default), files stay on storage and are recorded as retained.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;example&quot;: {
+    &quot;request_id&quot;: &quot;&lt;persisted-client-request-id&gt;&quot;,
+    &quot;delete_disks&quot;: false
+  }
+}</pre></details>
+<details id="DeleteVMResponse"><summary>DeleteVMResponse</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;delete_disks&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;operation&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;vm_id&quot;,
+    &quot;delete_disks&quot;,
+    &quot;operation&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="VMTombstone"><summary>VMTombstone</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;tombstone&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;tombstone&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;Intentional vm-delete tombstone from Core so Controller drops its mirror. Not the same as missing_vms.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.VMTombstone&quot;
+}</pre></details>
+<details id="VMDeleteRequest"><summary>VMDeleteRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;delete_disks&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;vm_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;delete_disks&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-type&quot;: &quot;protocol.VMDeleteRequest&quot;
 }</pre></details>
 </section></main></html>
