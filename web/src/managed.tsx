@@ -28,6 +28,24 @@ const task = (value: Registration) => <>{status(value.status)}{value.error && <p
 // Each registration form belongs to the pool tab that opens it; "" means no form is open.
 export const formTab = (form: string) => ({ vm: "Virtual machines", network: "Networking", iso: "ISO library" })[form] || "";
 
+// Last path segment of a direct download URL, for prefilling the ISO name field.
+export function isoNameFromURL(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  let base = "";
+  try {
+    base = decodeURIComponent(new URL(trimmed).pathname.split("/").filter(Boolean).pop() || "");
+  } catch {
+    // Incomplete while typing: still pick up a trailing .iso segment when present.
+    const match = trimmed.match(/\/([^/?#]+\.iso)(?:[?#]|$)/i);
+    if (match) {
+      try { base = decodeURIComponent(match[1]); } catch { base = match[1]; }
+    }
+  }
+  if (!base || base === "." || base === ".." || !/\.iso$/i.test(base)) return "";
+  return base.slice(0, 100);
+}
+
 type Pending = Record<string, { payload: string; id: string }>;
 function pendingRequests(key: string): Pending {
   try {
@@ -213,9 +231,14 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
         <label>Destination storage<select required value={uploadStorage} onChange={e => setUploadStorage(e.target.value)} disabled={busy || uploading}><option value="">Select ISO-ready storage</option>{isoReadyStorage.map(s => <option key={s.id} value={s.id}>{s.name} · {hostName(s.host_id)}</option>)}</select></label>
         <label>ISO source<select value={isoSource} disabled={busy || uploading} onChange={e => { setIsoSource(e.target.value); setError(""); }}><option value="file">Upload from computer</option><option value="url">Download from public URL</option></select></label>
         {isoSource === "url" ? <>
-          <label>Public ISO URL<input type="url" required maxLength={4096} value={isoURL} disabled={busy} onChange={e => setIsoURL(e.target.value)} placeholder="https://downloads.example.org/installer.iso" /></label>
+          <label>Public ISO URL<input type="url" required maxLength={4096} value={isoURL} disabled={busy} onChange={e => {
+            const url = e.target.value;
+            const suggested = isoNameFromURL(url);
+            setIsoURL(url);
+            setIsoName(name => (!name.trim() || name === isoNameFromURL(isoURL)) ? (suggested || name) : name);
+          }} placeholder="https://downloads.example.org/installer.iso" /></label>
           <label>ISO name<input required maxLength={100} pattern=".*[.][iI][sS][oO]" value={isoName} disabled={busy} onChange={e => setIsoName(e.target.value)} placeholder="installer.iso" /></label>
-          <p className="help">Use a direct public HTTP or HTTPS download link. Nex Core downloads and validates the ISO on the selected host; the download continues if you close this page.</p>
+          <p className="help">Use a direct public HTTP or HTTPS download link. The name is filled from the URL path; edit it if you want. Nex Core downloads and validates the ISO on the selected host; the download continues if you close this page.</p>
           {uploadStorage && !canDownload && <p className="warning">URL downloads need a freshly connected host with download support. Reconnect or upgrade Nex Core.</p>}
         </> : <div className="iso-drop" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (e.dataTransfer.files.length !== 1) { setError("Drop one ISO image at a time."); return; } chooseFile(e.dataTransfer.files[0]); }}>
           <label>ISO file<input ref={input} type="file" accept=".iso,application/x-iso9660-image" disabled={busy || uploading} onChange={e => chooseFile(e.target.files?.[0] || null)} /></label>

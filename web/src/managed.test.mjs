@@ -26,7 +26,7 @@ buildSync({
 // reload path that first showed the stale panel.
 let pending = {};
 globalThis.sessionStorage = { getItem: () => JSON.stringify(pending), setItem() {} };
-const { ManagedVMs, formTab } = await import(`file://${outfile}`);
+const { ManagedVMs, formTab, isoNameFromURL } = await import(`file://${outfile}`);
 
 const props = {
   account: "operator", poolID: "pool-1", poolName: "pool", hosts: [], storage: [], networks: [],
@@ -48,6 +48,14 @@ for (const [form, ownTab, heading] of [["network", "Networking", "Register guest
 
 assert.equal(formTab(""), "", "no open form matches no tab");
 assert.equal(formTab("storage"), "", "storage registration lives in its own tab-scoped view");
+
+assert.equal(
+  isoNameFromURL("https://saimei.ftp.acc.umu.se/debian-cd/current/amd64/iso-cd/debian-13.7.0-amd64-netinst.iso"),
+  "debian-13.7.0-amd64-netinst.iso",
+);
+assert.equal(isoNameFromURL("https://downloads.example.org/path/guest%20image.iso?token=1"), "guest image.iso");
+assert.equal(isoNameFromURL("https://downloads.example.org/path/"), "");
+assert.equal(isoNameFromURL(""), "");
 
 // BUG-0152: adopted Core outcomes retain their original request/status/error, but the
 // Controller's updated_at is when that history was re-observed. Only the exact Core

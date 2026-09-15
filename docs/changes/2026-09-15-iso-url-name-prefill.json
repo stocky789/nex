@@ -1,0 +1,38 @@
+{
+  "summary": "Prefill ISO library URL-download name from the URL path basename. API impact: none — same media/download payload; Controller UI only.",
+  "paths": [
+    "web/src/managed.tsx",
+    "web/src/managed.test.mjs",
+    "docs/guide/create-virtual-machine.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-15-iso-url-name-prefill.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "create-virtual-machine.md notes the ISO name is filled from the URL filename and remains editable.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. POST media/download still takes storage_id, name, and url; only the Controller form prefills name.",
+    "pages": [],
+    "contracts": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "UX convenience only; no milestone change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable state; media records remain host-owned after download."
+  },
+  "verification": {
+    "method": "npm --prefix web run test (isoNameFromURL cases in managed.test.mjs). python3 scripts/check_docs.py --worktree.",
+    "evidence": [
+      "web/src/managed.test.mjs"
+    ]
+  }
+}

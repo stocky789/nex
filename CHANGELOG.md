@@ -18,6 +18,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Minor Feature
 
 - When creating a VM, install media is first in the boot order by default.
+- ISO library URL downloads prefill the ISO name from the filename in the download link.
 
 ### Bug Fixes
 

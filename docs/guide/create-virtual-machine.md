@@ -88,11 +88,12 @@ Use an explicitly selected disposable lab host.
      **Upload and transfer ISO**. Progress, rate and **Cancel** for the upload to Controller
      appear under **Recent tasks**. You can close the form and keep working while the
      upload runs, but keep the Controller browser tab open.
-   - **Download from public URL**: enter the direct **Public ISO URL** and an **ISO name**
-     ending in `.iso`, then select **Download ISO**. The selected host downloads and
-     validates the image; once accepted, you can close the browser. Once Core has received
-     the task, its download continues if Controller disconnects. This source requires a freshly connected host with URL
-     download support; upgrade Nex Core if the form requests it.
+   - **Download from public URL**: enter the direct **Public ISO URL**. **ISO name** is
+     filled from the filename in that URL (edit it if you want; it must end in `.iso`),
+     then select **Download ISO**. The selected host downloads and validates the image;
+     once accepted, you can close the browser. Once Core has received the task, its
+     download continues if Controller disconnects. This source requires a freshly connected
+     host with URL download support; upgrade Nex Core if the form requests it.
 
    Wait for the host task to show `succeeded` before using either source. URL download size
    and SHA-256 appear after the host verifies the completed image; there is no byte-progress
