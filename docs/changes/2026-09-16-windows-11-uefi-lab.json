@@ -1,0 +1,33 @@
+{
+  "summary": "Record a disposable-lab walkthrough installing Windows 11 IoT Enterprise LTSC under UEFI on a fresh Nex Core 0.2.7 host and Controller, with the issues found. API impact: none; exploratory QA report only.",
+  "paths": [
+    "docs/qa/2026-09-16-windows-11-uefi-lab.md",
+    "docs/changes/2026-09-16-windows-11-uefi-lab.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No behavior changed. Guide gaps found for Windows boot prompt, VirtIO driver media and post-install eject are recorded as issues W2, W3 and W7 for the fixing change to address.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. The walkthrough used existing Controller session, media upload/download, VM create, power, media insert and console contracts without changing them.",
+    "pages": [],
+    "contracts": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Findings only; TPM, Secure Boot control and Windows-aware defaults are suggested fix directions pending project owner triage, not scope changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation only; no durable state added."
+  },
+  "verification": {
+    "method": "Fresh ISO install of Nex Core 0.2.7 in a disposable nested-KVM lab, Controller deployed from the Core local UI, Windows ISO upload, VM creation and a complete Windows install driven through the Controller web console with Playwright; host-side virsh reads for evidence. python3 scripts/check_docs.py --worktree and the repository privacy test.",
+    "evidence": [
+      "docs/qa/2026-09-16-windows-11-uefi-lab.md"
+    ]
+  }
+}
