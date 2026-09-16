@@ -54,10 +54,12 @@ disk to other storage and moving a VM to another host are not available in this 
      created before these fields existed shows **On** and **None**, which is what it is already
      running: libvirt gave every UEFI VM the enrolled-keys firmware, and no VM had a TPM.
      Leaving them alone changes nothing about how the guest boots. Both are part of the
-     firmware a guest is installed against, so both need the VM stopped, and both can break an
-     installed guest: turning Secure Boot off or on changes the firmware build, and removing a
-     TPM leaves a guest that sealed BitLocker keys to it unable to unlock. Record a BitLocker
-     recovery key inside the guest before touching its TPM.
+     firmware a guest is installed against, so both need the VM stopped. Turning Secure Boot off
+     or on changes the firmware build. A TPM can be added, but Nex refuses to remove one because
+     the guest may have sealed BitLocker keys or other state to it; recreate the VM if it must have
+     no TPM. Selecting **None** for a VM that already has a TPM therefore fails without changing
+     the VM. Record a BitLocker recovery key inside the guest before adding a TPM or changing
+     Secure Boot.
    - **Install ISO**: choose another ISO already on this VM's host, or **No install media**
      to eject the current one. The ISO library does not have to be the repository that holds
      the VM's disks. Both work while the VM runs; the CD drive keeps its place in the boot order.

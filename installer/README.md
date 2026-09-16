@@ -26,7 +26,9 @@ Every ISO build always rebuilds from the current tree:
 3. `nex-core-local` package from that appliance + source
 4. The ISO itself
 
-Reusing an older `CORE_LOCAL_DEB` is rejected. Set `NEX_VERSION` (default `0.1.5~alpha1`; use `~` for pre-release marks so a later final version sorts above it).
+Reusing an older `CORE_LOCAL_DEB` is rejected. By default the build derives `NEX_VERSION` from the
+newest numbered `CHANGELOG.md` heading. Override it only for a deliberate local build; Debian
+pre-release versions use `~` so the later final version sorts above them.
 Signing defaults to `~/.local/share/nex-dev/nex-appliance-signing.pem`; override with
 `NEX_APPLIANCE_SIGNING_KEY`, `NEX_APPLIANCE_BASE_IMAGE`, and `NEX_APPLIANCE_BASE_SHA256`.
 The build refuses to finish unless Core package source, Controller appliance source,

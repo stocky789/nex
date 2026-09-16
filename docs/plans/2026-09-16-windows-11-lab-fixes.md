@@ -1,12 +1,12 @@
 # Windows 11 UEFI lab fixes
 
 Date: 2026-09-16
-Status: implemented. All eighteen findings fixed and recorded as BUG-0196 through BUG-0213.
-Three further defects surfaced while fixing and verifying them: BUG-0214 (open, recorded not
-fixed), BUG-0215 and BUG-0216 (both fixed). A disposable lab verified the Core-side fixes
-against real libvirt, QEMU and Windows; the Controller, installer and browser fixes remain
-verified only by automated checks and review. See the
-[verification report](../qa/2026-09-16-windows-11-fix-verification.md) and the
+Status: implemented and accepted for this defect batch. All eighteen findings are fixed and
+recorded as BUG-0196 through BUG-0213. Three further defects surfaced while fixing and verifying
+them: BUG-0214, BUG-0215 and BUG-0216 are also fixed. Disposable labs verified the Core-side fixes
+against real libvirt, QEMU and Windows, and deployed Controller, installer and browser acceptance
+closed their applicable checks. See the [verification report](../qa/2026-09-16-windows-11-fix-verification.md),
+[final ISO and Controller acceptance](../qa/2026-09-16-final-iso-controller-acceptance.md) and the
 [handover](2026-09-16-windows-11-batch-handover.md).
 
 ## Authorized scope
@@ -108,12 +108,14 @@ Every fix ships a runnable regression check that fails without it, recorded in
 [the bug ledger](../BUG_LEDGER.md) as BUG-0196 through BUG-0213 with its actual command and
 result.
 
-**Acceptance status, 2026-09-16.** The walkthrough was run. Two of its three clauses are met:
-non-IoT Windows 11 (Enterprise LTSC) installed with a TPM present, and a clean shutdown was
-reported as succeeded — the latter proved by running the pre-fix binary against the same guest
-and reproducing the original false failure. **The third is not met:** the guest's system disk was
-SATA, so a VirtIO install using the driver disc at Setup's disk-selection step was never
-exercised. That clause stays open, and with it this plan's acceptance.
+**Acceptance status, 2026-09-16.** All three walkthrough clauses passed across the recorded
+disposable-lab runs: non-IoT Windows 11 Enterprise LTSC installed with a TPM present; the fixed
+shutdown reported success after the pre-fix binary reproduced the false failure on the same guest;
+and a fresh Windows install loaded the Red Hat VirtIO SCSI driver from the second CD drive, exposed
+the 64 GiB VirtIO system disk and reached OOBE. See the
+[firmware and VirtIO verification](../qa/2026-09-16-firmware-variable-store-verification.md).
 
-The lab was a contributor workstation running the Core engine against libvirt 12.7 / QEMU 11.1,
-not Nex Core. It establishes nothing about packaging, the installer ISO or the Controller UI.
+The original engine-only run used libvirt 12.7 / QEMU 11.1 rather than an installed Nex Core.
+Later final-package and deployed-Controller checks are recorded separately. The independent
+Windows TPM/Secure Boot requirements matrix and current BUG-0213 graceful-shutdown timing remain
+open in the [production-readiness tracker](2026-09-14-production-readiness-handoff.md#vm-foundation-added-2026-09-16).

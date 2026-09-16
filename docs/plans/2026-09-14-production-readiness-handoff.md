@@ -49,7 +49,7 @@ unexecuted items are kept apart.
 | Placement approval on master | Controller still validates placement from its mirror of host reports; the master Core must approve it from its own records. |
 | Physical SAN/NAS and fence devices | Needs an explicitly disposable supported hardware profile covering durability, power loss and exclusion. Nested virsh fencing does not certify physical devices. |
 | Recovery, mobility and HA | Snapshots, verified backup/restore, permanent host/master loss, migration, upgrades and separately gated automatic HA/failback keep their platform gates. Shared storage does not provide them. |
-| Latest ISO full installation | The tenth ISO passed artifact audit and the native wizard only. The full BIOS install/persistence evidence belongs to the seventh ISO. UEFI and physical hardware are unaccepted. |
+| Latest ISO full installation | Nex Core 0.2.9 passed BIOS/UEFI boot-menu checks and an unattended offline UEFI installation, first boot and reboot under TCG. Secure Boot host installation, the full Phase 3 multi-disk/network/recovery gate and physical hardware remain unaccepted. |
 | Release and CI | Needs real hosted GitHub/Gitea runs, a supported-version/hardware scope, source-delivery/component/firmware evidence and an artwork redistribution review. |
 
 ### VM foundation, added 2026-09-16

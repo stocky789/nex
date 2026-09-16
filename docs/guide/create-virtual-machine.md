@@ -230,8 +230,8 @@ Use an explicitly selected disposable lab host.
         operating system**: Windows starts with TPM 2.0 because Windows 11 refuses to install
         without one, everything else starts with None. The device is emulated per VM, and its
         state is kept on the host with that VM and removed when the VM is deleted. Disabled
-        with **Not available with BIOS** under BIOS firmware. Like Secure Boot, the TPM can
-        only be changed later while the VM is stopped.
+        with **Not available with BIOS** under BIOS firmware. A TPM can be added later while the
+        VM is stopped; Nex refuses to remove one because guest secrets may depend on its state.
       - **Install ISO** — an optional transferred ISO, or **No install media**. Any ISO
         already imported on this placement host can be attached, including one stored on a
         different repository from the VM's disks. The ISO is attached read-only as a SATA
@@ -254,8 +254,8 @@ Use an explicitly selected disposable lab host.
       manual MAC of each interface and the resolved boot order. Under **Lifecycle**:
       - **Start after creation** — the host starts the VM once, as the last step of the
         creation task, after every disk exists and the definition is verified. The start is
-        attempted once and is not retried; if it fails, the VM is still created and the task
-        reports `needs_attention` with the reason.
+        attempted once and is not retried; if it fails, creation still reports `succeeded` and a
+        separate failed power task records why the created VM stayed stopped.
       - **Start automatically when the host boots** — sets the VM's autostart property on the
         host. It does not start the VM now.
 6. Select **Create stopped VM** (or **Create and start VM**, when start after creation is
@@ -428,8 +428,9 @@ failed and uncertain transfers show their own status.
 - **Windows 11 Setup says the PC does not meet system requirements:** Setup does not say which
   requirement. Check on the VM's page that firmware is **UEFI**, **Secure Boot** is **On** and
   **TPM** is **TPM 2.0**, and that the VM has at least 2 vCPUs, 4096 MiB of memory and a 64 GiB
-  system disk. Secure Boot and the TPM can be corrected from **Edit** while the VM is stopped;
-  Setup must then be restarted, because it checks them once at the start.
+  system disk. Secure Boot can be changed and a missing TPM can be added from **Edit** while the
+  VM is stopped. Nex refuses TPM removal; recreate the VM if it must have no TPM. Restart Setup
+  after either addition or firmware change, because it checks the requirements at the start.
 - **A Maximum VM never gives memory back:** on Windows the balloon driver is missing; install
   the virtio-win [guest tools](guest-tools.md). On Linux the driver is in the kernel, and only
   memory the guest counts as free comes back, so a guest holding a large file cache can sit
@@ -445,10 +446,10 @@ failed and uncertain transfers show their own status.
   bypass an ambiguous task; unknown state does not prove that no disk or VM exists.
 - **A task reports `failed` or `needs_attention`:** inspect its error and the selected
   host's actual resources. After correcting a definite failed storage/network check, submit
-  a new registration; an uncertain registration retains its reservation. Failed or uncertain
-  VM creation keeps the VM name reserved; remove a stopped failed guest with
-  [Delete a virtual machine](delete-virtual-machine.md) when Core supports it. Never treat a
-  failed task as proof that its disk or guest definition is absent.
+  a new registration; an uncertain registration retains its reservation. A terminal VM creation
+  failure before Core defines a VM remains in task history but does not create a VM row or reserve
+  its name or MAC. An uncertain outcome can still represent a disk or guest definition, so inspect
+  Core's fresh inventory before retrying and never treat uncertainty as proof of absence.
 - **Observed state is unknown or stale:** restore connectivity and wait for fresh libvirt
   observations. Controller loss does not stop resident VMs and does not authorize another
   writable instance. Retain host-local recovery access.

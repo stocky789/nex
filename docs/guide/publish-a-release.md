@@ -25,7 +25,7 @@ APT archive and the ISO to the download tree. [Return to the guide](README.md).
 - Maintainer access to the Nex repository on the configured Git forge. The runner needs Docker;
   it may execute jobs inside a container, since the build locates the workspace on the Docker
   host itself.
-- `CHANGELOG.md` has a `## [X.Y.Z-preN]` section for the version being released and it is the
+- `CHANGELOG.md` has a `## [X.Y.Z]` or `## [X.Y.Z-preN]` section for the version being released and it is the
   newest version heading. Entries under `[Unreleased]` are not published: move them under the
   version heading.
 - Repository secret `NEX_APPLIANCE_SIGNING_KEY`: the Ed25519 PEM private key that signs the
@@ -53,7 +53,7 @@ APT archive and the ISO to the download tree. [Return to the guide](README.md).
 
 ## Steps
 
-1. Record the release in `CHANGELOG.md`: keep appending to the newest `## [X.Y.Z-preN]`
+1. Record the release in `CHANGELOG.md`: keep appending to the newest `## [X.Y.Z]` or `## [X.Y.Z-preN]`
    heading while that version is in development, or add a new heading above it to start the
    next version. Its section becomes the release notes.
 2. Confirm the version resolves before pushing:
@@ -62,7 +62,9 @@ APT archive and the ISO to the download tree. [Return to the guide](README.md).
    python3 scripts/release-version.py --current --format both
    ```
 
-   This prints the tag version and the Debian version (`0.1.6-alpha1 0.1.6~alpha1`).
+   This prints the tag version and Debian version. A final release prints the same value twice
+   (`0.2.9 0.2.9`); a prerelease converts the tag suffix to Debian ordering
+   (`0.1.6-alpha1 0.1.6~alpha1`).
 3. After the licensing evidence is complete, push to `main`. Watch the **Release** workflow: it resolves the version, builds the
    appliance, both packages and the ISO, checks each artifact declares the released version,
    then creates the release. A second push at the same version runs again and replaces the
@@ -70,12 +72,13 @@ APT archive and the ISO to the download tree. [Return to the guide](README.md).
 
 ## Expected result
 
-The repository's **Releases** page shows `Nex Core X.Y.Z~preN` at tag `vX.Y.Z-preN`, marked
-pre-release for a `-preN` version, with the changelog section as its notes and four assets:
+The repository's **Releases** page shows `Nex Core X.Y.Z` at tag `vX.Y.Z` for a final release, or
+the Debian-form `Nex Core X.Y.Z~preN` at tag `vX.Y.Z-preN` for a prerelease. A `-preN` version is
+marked prerelease. The changelog section supplies the notes and the release has four assets:
 
-- `nex-core-X.Y.Z~preN-amd64.iso` and its `.sha256` sidecar
-- `nex-core-local_X.Y.Z~preN_amd64.deb`
-- `nex-controller_X.Y.Z~preN_amd64.deb`
+- `nex-core-<Debian-version>-amd64.iso` and its `.sha256` sidecar
+- `nex-core-local_<Debian-version>_amd64.deb`
+- `nex-controller_<Debian-version>_amd64.deb`
 
 The tag points at the commit that built the release. Pushing the same version again deletes
 the previous release, moves the tag to the new commit and uploads fresh assets, so a version
@@ -83,7 +86,7 @@ has exactly one release and it always matches the newest build.
 
 With deploy secrets set, `https://<site>/apt/` also serves the new packages in the signed
 `Release`/`Packages` index, so enrolled hosts see the update under **Updates**, and
-`https://<site>/downloads/X.Y.Z~preN/` serves the ISO with `latest` pointing at the newest
+`https://<site>/downloads/<Debian-version>/` serves the ISO with `latest` pointing at the newest
 release; the three oldest-beyond-three ISO releases are pruned. The workflow then fetches the
 published index and the ISO checksum over HTTPS and fails if either is missing or does not
 list the released version.

@@ -1,11 +1,9 @@
 # Handover — Windows 11 defect batch and VM usage observation
 
 Date: 2026-09-16
-Release: **0.2.9** in the current worktree (`release-version.py --current` resolves
-`0.2.9 0.2.9`). The local 0.2.9 artifacts are built and verified but are not tagged or published.
-
-Everything below is uncommitted working-tree state. No commits were made; Git remains the project
-owner's.
+Release: **0.2.9** (`release-version.py --current` resolves `0.2.9 0.2.9`). The verified source
+tree is recorded in commit `76a28b6`; the local artifacts are built and verified but are not tagged
+or published.
 
 ## What landed
 
