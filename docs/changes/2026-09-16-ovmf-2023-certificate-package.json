@@ -1,0 +1,44 @@
+{
+  "summary": "Package Debian ovmf-generic 2026.05-2 from an isolated signed sid source with its matching edk2 source, checksum manifest and offline Microsoft 2023 certificate-template screen; verify parsed installed EFI db certificates by exact fingerprint and validity; add python3-virt-firmware as an installed Core dependency. API impact: none.",
+  "paths": [
+    "installer/packages.txt",
+    "installer/build.sh",
+    "installer/late-install.sh",
+    "installer/check.sh",
+    "packaging/core-local/build-inside.sh",
+    "tests/integration/iso-smoke.py",
+    "tests/integration/fresh_install_host.py",
+    "docs/LICENSING.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/qa/2026-09-16-ovmf-2023-certificate-package.md",
+    "docs/changes/2026-09-16-ovmf-2023-certificate-package.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The installer has no changed operator step; this is a packaged firmware and dependency correction.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. This changes ISO package contents only; no Controller/Core or client API request, response, authorization or state flow changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Exact-tree ISO evidence now passed, but the existing external-release gate remains open pending complete source-delivery and redistribution evidence.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Build and package artifacts add no Nex durable runtime state."
+  },
+  "verification": {
+    "method": "Inspected the ignored signed Debian sid retrieval evidence; reran the isolated sid APT download/source commands in the pinned ISO-builder container; extracted the exact package; then inspected exact-tree final development ISO SHA-256 403dc489fc8fb7d948fe3d27a561c4203a54642c27ac18141dae6ede4c84267c through static package/source inspection and disposable installation. Its parsed db fingerprint and checkend gate passed for Microsoft UEFI CA 2023 and Windows UEFI CA 2023; the final run emitted INSTALL_PASS, OVMF_2023_CERTIFICATES_PASS, ROOT_ONLY_PASS, FIRST_BOOT_PASS and REBOOT_PASS. External redistribution remains open.",
+    "evidence": [
+      "installer/check.sh",
+      "tests/integration/iso-smoke.py",
+      "tests/integration/fresh_install_host.py",
+      "docs/qa/2026-09-16-ovmf-2023-certificate-package.md"
+    ]
+  }
+}

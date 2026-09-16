@@ -573,15 +573,20 @@ func TestCreateVMSpecificationReferencesAndScope(t *testing.T) {
 	l.report(protocol.Result{OperationID: dup.Operation.ID, Status: "failed", Error: "MAC address 52:54:00:aa:bb:01 is already used by VM guest1 on this host"})
 	var vms []managedAppliance
 	read(t, a.call("GET", "/api/v1/vms", nil, nil, 200), &vms)
-	failed := 0
 	for _, vm := range vms {
-		if vm.ID == dup.VMID && vm.Status == "failed" && strings.Contains(vm.Error, "already used by VM guest1") {
-			failed++
+		if vm.ID == dup.VMID {
+			t.Fatalf("failed create remained in VM list: %+v", vms)
 		}
 	}
-	if len(vms) != 3 || failed != 1 {
-		t.Fatalf("host-reported conflict missing from the VM list: %+v", vms)
+	var operations []protocol.Operation
+	read(t, a.call("GET", "/api/v1/operations", nil, nil, 200), &operations)
+	for _, operation := range operations {
+		if operation.ID == dup.Operation.ID && operation.Status == "failed" && strings.Contains(operation.Error, "already used by VM guest1") {
+			goto duplicateRecorded
+		}
 	}
+	t.Fatalf("host-reported conflict missing from task history: %+v", operations)
+duplicateRecorded:
 	// The host must be in the VM's pool, freshly connected and still active.
 	other := a.enroll(a.token(a.site(), ""), csr(t))
 	wrongPool := l.spec("guest2")

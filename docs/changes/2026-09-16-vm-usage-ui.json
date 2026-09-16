@@ -1,0 +1,45 @@
+{
+  "summary": "Render the existing host-reported VM usage observation in VM details: CPU as a percentage of allocated vCPUs, assigned and maximum memory as allocation, resident host memory as host cost, optional disk used/capacity, and the sample age. Missing metrics and missing observations are shown as unknown rather than zero. API impact: existing contract; the UI consumes vms[].usage without changing it.",
+  "paths": [
+    "web/src/managed.tsx",
+    "web/src/managed.test.mjs",
+    "tests/integration/managed_vm_browser.py",
+    "CHANGELOG.md",
+    "docs/API.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "docs/changes/2026-09-16-vm-usage-ui.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "VM details now has a read-only usage panel. The guide explains CPU's allocated-vCPU basis, allocation versus guest-used memory, host memory cost, optional disk values, and why absent or stale data is not zero.",
+    "pages": [
+      "docs/guide/edit-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "API impact: existing contract. The UI consumes implemented GET /api/v1/vms vms[].usage without changing an endpoint, request, response field, authorization rule, or Core command; docs/API.md now describes the VM details panel.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Completes the existing UI half of roadmap item 8 without changing delivery order. Deployed current Core/Controller and real-browser acceptance now passed; no published roadmap page changed.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Usage remains ephemeral Core observation. The UI renders the newest host report and stores no pool, VM, or measurement state; a fresh Controller receives the next observation from the host."
+  },
+  "verification": {
+    "method": "python3 tests/integration/managed_vm_browser.py --simulated with ignored .cache evidence, npm --prefix web run test, npm --prefix web run typecheck, npm --prefix web run build, python3 scripts/check_docs.py --worktree, and python3 -m unittest discover -s tests -p 'test_repository_privacy.py'. The simulated browser walkthrough injects the existing GET /api/v1/vms usage shape after VM creation, checks reported and absent usage, nullable host memory and disk capacity, CPU's allocated-vCPU wording, sample age, stale state and desktop/360px layout, and scrolls the usage panel into view before desktop and stale captures. Real-browser acceptance then passed against deployed current Controller/Core: a running VM rendered CPU 2% of allocated vCPUs over a 5 s window, 4 GiB assigned/maximum, 4 GiB host cost, 5.9 GiB used/32 GiB capacity and a current sample age; an existing shut-off VM with usage null rendered the explicit not-zero explanation; no page errors occurred. Sanitized inspected results and screenshots remain ignored local evidence and are intentionally not linked from this public record.",
+    "evidence": [
+      "tests/integration/managed_vm_browser.py",
+      "web/src/managed.test.mjs",
+      "docs/guide/edit-virtual-machine.md"
+    ]
+  }
+}

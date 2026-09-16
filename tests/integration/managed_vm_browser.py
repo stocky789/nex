@@ -8,7 +8,7 @@ stopped VM and registers resources only in the selected disposable lab.
 """
 import re
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -158,6 +158,9 @@ def acceptance(config, password, iso, evidence, mode):
             row = page.locator('tr:not([aria-label="ISO upload to Controller"])').filter(has_text=name)
             expect(row).to_contain_text(marker, timeout=180000)
         pending = []
+        # The login screen skips an unauthenticated session probe; make this browser look like
+        # one whose previous session expired so the existing loading-state check remains valid.
+        page.add_init_script("localStorage.setItem('nex-signed-in', '1')")
         page.route('**/api/v1/session', lambda route: pending.append(route))
         page.goto(config['url'])
         expect(page.get_by_text('Connecting to Nex Controller…')).to_be_visible()
@@ -352,7 +355,10 @@ def acceptance(config, password, iso, evidence, mode):
         boot = page.get_by_role('group', name='Boot order', exact=True)
         expect(boot.locator('li')).to_have_count(3)
         for _ in range(2):  # the Up control is the first button in the row
-            boot.locator('li').filter(has_text='Install media').get_by_role('button').first.click()
+            up = boot.locator('li').filter(has_text='Install media').get_by_role('button').first
+            if up.is_disabled():
+                break
+            up.click()
         expect(boot.locator('li').first).to_contain_text('Install media')
         capture('boot-order')
         page.get_by_role('button', name='Next', exact=True).click()
@@ -398,7 +404,8 @@ def acceptance(config, password, iso, evidence, mode):
         vms = page.request.get(config['url'] + '/api/v1/vms').json()
         assert len([v for v in vms if v['name'] == vm_name]) == 1
         # The retry must reconcile the original request, so exactly one submission body exists.
-        spec = next(v for v in vms if v['name'] == vm_name)['spec']
+        created_vm = next(v for v in vms if v['name'] == vm_name)
+        spec = created_vm['spec']
         assert bodies and all(b['name'] == vm_name for b in bodies), bodies
         assert [d['name'] for d in spec['disks']] == ['system', 'data'] and [d['bus'] for d in spec['disks']] == ['virtio', 'sata'], spec
         assert spec['disks'][1]['thin'] is False and spec['cpu'] == {'count': 2, 'sockets': 2, 'cores': 1, 'threads': 1, 'model': 'Skylake-Server'}, spec
@@ -410,6 +417,29 @@ def acceptance(config, password, iso, evidence, mode):
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'details narrow page overflow'
         capture('created-360')
         passed('ISO picker validation, upload and six-step keyboard-accessible VM creation with two disks, two NICs, an explicit topology, maximum memory and an ISO-first boot order; invalid topology, duplicate disk name and malformed MAC refused in place; lost reply retry creates exactly one stopped VM; desktop and 360px checks')
+        # Inject the existing GET shape only at the browser boundary. The simulated Core does not
+        # claim to measure usage, and this route leaves its inventory and durable state untouched.
+        usage = {'observed_at': (datetime.now(timezone.utc) - timedelta(seconds=65)).isoformat(),
+                 'sample_window_ms': 30_000, 'cpu_percent': 125,
+                 'memory_assigned_bytes': 4 * 1024 ** 3, 'memory_maximum_bytes': 8 * 1024 ** 3,
+                 'memory_host_bytes': None, 'disk_used_bytes': 3 * 1024 ** 3, 'disk_capacity_bytes': None}
+        usage_vms = [{**v, 'usage': usage} if v['id'] == created_vm['id'] else v for v in vms]
+        page.route('**/api/v1/vms', lambda route: route.fulfill(json=usage_vms) if route.request.method == 'GET' else route.continue_())
+        page.set_viewport_size({'width': 1440, 'height': 1000})
+        page.reload()
+        usage_panel = page.get_by_role('region', name='VM usage', exact=True)
+        expect(usage_panel).to_contain_text('125% of allocated vCPUs')
+        expect(usage_panel).to_contain_text('4 GiB assigned · 8 GiB maximum')
+        expect(usage_panel).to_contain_text('3 GiB')
+        expect(usage_panel).to_contain_text('Sampled 1 minute ago')
+        expect(usage_panel).to_contain_text('Not reported')
+        usage_panel.scroll_into_view_if_needed()
+        capture('usage-desktop')
+        page.set_viewport_size({'width': 360, 'height': 800})
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'usage narrow page overflow'
+        capture('usage-360')
+        page.unroute('**/api/v1/vms')
+        passed('Injected existing GET VM usage shape renders CPU, allocation, disk, sample age and honest Not reported values at desktop and 360px without changing simulated Core state')
         if mode == 'simulated':
             page.set_viewport_size({'width': 1440, 'height': 1000})
             page.get_by_role('button', name='Edit', exact=True).click()
@@ -434,6 +464,9 @@ def acceptance(config, password, iso, evidence, mode):
         page.route('**/api/v1/vms', lambda route: route.fulfill(json=[{**v, 'freshness': 'stale'} for v in vms]))
         page.reload()
         expect(page.get_by_text('Current execution state is unknown.', exact=False)).to_be_visible()
+        stale_usage_panel = page.get_by_role('region', name='VM usage', exact=True)
+        expect(stale_usage_panel).to_contain_text('No usage sample reported. This is not zero usage')
+        stale_usage_panel.scroll_into_view_if_needed()
         capture('stale')
         page.unroute('**/api/v1/vms')
         page.route('**/api/v1/storage', lambda route: route.fulfill(status=503, json={'error': 'Injected Controller unavailable'}))

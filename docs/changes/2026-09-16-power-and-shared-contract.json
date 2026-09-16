@@ -43,7 +43,7 @@
     "pages": []
   },
   "api": {
-    "impact": "updated",
+    "impact": "changed contract",
     "reason": "API impact: changed contract. VMBoot gains secure_boot and tpm; VMCreateSpec gains drivers_media_id; VMMediaRequest gains drive with capability vm-media-drivers-drive-v1; GuestInfo gains drivers_media and redefines resize as guest-derived rather than device-model-derived. Every new field is omitted by default, so an older Controller and an older Core keep their current behaviour, and the second CD drive is advertised by capability rather than assumed. ValidateVMSpec rejects invalid values on both sides; NeedsStop makes Secure Boot and TPM stop-required and refuses removing a TPM outright. The vm-power contract is unchanged in shape: only the reported outcome of a power request whose virsh call failed after the guest acted changes, from needs_attention to succeeded where observation proves it.",
     "pages": [
       "docs/API.md",

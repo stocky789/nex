@@ -1147,6 +1147,13 @@ The existing VM list still includes adopted Controller appliances with
 `status` and optional `error`, with `role: guest`. Creation status never substitutes for
 fresh libvirt execution state.
 
+API impact: **existing contract** — a terminal Core `vm-create` failure before a definition is
+created remains task, audit and idempotent-replay data under an internal failed-create identity,
+so it cannot collide with a Core VM identity. It is excluded from Controller VM-list, ownership,
+placement and adoption-conflict queries; historical adoption relocates a conflicting failed row
+before storing Core's succeeded definition. No route, request, response, authorization or version
+changes.
+
 **Full VM specification (changed contract, 2026-09-10):** `POST /api/v1/vms`, the `vm-create`
 command payload and the VM list/report inventory carry `VMCreateSpec` in its complete shape
 ([plan](plans/2026-09-10-vm-creation-system.md)). Bounds below are enforced identically on
@@ -1562,8 +1569,8 @@ inventory and adoption path; neither adds Controller-owned state.
 Secure Boot is now stated explicitly in the domain rather than inferred by libvirt from
 `firmware='efi'`. **Omitted means on, with the Microsoft keys enrolled** — exactly what libvirt
 already selected for every UEFI VM defined before the field existed, so a definition re-sent
-unchanged keeps the firmware its guest was installed with. `off` selects the plain OVMF build
-with no enrolled keys, for unsigned boot media or drivers. Secure Boot requires UEFI; requesting
+unchanged keeps the firmware its guest was installed with. `off` disables Secure Boot for unsigned
+boot media or drivers while preserving an existing VM's NVRAM boot entries and enrolled keys. Secure Boot requires UEFI; requesting
 it with BIOS is rejected. A Secure Boot domain also carries SMM, which OVMF needs to protect the
 variable store.
 
@@ -1721,9 +1728,13 @@ usage. Controller must be upgraded before Core, because report JSON is decoded w
 `DisallowUnknownFields`. No pool-scoped setting is introduced: usage is observed state with no
 durable record, recomputed from the host on every report.
 
-Not yet delivered: no operator-facing surface renders these figures, so Phase 2 roadmap item 8
-remains open. Unverified: no host has run this probe; the units and key names are read from
-libvirt's reference, and `domstats` has not been confirmed on Core's read-only connection.
+The VM details panel renders this observation read-only: CPU is labelled as a percentage of
+allocated vCPUs; memory allocation is distinguished from guest-used memory; host memory and disk
+metrics show `Not reported` when absent; and the panel shows the sample age. A stale VM status
+still means the current execution state is unknown. Verified 2026-09-16 against a disposable
+Nex Core/libvirt host and the deployed Controller UI: a running VM reported CPU, allocation,
+resident memory, disk use/capacity and sample age, while a shut-off VM reported no usage rather
+than zero.
 
 ## Software updates
 

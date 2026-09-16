@@ -525,8 +525,8 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		out.StorageClusterRequests = c.takeStorageClusters(host)
 	}
 	for _, res := range v.Results {
-		var status string
-		err = tx.QueryRow("SELECT status FROM operations WHERE id=? AND host_id=?", res.OperationID, host).Scan(&status)
+		var status, kind string
+		err = tx.QueryRow("SELECT status,kind FROM operations WHERE id=? AND host_id=?", res.OperationID, host).Scan(&status, &kind)
 		if err != nil {
 			fail(w, 400, "result operation does not belong to host")
 			return
@@ -540,9 +540,14 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 				fail(w, 500, "result storage failed")
 				return
 			}
+			if res.Status == "failed" && kind == "vm-create" {
+				if _, err = tx.Exec("UPDATE managed_resources SET id=? WHERE operation_id=? AND kind='vm-create'", failedVMCreateRecordID(res.OperationID), res.OperationID); err != nil {
+					fail(w, 500, "VM replay record storage failed")
+					return
+				}
+			}
 			if res.Status == "succeeded" {
-				var kind string
-				if tx.QueryRow("SELECT kind FROM operations WHERE id=?", res.OperationID).Scan(&kind) == nil && kind == "vm-media" {
+				if kind == "vm-media" {
 					if err = c.mirrorVMMedia(tx, res.OperationID); err != nil {
 						fail(w, 500, "media mirror failed")
 						return

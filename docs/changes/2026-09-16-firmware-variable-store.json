@@ -1,0 +1,46 @@
+{
+  "summary": "Use a UUID-keyed explicit UEFI NVRAM path for new managed definitions, retain an observed legacy path during stopped UEFI edits, and safely clean the exact NVRAM file when a stopped VM changes from UEFI to BIOS. API impact: existing contract; vm-create, vm-update, vm-power and vm-delete routes and payloads are unchanged.",
+  "paths": [
+    "internal/vmhost/firmware.go",
+    "internal/vmhost/firmware_test.go",
+    "internal/vmhost/managed.go",
+    "docs/qa/2026-09-16-firmware-variable-store-verification.md",
+    "docs/qa/2026-09-16-final-iso-controller-acceptance.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "docs/plans/2026-09-16-windows-11-batch-handover.md",
+    "docs/BUG_LEDGER.md",
+    "docs/API.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/changes/2026-09-16-firmware-variable-store.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The existing stopped Secure Boot edit now has verified NVRAM semantics: disabling enforcement preserves an existing VM's boot entries and enrolled keys. The guides state that result and retain the independent Windows matrix as open.",
+    "pages": ["docs/guide/create-virtual-machine.md", "docs/guide/edit-virtual-machine.md"]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "API impact: existing contract. Existing create, update, power and delete operations preserve their requests, responses, authorization, validation, error and retry contracts; docs/API.md clarifies the observed Secure Boot off transition.",
+    "pages": ["docs/API.md"],
+    "contracts": ["vm-create", "vm-update", "vm-power", "vm-delete"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Closes verification debts without changing a published roadmap milestone or delivery order.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The VM's durable firmware record is its libvirt domain XML NVRAM path and host NVRAM file. Nex Core journals the interrupted cleanup stage and observes libvirt before recovery; the Controller stores no firmware state.",
+    "record": "Pool-master Core managed VM journal for recovery, plus the host libvirt domain XML NVRAM path and UUID-keyed regular NVRAM file. A fresh Controller adopts the VM and its current specification from Core inventory."
+  },
+  "verification": {
+    "method": "Disposable nested-lab probe passed template-free firmware auto-selection with an explicit UUID-keyed NVRAM path; Core create/start/stop/rename preserved its path, size and post-stop SHA-256; simultaneous rename plus UEFI-to-BIOS cleanup removed it; and focused race checks passed, including cleaning-nvram recovery. Final-package acceptance then completed Secure Boot on → rename → off → on, retained boot entries and keys, booted after rename and removed NVRAM on delete. Raw output is ignored local evidence.",
+    "evidence": [
+      "internal/vmhost/firmware_test.go",
+      "docs/qa/2026-09-16-firmware-variable-store-verification.md",
+      "docs/qa/2026-09-16-final-iso-controller-acceptance.md"
+    ]
+  }
+}

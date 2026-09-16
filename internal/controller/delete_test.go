@@ -5,6 +5,7 @@ import (
 	"nex.local/nex/internal/protocol"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDeleteVMGatesDispatchAndMirrorRemoval(t *testing.T) {
@@ -69,4 +70,107 @@ func TestDeleteVMGatesDispatchAndMirrorRemoval(t *testing.T) {
 			t.Fatalf("deleted VM still listed: %+v", vm)
 		}
 	}
+}
+
+func TestFailedVMCreateDoesNotLeaveControllerProjection(t *testing.T) {
+	l := newManagedLab(t, protocol.ManagedVMCapability, protocol.DeleteCapability)
+	var created createdVM
+	read(t, l.create("failed-create", l.spec("no-space"), 202), &created)
+	commands := l.report().Commands
+	if len(commands) != 1 || commands[0].OperationID != created.Operation.ID {
+		t.Fatalf("create dispatch %+v", commands)
+	}
+
+	// Core rejects before libvirt creates anything. The failed task remains, but the
+	// Controller must not represent its request as a pool VM.
+	l.report(protocol.Result{OperationID: created.Operation.ID, Status: "failed", Error: "insufficient storage"})
+	var replayKey string
+	if err := l.a.c.db.QueryRow("SELECT id FROM managed_resources WHERE operation_id=?", created.Operation.ID).Scan(&replayKey); err != nil || replayKey != failedVMCreateRecordID(created.Operation.ID) {
+		t.Fatalf("failed replay record still occupies the VM ID: key=%q err=%v", replayKey, err)
+	}
+	var vms []managedAppliance
+	read(t, l.a.call("GET", "/api/v1/vms", nil, nil, 200), &vms)
+	if len(vms) != 0 {
+		t.Fatalf("failed create left VM projection: %+v", vms)
+	}
+	var operations []protocol.Operation
+	read(t, l.a.call("GET", "/api/v1/operations", nil, nil, 200), &operations)
+	var failed *protocol.Operation
+	for i := range operations {
+		if operations[i].ID == created.Operation.ID {
+			failed = &operations[i]
+		}
+	}
+	if failed == nil || failed.Status != "failed" || failed.Error != "insufficient storage" {
+		t.Fatalf("failed create task was not retained: %+v", operations)
+	}
+	var replay createdVM
+	read(t, l.create("failed-create", l.spec("no-space"), 200), &replay)
+	if replay.VMID != created.VMID || replay.Operation.ID != created.Operation.ID || replay.Operation.Status != "failed" {
+		t.Fatalf("failed create did not replay its original task: %+v", replay)
+	}
+	l.create("retry-create", l.spec("no-space"), 202)
+}
+
+func TestHistoricalFailedVMCreateStaysHiddenAndReplayable(t *testing.T) {
+	l := newManagedLab(t, protocol.ManagedVMCapability)
+	var created createdVM
+	read(t, l.create("historic-failure", l.spec("historic-ghost"), 202), &created)
+	if commands := l.report().Commands; len(commands) != 1 {
+		t.Fatalf("create dispatch %+v", commands)
+	}
+	report := func(checks []protocol.Check) {
+		l.seq++
+		inv := &protocol.Inventory{
+			Hostname: "core", CPUCount: 8, CPUModels: []string{"Skylake-Server"}, MemoryBytes: 16 << 30,
+			Managed: hostDefaults(l.host.HostID),
+			Checks:  checks,
+		}
+		l.a.report(l.cert, protocol.ReportRequest{Version: protocol.Version, Sequence: l.seq, Capabilities: l.caps, Inventory: inv})
+	}
+	// Seed a prior healthy check while the creation is still dispatched, then simulate a
+	// Controller version that recorded Core's terminal failure but retained its payload.
+	now := time.Now().UTC()
+	report([]protocol.Check{{Name: "managed-vms", Status: "healthy", ObservedAt: now}})
+	if _, err := l.a.c.db.Exec("UPDATE operations SET status='failed',error='insufficient storage' WHERE id=?", created.Operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Merged, missing and stale checks cannot alter a failed request record. It stays out
+	// of the VM projection and adoption conflict set, but the original request replays.
+	report([]protocol.Check{{Name: "libvirt", Status: "healthy", ObservedAt: now.Add(time.Millisecond)}})
+	var vms []managedAppliance
+	read(t, l.a.call("GET", "/api/v1/vms", nil, nil, 200), &vms)
+	if len(vms) != 0 {
+		t.Fatalf("failed create reappeared after omitted check: %+v", vms)
+	}
+	report([]protocol.Check{{Name: "managed-vms", Status: "healthy", ObservedAt: now.Add(-l.a.c.cfg.StaleAfter - time.Second)}})
+	read(t, l.a.call("GET", "/api/v1/vms", nil, nil, 200), &vms)
+	if len(vms) != 0 {
+		t.Fatalf("failed create reappeared after stale check: %+v", vms)
+	}
+	// A later Core definition can even reuse the original identity. Adoption relocates the
+	// historical replay row before storing the Core-owned definition.
+	adopted := l.spec("historic-ghost")
+	adopted.ID = created.VMID
+	defaults := hostDefaults(l.host.HostID)
+	defaults.VMs = []protocol.VMCreateSpec{adopted}
+	l.seq++
+	l.a.report(l.cert, protocol.ReportRequest{Version: protocol.Version, Sequence: l.seq, Capabilities: l.caps, Inventory: &protocol.Inventory{
+		Hostname: "core", CPUCount: 8, CPUModels: []string{"Skylake-Server"}, MemoryBytes: 16 << 30, Managed: defaults,
+		Checks: []protocol.Check{{Name: "libvirt", Status: "healthy", ObservedAt: time.Now().UTC()}},
+	}})
+	read(t, l.a.call("GET", "/api/v1/vms", nil, nil, 200), &vms)
+	if len(vms) != 1 || vms[0].ID != adopted.ID || vms[0].Status != "succeeded" {
+		t.Fatalf("Core definition was blocked by failed create: %+v", vms)
+	}
+	var replayKey string
+	if err := l.a.c.db.QueryRow("SELECT id FROM managed_resources WHERE operation_id=?", created.Operation.ID).Scan(&replayKey); err != nil || replayKey != failedVMCreateRecordID(created.Operation.ID) {
+		t.Fatalf("historical replay record was not relocated: key=%q err=%v", replayKey, err)
+	}
+	var replay createdVM
+	read(t, l.create("historic-failure", l.spec("historic-ghost"), 200), &replay)
+	if replay.VMID != created.VMID || replay.Operation.ID != created.Operation.ID || replay.Operation.Status != "failed" {
+		t.Fatalf("historical failed create did not replay: %+v", replay)
+	}
+	l.create("historic-retry", l.spec("historic-ghost"), 202)
 }

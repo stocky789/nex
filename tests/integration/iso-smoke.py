@@ -84,9 +84,41 @@ CHECK = r'''#!/bin/sh
 exec >/dev/ttyS0 2>&1
 set -eu
 trap 'echo NEX_SMOKE_FAILED; systemctl poweroff' EXIT
-for p in qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients virtinst ovmf openssh-server nftables chrony; do
+for p in qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients virtinst ovmf-generic python3-virt-firmware openssh-server nftables chrony; do
     test "$(dpkg-query -W -f='${Status}' "$p")" = 'install ok installed'
 done
+test "$(dpkg-query -W -f='${Version}' ovmf-generic)" = 2026.05-2
+test -f /usr/share/qemu/firmware/40-edk2-x86_64-secure-enrolled.json
+grep -Fq /usr/share/OVMF/OVMF_CODE_4M.ms.fd /usr/share/qemu/firmware/40-edk2-x86_64-secure-enrolled.json
+grep -Fq /usr/share/OVMF/OVMF_VARS_4M.ms.fd /usr/share/qemu/firmware/40-edk2-x86_64-secure-enrolled.json
+test -f /usr/share/OVMF/OVMF_CODE_4M.ms.fd
+test -f /usr/share/OVMF/OVMF_VARS_4M.ms.fd
+cert_dir=$(mktemp -d)
+trap 'rm -rf "$cert_dir"; echo NEX_SMOKE_FAILED; systemctl poweroff' EXIT
+(
+    cd "$cert_dir"
+    virt-fw-vars -i /usr/share/OVMF/OVMF_VARS_4M.ms.fd --extract-certs
+)
+check_ovmf_certificate() {
+    expected_cn=$1
+    expected_fingerprint=$2
+    certificate=
+    for candidate in "$cert_dir"/db-*.pem; do
+        test -f "$candidate" || continue
+        if openssl x509 -in "$candidate" -noout -subject | grep -Fq "CN=$expected_cn"; then
+            test -z "$certificate"
+            certificate=$candidate
+        fi
+    done
+    test -n "$certificate"
+    test "$(openssl x509 -in "$certificate" -noout -fingerprint -sha256 | cut -d= -f2)" = "$expected_fingerprint"
+    openssl x509 -in "$certificate" -noout -checkend 0
+}
+check_ovmf_certificate 'Microsoft UEFI CA 2023' 'F6:12:4E:34:12:5B:EE:3F:E6:D7:9A:57:4E:AA:7B:91:C0:E7:BD:9D:92:9C:1A:32:11:78:EF:D6:11:DA:D9:01'
+check_ovmf_certificate 'Windows UEFI CA 2023' '07:6F:1F:EA:90:AC:29:15:5E:BF:77:C1:76:82:F7:5F:1F:DD:1B:E1:96:DA:30:2D:C8:46:1E:35:0A:9A:E3:30'
+rm -rf "$cert_dir"
+trap 'echo NEX_SMOKE_FAILED; systemctl poweroff' EXIT
+echo NEX_SMOKE_OVMF_2023_CERTIFICATES_PASS
 systemctl is-active libvirtd ssh chrony
 test "$(passwd -S root | awk '{print $2}')" = P
 # Debian reserves higher UIDs for service accounts such as libvirt-qemu (64055).
@@ -202,7 +234,7 @@ def main():
     args.output.mkdir(parents=True, exist_ok=False)
     iso = ['-cdrom', str(args.iso), '-boot', 'd']
     run_vm(args, 'bios-menu', iso)
-    code = args.uefi_code or next((p for p in [Path('/usr/share/edk2/x64/OVMF_CODE.4m.fd'), Path('/usr/share/OVMF/OVMF_CODE_4M.fd')] if p.exists()), None)
+    code = args.uefi_code or next((p for p in [Path('/usr/share/edk2/x64/OVMF_CODE.4m.fd'), Path('/usr/share/OVMF/OVMF_CODE_4M.ms.fd'), Path('/usr/share/OVMF/OVMF_CODE_4M.fd')] if p.exists()), None)
     if not code:
         raise RuntimeError('OVMF 4M firmware not found; UEFI has not been tested')
     source_vars = code.with_name(code.name.replace('CODE', 'VARS'))

@@ -22,7 +22,7 @@
     ]
   },
   "api": {
-    "impact": "updated",
+    "impact": "new contract",
     "reason": "API impact: new contract. DELETE /api/v1/media/{id} removes a failed or needs_attention iso-import record (admin session, same Origin, X-CSRF-Token; 409 for queued/dispatched and for an ISO the host holds; 404 otherwise). No Core command or capability is added: Core has no media-removal call, so a stored ISO is refused rather than faked. POST /api/v1/media/download is unchanged; a retry is that call under a new request_id. Core's iso-download error text changed within the existing iso-import result contract.",
     "pages": [
       "docs/API.md",

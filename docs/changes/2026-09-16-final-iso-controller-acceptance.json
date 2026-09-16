@@ -1,0 +1,45 @@
+{
+  "summary": "Record final ISO, firmware, Controller media/console and earlier-build installer acceptance evidence. API impact: none; this documentation records existing operations.",
+  "paths": [
+    "docs/qa/2026-09-16-final-iso-controller-acceptance.md",
+    "docs/BUG_LEDGER.md",
+    "docs/API.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/guide/storage-repositories.md",
+    "docs/guide/install-nex-core.md",
+    "docs/LICENSING.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "docs/plans/2026-09-16-windows-11-batch-handover.md",
+    "docs/changes/2026-09-16-final-iso-controller-acceptance.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Verification statements now distinguish completed disposable-lab walkthroughs from remaining physical-hardware, release and Windows-matrix limits.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/edit-virtual-machine.md",
+      "docs/guide/storage-repositories.md",
+      "docs/guide/install-nex-core.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "API impact: existing contract. The evidence exercised existing VM create/update/power/media, ISO import/discard and console operations without changing requests, responses, authorization or Core commands.",
+    "pages": ["docs/API.md"],
+    "contracts": ["vm-create", "vm-update", "vm-power", "vm-media", "console", "iso-import", "DELETE /api/v1/media/{id}"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Acceptance evidence closes internal debts but does not certify a published roadmap milestone or external release.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation only. The exercised VM and media state remains Core-owned and disposable fixtures were deleted; no Controller state was introduced."
+  },
+  "verification": {
+    "method": "Inspected sanitized results from disposable nested-KVM final ISO, deployed Controller/Core and Chromium runs. Exact-tree final ISO SHA-256 403dc489fc8fb7d948fe3d27a561c4203a54642c27ac18141dae6ede4c84267c passed static package/source and parsed certificate inspection, then emitted INSTALL_PASS, OVMF_2023_CERTIFICATES_PASS, ROOT_ONLY_PASS, FIRST_BOOT_PASS and REBOOT_PASS. BUG-0209 visual completion acceptance ran on an earlier 0.2.8 build with unchanged installer code, not this exact SHA. The independent Windows TPM/Secure Boot matrix and current graceful timing remain open.",
+    "evidence": ["docs/qa/2026-09-16-final-iso-controller-acceptance.md"]
+  }
+}

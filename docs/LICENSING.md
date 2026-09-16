@@ -92,6 +92,31 @@ Do not ship a placeholder or broken source link.
 This file records scope and required evidence; it does not certify a release
 or substitute for checking each component's license terms.
 
+## OVMF 2023 certificate package — 2026-09-16
+
+The installer carries Debian `ovmf-generic` `2026.05-2` from Debian sid because
+the Debian 13 package does not provide the required 2023 Microsoft certificate
+template. The ISO builder uses an isolated, signed sid APT source for that exact
+package only; sid is not available to ordinary ISO dependency resolution or to
+an installed host. It pins the binary SHA-256
+`0f2d4de080ebeaf0972c5e212253c28dd2d90aa641542f42f37c6d6ecd4c67eb`, retains
+the matching `edk2` `2026.05-2` `.dsc`, upstream tarball, Debian patch tarball,
+the package copyright, and a checksum manifest under
+`/nex/third-party/ovmf-generic/`. The installer retains that directory under
+`/usr/share/doc/nex-core/third-party/ovmf-generic/`.
+
+Exact-tree final ISO `403dc489fc8fb7d948fe3d27a561c4203a54642c27ac18141dae6ede4c84267c` was
+inspected for this package, retained source and parsed enrolled `db` certificates; installation,
+first boot and reboot checks passed. This is a scoped
+source-retention result for one firmware package. It does **not** complete the whole-ISO component
+manifest, source delivery, firmware-term review or external redistribution gate above. A release
+still needs a tested public source-delivery location and all remaining component and artwork work.
+
+The later exact-tree 0.2.9 ISO
+`fe49ea1d69e16b45eaf3abd25cfec0e1645096a9fbe0a2532b6b2e5b136d1f64` also passed the
+parsed 2023 `db` certificate, unattended offline installation, first-boot and reboot checks. This
+reconfirms the scoped OVMF package result and does not close any whole-ISO distribution gate.
+
 ## VM storage client dependencies — 2026-09-11
 
 The VM-storage repository work adds Debian's `nfs-common`, `libnfs-utils`,

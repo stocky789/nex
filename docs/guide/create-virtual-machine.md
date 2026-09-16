@@ -222,8 +222,8 @@ Use an explicitly selected disposable lab host.
       - **Secure Boot** — **On · only signed boot software runs** (the default) or
         **Off · unsigned boot media and drivers allowed**. On, the VM boots the firmware
         build with the Microsoft keys enrolled, which is what a stock Windows or a signed
-        Linux shim expects. Off, the keys are not enrolled, so unsigned boot media and
-        unsigned kernel drivers load. The field is disabled with **Not available with BIOS**
+        Linux shim expects. Off disables Secure Boot so unsigned boot media and drivers load;
+        changing an existing VM preserves its NVRAM boot entries and enrolled keys. The field is disabled with **Not available with BIOS**
         when firmware is **BIOS**; BIOS has no Secure Boot. Secure Boot is part of the
         firmware a guest is installed against and can only be changed while the VM is stopped.
       - **TPM** — **TPM 2.0 · emulated device** or **None**. The default follows **Guest
@@ -475,13 +475,14 @@ Recorded checks and their limits:
   missing TPM, the hidden Secure Boot state, the single CD drive and the unchanged Windows
   defaults. It describes Nex Core 0.2.7, before those were fixed.
 
-**Secure Boot, TPM and driver disc are not lab-verified.** They are covered by Nex Core unit
-tests over the generated libvirt definition, the CD-drive resolution and the delete path
-(`internal/vmhost/firmware_test.go`), and by Controller UI tests. No VM was created, started or
-installed with them: a Windows 11 install onto a TPM-equipped VM, a Secure Boot **Off** boot of
-unsigned media, the virtio-win **Load driver** step from the second drive, and an existing
-UEFI VM continuing to boot unchanged after a Core upgrade are all still to be walked through
-on a disposable host.
+The disposable final-package walkthrough created and booted UEFI VMs, preserved NVRAM and boot
+entries through rename, exercised Secure Boot on → off → on, and installed Windows with the
+virtio-win driver disc. A signed Debian guest observed Secure Boot on and its absence after the
+off edit. The independent Windows TPM/Secure Boot matrix remains open: fresh 60 GiB cases
+created, booted and deleted with expected live XML combinations, but Windows Setup did not reach
+the non-IoT requirements decision because optical-prompt timing and the manual Setup flow limited
+the harness.
+See [final ISO and Controller acceptance](../qa/2026-09-16-final-iso-controller-acceptance.md).
 
 Guest installation, physical hardware and arbitrary storage-failure recovery remain unverified;
 see the [platform plan](../plans/2026-09-08-nex-platform.md).

@@ -1,0 +1,36 @@
+{
+  "summary": "Start Nex 0.2.9 and record the operator-visible firmware, Secure Boot, failed-create, media-library, VM-usage and installer certificate work included in this release. API impact: none; this change only selects the release version and summarizes contracts already assessed by their implementation records.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/LICENSING.md",
+    "docs/guide/publish-a-release.md",
+    "docs/plans/2026-09-16-windows-11-batch-handover.md",
+    "docs/qa/2026-09-16-nex-core-0.2.9-release.md",
+    "docs/changes/2026-09-16-release-0.2.9.json",
+    "installer/README.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The release guide now states the existing whole-ISO compliance prerequisite before its build and publication steps; other affected operator workflows remain covered by their implementation changes.",
+    "pages": ["docs/guide/publish-a-release.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. The version bump changes release metadata and notes only; each included API behavior is assessed in its implementation change record.",
+    "pages": [],
+    "contracts": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The internal handover identifies the worktree release, but no public roadmap milestone or acceptance status changed.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Release metadata creates no durable Controller or Core state."
+  },
+  "verification": {
+    "method": "Resolved 0.2.9 from the current changelog; built the source archive, Controller appliance, both Debian packages and ISO from the exact worktree; verified package versions and checksums; passed installer static checks, BIOS/UEFI boot-menu smoke and an unattended TCG UEFI install, first boot and reboot. Reviewed the release workflow and public website/APT endpoints against the updated guide. Publication was not performed because whole-ISO external distribution gates and deployment credentials remain incomplete.",
+    "evidence": ["docs/qa/2026-09-16-nex-core-0.2.9-release.md"]
+  }
+}

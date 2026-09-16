@@ -53,7 +53,8 @@ assert entries.count(['d-i', 'preseed/early_command', 'string', '/bin/sh /cdrom/
 
 packages = Path('installer/packages.txt').read_text().split()
 assert len(packages) == len(set(packages)), 'Duplicate package'
-assert {'qemu-system-x86', 'libvirt-daemon-system', 'libvirt-clients', 'openssh-server', 'genisoimage'} <= set(packages)
+assert {'qemu-system-x86', 'libvirt-daemon-system', 'libvirt-clients', 'openssh-server', 'genisoimage', 'ovmf-generic', 'python3-virt-firmware'} <= set(packages)
+assert 'ovmf' not in packages, 'Use only the pinned ovmf-generic package'
 assert 'nex-core-local' not in packages, 'Ship nex-core-local via the ISO repo copy, not Debian APT download'
 assert all(p.replace('-', '').isalnum() for p in packages), 'Unexpected package argument'
 late = Path('installer/late-install.sh').read_text()
@@ -68,6 +69,14 @@ assert "printf 'nex-core-local\\n' >>" in build
 assert 'scripts/build-source.py' in build, 'ISO builds must regenerate corresponding source'
 assert 'appliance/build.py' in build, 'ISO builds must rebuild the Controller appliance'
 assert 'assert_iso_artifacts_current' in build, 'ISO builds must verify Core/Controller source freshness'
+assert 'stage_ovmf_generic' in build and 'local version=2026.05-2' in build and 'ovmf-generic=$version' in build
+assert '0f2d4de080ebeaf0972c5e212253c28dd2d90aa641542f42f37c6d6ecd4c67eb' in build
+assert 'Dir::Etc::sourceparts=-' in build and 'sid main' in build
+assert "grep -aFq 'Microsoft UEFI CA 2023'" in build
+assert "grep -aFq 'Windows UEFI CA 2023'" in build
+assert 'OVMF_CODE_4M.ms.fd' in build and 'OVMF_VARS_4M.ms.fd' in build
+assert '40-edk2-x86_64-secure-enrolled.json' in build
+assert 'third-party/ovmf-generic' in build and 'checksums.sha256' in build
 assert 'Unset CORE_LOCAL_DEB and NEX_SKIP_APPLIANCE_REBUILD' in build, 'ISO builds must reject reused packages'
 assert 'dist/nex-source.tar.gz required' in build
 assert 'cp -a installer "$source_stage/nex-source/"' in build
@@ -77,10 +86,13 @@ assert re.search(r'tar .* -czf "\$stage/nex/nex-source\.tar\.gz" \\\s*LICENSE NO
 assert '\nin-target /bin/sh /var/cache/nex-install/configure.sh\n' in late, 'Use Debian in-target for package configuration'
 assert '\nchroot /target ' not in late, 'Raw chroot bypasses installer setup'
 post = Path('packaging/core-local/postinst').read_text()
+core_package = Path('packaging/core-local/build-inside.sh').read_text()
+assert 'python3-virt-firmware' in core_package, 'nex-core-local must depend on the Secure Boot variable tool package'
 assert 'dpkg-divert --local --add --rename --divert /etc/os-release.debian /etc/os-release' in post
 assert 'ID=nex-core\nID_LIKE=debian\n' in post and "dpkg-query -W -f='${Version}' nex-core-local" in post
 assert 'systemd.ssh_auto=no' in post
 assert '0.1.0-alpha1' not in build + late and 'test "$ID" = nex-core' in late, 'One Nex Core version: the package'
 assert '> /usr/lib/os-release' not in late, 'Preserve upstream release metadata'
+assert 'third-party/ovmf-generic' in late
 print('PASS: shell syntax, interactive disk/account/network contract, package inputs, offline APT scope')
 PY

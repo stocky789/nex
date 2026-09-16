@@ -2,6 +2,7 @@
 package vmhost
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -117,6 +118,25 @@ type managedJournal struct {
 	DriversTarget string   `json:"drivers_target,omitempty"`
 	// DriversPath is the resolved host path of the driver disc, recorded with MediaPath.
 	DriversPath string `json:"drivers_path,omitempty"`
+	// NVRAMPath is the observed UEFI variable-store path retained across the UEFI-to-BIOS
+	// cleanup boundary. It is host state, not Controller state, and lets recovery remove the
+	// exact file after libvirt has removed the definition.
+	NVRAMPath string `json:"nvram_path,omitempty"`
+	// SecureBootNVRAM is an in-place logical update of the UEFI store.  The staged hashes make
+	// an interrupted native edit observable: Core only retries while the original store remains,
+	// and only accepts the result after the exact desired value is present.
+	SecureBootNVRAM     string `json:"secure_boot_nvram,omitempty"`
+	SecureBootTemporary string `json:"secure_boot_temporary,omitempty"`
+	SecureBootBefore    string `json:"secure_boot_before,omitempty"`
+	SecureBootAfter     string `json:"secure_boot_after,omitempty"`
+	SecureBootEnabled   bool   `json:"secure_boot_enabled,omitempty"`
+	SecureBootMode      uint32 `json:"secure_boot_mode,omitempty"`
+	SecureBootUID       uint32 `json:"secure_boot_uid,omitempty"`
+	SecureBootGID       uint32 `json:"secure_boot_gid,omitempty"`
+	// SecureBootPreviousDomain is the exact inactive definition observed before the native
+	// transition. It makes a combined rename and Secure Boot change recoverable without
+	// treating a guessed XML predecessor as authority.
+	SecureBootPreviousDomain []byte `json:"secure_boot_previous_domain,omitempty"`
 	// Retained lists disk files an edit detached from the VM; edits never delete data.
 	Retained []string `json:"retained,omitempty"`
 	// UnappliedObserved marks a failed vm-update recorded after allocation or define only
@@ -1721,13 +1741,13 @@ func nextRemoteVMCreateReconcile(js []managedJournal, now time.Time) *managedJou
 	return due
 }
 
-// ReconcileRemoteVMUpdate settles one unresolved remote-storage vm-update from native
-// observation after the caller has revalidated its pool execution identity. It never
-// defines, attaches, allocates or starts anything. The update succeeds when the persistent
-// definition and state match it; it fails only when a stopped VM's persistent definition is
-// still exactly its predecessor after allocation or define (proven unapplied); anything else
-// stays needs_attention. Like ReconcileRemoteVMCreateStopped, remote storage is excluded from
-// promote because the report path cannot make these checks.
+// ReconcileRemoteVMUpdate settles one unresolved remote-storage vm-update after the caller has
+// revalidated its pool execution identity. It normally observes only; cleaning-nvram is the one
+// journaled native recovery stage, which resumes only after that validation. The update succeeds
+// when the persistent definition and state match it; it fails only when a stopped VM's persistent
+// definition is still exactly its predecessor after allocation or define (proven unapplied);
+// anything else stays needs_attention. Like ReconcileRemoteVMCreateStopped, remote storage is
+// excluded from promote because the report path cannot make these checks.
 func (e *ManagedEngine) ReconcileRemoteVMUpdate(ctx context.Context, validate func(context.Context, protocol.VMCreateSpec) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1748,6 +1768,18 @@ func (e *ManagedEngine) ReconcileRemoteVMUpdate(ctx context.Context, validate fu
 	j := *due
 	err = validate(ctx, *j.Command.VM)
 	validated := err == nil
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err == nil && j.Stage == "cleaning-nvram" {
+		err = e.finishFirmwareRemoval(ctx, &j)
+	}
+	if err == nil && j.Stage == secureBootVariablesStage {
+		err = e.finishSecureBootVariables(ctx, &j)
+	}
+	if err == nil && j.Stage == secureBootDefiningStage {
+		err = e.finishSecureBootDefinition(ctx, &j)
+	}
 	if err == nil {
 		err = ctx.Err()
 	}
@@ -1774,7 +1806,7 @@ func nextRemoteVMUpdateReconcile(js []managedJournal, now time.Time) *managedJou
 	var due *managedJournal
 	for i := range js {
 		j := &js[i]
-		if j.Command.Kind != "vm-update" || j.Command.VM == nil || (!updateObservable(j.Stage) && j.Stage != "allocating") || (j.Result.Status != "pending" && j.Result.Status != "needs_attention") || !promotionUsesRemoteStorage(js, *j) || now.Sub(j.Result.ObservedAt) < time.Minute {
+		if j.Command.Kind != "vm-update" || j.Command.VM == nil || (!updateObservable(j.Stage) && j.Stage != "allocating" && j.Stage != "cleaning-nvram" && j.Stage != secureBootVariablesStage && j.Stage != secureBootDefiningStage) || (j.Result.Status != "pending" && j.Result.Status != "needs_attention") || !promotionUsesRemoteStorage(js, *j) || now.Sub(j.Result.ObservedAt) < time.Minute {
 			continue
 		}
 		// A later success of the same or a newer revision (for example an operator retry) owns
@@ -1951,7 +1983,7 @@ func createObservable(stage string) bool {
 
 // updateObservable reports whether a vm-update stage has a definition to observe.
 func updateObservable(stage string) bool {
-	return stage == "defining" || stage == "attaching" || stage == "defined"
+	return stage == "defining" || stage == secureBootDefiningStage || stage == "attaching" || stage == "defined"
 }
 
 // updateState is the libvirt state an interrupted operation left the guest in: an edit
@@ -2388,6 +2420,7 @@ type managedOS struct {
 	// FirmwareFeatures states Secure Boot and the enrolled keys instead of leaving libvirt to
 	// pick a firmware build from the rest of the domain (see applyFirmware).
 	FirmwareFeatures *firmwareXML  `xml:"firmware,omitempty"`
+	NVRAM            *nvramXML     `xml:"nvram,omitempty"`
 	Boot             []managedBoot `xml:"boot"`
 }
 type managedBoot struct {
@@ -3294,6 +3327,9 @@ func validateManagedDefinition(b, expected []byte) error {
 	if (want.OS.Firmware == "efi" && got.OS.Firmware != "efi") || (want.OS.Firmware == "" && got.OS.Firmware != "" && got.OS.Firmware != "bios") {
 		return errors.New("VM firmware changed")
 	}
+	if want.OS.NVRAM != nil && (got.OS.NVRAM == nil || got.OS.NVRAM.Path != want.OS.NVRAM.Path) {
+		return errors.New("VM firmware variable store changed")
+	}
 	if err := checkFirmwareAndTPM(got, want); err != nil {
 		return err
 	}
@@ -3362,6 +3398,545 @@ func diskFile(d managedDisk) string {
 func sameMTU(got, want *mtuXML) bool {
 	return want == nil || (got != nil && *got == *want)
 }
+
+// carryFirmwareVariables keeps an existing UEFI store during an edit. Older Nex
+// definitions let libvirt choose a name-derived path; moving them to the new UUID path would
+// discard boot entries and Secure Boot variables. New definitions already carry the UUID path.
+func carryFirmwareVariables(expected, current []byte) ([]byte, error) {
+	var want, got managedDomain
+	if xml.Unmarshal(expected, &want) != nil || xml.Unmarshal(current, &got) != nil {
+		return nil, errors.New("cannot read VM firmware variable store")
+	}
+	if want.OS.Firmware == "efi" && got.OS.Firmware == "efi" {
+		if got.OS.NVRAM == nil || got.OS.NVRAM.Path == "" {
+			return nil, errors.New("existing UEFI VM has no firmware variable store; inspect it on the host before editing")
+		}
+		want.OS.NVRAM = &nvramXML{Path: got.OS.NVRAM.Path}
+	}
+	return xml.Marshal(want)
+}
+
+func firmwareRemoved(before, after protocol.VMCreateSpec) bool {
+	return before.Boot.Firmware == "uefi" && after.Boot.Firmware != "uefi"
+}
+
+// firmwareVariablesFile accepts only the exact libvirt-owned NVRAM directory and one regular
+// file directly within it. A missing file is valid for a UEFI domain that has never started;
+// it also makes cleanup retries idempotent. Never follow a symlink from a privileged cleanup.
+func firmwareVariablesFile(path string) error {
+	if filepath.Clean(path) != path || filepath.Dir(path) != firmwareVariablesDir || filepath.Base(path) == "." {
+		return errors.New("VM firmware variable store is outside libvirt's NVRAM directory")
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("VM firmware variable store is not a regular file")
+	}
+	return nil
+}
+
+func removeFirmwareVariables(path string) error {
+	if err := firmwareVariablesFile(path); err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+const (
+	secureBootVariablesStage = "updating-secure-boot-vars"
+	secureBootDefiningStage  = "defining-secure-boot"
+)
+
+// secureBootChanged is deliberately separate from the XML feature change: libvirt chooses the
+// firmware image, but OVMF enforces Secure Boot from this per-guest variable store.
+func secureBootChanged(before, after protocol.VMCreateSpec) bool {
+	return before.Boot.Firmware == "uefi" && after.Boot.Firmware == "uefi" && before.Boot.SecureBootEnabled() != after.Boot.SecureBootEnabled()
+}
+
+type firmwareVariablesJSON struct {
+	Variables []struct {
+		Name string `json:"name"`
+		GUID string `json:"guid"`
+		Data string `json:"data"`
+	} `json:"variables"`
+}
+
+const (
+	efiGlobalVariableGUID          = "8be4df61-93ca-11d2-aa0d-00e098032b8c"
+	efiSecureBootEnableDisableGUID = "f0a30bc7-af08-4556-99c4-001009c93a44"
+	efiCustomModeEnableGUID        = "c076ec0c-7028-4399-a072-71ee5c448b9f"
+	efiImageSecurityDatabaseGUID   = "d719b2cb-3d3a-4596-a3bc-dad00e67656f"
+)
+
+// firmwareVariablesState uses the supported Debian virt-fw-vars JSON output, rather than
+// parsing its human-readable print format. A Secure Boot enable requires an already enrolled
+// PK and, when the offline store exposes it, SetupMode false; inventing or replacing keys belongs
+// to a later explicit policy.
+func firmwareVariablesState(ctx context.Context, path string) (enabled, enrolled bool, err error) {
+	vars, err := readFirmwareVariables(ctx, path)
+	if err != nil {
+		return false, false, err
+	}
+	values := map[string]string{}
+	for _, variable := range vars.Variables {
+		if variable.Name == "SecureBootEnable" || variable.Name == "SetupMode" || variable.Name == "PK" {
+			wantGUID := efiGlobalVariableGUID
+			if variable.Name == "SecureBootEnable" {
+				wantGUID = efiSecureBootEnableDisableGUID
+			}
+			if strings.ToLower(variable.GUID) != wantGUID {
+				return false, false, errors.New("VM firmware variable has an unexpected EFI GUID")
+			}
+			if _, duplicate := values[variable.Name]; duplicate {
+				return false, false, errors.New("VM firmware variable state is ambiguous")
+			}
+		}
+		values[variable.Name] = variable.Data
+	}
+	secureBoot, ok := values["SecureBootEnable"]
+	if !ok || (secureBoot != "00" && secureBoot != "01") {
+		return false, false, errors.New("VM firmware SecureBootEnable state is invalid")
+	}
+	if setupMode, ok := values["SetupMode"]; ok && setupMode != "00" && setupMode != "01" {
+		return false, false, errors.New("VM firmware SetupMode state is invalid")
+	}
+	enabled = secureBoot == "01"
+	// SetupMode is a runtime-derived variable and OVMF's offline VARS templates commonly omit
+	// it. A present setup-mode value is evidence; its absence is not. PK is the durable proof
+	// that a previously Secure-Boot-on store remains enrolled.
+	return enabled, values["PK"] != "" && values["SetupMode"] != "01", nil
+}
+
+func readFirmwareVariables(ctx context.Context, path string) (firmwareVariablesJSON, error) {
+	b, err := run(ctx, "virt-fw-vars", "--input", path, "--output-json", "-")
+	if err != nil {
+		return firmwareVariablesJSON{}, errors.New("cannot inspect VM firmware variables: " + err.Error())
+	}
+	var vars firmwareVariablesJSON
+	if err = json.Unmarshal(b, &vars); err != nil {
+		return firmwareVariablesJSON{}, errors.New("cannot read VM firmware variable state")
+	}
+	seen := map[string]bool{}
+	for _, variable := range vars.Variables {
+		identity := variable.Name + "\x00" + strings.ToLower(variable.GUID)
+		if seen[identity] {
+			return firmwareVariablesJSON{}, errors.New("VM firmware variable store repeats an EFI variable")
+		}
+		seen[identity] = true
+	}
+	return vars, nil
+}
+
+// secureBootVariablesPreserved makes the native tool's intended logical in-place behavior an
+// observed requirement: every existing variable except the documented Secure Boot controls must
+// be byte-for-byte unchanged. This protects Boot####, BootOrder and operator-provided keys.
+func secureBootVariablesPreserved(ctx context.Context, source, output string, enabled bool) error {
+	before, err := readFirmwareVariables(ctx, source)
+	if err != nil {
+		return err
+	}
+	after, err := readFirmwareVariables(ctx, output)
+	if err != nil {
+		return err
+	}
+	key := func(name, guid string) string { return name + "\x00" + strings.ToLower(guid) }
+	values := func(vars firmwareVariablesJSON) map[string]string {
+		out := map[string]string{}
+		for _, variable := range vars.Variables {
+			out[key(variable.Name, variable.GUID)] = variable.Data
+		}
+		return out
+	}
+	allowed := func(k string) bool {
+		return k == key("SecureBootEnable", efiSecureBootEnableDisableGUID) ||
+			(enabled && (k == key("CustomMode", efiCustomModeEnableGUID) || k == key("dbx", efiImageSecurityDatabaseGUID)))
+	}
+	left, right := values(before), values(after)
+	for k, value := range left {
+		if !allowed(k) && right[k] != value {
+			return errors.New("VM firmware tool changed a guest variable outside Secure Boot")
+		}
+	}
+	for k := range right {
+		if !allowed(k) {
+			if _, exists := left[k]; !exists {
+				return errors.New("VM firmware tool added an unexpected guest variable")
+			}
+		}
+	}
+	return nil
+}
+
+func firmwareVariablesDigest(path string) (string, os.FileInfo, error) {
+	if err := firmwareVariablesFile(path); err != nil {
+		return "", nil, err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil, errors.New("VM firmware variable store does not exist; start the VM once or recreate it before changing Secure Boot")
+		}
+		return "", nil, err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", nil, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err = io.Copy(h, f); err != nil {
+		return "", nil, err
+	}
+	return hex.EncodeToString(h.Sum(nil)), info, nil
+}
+
+func secureBootMetadata(info os.FileInfo) (mode, uid, gid uint32, err error) {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, 0, 0, errors.New("cannot read VM firmware variable store ownership")
+	}
+	return uint32(info.Mode().Perm()), stat.Uid, stat.Gid, nil
+}
+
+func preserveFirmwareXattrs(source, target string) error {
+	n, err := syscall.Listxattr(source, nil)
+	if err != nil {
+		if errors.Is(err, syscall.ENOTSUP) {
+			return nil
+		}
+		return err
+	}
+	if n == 0 {
+		return nil
+	}
+	names := make([]byte, n)
+	if _, err = syscall.Listxattr(source, names); err != nil {
+		return err
+	}
+	for _, name := range strings.Split(strings.TrimSuffix(string(names), "\x00"), "\x00") {
+		if name == "" {
+			continue
+		}
+		size, err := syscall.Getxattr(source, name, nil)
+		if err != nil {
+			return err
+		}
+		value := make([]byte, size)
+		if _, err = syscall.Getxattr(source, name, value); err != nil {
+			return err
+		}
+		if err = syscall.Setxattr(target, name, value, 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func secureBootTemporary(path string, mode, uid, gid uint32) (string, error) {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".secure-boot-")
+	if err != nil {
+		return "", err
+	}
+	name := f.Name()
+	if err = f.Chmod(os.FileMode(mode)); err == nil {
+		err = f.Chown(int(uid), int(gid))
+	}
+	if err == nil {
+		err = preserveFirmwareXattrs(path, name)
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = os.Remove(name)
+		return "", err
+	}
+	return name, nil
+}
+
+func removeSecureBootTemporary(path string) error {
+	if path == "" {
+		return nil
+	}
+	if filepath.Clean(path) != path || filepath.Dir(path) != firmwareVariablesDir {
+		return errors.New("VM firmware temporary file is outside libvirt's NVRAM directory")
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("VM firmware temporary file is not a regular file")
+	}
+	return os.Remove(path)
+}
+
+func syncFirmwareVariables(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	err = f.Sync()
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return syncManagedDir(filepath.Dir(path))
+}
+
+func secureBootTemporaryValid(ctx context.Context, path string, j managedJournal) error {
+	digest, info, err := firmwareVariablesDigest(path)
+	if err != nil {
+		return err
+	}
+	mode, uid, gid, err := secureBootMetadata(info)
+	if err != nil || mode != j.SecureBootMode || uid != j.SecureBootUID || gid != j.SecureBootGID {
+		return errors.New("VM firmware temporary file ownership changed")
+	}
+	if info.Size() == 0 {
+		return errors.New("VM firmware temporary file is empty")
+	}
+	if j.SecureBootAfter != "" && digest != j.SecureBootAfter {
+		return errors.New("VM firmware temporary file changed during Secure Boot update")
+	}
+	enabled, enrolled, err := firmwareVariablesState(ctx, path)
+	if err != nil || enabled != j.SecureBootEnabled || (j.SecureBootEnabled && !enrolled) {
+		return errors.New("VM firmware temporary file does not contain the requested Secure Boot state")
+	}
+	return nil
+}
+
+// prepareSecureBootVariables records the immutable source identity before any native mutation.
+func (e *ManagedEngine) prepareSecureBootVariables(ctx context.Context, j *managedJournal) error {
+	if j.SecureBootNVRAM != "" {
+		return nil
+	}
+	if len(j.SecureBootPreviousDomain) == 0 {
+		return errors.New("VM Secure Boot predecessor was not recorded; inspect the VM on its host")
+	}
+	var domain managedDomain
+	if xml.Unmarshal(j.Domain, &domain) != nil || domain.OS.NVRAM == nil || domain.OS.NVRAM.Path == "" {
+		return errors.New("cannot read VM firmware variable store before changing Secure Boot")
+	}
+	digest, info, err := firmwareVariablesDigest(domain.OS.NVRAM.Path)
+	if err != nil {
+		return err
+	}
+	if j.SecureBootEnabled {
+		_, enrolled, err := firmwareVariablesState(ctx, domain.OS.NVRAM.Path)
+		if err != nil {
+			return err
+		}
+		if !enrolled {
+			return errors.New("this VM's firmware variables have no enrolled Secure Boot keys; recreate the VM with Secure Boot on or wait for a Secure Boot enrollment policy")
+		}
+	}
+	mode, uid, gid, err := secureBootMetadata(info)
+	if err != nil {
+		return err
+	}
+	j.SecureBootNVRAM, j.SecureBootBefore = domain.OS.NVRAM.Path, digest
+	j.SecureBootMode, j.SecureBootUID, j.SecureBootGID = mode, uid, gid
+	return e.save(*j)
+}
+
+// finishSecureBootVariables is safe after a process death: source and temporary hashes decide
+// whether it may resume, and the desired firmware variable is observed before an atomic rename.
+func (e *ManagedEngine) finishSecureBootVariables(ctx context.Context, j *managedJournal) error {
+	if j.SecureBootNVRAM == "" || j.SecureBootBefore == "" {
+		return errors.New("VM Secure Boot update was not journaled; inspect the VM on its host")
+	}
+	digest, info, err := firmwareVariablesDigest(j.SecureBootNVRAM)
+	if err != nil {
+		return err
+	}
+	mode, uid, gid, metaErr := secureBootMetadata(info)
+	if metaErr != nil || mode != j.SecureBootMode || uid != j.SecureBootUID || gid != j.SecureBootGID {
+		return errors.New("VM firmware variable store ownership changed during Secure Boot update")
+	}
+	if digest == j.SecureBootAfter && j.SecureBootAfter != "" {
+		enabled, enrolled, err := firmwareVariablesState(ctx, j.SecureBootNVRAM)
+		if err != nil || enabled != j.SecureBootEnabled || (j.SecureBootEnabled && !enrolled) {
+			return errors.New("VM firmware variable store does not contain the requested Secure Boot state")
+		}
+		if err = removeSecureBootTemporary(j.SecureBootTemporary); err != nil {
+			return err
+		}
+		j.Stage = secureBootDefiningStage
+		return e.save(*j)
+	}
+	if digest != j.SecureBootBefore {
+		return errors.New("VM firmware variable store changed during Secure Boot update; inspect the VM on its host")
+	}
+	if j.SecureBootTemporary == "" {
+		j.SecureBootTemporary, err = secureBootTemporary(j.SecureBootNVRAM, j.SecureBootMode, j.SecureBootUID, j.SecureBootGID)
+		if err != nil {
+			return err
+		}
+		if err = e.save(*j); err != nil {
+			return err
+		}
+	}
+	if err = secureBootTemporaryValid(ctx, j.SecureBootTemporary, *j); err != nil {
+		// A pre-created or partial output is never trusted. It is safe to replace only after the
+		// source digest above proved the original store is still present.
+		if j.SecureBootAfter != "" {
+			j.SecureBootAfter = ""
+			if saveErr := e.save(*j); saveErr != nil {
+				return saveErr
+			}
+		}
+		if err = removeSecureBootTemporary(j.SecureBootTemporary); err != nil {
+			return err
+		}
+		j.SecureBootTemporary, err = secureBootTemporary(j.SecureBootNVRAM, j.SecureBootMode, j.SecureBootUID, j.SecureBootGID)
+		if err != nil {
+			return err
+		}
+		if err = e.save(*j); err != nil {
+			return err
+		}
+		args := []string{"--input", j.SecureBootNVRAM, "--output", j.SecureBootTemporary}
+		if j.SecureBootEnabled {
+			args = append(args, "--secure-boot")
+		} else {
+			args = append(args, "--set-false", "SecureBootEnable")
+		}
+		if _, err = run(ctx, "virt-fw-vars", args...); err != nil {
+			return errors.New("cannot update VM Secure Boot variables: " + err.Error())
+		}
+	}
+	if err = secureBootTemporaryValid(ctx, j.SecureBootTemporary, *j); err != nil {
+		return err
+	}
+	if err = secureBootVariablesPreserved(ctx, j.SecureBootNVRAM, j.SecureBootTemporary, j.SecureBootEnabled); err != nil {
+		return err
+	}
+	if err = syncFirmwareVariables(j.SecureBootTemporary); err != nil {
+		return err
+	}
+	j.SecureBootAfter, _, err = firmwareVariablesDigest(j.SecureBootTemporary)
+	if err != nil {
+		return err
+	}
+	if err = e.save(*j); err != nil {
+		return err
+	}
+	if err = os.Rename(j.SecureBootTemporary, j.SecureBootNVRAM); err != nil {
+		return err
+	}
+	if err = syncManagedDir(filepath.Dir(j.SecureBootNVRAM)); err != nil {
+		return err
+	}
+	j.Stage = secureBootDefiningStage
+	return e.save(*j)
+}
+
+func strictSecureBootPredecessor(got, expected []byte) bool {
+	// Both values come from virsh dumpxml. Do not re-parse and project them through managedDomain:
+	// that would silently ignore XML Core does not understand and then overwrite it. Whitespace at
+	// the edges is the one harmless normalization accepted here.
+	return bytes.Equal(bytes.TrimSpace(got), bytes.TrimSpace(expected))
+}
+
+// finishSecureBootDefinition resumes only the define known not to have been sent yet (the
+// predecessor is still persistent), or accepts the desired definition after a crash. It never
+// redefines an unrecognised domain.
+func (e *ManagedEngine) finishSecureBootDefinition(ctx context.Context, j *managedJournal) error {
+	b, err := managedVirsh(ctx, "dumpxml", j.Command.VM.ID, "--inactive")
+	if err != nil {
+		return errors.New("cannot observe VM after Secure Boot update; inspect the VM on its host")
+	}
+	if validateManagedDefinition(b, j.Domain) == nil {
+		j.Stage = "defined"
+		return e.save(*j)
+	}
+	if len(j.SecureBootPreviousDomain) == 0 || !strictSecureBootPredecessor(b, j.SecureBootPreviousDomain) {
+		return errors.New("VM definition changed during Secure Boot update; inspect the VM on its host")
+	}
+	domainPath := filepath.Join(e.stateDir, j.Command.OperationID+".xml")
+	if err = atomicWrite(domainPath, j.Domain); err != nil {
+		return err
+	}
+	if _, err = managedVirsh(ctx, "define", domainPath); err != nil {
+		return errors.New("VM Secure Boot redefinition outcome uncertain; observation required before recovery")
+	}
+	return nil
+}
+
+// finishFirmwareRemoval is safe to retry after the journal records cleaning-nvram. A UEFI
+// definition proves the BIOS redefine landed; an absent domain proves undefine landed. In both
+// cases it removes the exact journaled file after path validation, because libvirt can report a
+// successful --nvram undefine while leaving that file behind.
+func (e *ManagedEngine) finishFirmwareRemoval(ctx context.Context, j *managedJournal) error {
+	b, err := managedVirsh(ctx, "dumpxml", j.Command.VM.ID, "--inactive")
+	if err == nil {
+		if validateManagedDefinition(b, j.Domain) == nil {
+			if j.NVRAMPath == "" {
+				return errors.New("VM firmware cleanup path was not recorded; inspect the VM on its host")
+			}
+			if err = removeFirmwareVariables(j.NVRAMPath); err != nil {
+				return err
+			}
+			j.Stage = "defined"
+			return nil
+		}
+		var d managedDomain
+		if xml.Unmarshal(b, &d) != nil || d.OS.Firmware != "efi" {
+			return errors.New("VM firmware cleanup state is not recognisable; inspect the VM on its host")
+		}
+		if d.OS.NVRAM == nil || d.OS.NVRAM.Path == "" {
+			return errors.New("existing UEFI VM has no firmware variable store; inspect it on the host before editing")
+		}
+		if j.NVRAMPath == "" {
+			if err = firmwareVariablesFile(d.OS.NVRAM.Path); err != nil {
+				return err
+			}
+			j.NVRAMPath = d.OS.NVRAM.Path
+			if err = e.save(*j); err != nil {
+				return err
+			}
+		} else if j.NVRAMPath != d.OS.NVRAM.Path {
+			return errors.New("VM firmware variable store changed during cleanup; inspect the VM on its host")
+		}
+		if _, err = managedVirsh(ctx, "undefine", j.Command.VM.ID, "--nvram"); err != nil {
+			return errors.New("VM firmware variable cleanup outcome uncertain; observation required before recovery")
+		}
+	} else {
+		// A successful undefine leaves no persistent domain. Define is idempotent only after
+		// that observation, never blindly replayed after an interrupted libvirt request.
+		ids, listErr := managedVirsh(ctx, "list", "--all", "--uuid")
+		if listErr != nil || slices.Contains(strings.Fields(string(ids)), j.Command.VM.ID) {
+			return errors.New("VM firmware cleanup outcome uncertain; observation required before recovery")
+		}
+	}
+	if j.NVRAMPath == "" {
+		return errors.New("VM firmware cleanup path was not recorded; inspect the VM on its host")
+	}
+	if err = removeFirmwareVariables(j.NVRAMPath); err != nil {
+		return err
+	}
+	domainPath := filepath.Join(e.stateDir, j.Command.OperationID+".xml")
+	if err = atomicWrite(domainPath, j.Domain); err != nil {
+		return err
+	}
+	j.Stage = "defining"
+	if err = e.save(*j); err != nil {
+		return err
+	}
+	if _, err = managedVirsh(ctx, "define", domainPath); err != nil {
+		return errors.New("VM redefinition outcome uncertain; observation required before recovery")
+	}
+	return nil
+}
+
 func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protocol.Result, error) {
 	j.Result.Status = "needs_attention"
 	j.Result.Error = "interrupted operation retained; inspect host resources before creating a new request; no effects replayed"
@@ -3392,6 +3967,27 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protoc
 		}
 	}
 	// An interrupted edit is proven the same way, in whichever state it was applied.
+	if j.Command.Kind == "vm-update" && j.Stage == "cleaning-nvram" {
+		if err := e.finishFirmwareRemoval(ctx, &j); err == nil {
+			if err = e.observer()(ctx, j, "shut off"); err == nil {
+				j.Result.Status, j.Result.Error, j.Stage = "succeeded", "", "defined"
+			} else {
+				j.Result.Error = "interrupted edit: " + err.Error() + "; inspect the VM on its host, then stop it and submit the edit again"
+			}
+		} else {
+			j.Result.Error = "interrupted edit: " + err.Error() + "; inspect the VM on its host, then stop it and submit the edit again"
+		}
+	}
+	if j.Command.Kind == "vm-update" && j.Stage == secureBootVariablesStage {
+		if err := e.finishSecureBootVariables(ctx, &j); err != nil {
+			j.Result.Error = "interrupted edit: " + err.Error() + "; inspect the VM on its host, then stop it and submit the edit again"
+		}
+	}
+	if j.Command.Kind == "vm-update" && j.Stage == secureBootDefiningStage {
+		if err := e.finishSecureBootDefinition(ctx, &j); err != nil {
+			j.Result.Error = "interrupted edit: " + err.Error() + "; inspect the VM on its host, then stop it and submit the edit again"
+		}
+	}
 	if j.Command.Kind == "vm-update" && updateObservable(j.Stage) {
 		if err := e.observer()(ctx, j, updateState(j)); err == nil {
 			j.Result.Status = "succeeded"
@@ -4296,6 +4892,23 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 	if j.Domain, err = managedDomainXML(v, nets, j.Disks, j.Targets, j.MediaTarget, mediaPath, j.DriversTarget, driversPath); err != nil {
 		return err
 	}
+	var current []byte
+	if cur.Command.VM.Boot.Firmware == "uefi" && v.Boot.Firmware == "uefi" {
+		// A journal written before explicit NVRAM paths cannot tell us libvirt's generated
+		// path. Read the stopped definition before a rename and retain that path, so an
+		// upgrade does not replace an installed guest's firmware variables.
+		var readErr error
+		current, readErr = managedVirsh(ctx, "dumpxml", v.ID, "--inactive")
+		if readErr != nil {
+			return errors.New("cannot read VM firmware variable store before editing")
+		}
+		if j.Domain, err = carryFirmwareVariables(j.Domain, current); err != nil {
+			return err
+		}
+		if secureBootChanged(*cur.Command.VM, v) {
+			j.SecureBootPreviousDomain = current
+		}
+	}
 	j.Stage = "allocating"
 	if err = e.save(*j); err != nil {
 		return err
@@ -4327,21 +4940,53 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 			return err
 		}
 	} else {
-		if v.Name != cur.Command.VM.Name {
+		removeFirmware := firmwareRemoved(*cur.Command.VM, v)
+		changingSecureBoot := secureBootChanged(*cur.Command.VM, v)
+		if changingSecureBoot {
+			// The XML selects the matching OVMF build, but the existing variable store is
+			// authoritative for enforcement and guest boot entries. Journal its native edit
+			// before invoking the tool; recovery never replaces it with a template.
+			j.SecureBootEnabled = v.Boot.SecureBootEnabled()
+			j.Stage = secureBootVariablesStage
+			if err = e.prepareSecureBootVariables(ctx, j); err != nil {
+				return err
+			}
+			if err = e.finishSecureBootVariables(ctx, j); err != nil {
+				return err
+			}
+			if err = e.finishSecureBootDefinition(ctx, j); err != nil {
+				return err
+			}
+		}
+		if removeFirmware {
+			// Libvirt can remove NVRAM only while the persistent definition still describes
+			// UEFI. Persist this boundary first; finishFirmwareRemoval observes before any
+			// retry, so an interruption cannot replay an ambiguous undefine.
+			j.Stage = "cleaning-nvram"
+			if err = e.save(*j); err != nil {
+				return err
+			}
+			if err = e.finishFirmwareRemoval(ctx, j); err != nil {
+				return err
+			}
+		}
+		if v.Name != cur.Command.VM.Name && !removeFirmware {
 			if _, err = managedVirsh(ctx, "domrename", v.ID, "--", v.Name); err != nil {
 				return fmt.Errorf("libvirt refused the rename (%v); inspect the VM on its host", err)
 			}
 		}
-		domainPath := filepath.Join(e.stateDir, j.Command.OperationID+".xml")
-		if err = atomicWrite(domainPath, j.Domain); err != nil {
-			return err
-		}
-		j.Stage = "defining"
-		if err = e.save(*j); err != nil {
-			return err
-		}
-		if _, err = managedVirsh(ctx, "define", domainPath); err != nil {
-			return errors.New("VM redefinition outcome uncertain; observation required before recovery")
+		if !removeFirmware && !changingSecureBoot {
+			domainPath := filepath.Join(e.stateDir, j.Command.OperationID+".xml")
+			if err = atomicWrite(domainPath, j.Domain); err != nil {
+				return err
+			}
+			j.Stage = "defining"
+			if err = e.save(*j); err != nil {
+				return err
+			}
+			if _, err = managedVirsh(ctx, "define", domainPath); err != nil {
+				return errors.New("VM redefinition outcome uncertain; observation required before recovery")
+			}
 		}
 	}
 	if err = setAutostart(ctx, v, js); err != nil {

@@ -6,12 +6,32 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.2.8` →
-> Debian `0.2.8`).
+> development software. Builds use the newest numbered changelog heading (`0.2.9` →
+> Debian `0.2.9`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.2.9] — 2026-09-16
+
+### Minor Feature
+
+- Per-VM CPU, memory and disk usage reported by the host is now displayed in the VM details
+  panel, including sample age and explicit unknown values when a metric was not reported.
+- Failed ISO imports now offer a confirmed **Discard failed import** action in the ISO library.
+  The failed task and audit history remain available after its library row is removed.
+
+### Bug Fixes
+
+- UEFI firmware variables now stay with a VM when it is renamed. Changing a stopped VM from
+  UEFI to BIOS removes its old variable file safely, including after an interrupted change.
+- Turning Secure Boot off and back on now preserves the VM's boot entries and enrolled keys.
+- A VM creation rejected by Nex Core no longer leaves an unknown Controller-only VM in the
+  inventory. Its failed task remains available and the same request can still be replayed safely
+  (BUG-0217).
+- New installations include the current OVMF Secure Boot certificate template, with the 2023
+  Microsoft UEFI and Windows UEFI certificate authorities verified during installation checks.
 
 ## [0.2.8] — 2026-09-16
 

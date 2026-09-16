@@ -138,6 +138,15 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 		return map[string]any{"vm_id": cmd.VM.ID, "operation": op}
 	}
 }
+
+// failedVMCreateRecordID is an internal primary key for a failed create's retained replay
+// record. Valid guest IDs cannot contain a colon, so this cannot be a guest identity.
+func failedVMCreateRecordID(operationID string) string { return "failed-vm-create:" + operationID }
+
+func moveFailedVMCreateRecord(tx *sql.Tx, id string) error {
+	_, err := tx.Exec("UPDATE managed_resources SET id='failed-vm-create:' || operation_id WHERE id=? AND kind='vm-create' AND operation_id IN (SELECT id FROM operations WHERE status='failed')", id)
+	return err
+}
 func (c *Controller) listResources(w http.ResponseWriter, kind string) {
 	rows, err := c.db.Query("SELECT r.command,o.id,o.host_id,o.kind,o.request_id,o.status,o.error,o.created_at,o.updated_at,o.actor FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind=? ORDER BY r.name,r.id", kind)
 	if err != nil {
@@ -307,7 +316,7 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		return err
 	}
 	taken := map[string]bool{}
-	rows, err := tx.Query("SELECT r.kind,r.name,r.payload FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE (r.host_id=? AND r.kind IN ('storage-register','network-register') AND o.status!='failed') OR (r.pool_id=? AND r.kind='vm-create')", host, pool)
+	rows, err := tx.Query("SELECT r.kind,r.name,r.payload FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE (r.host_id=? AND r.kind IN ('storage-register','network-register') AND o.status!='failed') OR (r.pool_id=? AND r.kind='vm-create' AND o.status!='failed')", host, pool)
 	if err != nil {
 		return err
 	}
@@ -350,14 +359,14 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 	// held reports an entry this Controller already knows under the same ID and kind: the
 	// steady state of every report after adoption, which needs no record.
 	held := func(id, kind string) (bool, error) {
-		n, err := count("SELECT count(*) FROM managed_resources WHERE id=? AND kind=?", id, kind)
+		n, err := count("SELECT count(*) FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.id=? AND r.kind=? AND o.status!='failed'", id, kind)
 		return n > 0, err
 	}
 	free := func(id, key string) (bool, error) {
 		if !identifierValid(id) || taken[key] {
 			return false, nil
 		}
-		n, err := count("SELECT count(*) FROM managed_resources WHERE id=?", id)
+		n, err := count("SELECT count(*) FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.id=? AND o.status!='failed'", id)
 		if err != nil || n > 0 {
 			return false, err
 		}
@@ -556,6 +565,9 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 			}
 		}
 		if reason == "" {
+			if err = moveFailedVMCreateRecord(tx, s.ID); err != nil {
+				return err
+			}
 			if ok, err := free(s.ID, "vm:"+s.Name); err != nil {
 				return err
 			} else if !ok {
@@ -677,7 +689,7 @@ func (c *Controller) adoptAppliances(tx *sql.Tx, host, pool string, inv *protoco
 				continue // unknown, not absent: the next healthy observation decides
 			}
 			reason = "deploy record present but libvirt does not list the VM"
-		} else if n := 0; tx.QueryRow("SELECT count(*) FROM managed_resources WHERE id=?", ap.ID).Scan(&n) == nil && n > 0 {
+		} else if n := 0; tx.QueryRow("SELECT count(*) FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.id=? AND o.status!='failed'", ap.ID).Scan(&n) == nil && n > 0 {
 			reason = "VM belongs to a managed creation operation"
 		}
 		if reason != "" {

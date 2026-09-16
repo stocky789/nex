@@ -18,7 +18,7 @@
     "pages": []
   },
   "api": {
-    "impact": "updated",
+    "impact": "changed contract",
     "reason": "Changed contract. The report inventory member vms[].usage (protocol.VMUsage, new schema) and the `usage` health check are new, and GET /api/v1/vms passes `usage` through for a VM observed running in a fresh libvirt-healthy report. No route, agent command, capability or protocol version changes, and no existing member is altered. Controller bounds the new member in validateInventory: a rate paired with no window, a window above 300000 ms, or a percentage above the host's own 1000 clamp is refused, while a window without a rate is accepted because that is a host that measured a gap and declined to turn it into a rate; the asymmetry is deliberate, since a validateInventory failure discards the whole host report. Compatibility follows the shared upgrade rule: an older Core omits the member and clients show no usage, and Controller must be upgraded before Core because report JSON is decoded with DisallowUnknownFields. Affected contracts: protocol.VM, protocol.VMUsage, the host inventory report, and GET /api/v1/vms (ManagedAppliance).",
     "pages": [
       "docs/API.md",

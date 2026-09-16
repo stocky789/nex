@@ -3,6 +3,7 @@ package vmhost
 
 import (
 	"errors"
+	"path/filepath"
 	"slices"
 
 	"nex.local/nex/internal/protocol"
@@ -44,6 +45,21 @@ type firmwareFeatureXML struct {
 }
 type firmwareXML struct {
 	Features []firmwareFeatureXML `xml:"feature"`
+}
+
+// nvramXML names the writable UEFI variable store.  It deliberately has no template
+// attribute: libvirt's firmware auto-selection supplies the matching template while the
+// explicit path keeps the guest state independent of the operator-visible domain name.
+type nvramXML struct {
+	Path string `xml:",chardata"`
+}
+
+// firmwareVariablesDir is package-scoped so focused tests can exercise the same ownership
+// checks against a disposable directory. Production never changes it.
+var firmwareVariablesDir = "/var/lib/libvirt/qemu/nvram"
+
+func firmwareVariablesPath(id string) string {
+	return filepath.Join(firmwareVariablesDir, id+"_VARS.fd")
 }
 
 // smmXML enables System Management Mode. OVMF stores the Secure Boot variables in SMRAM, so a
@@ -126,6 +142,7 @@ func applyFirmware(d *managedDomain, boot protocol.VMBoot) {
 		return
 	}
 	d.OS.Firmware = "efi"
+	d.OS.NVRAM = &nvramXML{Path: firmwareVariablesPath(d.UUID)}
 	on := yesNo(boot.SecureBootEnabled())
 	d.OS.FirmwareFeatures = &firmwareXML{Features: []firmwareFeatureXML{
 		{Enabled: on, Name: "enrolled-keys"},

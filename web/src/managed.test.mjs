@@ -26,7 +26,7 @@ buildSync({
 // reload path that first showed the stale panel.
 let pending = {};
 globalThis.sessionStorage = { getItem: () => JSON.stringify(pending), setItem() {} };
-const { ManagedVMs, VMDetails, formTab, isoNameFromURL, isoTransferNotice, ejectInstallOffer, guestResizeText } = await import(`file://${outfile}`);
+const { ManagedVMs, VMDetails, formTab, isoNameFromURL, isoTransferNotice, mediaDiscardable, ejectInstallOffer, guestResizeText, usageAge } = await import(`file://${outfile}`);
 
 const props = {
   account: "operator", poolID: "pool-1", poolName: "pool", hosts: [], storage: [], networks: [],
@@ -88,6 +88,22 @@ assert.match(isoTransferNotice("windows.iso", undefined), /has no host transfer 
 // A URL download never passes through the Controller, so its banner says what the host is doing.
 assert.match(isoTransferNotice("virtio-win.iso", "queued", "download"), /^The host download of virtio-win\.iso is queued/);
 assert.match(isoTransferNotice("virtio-win.iso", "succeeded", "download"), /^virtio-win\.iso is on the host/);
+
+// BUG-0203: only an import that never became host-held media can be discarded. The confirmation
+// action uses the existing DELETE contract, reconciles an ambiguous response, then reloads.
+assert.equal(mediaDiscardable({ id: "failed", status: "failed" }), true);
+assert.equal(mediaDiscardable({ id: "uncertain", status: "needs_attention" }), true);
+for (const status of ["queued", "dispatched", "succeeded"]) assert.equal(mediaDiscardable({ id: status, status }), false);
+const failedLibrary = renderToStaticMarkup(createElement(ManagedVMs, { ...props, tab: "ISO library", media: [{ id: "failed", pool_id: "pool-1", host_id: "host-1", storage_id: "storage-1", name: "failed.iso", operation_id: "op-1", status: "failed", size_bytes: 0, sha256: "" }] }));
+assert.match(failedLibrary, /Discard failed import/);
+const storedLibrary = renderToStaticMarkup(createElement(ManagedVMs, { ...props, tab: "ISO library", media: [{ id: "stored", pool_id: "pool-1", host_id: "host-1", storage_id: "storage-1", name: "stored.iso", operation_id: "op-2", status: "succeeded", size_bytes: 40000, sha256: "a" }] }));
+assert.doesNotMatch(storedLibrary, /Discard failed import/);
+const managedSource = readFileSync(new URL("./managed.tsx", import.meta.url), "utf8");
+assert.match(managedSource, /confirm\(`Discard \$\{media\.name\}\?/);
+assert.match(managedSource, /await api\(`media\/\$\{media\.id\}`, "DELETE"\)/);
+assert.match(managedSource, /current = await api<Media\[\]>\("media"\)/);
+assert.match(managedSource, /current\.some\(entry => entry\.id === media\.id\)/);
+assert.match(managedSource, /await reload\(\);\s*\n\s*setNotice\(`Discarded the failed import/);
 
 // BUG-0202: after an install the ISO stays in the drive ahead of the disks, so every boot stops
 // at "Press any key to boot from CD or DVD". The eject is offered only where it is true and can
@@ -157,6 +173,18 @@ assert.match(
 // The Controller cannot observe a VM's memory backing, so the row states the policy only.
 assert.match(details, /Dedicated · the host locks this much RAM while the VM runs/);
 assert.doesNotMatch(details, /upgrade Core, stop/);
+
+// Roadmap item 8: Core reports nullable observations. The UI must distinguish an unavailable
+// metric from zero, state CPU's vCPU-relative meaning, and retain the sample age.
+const usageDetails = renderToStaticMarkup(createElement(VMDetails, { ...detailProps, vm: { ...installed, usage: { observed_at: new Date(Date.now() - 65_000).toISOString(), sample_window_ms: 30_000, cpu_percent: 125, memory_assigned_bytes: 4 * 1024 ** 3, memory_maximum_bytes: 8 * 1024 ** 3, memory_host_bytes: null, disk_used_bytes: 3 * 1024 ** 3, disk_capacity_bytes: null } } }));
+assert.match(usageDetails, /VM usage/);
+assert.match(usageDetails, /125% of allocated vCPUs/);
+assert.match(usageDetails, /Allocation, not memory used inside the guest/);
+assert.match(usageDetails, /Host memory cost<\/dt><dd>Not reported/);
+assert.match(usageDetails, /Disk capacity<\/dt><dd>Not reported/);
+assert.match(usageDetails, /Sampled 1 minute ago/);
+assert.match(renderToStaticMarkup(createElement(VMDetails, { ...detailProps, vm: { ...installed, usage: null } })), /This is not zero usage/);
+assert.equal(usageAge(), "Sample time not reported");
 assert.doesNotMatch(details, /Existing VMs/);
 
 // BUG-0201 (UI half): resize is now reported from what the guest can do, not from the device

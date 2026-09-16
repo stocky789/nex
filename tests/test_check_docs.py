@@ -58,17 +58,36 @@ class DocumentationGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'missing documentation assessment'):
             docs.check(self.root, {'app.py'})
 
-    def test_updated_guide_and_api_must_change_in_range(self):
+    def test_updated_guide_and_changed_api_must_change_in_range(self):
         record = self.record(['app.py'], guide={'impact': 'updated', 'reason': 'New workflow', 'pages': ['docs/guide/install.md']},
-                             api={'impact': 'updated', 'reason': 'Changed contract', 'pages': ['docs/API.md']})
+                             api={'impact': 'changed contract', 'reason': 'Changed contract', 'pages': ['docs/API.md']})
         with self.assertRaisesRegex(ValueError, 'guide updated requires'):
             docs.check(self.root, {'app.py', record})
-        with self.assertRaisesRegex(ValueError, 'api updated requires'):
+        with self.assertRaisesRegex(ValueError, 'api changed contract requires'):
             docs.check(self.root, {'app.py', record, 'docs/guide/install.md'})
         self.record(['app.py', 'docs/guide/install.md', 'docs/API.md'],
                     guide={'impact': 'updated', 'reason': 'New workflow', 'pages': ['docs/guide/install.md']},
-                    api={'impact': 'updated', 'reason': 'Changed contract', 'pages': ['docs/API.md']})
+                    api={'impact': 'changed contract', 'reason': 'Changed contract', 'pages': ['docs/API.md']})
         docs.check(self.root, {'app.py', record, 'docs/guide/install.md', 'docs/API.md'})
+
+    def test_api_contract_impacts_are_accepted_and_invalid_values_rejected(self):
+        for impact in ('existing contract', 'changed contract', 'new contract'):
+            record = self.record(['app.py', 'docs/API.md'], name=impact.replace(' ', '-'),
+                                 api={'impact': impact, 'reason': 'Contract assessed',
+                                      'pages': ['docs/API.md']})
+            docs.check(self.root, {'app.py', 'docs/API.md', record}, added={record})
+        record = self.record(['app.py'], name='invalid-api',
+                             api={'impact': 'existing', 'reason': 'Invalid value', 'pages': []})
+        with self.assertRaisesRegex(ValueError, 'api.impact must be none, existing contract, changed contract, or new contract'):
+            docs.check(self.root, {'app.py', record}, added={record})
+
+    def test_legacy_updated_api_impact_is_rejected_for_new_records(self):
+        record = self.record(['app.py'], name='legacy-api',
+                             api={'impact': 'updated', 'reason': 'Historical record',
+                                  'pages': ['docs/API.md']})
+        with self.assertRaisesRegex(ValueError, 'api.impact must be none, existing contract, changed contract, or new contract'):
+            docs.check(self.root, {'app.py', record}, added={record})
+        docs.check(self.root, {'app.py', record}, added=set())
 
     def test_reasons_and_evidence_required(self):
         file = self.record(['app.py'], api={'impact': 'none', 'reason': '', 'pages': []})

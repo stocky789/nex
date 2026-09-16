@@ -1,0 +1,36 @@
+{
+  "summary": "Complete BUG-0203 in the ISO library UI: failed and needs-attention imports offer a confirmed discard action that uses existing DELETE /api/v1/media/{id}, reconciles a lost response from GET /api/v1/media, and reloads the list. Queued, dispatched and succeeded rows offer no discard action; retry remains POST /api/v1/media/download with a new request_id. API impact: existing contract.",
+  "paths": [
+    "web/src/managed.tsx",
+    "web/src/managed.test.mjs",
+    "docs/guide/storage-repositories.md",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-16-media-library-discard-ui.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The guide now names the confirmed ISO-library action, its eligible failed and needs-attention states, and the retained audit history.",
+    "pages": ["docs/guide/storage-repositories.md"]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "API impact: existing contract. The UI calls implemented DELETE and GET /api/v1/media and retains POST /api/v1/media/download for retry; neither request, response, authorization rule nor Core command changes.",
+    "pages": ["docs/API.md"],
+    "contracts": ["DELETE /api/v1/media/{id}", "POST /api/v1/media/download", "iso-import"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Completes the UI half of an existing defect fix without changing milestone status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "controller",
+    "reason": "Discard removes the disposable Controller import row and staging bytes for an import that did not become host media. Its task and audit history remain; the UI stores no new pool or media state.",
+    "record": "Controller operation and audit history retain the discard and failed import; its disposable staging/import row is removed. Successful ISO files and identities remain in the Core managed journal and repository media directory, recovered by a fresh Controller from Inventory.managed.media."
+  },
+  "verification": {
+    "method": "npm --prefix web run test, npm --prefix web run typecheck, npm --prefix web run build, python3 scripts/check_docs.py --worktree, and python3 -m unittest discover -s tests -p 'test_repository_privacy.py'. The focused UI check renders eligible and ineligible rows and asserts confirmation, GET reconciliation after a DELETE failure, reload and the existing retry route. Chromium against deployed Controller/Core then discarded a disposable HTTPS-downgrade failure, removed its row and retained task history; a browser-uploaded disposable 64 MiB ISO reached the live host-ready banner.",
+    "evidence": ["web/src/managed.test.mjs", "docs/guide/storage-repositories.md", "docs/BUG_LEDGER.md"]
+  }
+}

@@ -292,9 +292,10 @@ A terminal `failed` task is not retried; fix the cause and submit a new request.
   redirect target that is not a public HTTP or HTTPS URL without credentials, a destination that is
   not a public address, or a DNS or connection failure. Only `ISO download failed: connection,
   redirect or timeout` means an unexplained network fault; check the host's own connectivity.
-- **A failed ISO import stays in the library:** an import that failed or was interrupted can be
-  removed from **ISO library**; the task and audit history of what happened are kept. Then submit
-  the transfer or download again, which starts a new import. An ISO a host actually holds cannot be
+- **A failed ISO import stays in the library:** for a `failed` or `needs_attention` row, select
+  **Discard failed import** and confirm. This removes the failed import record and any Controller
+  staging bytes; the task and audit history of what happened are kept. Then submit the transfer or
+  download again, which starts a new import. An ISO a host actually holds cannot be
   removed this way: it is Core's record and file, so Controller refuses with `this ISO is stored on
   its host; Nex Core cannot remove imported media yet`, and a removal attempted directly in the
   Controller database reappears at the host's next report. Deleting the file on the host by hand is
@@ -322,11 +323,9 @@ and the SMB domain/existing-folder picker in
 the two-Core NFS/SMB member workflow in
 [bug-ledger lab evidence](../qa/2026-09-12-bug-ledger.md#bug-0094-primary-native-pool-walkthrough),
 and clustered GFS2 in [concurrent storage verification](../qa/2026-09-12-concurrent-pool-storage.md).
-The distinct ISO download refusals, removing a failed import (`DELETE /api/v1/media/{id}`) and the
-accurate default name for a newly registered local repository (with an existing registration left
-unrenamed) have Core and Controller test coverage only; they were found in the
-[Windows 11 UEFI lab](../qa/2026-09-16-windows-11-uefi-lab.md) and no lab walkthrough of the fixes
-is claimed.
+The disposable Controller walkthrough confirmed the HTTPS-downgrade refusal, discard of its failed
+import with task history retained, and the upload banner changing to its live host-ready state.
+See [final ISO and Controller acceptance](../qa/2026-09-16-final-iso-controller-acceptance.md).
 Untested: failed-fence admission, broader outages/adoption, HA/failover, migration, physical hardware
 and the unavailable-Core browser presentation.
 

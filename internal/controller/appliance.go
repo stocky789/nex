@@ -133,7 +133,7 @@ func (c *Controller) adoptAppliance(w http.ResponseWriter, r *http.Request, user
 	}
 	v.PoolID = pool
 	var managedCount int
-	if tx.QueryRow("SELECT count(*) FROM managed_resources WHERE id=?", v.VMID).Scan(&managedCount) != nil {
+	if tx.QueryRow("SELECT count(*) FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.id=? AND o.status!='failed'", v.VMID).Scan(&managedCount) != nil {
 		fail(w, 500, "VM ownership lookup failed")
 		return
 	}
@@ -231,7 +231,7 @@ func (c *Controller) appliances(w http.ResponseWriter, r *http.Request, user, cs
 		return
 	}
 	rows.Close()
-	managed, err := c.db.Query("SELECT r.command,o.status,o.error,h.revoked,h.inventory FROM managed_resources r JOIN operations o ON o.id=r.operation_id JOIN hosts h ON h.id=r.host_id WHERE r.kind='vm-create' ORDER BY r.name,r.id")
+	managed, err := c.db.Query("SELECT r.command,o.status,o.error,h.revoked,h.inventory FROM managed_resources r JOIN operations o ON o.id=r.operation_id JOIN hosts h ON h.id=r.host_id WHERE r.kind='vm-create' AND o.status!='failed' ORDER BY r.name,r.id")
 	if err != nil {
 		fail(w, 500, "VM lookup failed")
 		return

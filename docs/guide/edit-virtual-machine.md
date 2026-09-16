@@ -82,6 +82,16 @@ definition. For a stopped VM the host redefines it; for a running VM new devices
 the guest immediately, removed ones disappear once the guest releases them (or after the next
 stop and start), and a changed ISO is visible in the guest's CD drive. **Activity** records `vm-update` with the administrator.
 
+## Observe VM usage
+
+The **VM usage** panel under the VM details shows the latest host sample for a running VM.
+**CPU** is a percentage of this VM's allocated vCPUs, not of the host; **Memory allocation** is
+the amount assigned and its configured maximum, not memory used inside the guest; and **Host
+memory cost** is the VM process's resident host memory. Disk used and capacity describe only
+the VM's disk images. Every value can be **Not reported**: that is unknown, not zero, when the
+host could not read it without waiting for another VM operation. Check **Sample age** and the
+fresh/stale badge before relying on the numbers; a stale status does not prove the VM stopped.
+
 ## Troubleshooting
 
 - **The Edit button is greyed:** hover it for the reason. The VM's host is not freshly
@@ -144,11 +154,10 @@ See the [edit QA report](../qa/vm-edit/checks.md) and the
 [physical reservation QA report](../qa/dedicated-memory/checks.md) for executed checks and
 untested limits.
 
-**Secure Boot, TPM and driver disc editing are not lab-verified.** They are covered by Nex Core
-unit tests over the generated libvirt definition, the drive-by-alias resolution, the live-edit
-path for a VM that predates the second CD drive, and the TPM state removal on delete
-(`internal/vmhost/firmware_test.go`), and by Controller UI tests. Not exercised on a host: the
-compatibility case that matters most — an installed Windows VM created before these fields
-existed, saved once after a Core upgrade, continuing to boot with the same firmware — and
-adding a driver disc to a VM that predates the second drive.
+The final disposable-package run verified Secure Boot on → rename → off → on, retained boot
+entries and NVRAM identity, and a signed guest's EFI state. The independent Windows TPM/Secure
+Boot matrix remains open. See [final ISO and Controller acceptance](../qa/2026-09-16-final-iso-controller-acceptance.md).
 
+**VM usage verification, 2026-09-16.** A disposable Nex Core/libvirt host and the deployed
+Controller UI reported a running VM's CPU, allocation, resident memory, disk use/capacity and
+sample age. A shut-off VM reported no sample and the UI showed it as unknown rather than zero.

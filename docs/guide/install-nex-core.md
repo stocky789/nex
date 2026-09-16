@@ -170,8 +170,8 @@ to configured Debian repositories. No Nex package repository is configured yet.
   `ip route` and `/etc/network/interfaces`. Match `nexN` names to their MAC addresses and
   check switch VLAN configuration. Correct the installed settings locally; the installer
   does not offer remote rollback or prove connectivity before first boot.
-- **No bootable media:** check the attached ISO and VM boot order. Try the tested BIOS path
-  on a fresh disposable disk. UEFI installation and Secure Boot remain unverified.
+- **No bootable media:** check the attached ISO and VM boot order. BIOS and UEFI menu boots
+  passed on the final disposable ISO; physical hardware remains unverified.
 - **Installation/package setup fails:** retain the installer error and logs with the image
   checksum for diagnosis. Do not treat the base Debian installation alone as a successful
   Nex installation. Retry on a new disposable disk after resolving the error.
@@ -194,16 +194,12 @@ the [Nex wizard](../qa/iso/2026-09-08-nex-wizard.md), [usability](../qa/iso/2026
 [installer modes](../qa/iso/2026-09-08-installer-modes.md) and
 [previous custom shell](../qa/iso/2026-09-08-custom-installer.md).
 
-Physical NICs, switch VLANs, Xen installation and UEFI/Secure Boot remain unverified.
+The final ISO passed BIOS/UEFI menu boots, offline installation, installed first boot and reboot
+in a disposable nested-KVM lab. Physical NICs, switch VLANs, Xen installation and physical
+hardware remain unverified.
 
-The step list and the completion screen's single **Restart now** button were changed after the
-[Windows 11 UEFI lab](../qa/2026-09-16-windows-11-uefi-lab.md) recorded issue W14. That change
-has **not** been exercised in an installer run: the installer shell is compiled inside the ISO
-builder, and only source-level checks were run (`bash installer/check.sh`, the
-`installer/build-gui.sh` patch asserts against pristine cdebconf 0.280 source, and a
-compiler syntax check of the patched frontend). No ISO was built or booted, so the screens
-above are described from the source, not from a capture. An installer run still needs to
-confirm that the completion page shows **Restart now**, that it shows no back button, and
-that **Go Back** still works on every earlier screen.
+An earlier 0.2.8 build with unchanged installer code reached the final prompt, stayed open until
+**Restart now**, then rebooted naturally. The final SHA's unattended install, first boot and reboot
+passed; its completion screen was not visually inspected. See [final ISO and Controller acceptance](../qa/2026-09-16-final-iso-controller-acceptance.md).
 
 [Return to the guide](README.md)

@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"nex.local/nex/internal/protocol"
 )
@@ -21,6 +24,579 @@ func parseDomain(t *testing.T, b []byte) managedDomain {
 		t.Fatalf("definition does not parse: %v\n%s", err, b)
 	}
 	return d
+}
+
+func TestFirmwareVariablesStayWithVMIdentity(t *testing.T) {
+	v := managedTestVM()
+	nets := []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}
+	v.Name = "before-rename"
+	before, err := testDomainXML(v, nets, []string{"/disk-0.qcow2"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.Name, v.Revision = "after-rename", 1
+	after, err := testDomainXML(v, nets, []string{"/disk-0.qcow2"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := firmwareVariablesPath(v.ID)
+	if got := parseDomain(t, before).OS.NVRAM; got == nil || got.Path != want {
+		t.Fatalf("new UEFI VM variable store %+v, want %q", got, want)
+	}
+	if got := parseDomain(t, after).OS.NVRAM; got == nil || got.Path != want {
+		t.Fatalf("rename changed firmware variable store to %+v, want %q", got, want)
+	}
+	// A definition from before explicit paths retains libvirt's resolved path during a stopped
+	// rename, rather than replacing its installed guest state with a blank UUID store.
+	legacy := parseDomain(t, before)
+	legacy.OS.NVRAM.Path = filepath.Join(firmwareVariablesDir, "before-rename_VARS.fd")
+	legacyXML, err := xml.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	carried, err := carryFirmwareVariables(after, legacyXML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parseDomain(t, carried).OS.NVRAM.Path; got != legacy.OS.NVRAM.Path {
+		t.Fatalf("legacy variable store changed to %q", got)
+	}
+	legacy.OS.NVRAM = nil
+	legacyXML, err = xml.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = carryFirmwareVariables(after, legacyXML); err == nil {
+		t.Fatal("existing UEFI VM without an observed variable store was reset to a blank store")
+	}
+}
+
+func TestSecureBootVariablesPreserveGuestStateAndRecover(t *testing.T) {
+	oldVariablesDir := firmwareVariablesDir
+	firmwareVariablesDir = t.TempDir()
+	defer func() { firmwareVariablesDir = oldVariablesDir }()
+	// The fake exposes exactly the Debian tool's JSON contract and copies all unrelated
+	// variables. Boot#### and PK stand in for guest boot entries and custom enrolled keys.
+	fakeCommand(t, "virt-fw-vars", `
+input=""
+output=""
+json=""
+mode=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --input) input="$2"; shift 2;;
+    --output) output="$2"; shift 2;;
+    --output-json) json="$2"; shift 2;;
+	--secure-boot) mode=on; shift;;
+	--set-false) mode=off; shift 2;;
+    *) shift;;
+  esac
+done
+if [ -n "$json" ]; then
+  secure=$(sed -n 's/^secure=//p' "$input")
+  setup=$(sed -n 's/^setup=//p' "$input")
+  pk=$(sed -n 's/^pk=//p' "$input")
+  boot=$(sed -n 's/^Boot0001=//p' "$input")
+  order=$(sed -n 's/^BootOrder=//p' "$input")
+  [ "$secure" = 1 ] && secure=01 || secure=00
+  [ "$setup" = 0 ] && setup=00 || setup=01
+  [ -n "$pk" ] && pk=aa
+  printf '{"variables":[{"name":"SecureBootEnable","guid":"f0a30bc7-af08-4556-99c4-001009c93a44","data":"%s"},{"name":"SetupMode","guid":"8be4df61-93ca-11d2-aa0d-00e098032b8c","data":"%s"},{"name":"PK","guid":"8be4df61-93ca-11d2-aa0d-00e098032b8c","data":"%s"},{"name":"Boot0001","data":"%s"},{"name":"BootOrder","data":"%s"}]}' "$secure" "$setup" "$pk" "$boot" "$order"
+  exit 0
+fi
+cp "$input" "$output"
+case "$mode" in
+  on) sed -i 's/^secure=.*/secure=1/' "$output";;
+  off) sed -i 's/^secure=.*/secure=0/' "$output";;
+esac`)
+	vm := managedTestVM()
+	vm.Boot.SecureBoot = protocol.SecureBootOff
+	domain, err := testDomainXML(vm, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, []string{"/disk-0.qcow2"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nvram := firmwareVariablesPath(vm.ID)
+	if err = os.WriteFile(nvram, []byte("secure=1\nsetup=0\npk=custom\nBoot0001=guest\nBootOrder=0001\n"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	e := NewManaged(t.TempDir())
+	if err = os.MkdirAll(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	j := managedJournal{Command: protocol.Command{OperationID: "secure-boot-off", Kind: "vm-update", VM: &vm}, Domain: domain, SecureBootPreviousDomain: domain, Stage: secureBootVariablesStage, SecureBootEnabled: false}
+	if err = e.prepareSecureBootVariables(context.Background(), &j); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.finishSecureBootVariables(context.Background(), &j); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(nvram)
+	if err != nil || !strings.Contains(string(got), "secure=0") || !strings.Contains(string(got), "Boot0001=guest") || !strings.Contains(string(got), "pk=custom") || j.Stage != secureBootDefiningStage {
+		t.Fatalf("Secure Boot update lost guest state: %q err=%v stage=%q", got, err, j.Stage)
+	}
+	if info, err := os.Stat(nvram); err != nil || info.Mode().Perm() != 0640 {
+		t.Fatalf("Secure Boot update changed NVRAM mode: %v %v", info, err)
+	}
+	// A crash after rename but before the final journal save observes the desired store and
+	// advances without rerunning the native tool or replacing the guest's variables.
+	j.Stage = secureBootVariablesStage
+	if err = e.finishSecureBootVariables(context.Background(), &j); err != nil || j.Stage != secureBootDefiningStage {
+		t.Fatalf("post-rename recovery: %v stage=%q", err, j.Stage)
+	}
+}
+
+func TestSecureBootEnableRefusesUnenrolledVariables(t *testing.T) {
+	oldVariablesDir := firmwareVariablesDir
+	firmwareVariablesDir = t.TempDir()
+	defer func() { firmwareVariablesDir = oldVariablesDir }()
+	fakeCommand(t, "virt-fw-vars", `printf '{"variables":[{"name":"SecureBootEnable","guid":"f0a30bc7-af08-4556-99c4-001009c93a44","data":"00"},{"name":"SetupMode","guid":"8be4df61-93ca-11d2-aa0d-00e098032b8c","data":"01"}]}'`)
+	vm := managedTestVM()
+	vm.Boot.SecureBoot = protocol.SecureBootOn
+	domain, err := testDomainXML(vm, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, []string{"/disk-0.qcow2"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nvram := firmwareVariablesPath(vm.ID)
+	if err = os.WriteFile(nvram, []byte("secure=0\nsetup=1\nBoot0001=guest\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	e := NewManaged(t.TempDir())
+	if err = os.MkdirAll(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	j := managedJournal{Command: protocol.Command{OperationID: "secure-boot-on", Kind: "vm-update", VM: &vm}, Domain: domain, SecureBootPreviousDomain: domain, Stage: secureBootVariablesStage, SecureBootEnabled: true}
+	if err = e.prepareSecureBootVariables(context.Background(), &j); err == nil || !strings.Contains(err.Error(), "no enrolled Secure Boot keys") {
+		t.Fatalf("unenrolled firmware variables accepted: %v", err)
+	}
+	got, _ := os.ReadFile(nvram)
+	if !strings.Contains(string(got), "Boot0001=guest") {
+		t.Fatalf("refusal changed guest state: %q", got)
+	}
+}
+
+func TestSecureBootTemporaryRejectsUnsafePathAndPreservesXattr(t *testing.T) {
+	old := firmwareVariablesDir
+	firmwareVariablesDir = t.TempDir()
+	defer func() { firmwareVariablesDir = old }()
+	source := firmwareVariablesPath("vm")
+	if err := os.WriteFile(source, []byte("vars"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Setxattr(source, "user.nex-test", []byte("kept"), 0); err == nil {
+		temp, err := secureBootTemporary(source, 0600, uint32(os.Getuid()), uint32(os.Getgid()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		buf := make([]byte, 16)
+		n, err := syscall.Getxattr(temp, "user.nex-test", buf)
+		if err != nil || string(buf[:n]) != "kept" {
+			t.Fatalf("xattr not preserved: %q %v", buf[:n], err)
+		}
+		if err = removeSecureBootTemporary(temp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(firmwareVariablesDir, "bad")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeSecureBootTemporary(link); err == nil {
+		t.Fatal("symlink temporary accepted")
+	}
+	if got, _ := os.ReadFile(outside); string(got) != "keep" {
+		t.Fatalf("unsafe unlink touched outside file: %q", got)
+	}
+	if err := removeSecureBootTemporary(outside); err == nil {
+		t.Fatal("outside temporary accepted")
+	}
+}
+
+func TestFirmwareVariableStateRejectsSpoofedOrDuplicateCriticalVariables(t *testing.T) {
+	for _, output := range []string{
+		`{"variables":[{"name":"SecureBootEnable","guid":"00000000-0000-0000-0000-000000000000","data":"01"}]}`,
+		`{"variables":[{"name":"SetupMode","guid":"8be4df61-93ca-11d2-aa0d-00e098032b8c","data":"00"},{"name":"SetupMode","guid":"8be4df61-93ca-11d2-aa0d-00e098032b8c","data":"01"}]}`,
+		`{"variables":[{"name":"Boot0001","guid":"8be4df61-93ca-11d2-aa0d-00e098032b8c","data":"one"},{"name":"Boot0001","guid":"8be4df61-93ca-11d2-aa0d-00e098032b8c","data":"two"}]}`,
+	} {
+		t.Run("reject", func(t *testing.T) {
+			fakeCommand(t, "virt-fw-vars", "printf '%s' '"+output+"'")
+			if _, _, err := firmwareVariablesState(context.Background(), "/unused"); err == nil {
+				t.Fatal("ambiguous firmware JSON accepted")
+			}
+		})
+	}
+}
+
+func TestFirmwareVariableStateAcceptsEnrolledOfflineOVMFStore(t *testing.T) {
+	// OVMF's offline VARS store contains SecureBootEnable at EDK2's vendor GUID and PK at
+	// the global-variable GUID. SetupMode is runtime-derived and absent from this store.
+	fakeCommand(t, "virt-fw-vars", `printf '%s' '{"variables":[{"name":"SecureBootEnable","guid":"f0a30bc7-af08-4556-99c4-001009c93a44","data":"00"},{"name":"PK","guid":"8be4df61-93ca-11d2-aa0d-00e098032b8c","data":"a1b2"},{"name":"Boot0001","guid":"8be4df61-93ca-11d2-aa0d-00e098032b8c","data":"guest"}]}'`)
+	enabled, enrolled, err := firmwareVariablesState(context.Background(), "/unused")
+	if err != nil || enabled || !enrolled {
+		t.Fatalf("offline OVMF state enabled=%t enrolled=%t err=%v", enabled, enrolled, err)
+	}
+}
+
+func TestFirmwareVariableStateRejectsUnenrolledEvidence(t *testing.T) {
+	for _, output := range []string{
+		`{"variables":[{"name":"SecureBootEnable","guid":"f0a30bc7-af08-4556-99c4-001009c93a44","data":"00"},{"name":"SetupMode","guid":"8be4df61-93ca-11d2-aa0d-00e098032b8c","data":"00"}]}`,
+		`{"variables":[{"name":"SecureBootEnable","guid":"f0a30bc7-af08-4556-99c4-001009c93a44","data":"00"},{"name":"SetupMode","guid":"8be4df61-93ca-11d2-aa0d-00e098032b8c","data":"01"},{"name":"PK","guid":"8be4df61-93ca-11d2-aa0d-00e098032b8c","data":"a1b2"}]}`,
+	} {
+		t.Run("reject", func(t *testing.T) {
+			fakeCommand(t, "virt-fw-vars", "printf '%s' '"+output+"'")
+			_, enrolled, err := firmwareVariablesState(context.Background(), "/unused")
+			if err != nil || enrolled {
+				t.Fatalf("unenrolled firmware state accepted: enrolled=%t err=%v", enrolled, err)
+			}
+		})
+	}
+}
+
+func TestSecureBootVariablesPreservedRejectsWrongGUIDControlVariable(t *testing.T) {
+	fakeCommand(t, "virt-fw-vars", `
+input=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --input) input="$2"; shift 2;;
+    *) shift;;
+  esac
+done
+cat "$input"`)
+	dir := t.TempDir()
+	before := filepath.Join(dir, "before.json")
+	after := filepath.Join(dir, "after.json")
+	if err := os.WriteFile(before, []byte(`{"variables":[{"name":"SecureBootEnable","guid":"f0a30bc7-af08-4556-99c4-001009c93a44","data":"01"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// The native tool may add its legitimate vendor-GUID control variable, but it must never
+	// add a same-named value under another GUID.
+	if err := os.WriteFile(after, []byte(`{"variables":[{"name":"SecureBootEnable","guid":"f0a30bc7-af08-4556-99c4-001009c93a44","data":"00"},{"name":"SecureBootEnable","guid":"8be4df61-93ca-11d2-aa0d-00e098032b8c","data":"00"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := secureBootVariablesPreserved(context.Background(), before, after, false); err == nil {
+		t.Fatal("wrong-GUID SecureBootEnable addition was accepted")
+	}
+	if err := os.WriteFile(before, []byte(`{"variables":[{"name":"SecureBootEnable","guid":"8be4df61-93ca-11d2-aa0d-00e098032b8c","data":"01"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(after, []byte(`{"variables":[{"name":"SecureBootEnable","guid":"8be4df61-93ca-11d2-aa0d-00e098032b8c","data":"00"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := secureBootVariablesPreserved(context.Background(), before, after, false); err == nil {
+		t.Fatal("wrong-GUID SecureBootEnable change was accepted")
+	}
+}
+
+func TestSecureBootVariablesPreservedAcceptsOnlyImageSecurityDatabaseDBX(t *testing.T) {
+	fakeCommand(t, "virt-fw-vars", `
+input=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --input) input="$2"; shift 2;;
+    *) shift;;
+  esac
+done
+cat "$input"`)
+	dir := t.TempDir()
+	before := filepath.Join(dir, "before.json")
+	after := filepath.Join(dir, "after.json")
+	if err := os.WriteFile(before, []byte(`{"variables":[{"name":"dbx","guid":"d719b2cb-3d3a-4596-a3bc-dad00e67656f","data":"old"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(after, []byte(`{"variables":[{"name":"dbx","guid":"d719b2cb-3d3a-4596-a3bc-dad00e67656f","data":"new"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := secureBootVariablesPreserved(context.Background(), before, after, true); err != nil {
+		t.Fatalf("legitimate dbx update rejected: %v", err)
+	}
+	if err := os.WriteFile(after, []byte(`{"variables":[{"name":"dbx","guid":"8be4df61-93ca-11d2-aa0d-00e098032b8c","data":"new"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := secureBootVariablesPreserved(context.Background(), before, after, true); err == nil {
+		t.Fatal("global-GUID dbx replacement was accepted")
+	}
+}
+
+func TestSecureBootDefinitionRecoveryDefinesOnlyProvenPredecessor(t *testing.T) {
+	vm := managedTestVM()
+	old := vm
+	vm.Name, vm.Boot.SecureBoot = "renamed-guest", protocol.SecureBootOff
+	target, err := testDomainXML(vm, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, []string{"/disk-0.qcow2"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous, err := testDomainXML(old, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, []string{"/disk-0.qcow2"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(t.TempDir(), "domain.xml")
+	if err = os.WriteFile(state, previous, 0600); err != nil {
+		t.Fatal(err)
+	}
+	fakeCommand(t, "virsh", `case "$3" in
+dumpxml) cat "$VMHOST_STATE";;
+define) cp "$4" "$VMHOST_STATE";;
+*) exit 2;; esac`)
+	t.Setenv("VMHOST_STATE", state)
+	e := NewManaged(t.TempDir())
+	if err = os.MkdirAll(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	j := managedJournal{Command: protocol.Command{OperationID: "secure-boot-define", Kind: "vm-update", VM: &vm}, Domain: target, SecureBootPreviousDomain: previous, Stage: secureBootDefiningStage, SecureBootEnabled: false}
+	// This is the crash window after the atomic NVRAM rename and before XML define: only the
+	// exact predecessor permits the pending define.
+	if err = e.finishSecureBootDefinition(context.Background(), &j); err != nil || j.Stage != secureBootDefiningStage {
+		t.Fatalf("predecessor recovery: %v stage=%q", err, j.Stage)
+	}
+	got, err := os.ReadFile(state)
+	if err != nil || validateManagedDefinition(got, target) != nil {
+		t.Fatalf("recovery did not define requested XML: %q err=%v", got, err)
+	}
+	// This is the crash window after virsh define: observation sees the target and accepts it
+	// without another define.
+	if err = e.finishSecureBootDefinition(context.Background(), &j); err != nil || j.Stage != "defined" {
+		t.Fatalf("post-define recovery: %v stage=%q", err, j.Stage)
+	}
+	// A field Core does not model is still part of the recorded definition. Recovery must not
+	// accept it and overwrite it just because the resource projection happens to match.
+	changed := strings.Replace(string(previous), "</domain>", "<description>operator change</description></domain>", 1)
+	if err = os.WriteFile(state, []byte(changed), 0600); err != nil {
+		t.Fatal(err)
+	}
+	j.Stage = secureBootDefiningStage
+	if err = e.finishSecureBootDefinition(context.Background(), &j); err == nil {
+		t.Fatal("non-firmware XML change was redefined")
+	}
+	if err = os.WriteFile(state, []byte("<domain><name>other</name></domain>"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	j.Stage = secureBootDefiningStage
+	if err = e.finishSecureBootDefinition(context.Background(), &j); err == nil {
+		t.Fatal("unrecognised persistent definition was redefined")
+	}
+}
+
+func TestRemoteSecureBootRecoveryValidatesBeforeChangingVariables(t *testing.T) {
+	oldVariablesDir := firmwareVariablesDir
+	firmwareVariablesDir = t.TempDir()
+	defer func() { firmwareVariablesDir = oldVariablesDir }()
+	e, _, next, _, _ := remoteUpdateEngine(t, secureBootVariablesStage, 2*time.Minute)
+	nvram := firmwareVariablesPath(next.ID)
+	if err := os.WriteFile(nvram, []byte("secure=1\nsetup=0\npk=custom\nBoot0001=guest\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	toolCalls := filepath.Join(t.TempDir(), "tool-calls")
+	fakeCommand(t, "virt-fw-vars", `echo called >> "$VMHOST_TOOL_CALLS"; exit 2`)
+	t.Setenv("VMHOST_TOOL_CALLS", toolCalls)
+	j, err := e.readJournal("remote-update.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.SecureBootEnabled = false
+	j.SecureBootPreviousDomain = j.Domain
+	if err = e.prepareSecureBootVariables(context.Background(), &j); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.ReconcileRemoteVMUpdate(context.Background(), func(context.Context, protocol.VMCreateSpec) error {
+		return errors.New("pool execution permit lost")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, readErr := os.ReadFile(nvram)
+	if readErr != nil || !strings.Contains(string(got), "secure=1") {
+		t.Fatalf("remote validation changed variables: %q err=%v", got, readErr)
+	}
+	if calls, _ := os.ReadFile(toolCalls); len(calls) != 0 {
+		t.Fatalf("remote validation invoked native tool: %q", calls)
+	}
+}
+
+// BUG-0214: libvirt only deletes NVRAM while its persistent definition still names UEFI.
+// The cleanup is journaled before undefine and can resume once an interrupted undefine is
+// observed to have removed the old domain.
+func TestFinishFirmwareRemovalCleansNVRAMAndRetriesSafely(t *testing.T) {
+	state, calls := filepath.Join(t.TempDir(), "domain.xml"), filepath.Join(t.TempDir(), "virsh.log")
+	oldVariablesDir := firmwareVariablesDir
+	firmwareVariablesDir = t.TempDir()
+	defer func() { firmwareVariablesDir = oldVariablesDir }()
+	old := managedTestVM()
+	nets := []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}
+	old.Name = "uefi-guest"
+	uefi, err := testDomainXML(old, nets, []string{"/disk-0.qcow2"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(state, uefi, 0600); err != nil {
+		t.Fatal(err)
+	}
+	nvram := firmwareVariablesPath(old.ID)
+	if err = os.WriteFile(nvram, []byte("firmware variables"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	next := old
+	next.Revision, next.Name, next.Boot.Firmware, next.Boot.SecureBoot = 1, "bios-guest", "bios", ""
+	bios, err := testDomainXML(next, nets, []string{"/disk-0.qcow2"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakeCommand(t, "virsh", `echo "$*" >> "$VMHOST_CALLS"
+case "$3" in
+dumpxml) [ -f "$VMHOST_STATE" ] && cat "$VMHOST_STATE" || exit 1;;
+list) ;;
+undefine) [ "$5" = "--nvram" ] || exit 2; rm -f "$VMHOST_STATE";;
+define) cp "$4" "$VMHOST_STATE";;
+*) exit 2;; esac`)
+	t.Setenv("VMHOST_STATE", state)
+	t.Setenv("VMHOST_CALLS", calls)
+	e := NewManaged(t.TempDir())
+	if err = os.MkdirAll(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	j := managedJournal{Command: protocol.Command{OperationID: "firmware-to-bios", Kind: "vm-update", VM: &next}, Domain: bios, Stage: "cleaning-nvram"}
+	if err = e.finishFirmwareRemoval(context.Background(), &j); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(state)
+	if err != nil || validateManagedDefinition(got, bios) != nil || j.Stage != "defining" {
+		t.Fatalf("BIOS definition after cleanup: %q %v stage=%q", got, err, j.Stage)
+	}
+	log, _ := os.ReadFile(calls)
+	if !strings.Contains(string(log), "undefine "+old.ID+" --nvram") || !strings.Contains(string(log), "define ") {
+		t.Fatalf("cleanup calls %q", log)
+	}
+	if _, err = os.Stat(nvram); !os.IsNotExist(err) {
+		t.Fatalf("NVRAM left after libvirt undefine: %v", err)
+	}
+	// A crash after the BIOS definition lands still removes the recorded variable store before
+	// accepting that observed definition.
+	if err = os.WriteFile(nvram, []byte("left by libvirt"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	j.Stage = "cleaning-nvram"
+	if err = e.finishFirmwareRemoval(context.Background(), &j); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(nvram); !os.IsNotExist(err) || j.Stage != "defined" {
+		t.Fatalf("BIOS-observed cleanup left NVRAM: %v stage=%q", err, j.Stage)
+	}
+	// The crash window after undefine has no domain. Observation proves that state, then
+	// defining the journaled BIOS XML is safe and never repeats the destructive call.
+	if err = os.Remove(state); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(calls)
+	j.Command.OperationID = "firmware-to-bios-retry"
+	j.Stage = "cleaning-nvram"
+	if err = e.finishFirmwareRemoval(context.Background(), &j); err != nil {
+		t.Fatal(err)
+	}
+	log, _ = os.ReadFile(calls)
+	if strings.Contains(string(log), "undefine") || !strings.Contains(string(log), "define ") {
+		t.Fatalf("absent-domain retry calls %q", log)
+	}
+}
+
+func TestReconcileRemoteVMUpdateFinishesFirmwareCleanupAfterValidation(t *testing.T) {
+	oldVariablesDir := firmwareVariablesDir
+	firmwareVariablesDir = t.TempDir()
+	defer func() { firmwareVariablesDir = oldVariablesDir }()
+	e, previous, next, previousDomain, _ := remoteUpdateEngine(t, "cleaning-nvram", 2*time.Minute)
+	next.Name, next.Boot.Firmware, next.Boot.SecureBoot = "bios-remote-guest", "bios", ""
+	bios, err := testDomainXML(next, []protocol.NetworkRegistration{{Kind: "network", Source: "default"}}, []string{"/remote/nex-vms/disk"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nvram := firmwareVariablesPath(previous.ID)
+	if err = os.WriteFile(nvram, []byte("firmware variables"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	j, err := e.readJournal("remote-update.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Command.VM, j.Domain, j.NVRAMPath = &next, bios, nvram
+	if err = e.save(j); err != nil {
+		t.Fatal(err)
+	}
+	state, calls := filepath.Join(t.TempDir(), "domain.xml"), filepath.Join(t.TempDir(), "calls")
+	if err = os.WriteFile(state, previousDomain, 0600); err != nil {
+		t.Fatal(err)
+	}
+	fakeCommand(t, "virsh", `echo "$*" >> "$VMHOST_CALLS"
+case "$3" in
+dumpxml) [ -f "$VMHOST_STATE" ] && cat "$VMHOST_STATE" || exit 1;;
+list) ;;
+undefine) rm -f "$VMHOST_STATE";;
+define) cp "$4" "$VMHOST_STATE";;
+*) exit 2;; esac`)
+	t.Setenv("VMHOST_STATE", state)
+	t.Setenv("VMHOST_CALLS", calls)
+	observed := 0
+	e.observe = func(_ context.Context, got managedJournal, state string) error {
+		observed++
+		if got.Stage != "defining" || state != "shut off" {
+			t.Fatalf("remote cleanup observation %+v state=%q", got, state)
+		}
+		return nil
+	}
+	validated := 0
+	if err = e.ReconcileRemoteVMUpdate(context.Background(), func(_ context.Context, got protocol.VMCreateSpec) error {
+		validated++
+		if got.ID != next.ID {
+			t.Fatalf("validated wrong VM %+v", got)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.readJournal("remote-update.json"); err != nil || got.Result.Status != "succeeded" || got.Stage != "defined" || observed != 1 || validated != 1 {
+		t.Fatalf("remote cleanup journal %+v err=%v observed=%d validated=%d", got, err, observed, validated)
+	}
+	if _, err = os.Stat(nvram); !os.IsNotExist(err) {
+		t.Fatalf("remote cleanup left NVRAM: %v", err)
+	}
+	log, _ := os.ReadFile(calls)
+	if !strings.Contains(string(log), "undefine "+previous.ID+" --nvram") || !strings.Contains(string(log), "define ") {
+		t.Fatalf("remote cleanup calls %q", log)
+	}
+
+	// Validation runs before the cleanup's native effects. A lost pool execution permit leaves
+	// both the definition and variable store untouched for a later eligible reconciliation.
+	e2, previous2, next2, previousDomain2, _ := remoteUpdateEngine(t, "cleaning-nvram", 2*time.Minute)
+	next2.Boot.Firmware, next2.Boot.SecureBoot = "bios", ""
+	bios2, err := testDomainXML(next2, []protocol.NetworkRegistration{{Kind: "network", Source: "default"}}, []string{"/remote/nex-vms/disk"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nvram2 := firmwareVariablesPath(previous2.ID)
+	if err = os.WriteFile(nvram2, []byte("firmware variables"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	j2, _ := e2.readJournal("remote-update.json")
+	j2.Command.VM, j2.Domain, j2.NVRAMPath = &next2, bios2, nvram2
+	if err = e2.save(j2); err != nil {
+		t.Fatal(err)
+	}
+	state2, calls2 := filepath.Join(t.TempDir(), "domain.xml"), filepath.Join(t.TempDir(), "calls")
+	if err = os.WriteFile(state2, previousDomain2, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VMHOST_STATE", state2)
+	t.Setenv("VMHOST_CALLS", calls2)
+	if err = e2.ReconcileRemoteVMUpdate(context.Background(), func(context.Context, protocol.VMCreateSpec) error {
+		return errors.New("remote VM storage is not currently eligible")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if log, _ := os.ReadFile(calls2); len(log) != 0 {
+		t.Fatalf("ineligible remote cleanup issued native calls: %q", log)
+	}
+	if _, err = os.Stat(nvram2); err != nil {
+		t.Fatalf("ineligible remote cleanup removed NVRAM: %v", err)
+	}
 }
 
 // W1/BUG-0196: Windows 11 refuses to install without TPM 2.0. A VM asking for one gets an

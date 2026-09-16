@@ -177,8 +177,18 @@ def check_record(root, file, changed=None, new=True):
         if kind == 'roadmap' and decision is None and not roadmap_required(
                 file.relative_to(root).as_posix()):
             continue
-        if not isinstance(decision, dict) or decision.get('impact') not in ('updated', 'none'):
-            raise ValueError(f'{file}: {kind}.impact must be updated or none')
+        allowed_impacts = ('updated', 'none')
+        if kind == 'api':
+            # "updated" remains valid only for tracked historical records. New records
+            # must use the architecture contract vocabulary in AGENTS.md.
+            allowed_impacts = ('none', 'existing contract', 'changed contract', 'new contract')
+            if not new:
+                allowed_impacts = ('updated',) + allowed_impacts
+        if not isinstance(decision, dict) or decision.get('impact') not in allowed_impacts:
+            expected = 'updated or none' if kind != 'api' else \
+                ('updated, none, existing contract, changed contract, or new contract'
+                 if not new else 'none, existing contract, changed contract, or new contract')
+            raise ValueError(f'{file}: {kind}.impact must be {expected}')
         nonempty(decision.get('reason'), f'{kind}.reason')
         # An absent pages key reads as "no pages", which is what impact none means.
         # Requiring the empty list added nothing but a confusing "list required" error.
@@ -186,9 +196,9 @@ def check_record(root, file, changed=None, new=True):
         allowed = AREAS[kind]
         if any(not allowed(p) for p in pages):
             raise ValueError(f'{file}: {kind}.pages outside reference area')
-        if decision['impact'] == 'updated':
+        if decision['impact'] != 'none':
             if not pages:
-                raise ValueError(f'{file}: {kind} updated requires at least one page')
+                raise ValueError(f'{file}: {kind} {decision["impact"]} requires at least one page')
             # Only a record introduced by this range has to prove its pages changed
             # alongside it. A record added earlier already did so in the push that
             # introduced it; re-checking it against a later diff would demand editing
@@ -196,7 +206,7 @@ def check_record(root, file, changed=None, new=True):
             # merged record - fixing a reason, adding a missed path - would fail until
             # its pages were touched again for no reason.
             if new and changed is not None and not pages <= changed:
-                raise ValueError(f'{file}: {kind} updated requires pages changed in this range')
+                raise ValueError(f'{file}: {kind} {decision["impact"]} requires pages changed in this range')
         elif pages:
             raise ValueError(f'{file}: {kind} none requires empty pages')
     check_state(file, data)

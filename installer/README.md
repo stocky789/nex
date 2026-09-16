@@ -137,9 +137,11 @@ reboots. Installing the host packages or seeing a boot menu does not prove this 
 On a nested host `/dev/kvm` must exist and permit accelerated guest operation.
 
 After installation, updates use explicit Debian `trixie`, `trixie-updates`, and
-`trixie-security` repositories. No Nex APT repository exists yet. Signed upstream
-boot files are retained, but physical UEFI/Secure Boot compatibility is a separate
-hardware acceptance check; do not describe it as certified from ISO inspection alone.
+`trixie-security` repositories. Nex product updates use the separately signed Nex APT
+archive configured by `/etc/nex/updates.conf`; that public archive can lag an unpublished
+local development build. Signed upstream boot files are retained, but physical UEFI/Secure
+Boot compatibility is a separate hardware acceptance check; do not describe it as certified
+from ISO inspection alone.
 
 ## References
 

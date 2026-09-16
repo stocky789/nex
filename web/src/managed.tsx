@@ -19,7 +19,8 @@ export type Media = Registration & { storage_id: string; size_bytes: number; sha
 // existed: an unset secure_boot on a UEFI VM is Secure Boot on, and an unset tpm is no TPM.
 // drivers_media_id is the ISO in the VM's second CD drive, empty when that drive is empty.
 export type VMSpec = { revision?: number; description: string; guest_os: string; cpu: { count: number; sockets: number; cores: number; threads: number; model: string }; memory: { mode: string; size_mib: number }; disks: DiskRow[] | null; nics: NICRow[] | null; boot: { firmware: string; machine: string; media_boot_order: number; secure_boot?: string; tpm?: string }; media_id: string; drivers_media_id?: string; start_after_create: boolean; autostart: boolean };
-export type VM = Registration & { spec?: VMSpec; state: string; freshness: string; role: string; protected: boolean; guest?: Guest | null };
+export type VMUsage = { observed_at?: string; sample_window_ms?: number; cpu_percent?: number | null; memory_assigned_bytes?: number; memory_maximum_bytes?: number; memory_host_bytes?: number | null; disk_used_bytes?: number | null; disk_capacity_bytes?: number | null };
+export type VM = Registration & { spec?: VMSpec; state: string; freshness: string; role: string; protected: boolean; guest?: Guest | null; usage?: VMUsage | null };
 type NIC = { name: string; mac: string; kind?: string; master?: string; parent?: string; state: string; addresses?: string[] | null };
 export type Host = { id: string; pool_id: string; hostname: string; connection: string; revoked: boolean; capabilities?: string[]; inventory: { cpu_count: number; cpu_models?: string[] | null; memory_bytes: number; nics?: NIC[] | null } | null };
 type API = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
@@ -69,6 +70,10 @@ export function isoTransferNotice(name: string, status?: string, source: "upload
       return `The ${work} of ${name} is ${status}. Wait for a succeeded result before using it in a VM.`;
   }
 }
+
+// Only imports that never became host-held media can be discarded. Core owns a succeeded ISO,
+// while queued and dispatched imports still belong to their host task (BUG-0203).
+export const mediaDiscardable = (media: Media) => media.status === "failed" || media.status === "needs_attention";
 
 type Pending = Record<string, { payload: string; id: string }>;
 function pendingRequests(key: string): Pending {
@@ -196,6 +201,20 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
       await reload(); if (mounted.current) { setForm(""); location.hash = `/vms/${result.vm_id}`; }
     });
   }
+  function discardMedia(media: Media) {
+    if (!confirm(`Discard ${media.name}? This removes the failed import record and any Controller staging bytes. The task and audit history are kept.`)) return;
+    void run("media-discard", async () => {
+      try {
+        await api(`media/${media.id}`, "DELETE");
+      } catch (error) {
+        let current: Media[];
+        try { current = await api<Media[]>("media"); } catch { throw error; }
+        if (current.some(entry => entry.id === media.id)) throw error;
+      }
+      await reload();
+      setNotice(`Discarded the failed import for ${media.name}. Submit the download again to retry.`);
+    });
+  }
   const vmTab = tab === "Virtual machines";
   const relevant = ["Virtual machines", "Storage", "Networking", "ISO library"].includes(tab);
   // An open form stays mounted across tab switches so restored entries and wizard progress survive
@@ -288,7 +307,7 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
     {vmTab && <section className="panel"><div className="section-heading"><h2>Virtual machines</h2><span className="muted">{vms.length} in pool</span></div>{vms.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Assigned host</th><th>Observed state</th><th>Freshness</th><th>Creation task</th></tr></thead><tbody>{vms.map(v => <tr key={v.id}><td><a href={`#/vms/${v.id}`}>{v.name}</a>{v.protected && <small>Protected Controller appliance</small>}</td><td>{hostName(v.host_id)}</td><td>{v.state || "unknown"}</td><td>{status(v.freshness)}</td><td>{v.operation_id ? task(v) : "—"}</td></tr>)}</tbody></table></div> : <p className="empty">No virtual machines in this pool. Register storage and a network, upload an ISO, then create your first VM.</p>}<p className="panel-note">A stale or unreachable host does not mean its VMs have stopped. Creation results and current observations are separate.</p></section>}
     {tab === "Storage" && <StorageRepositories poolID={poolID} masterHostID={masterHostID} hosts={hosts} storage={storage} api={api} reload={reload} unavailable={unavailable} onNotice={setNotice} />}
     {tab === "Networking" && <section className="panel"><div className="section-heading"><h2>Pool guest networks</h2></div>{networks.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Host</th><th>Connection</th><th>VMs</th><th>Host check</th></tr></thead><tbody>{[...networks].sort((a, b) => (a.vlan || 0) - (b.vlan || 0) || a.name.localeCompare(b.name)).map(n => <tr key={n.id}><td>{n.name}</td><td>{hostName(n.host_id)}</td><td>{describeNetwork(n)}<small className="mono">{n.source}</small></td><td>{vms.filter(v => v.spec?.nics?.some(i => i.network_id === n.id)).length}</td><td>{task(n)}</td></tr>)}</tbody></table></div> : <p className="empty">No networks reported yet.</p>}</section>}
-    {tab === "ISO library" && <section className="panel"><div className="section-heading"><h2>Guest ISO library</h2></div>{media.length ? <div className="table-scroll"><table><thead><tr><th>ISO</th><th>Host / storage</th><th>Size</th><th>Transfer task</th></tr></thead><tbody>{media.map(m => <tr key={m.id}><td>{m.name}<small className="mono">SHA-256: {m.sha256 || "Pending verification"}</small></td><td>{hostName(m.host_id)}<small>{storage.find(s => s.id === m.storage_id)?.name || m.storage_id}</small></td><td>{m.size_bytes > 0 ? `${(m.size_bytes / GiB).toFixed(2)} GiB` : "Unknown until downloaded"}</td><td>{task(m)}</td></tr>)}</tbody></table></div> : <p className="empty">No ISO images uploaded. Select validated storage and upload installation media.</p>}</section>}
+    {tab === "ISO library" && <section className="panel"><div className="section-heading"><h2>Guest ISO library</h2></div>{media.length ? <div className="table-scroll"><table><thead><tr><th>ISO</th><th>Host / storage</th><th>Size</th><th>Transfer task</th><th>Actions</th></tr></thead><tbody>{media.map(m => <tr key={m.id}><td>{m.name}<small className="mono">SHA-256: {m.sha256 || "Pending verification"}</small></td><td>{hostName(m.host_id)}<small>{storage.find(s => s.id === m.storage_id)?.name || m.storage_id}</small></td><td>{m.size_bytes > 0 ? `${(m.size_bytes / GiB).toFixed(2)} GiB` : "Unknown until downloaded"}</td><td>{task(m)}</td><td>{mediaDiscardable(m) && <button type="button" disabled={busy || unavailable} onClick={() => discardMedia(m)}>Discard failed import</button>}</td></tr>)}</tbody></table></div> : <p className="empty">No ISO images uploaded. Select validated storage and upload installation media.</p>}</section>}
   </div>;
 }
 
@@ -338,7 +357,40 @@ export function VMDetails({ vm, hosts, storage, networks, media, api, reload, bu
     {!vm.protected && !editing && <p className="panel-note">Creation provisions a stopped VM. Use Start in the toolbar to start it, then open the Console tab. Select Edit to change the VM; changes a running guest can take apply while it runs.</p>}
   </section>
   <GuestTools vm={vm} />
+  <VMUsagePanel vm={vm} />
   </>;
+}
+
+const usageBytes = (value?: number | null) => typeof value === "number" && Number.isFinite(value)
+  ? `${(value / GiB).toLocaleString(undefined, { maximumFractionDigits: 1 })} GiB`
+  : "Not reported";
+export function usageAge(observedAt?: string): string {
+  const time = observedAt ? Date.parse(observedAt) : NaN;
+  if (!Number.isFinite(time)) return "Sample time not reported";
+  const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000));
+  if (seconds < 60) return "Sampled less than a minute ago";
+  if (seconds < 3600) {
+    const minutes = Math.floor(seconds / 60);
+    return `Sampled ${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  }
+  const hours = Math.floor(seconds / 3600);
+  return `Sampled ${hours} hour${hours === 1 ? "" : "s"} ago`;
+}
+function VMUsagePanel({ vm }: { vm: VM }) {
+  const usage = vm.usage;
+  return <section className="panel vm-usage" aria-label="VM usage">
+    <div className="section-heading"><h2>VM usage</h2>{status(vm.freshness)}</div>
+    {!usage ? <p className="empty">No usage sample reported. This is not zero usage: the VM may be stopped, the host may not support usage observation, or the host could not sample it without waiting for another operation.</p>
+      : <dl className="details">
+        <dt>CPU</dt><dd>{usage.cpu_percent == null ? "Not reported" : `${usage.cpu_percent}% of allocated vCPUs`}{usage.cpu_percent != null && usage.sample_window_ms ? <small>Average over {(usage.sample_window_ms / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })} seconds</small> : <small>A rate needs two host samples; it is not reported as zero before then.</small>}</dd>
+        <dt>Memory allocation</dt><dd>{usageBytes(usage.memory_assigned_bytes)} assigned · {usageBytes(usage.memory_maximum_bytes)} maximum<small>Allocation, not memory used inside the guest.</small></dd>
+        <dt>Host memory cost</dt><dd>{usageBytes(usage.memory_host_bytes)}<small>Resident memory used by this VM's host process, not guest-used memory.</small></dd>
+        <dt>Disk used</dt><dd>{usageBytes(usage.disk_used_bytes)}<small>Repository space occupied by this VM's disk images.</small></dd>
+        <dt>Disk capacity</dt><dd>{usageBytes(usage.disk_capacity_bytes)}<small>Virtual disk size visible to the guest.</small></dd>
+        <dt>Sample age</dt><dd>{usageAge(usage.observed_at)}<small>{usage.observed_at || "The host did not report a sample timestamp."}</small></dd>
+      </dl>}
+    <p className="panel-note">Usage is a host observation, not a guest-health check. A stale VM status means the host's current execution state is unknown; wait for a fresh report before acting on these numbers.</p>
+  </section>;
 }
 
 // GuestTools shows what the host observed inside a running guest: agent facts and the

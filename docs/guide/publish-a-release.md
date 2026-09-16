@@ -2,17 +2,26 @@
 
 ## Status
 
-Available. Every push to `main` on the configured Git forge builds the ISO and both Debian
-packages at the newest `CHANGELOG.md` version and publishes them as the repository release
-for tag `vX.Y.Z[-preN]`, replacing that version's previous release. One version identifies a
-release: the changelog heading, the tag and the Debian package version are the same number.
-No tag is pushed by hand; the workflow creates or moves it.
+The build and publication workflow is available, but public distribution is currently blocked
+by the open whole-ISO requirements in [Nex licensing](../LICENSING.md#release-evidence). Do not
+push a release-triggering change or publish artifacts until the exact release has a complete
+component/source manifest, tested corresponding-source delivery, firmware-term review and an
+approved redistribution basis for Nex artwork.
+
+Once those gates are recorded as complete, every push to `main` on the configured Git forge
+builds the ISO and both Debian packages at the newest `CHANGELOG.md` version and publishes them
+as the repository release for tag `vX.Y.Z[-preN]`, replacing that version's previous release.
+One version identifies a release: the changelog heading, the tag and the Debian package version
+are the same number. No tag is pushed by hand; the workflow creates or moves it.
 
 If the website deploy secrets are set, the same run also publishes the packages to the signed
 APT archive and the ISO to the download tree. [Return to the guide](README.md).
 
 ## Prerequisites
 
+- The exact release has completed every external-distribution requirement in
+  [Nex licensing](../LICENSING.md#release-evidence), with reviewable evidence. A successful build,
+  existing website content or a configured deployment secret does not satisfy this prerequisite.
 - Maintainer access to the Nex repository on the configured Git forge. The runner needs Docker;
   it may execute jobs inside a container, since the build locates the workspace on the Docker
   host itself.
@@ -54,7 +63,7 @@ APT archive and the ISO to the download tree. [Return to the guide](README.md).
    ```
 
    This prints the tag version and the Debian version (`0.1.6-alpha1 0.1.6~alpha1`).
-3. Push to `main`. Watch the **Release** workflow: it resolves the version, builds the
+3. After the licensing evidence is complete, push to `main`. Watch the **Release** workflow: it resolves the version, builds the
    appliance, both packages and the ISO, checks each artifact declares the released version,
    then creates the release. A second push at the same version runs again and replaces the
    release; a newer push cancels a release build still in progress.
@@ -111,4 +120,3 @@ list the released version.
 (`test_build_source.py`). One end-to-end release run published its assets; installing from that
 ISO and website publishing have not been verified. Check the source archive contents of a
 release's package before distributing it.
-

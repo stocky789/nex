@@ -1,0 +1,39 @@
+{
+  "summary": "Hide a Controller-only VM projection after Core terminally rejects vm-create before libvirt creates a definition, while retaining its task, audit and idempotent-replay data under an internal failed-create identity. Terminal failures do not occupy VM ownership, placement or adoption admission. API impact: existing contract.",
+  "paths": [
+    "internal/controller/appliance.go",
+    "internal/controller/identity.go",
+    "internal/controller/managed.go",
+    "internal/controller/delete_test.go",
+    "internal/controller/managed_test.go",
+    "scripts/check_docs.py",
+    "tests/test_check_docs.py",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-16-failed-vm-create-reconciliation.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "A failed create now correctly disappears from the VM list while its existing task history remains. This does not change an operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Existing Core ReportRequest results and Inventory.managed remain unchanged. Controller relocates terminal failed create identities and filters them from VM projection and admission queries; no endpoint, message, authorization, version, request or response changes.",
+    "pages": ["docs/API.md"],
+    "contracts": ["ReportRequest results", "Inventory.managed", "vm-create", "vm-delete"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Corrects reconciliation within the existing VM creation flow without changing milestone scope or order.",
+    "pages": []
+  },
+  "state": {
+    "owner": "controller",
+    "reason": "Controller owns only the disposable projection and task/audit replay data. Core owns every VM identity and definition in its managed journal; a fresh Controller adopts Core-reported definitions.",
+    "record": "Controller managed_resources row under an internal failed-create identity plus operation/audit history retain a failed request for idempotent replay. Core's managed VM journal and Inventory.managed.vms are the authoritative durable record and fresh-Controller adoption path."
+  },
+  "verification": {
+    "method": "Focused race regression passed: go test -race ./internal/controller -run 'Test(CreateVMSpecificationReferencesAndScope|FailedVMCreateDoesNotLeaveControllerProjection|HistoricalFailedVMCreateStaysHiddenAndReplayable)$' -count=1. It covers terminal Core failure hidden from the VM list while retaining its failed task and replay, a historical failed row with the same Core VM ID relocated before Core's succeeded definition is adopted, and a failed duplicate-MAC create absent from GET /api/v1/vms while its error remains in GET /api/v1/operations. Full Controller race passed: go test -race ./internal/controller -count=1 (ok nex.local/nex/internal/controller 124.279s). The focused documentation-gate tests accept existing, changed and new API contract values, retain legacy updated support, and reject an invalid value. Both GitHub and Gitea phase1 workflows run the existing Controller Go suite.",
+    "evidence": ["internal/controller/delete_test.go", "internal/controller/managed_test.go", "tests/test_check_docs.py", "docs/BUG_LEDGER.md"]
+  }
+}
