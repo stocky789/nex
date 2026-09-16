@@ -167,24 +167,24 @@ func (b VMBoot) TPMEnabled() bool { return b.TPM == TPM20 }
 // VMCreateSpec is a VM's complete definition. It is the vm-create payload and, at a later
 // Revision, the vm-update payload; the host journals every revision and reports the current one.
 type VMCreateSpec struct {
-	ID               string   `json:"id"`
-	PoolID           string   `json:"pool_id"`
-	HostID           string   `json:"host_id"`
-	Name             string   `json:"name"`
-	Description      string   `json:"description"`
-	GuestOS          string   `json:"guest_os"`
-	CPU              VMCPU    `json:"cpu"`
-	Memory           VMMemory `json:"memory"`
-	Disks            []VMDisk `json:"disks"`
-	NICs             []VMNIC  `json:"nics"`
-	Boot             VMBoot   `json:"boot"`
-	MediaID          string   `json:"media_id"`
+	ID          string   `json:"id"`
+	PoolID      string   `json:"pool_id"`
+	HostID      string   `json:"host_id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	GuestOS     string   `json:"guest_os"`
+	CPU         VMCPU    `json:"cpu"`
+	Memory      VMMemory `json:"memory"`
+	Disks       []VMDisk `json:"disks"`
+	NICs        []VMNIC  `json:"nics"`
+	Boot        VMBoot   `json:"boot"`
+	MediaID     string   `json:"media_id"`
 	// DriversMediaID is the ISO in the VM's second CD drive, for a driver disc an installer
 	// needs alongside the install media (Windows and VirtIO storage, for example). Empty
 	// leaves that drive empty; the drive itself always exists.
 	DriversMediaID   string `json:"drivers_media_id,omitempty"`
 	StartAfterCreate bool   `json:"start_after_create"`
-	Autostart        bool     `json:"autostart"`
+	Autostart        bool   `json:"autostart"`
 	// Revision is 0 at creation and current + 1 for each edit; Core refuses any other value.
 	Revision int `json:"revision"`
 }

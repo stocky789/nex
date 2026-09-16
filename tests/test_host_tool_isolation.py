@@ -17,11 +17,19 @@ worst offender (`internal/localcore`, 23 of the 28 calls) never mentions `virsh`
 reaches it through `internal/vmhost`.
 """
 import re
-import subprocess
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+MODULE = 'nex.local/nex/'
+# Imports are resolved by reading the sources rather than by shelling out to `go list`. The
+# contracts job that runs this suite installs no Go toolchain, so a check that needed one would
+# fail there (it did) — and making it skip instead would leave the guard silently absent, which
+# is the failure mode BUG-0216 is about. The import graph inside one module is simple enough to
+# read directly, and doing so keeps this check runnable anywhere the repository is checked out.
+IMPORT_BLOCK = re.compile(r'^import\s*\((.*?)^\)', re.S | re.M)
+IMPORT_SINGLE = re.compile(r'^import\s+(?:[\w.]+\s+)?"([^"]+)"', re.M)
+IMPORT_LINE = re.compile(r'^\s*(?:[\w.]+\s+)?"([^"]+)"', re.M)
 GUARD = 'runWithStubbedHostTools'
 # A package is treated as executing virsh when it both names the binary and runs subprocesses.
 # Judging it per line was tried and rejected: excluding assignment lines dropped
@@ -33,13 +41,41 @@ EXECUTES = re.compile(r'exec\.Command(?:Context)?\(')
 
 
 def go_packages():
-    out = subprocess.run(['go', 'list', './internal/...'], cwd=ROOT, check=True,
-                         stdout=subprocess.PIPE, text=True).stdout
-    return [line.strip() for line in out.splitlines() if line.strip()]
+    """Every package directory under internal/ that holds Go sources."""
+    return sorted(MODULE + 'internal/' + d.name
+                  for d in (ROOT / 'internal').iterdir()
+                  if d.is_dir() and any(d.glob('*.go')))
 
 
 def package_dir(pkg):
-    return ROOT / pkg.split('nex.local/nex/', 1)[1]
+    return ROOT / pkg.split(MODULE, 1)[1]
+
+
+def imports_of(pkg, tests=False):
+    """Import paths named by pkg's sources, non-test only unless tests is set."""
+    found = set()
+    for src in sorted(package_dir(pkg).glob('*.go')):
+        if src.name.endswith('_test.go') and not tests:
+            continue
+        body = src.read_text()
+        for block in IMPORT_BLOCK.findall(body):
+            found.update(IMPORT_LINE.findall(block))
+        found.update(IMPORT_SINGLE.findall(body))
+    return {i for i in found if i.startswith(MODULE)}
+
+
+def reaches(pkg, targets, graph):
+    """Whether pkg or anything it imports, transitively, is in targets."""
+    seen, stack = set(), [pkg]
+    while stack:
+        current = stack.pop()
+        if current in targets:
+            return True
+        if current in seen:
+            continue
+        seen.add(current)
+        stack.extend(graph.get(current, ()))
+    return False
 
 
 class HostToolIsolationTests(unittest.TestCase):
@@ -62,13 +98,18 @@ class HostToolIsolationTests(unittest.TestCase):
         self.assertIn('nex.local/nex/internal/agent', executes)
         self.assertNotIn('nex.local/nex/internal/protocol', executes)
 
+        # Non-test imports only, which is what `go list -deps` reports and what the measured
+        # set matches: {vmhost, agent, localcore}, the three packages whose suites were observed
+        # making real virsh calls. Including test-only imports additionally flags
+        # internal/controller, whose tests were measured making none, so it would demand a guard
+        # the evidence does not support.
+        graph = {p: imports_of(p) for p in packages}
+
         for pkg in packages:
             directory = package_dir(pkg)
             if not list(directory.glob('*_test.go')):
                 continue
-            deps = subprocess.run(['go', 'list', '-deps', pkg], cwd=ROOT, check=True,
-                                  stdout=subprocess.PIPE, text=True).stdout.split()
-            if not ({pkg} | set(deps)) & executes:
+            if not reaches(pkg, executes, graph):
                 continue
             guarded = any(GUARD in f.read_text() for f in directory.glob('*_test.go'))
             self.assertTrue(guarded, (

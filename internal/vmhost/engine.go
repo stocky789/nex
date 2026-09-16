@@ -306,6 +306,7 @@ func runCommand(ctx context.Context, dir, name string, args ...string) ([]byte, 
 	}
 	return out.Bytes(), nil
 }
+
 // virshTimeout bounds one virsh call, by whether the command takes libvirt's per-domain job.
 //
 // A command that takes the job waits for it, and libvirt holds it for the whole of the operation

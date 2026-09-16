@@ -1,0 +1,35 @@
+{
+  "summary": "Fix the CI contracts job, which the BUG-0216 recurrence check broke: the check shelled out to `go list` for the package dependency graph, and that job installs no Go toolchain, so the whole Python suite failed with FileNotFoundError: 'go'. The check now resolves internal imports by reading the sources, so it runs wherever the repository is checked out. Also gofmt the two files whose struct alignment the new fields changed. API impact: none.",
+  "paths": [
+    "tests/test_host_tool_isolation.py",
+    "internal/protocol/managed.go",
+    "internal/vmhost/engine.go",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-16-ci-host-tool-check-toolchain.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Guide impact: none. A repository check and Go source formatting; no operator-visible behaviour, workflow, configuration or error text changes. The gofmt edits are whitespace alignment only - `drivers_media_id` became the longest field name in VMCreateSpec, so gofmt realigned the struct tags."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. No contract, schema, route, payload or reported field changes. The Go edits are gofmt whitespace, and the Python edit replaces a subprocess call to `go list` with reading import blocks from the same sources. `python3 scripts/generate_api.py --check` reports every generated reference current.",
+    "pages": [],
+    "contracts": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "A CI fix and formatting. No milestone, gate or published roadmap claim is affected."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state. A repository test and source formatting only."
+  },
+  "verification": {
+    "method": "Reproduced the CI failure before fixing it, rather than inferring it from the workflow file: running the suite with a PATH containing no `go` gave `FileNotFoundError: [Errno 2] No such file or directory: 'go'`, which is what the contracts job hits because it installs dpkg-dev, gnupg and nginx-core but no Go toolchain (.github/workflows/phase1.yml:35-48 and the identical .gitea job). After the fix the same no-Go invocation passes, and so does the normal one. The check still fails when a guard is deleted (`internal/localcore has tests and can reach virsh, but installs no refusing stub`), so it was not weakened into a no-op. Import resolution is deliberately non-test only, matching `go list -deps` semantics and the measured set {vmhost, agent, localcore}: including test-only imports additionally flagged internal/controller, whose tests were measured making zero real virsh calls, so it would have demanded a guard the evidence does not support. Full sweep after the change: `go build ./...`, `go vet ./...`, `go test -race ./...`, `npm --prefix web ci/typecheck/test/build`, `python3 scripts/generate_api.py --check` and `python3 -m unittest discover -s tests -p 'test_check_docs.py'` all pass; the full Python suite is 261 tests with one error, `test_website_hosting`, which requires nginx that this workstation lacks and CI installs. gofmt is clean under internal/ and cmd/ except internal/vmhost/hostconsole.go and hostconsole_font.go, which are pre-existing and untouched here. NOT VERIFIED: the actual CI run. The forge API is not reachable without authentication from this environment, so the failing runs were diagnosed by reproducing their conditions locally, not by reading their logs.",
+    "evidence": [
+      "tests/test_host_tool_isolation.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}
