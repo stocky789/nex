@@ -9,8 +9,11 @@ shows what a monitor attached to the VM would show, so it works before any guest
 operating system or agent is installed. With the [guest tools](guest-tools.md) installed,
 the console also exchanges clipboard text with the guest and can resize its display.
 
-A VM created through Controller starts stopped; start it with the
-[Power controls](vm-power.md) in the toolbar first. The host-local page offers local power
+A VM created through Controller starts stopped. Open the **Console** tab first and use
+**Start VM** on the console toolbar: the tab is already open, so it attaches as the VM boots,
+in time to answer *Press any key to boot from CD or DVD*, which waits about five seconds. The
+[Power controls](vm-power.md) in the page toolbar start the VM too, but a console opened after
+that start usually attaches too late for the prompt. The host-local page offers local power
 only for the Controller appliance it deployed.
 
 ## Prerequisites
@@ -43,34 +46,52 @@ host-local console and full-screen or separate-window views.
    The status badge changes to **connected** and the screen shows the VM display scaled
    to fit the panel. If the VM is not running, the tab explains why and connects on its
    own once a fresh report shows it running.
-2. Use **CD/DVD** on the console toolbar to insert an ISO from the pool library that is
-   already on this VM's host, or **Eject** to clear the tray. Linux guests usually see
-   `/dev/sr0` (often also `/dev/cdrom`); Windows guests see a DVD drive letter. A running
-   VM that was created without any ISO needs to be shut down once before the first insert
-   so the host can add a CDROM tray. **Inserting ISO…** or **Ejecting ISO…** clears
-   when the task succeeds or the host reports the requested tray contents. If the task
-   fails or needs attention, its reason remains visible; inspect it in Recent tasks.
+2. If the VM is not running, select **Start VM** on the console toolbar and keep watching the
+   screen. The tab connects as soon as the host reports the VM running, which is early enough
+   to answer *Press any key to boot from CD or DVD* or to work a firmware menu; hold the key
+   down if you want to be certain. The button is shown only while the VM is not running and is
+   unavailable while a start is in progress; it disappears once the VM is running. Starting the
+   VM elsewhere and opening the console afterwards usually misses the prompt, and a UEFI guest
+   with an empty disk then stops at *BdsDxe: No bootable option or device was found* or the
+   firmware front page. From there, use the firmware's own boot menu, or shut the VM down and
+   start it again from this toolbar.
+3. Use the CD/DVD controls on the console toolbar to insert an ISO from the pool library that
+   is already on this VM's host, or **Eject** to clear a tray. A VM has two drives:
+   **Install media** and **Driver disc**, each with its own list and **Eject**, so a driver
+   ISO (for example virtio-win) can stay in the second drive while the installer runs from the
+   first. A host running an older Nex Core reports one drive and shows a single **CD/DVD**
+   control, as before. Linux guests usually see `/dev/sr0` (often also `/dev/cdrom`); Windows
+   guests see a DVD drive letter per drive. A running VM that was created without any ISO
+   needs to be shut down once before the first insert so the host can add a CDROM tray.
+   **Inserting the install media…** or **Ejecting the driver disc…** clears when the task
+   succeeds or the host reports the requested tray contents. If the task fails or needs
+   attention, its reason remains visible; inspect it in Recent tasks.
    This works the same for a VM whose disks are on pool-shared storage; the host records
    the change on its pool master, so the ISO is still attached after the VM is re-adopted.
-3. A guest can eject its own disc: the Debian installer does after it has copied the base
+4. A guest can eject its own disc: the Debian installer does after it has copied the base
    system, and then asks you to reinsert it. The control shows the ISO Nex recorded with
    **(ejected in the VM)** and says *The VM ejected the disc. Insert it again to reconnect
    it.* Select the same ISO in the list to put it back in the drive, then continue in the
    guest. Nex does not change what it recorded because a guest opened the tray, and does
    not need the VM stopped.
-4. Click inside the screen or select **Focus console** to give the VM keyboard focus.
+5. Click inside the screen or select **Focus console** to give the VM keyboard focus.
    Keys and mouse input go to the guest; the pointer is absolute in VMs created with the
    USB tablet device, so it does not drift. Use **Send Ctrl+Alt+Del** for that sequence
    and **Send key…** for combinations the browser would otherwise keep, such as
    Ctrl+Alt+F1–F7 (Linux text consoles), Ctrl+C (interrupt a command, mainly on the host
    console), Alt+Tab, Alt+F4, Ctrl+Esc, the Windows key and Escape.
-5. Choose how the display is shown with **View**: **Fit to window** scales it into the
+6. Choose how the display is shown with **View**: **Fit to window** scales it into the
    panel, **Actual size** shows it 1:1 with scrolling, and **Resize guest to window** asks
-   the guest to change its resolution to the panel size. The last option is hidden for a VM
-   whose host reports no VirtIO display, and takes effect in guests with a virtio-gpu
-   driver (Linux, including text consoles; Windows with the virtio-win display driver).
-   The View choice is remembered in this browser.
-6. Exchange text with the guest through **Clipboard**:
+   the guest to change its resolution to the panel size. That last option is offered only
+   while the guest reports that it can act on the request: the VM needs a VirtIO display and
+   a running guest agent to apply the resolution, which is what the
+   [guest tools](guest-tools.md) install and the same condition that makes the clipboard
+   **ready**. Until then — during installation, or on a guest without the tools — the option
+   reads **Resize guest to window (guest cannot resize)** and cannot be chosen. Where there is
+   no guest report at all, such as a host console or a VM whose host has not reported yet, it
+   reads **(no guest report)**. The note under the display says which case applies. The View
+   choice is remembered in this browser.
+7. Exchange text with the guest through **Clipboard**:
    - **Read my clipboard** loads the browser clipboard into the text box (the browser asks
      for permission once); you can also paste or type into the box.
    - **Paste into VM** places the text on the guest clipboard. It needs the
@@ -78,15 +99,22 @@ host-local console and full-screen or separate-window views.
      whether the guest is **ready**.
    - **Type into VM** sends the text as keystrokes instead. It works in any guest, including
      installers and text consoles, at about 40 characters per second; newlines press Enter.
+     Nex presses the keys a US keyboard would, holding Shift for capitals and for shifted
+     symbols such as `:`, `_`, `~` and `"`, so paths, passwords and commands arrive as typed
+     in a guest using a US layout. A guest set to another keyboard layout still interprets the
+     key positions its own way; use **Paste into VM** there.
    - Text copied inside the guest appears under **Latest text copied inside the VM**;
      select **Copy** to place it on your clipboard. The guest never writes your clipboard
      on its own.
-7. **Screenshot** downloads a PNG of the current display named after the VM. **View only**
+   - The clipboard panel sits between the toolbar and the display and shares the panel's
+     height with it, so the display stays visible while you send text. Select **Clipboard**
+     again to close it, or collapse the toolbar, to give the display the whole panel.
+8. **Screenshot** downloads a PNG of the current display named after the VM. **View only**
    stops keyboard and mouse input while you watch. **Reconnect** ends the current stream
    and attaches again with a new ticket. **Full screen** enlarges the panel with its
    toolbar; press Escape or the button again to leave. **Open in new window** opens a
    console-only page (`#/console/<VM>`) in a separate tab or window.
-8. Leave the tab, select another resource, or close the page to end the console. The VM
+9. Leave the tab, select another resource, or close the page to end the console. The VM
    keeps running. If the link drops while the VM is still eligible, the console
    reconnects by itself every few seconds with a new ticket.
 
@@ -96,6 +124,8 @@ host-local console and full-screen or separate-window views.
    connects to the host itself (a root shell on Nex Core through the same display path as a
    VM console). The host must be freshly connected and report `host-console-v1`.
 2. Type as on a local terminal. **Open in new window** uses `#/host-console/<host-id>`.
+   A host console has no guest report, so it offers no CD/DVD drives, no **Start VM** and no
+   **Resize guest to window**; the other controls behave as above.
 3. Leave the tab when finished; the host keeps running.
 
 ### From the host-local page
@@ -116,9 +146,15 @@ Leaving the console leaves the VM running. While a reconnect is pending the badg
 ## Troubleshooting
 
 - **"The VM is observed shut off"** or **Start the VM first:** the VM is not running.
-  Use **Start** in the Controller toolbar or start it on its host; the Console tab
-  connects on its own once a fresh report shows the VM running. Controller never starts
-  a VM as a side effect of opening its console.
+  Use **Start VM** on the console toolbar, **Start** in the page toolbar, or start it on its
+  host; the Console tab connects on its own once a fresh report shows the VM running.
+  Controller never starts a VM as a side effect of opening its console.
+- **The boot prompt is gone, or the guest stops at "No bootable option or device was found":**
+  the *Press any key to boot from CD or DVD* prompt waits about five seconds, which a console
+  opened after the start usually misses; the same happens when Setup reboots by itself. Shut
+  the VM down, open the **Console** tab, and use **Start VM** on the console toolbar with a
+  hand on a key. From the firmware front page you can also choose the DVD entry in the
+  firmware's own boot menu.
 - **"The VM's host is not freshly connected":** the host has not reported within the
   freshness window. Restore host connectivity; running VMs are not affected by the
   Controller connection. Use the host-local page for console access during an outage.
@@ -154,12 +190,23 @@ Leaving the console leaves the VM running. While a reconnect is pending the badg
 - **Paste into VM does nothing in the guest:** the guest has no running spice-vdagent, or
   the VM was created before clipboard support (**Channel missing** in its Guest tools
   panel). Install the [guest tools](guest-tools.md) or use **Type into VM**.
-- **Resize guest to window does not change the resolution:** the guest has no virtio-gpu
-  driver (for example an installer before drivers load, or a VM created before this
-  feature). The console keeps scaling the display; choose **Fit to window**.
-- **Typed text arrives with wrong characters:** keystrokes are interpreted with the
-  guest's keyboard layout. Characters outside the guest layout cannot be typed; use
-  **Paste into VM** with the guest tools instead.
+- **Resize guest to window cannot be chosen:** the guest has not reported that it can act on
+  a resize request — an installer before drivers load, or a guest without the
+  [guest tools](guest-tools.md), whose agent is what applies the new resolution. The option
+  stays visible as **(guest cannot resize)**, or as **(no guest report)** where nothing has
+  reported at all, and the note under the display explains it. Install the guest tools; until
+  then the console scales the display with **Fit to window**. Nex does not offer the option on
+  the strength of the VM having a VirtIO display, because that alone never resized a guest.
+- **Typed text arrives with wrong characters:** keystrokes are key presses, interpreted with
+  the guest's keyboard layout. Nex presses US-layout positions, with Shift for capitals and
+  shifted symbols; a guest set to another layout produces that layout's characters for those
+  positions, and characters on no US position cannot be typed. Use **Paste into VM** with the
+  guest tools there. A Windows guest that received lowercase text, `-` for `_` or `;` for `:`
+  is running a Controller older than this fix.
+- **Setup lists no disks for a VirtIO disk:** insert the virtio-win ISO in the **Driver disc**
+  drive and load the driver from it in Setup, leaving the Windows ISO in **Install media**. On
+  a host that reports only one **CD/DVD** drive, update Nex Core on that host from
+  [Software updates](software-updates.md) to gain the second drive.
 - **Reading your clipboard is refused:** the browser denied clipboard access or the page is
   not on HTTPS. Paste into the text box manually.
 - **The display is not visible after a hardware passthrough change:** the browser console
@@ -177,4 +224,15 @@ sessions were not. See the [console QA report](../qa/console/checks.md),
 [quality-menu removal](../qa/console-quality/checks.md),
 [toolbar collapse](../qa/console-toolbar/checks.md) and
 [media status](../qa/console-media-status/checks.md) checks.
+
+**Start VM, the two CD/DVD drives, typing shifted characters and the panel layout are newer
+than those walkthroughs.** They were exercised in a browser against the real console component
+in a harness with no VM attached, at 1440×1000 and 900×700: typing
+`Nex-Test_Upper D:\Path\virtio-win-guest-tools.exe 123` produced key presses that a US-layout
+guest reads back unchanged, **Start VM** appeared only while the VM was not running, one-drive
+and two-drive toolbars behaved as described above, and the toolbar, an open clipboard and the
+display stayed visible together. None of it has been re-run against a Windows or Linux guest
+on a host, and the boot-prompt timing in particular cannot be proven without one. The findings
+these changes answer are recorded in the
+[Windows 11 UEFI lab report](../qa/2026-09-16-windows-11-uefi-lab.md).
 

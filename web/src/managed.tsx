@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { Guest } from "./console";
 import { Icon } from "./icons";
-import { VMWizard, adapterNames, busNames, cpuNames, describeNetwork, guestNames, readyHost, type DiskRow, type NICRow } from "./vm-create";
+import { VMWizard, adapterNames, busNames, cpuNames, describeNetwork, guestNames, readyHost, secureBootText, tpmText, type DiskRow, type NICRow } from "./vm-create";
 import { VMEditor, editBlocker } from "./vm-edit";
 import { StorageRepositories, storageOwnerFresh } from "./storage";
 
@@ -15,7 +15,10 @@ export type Storage = Registration & { path: string; kind?: string; source?: Sto
 export type Network = Registration & { kind: string; source: string; uplink?: string; vlan?: number };
 export type Media = Registration & { storage_id: string; size_bytes: number; sha256: string };
 // Arrays are nullable because Go marshals an empty slice as null; render accordingly.
-export type VMSpec = { revision?: number; description: string; guest_os: string; cpu: { count: number; sockets: number; cores: number; threads: number; model: string }; memory: { mode: string; size_mib: number }; disks: DiskRow[] | null; nics: NICRow[] | null; boot: { firmware: string; machine: string; media_boot_order: number }; media_id: string; start_after_create: boolean; autostart: boolean };
+// boot.secure_boot and boot.tpm are absent from a definition written before those fields
+// existed: an unset secure_boot on a UEFI VM is Secure Boot on, and an unset tpm is no TPM.
+// drivers_media_id is the ISO in the VM's second CD drive, empty when that drive is empty.
+export type VMSpec = { revision?: number; description: string; guest_os: string; cpu: { count: number; sockets: number; cores: number; threads: number; model: string }; memory: { mode: string; size_mib: number }; disks: DiskRow[] | null; nics: NICRow[] | null; boot: { firmware: string; machine: string; media_boot_order: number; secure_boot?: string; tpm?: string }; media_id: string; drivers_media_id?: string; start_after_create: boolean; autostart: boolean };
 export type VM = Registration & { spec?: VMSpec; state: string; freshness: string; role: string; protected: boolean; guest?: Guest | null };
 type NIC = { name: string; mac: string; kind?: string; master?: string; parent?: string; state: string; addresses?: string[] | null };
 export type Host = { id: string; pool_id: string; hostname: string; connection: string; revoked: boolean; capabilities?: string[]; inventory: { cpu_count: number; cpu_models?: string[] | null; memory_bytes: number; nics?: NIC[] | null } | null };
@@ -46,6 +49,27 @@ export function isoNameFromURL(raw: string): string {
   return base.slice(0, 100);
 }
 
+// isoTransferNotice describes what is happening to an ISO the operator just uploaded or asked
+// the host to download, from the record the host reports now. The status the submission
+// returned is only its first word: a banner that keeps saying "queued. Wait for a succeeded
+// result" while the same page shows the iso-import task succeeded is wrong (BUG-0204).
+// `status` is undefined until the ISO library lists the record.
+export function isoTransferNotice(name: string, status?: string, source: "upload" | "download" = "upload"): string {
+  const work = source === "download" ? "host download" : "host transfer";
+  switch (status) {
+    case "succeeded":
+      return `${name} is on the host and can be used as install media or a driver disc.`;
+    case "failed":
+      return `The ${work} of ${name} failed, so it cannot be used by a VM. Read the reason in Task history.`;
+    case "needs_attention":
+      return `The ${work} of ${name} needs attention: the host did not confirm it, so whether the file is usable is unknown. Check it in Task history before using it or sending it again.`;
+    case undefined:
+      return `${name} has no ${work} record yet. It is not usable by a VM until one reports succeeded.`;
+    default:
+      return `The ${work} of ${name} is ${status}. Wait for a succeeded result before using it in a VM.`;
+  }
+}
+
 type Pending = Record<string, { payload: string; id: string }>;
 function pendingRequests(key: string): Pending {
   try {
@@ -69,6 +93,9 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  // The ISO whose host transfer this view is following, so its banner can report the record the
+  // host reports now instead of the status the submission happened to return.
+  const [transfer, setTransfer] = useState<{ id: string; name: string; source: "upload" | "download" } | null>(null);
   const [uploadStorage, setUploadStorage] = useState<string>(restored("iso").storage_id || "");
   const [isoSource, setIsoSource] = useState(restored("iso").url ? "url" : "file");
   const [isoURL, setIsoURL] = useState<string>(restored("iso").url || "");
@@ -175,9 +202,15 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
   // a trip to another tab (the wizard sends the operator to Storage, Networking and ISO library),
   // but it is only shown on the tab that opened it instead of sitting on top of an unrelated one.
   const showForm = formTab(form) === tab;
+  // The banner for an ISO the operator just sent follows that record's own status.
+  const transferStatus = transfer && media.find(m => m.id === transfer.id)?.status;
   return <div hidden={!relevant}>
     {error && <p className="alert" role="alert">{error} Your entries are retained. Review Task history before retrying an uncertain result.</p>}
     {notice && <p className="notice" role="status">{notice} <a href="#/tasks">Task history</a></p>}
+    {transfer && <p className={transferStatus === "failed" ? "alert" : transferStatus === "needs_attention" ? "warning" : "notice"} role="status">
+      {isoTransferNotice(transfer.name, transferStatus || undefined, transfer.source)} <a href="#/tasks">Task history</a>
+      <button type="button" onClick={() => setTransfer(null)}>Dismiss</button>
+    </p>}
     {unavailable && <p className="warning">Controller inventory may be out of date. Refresh the view before submitting changes.</p>}
     <div className="managed-actions actions">
       {vmTab && <button className="primary" disabled={busy || unavailable} onClick={() => open("vm")}>Create VM</button>}
@@ -216,7 +249,8 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
           void run("iso", async () => {
             const result = await api<Media>("media/download", "POST", { ...payload, request_id: requestID("iso", payload) });
             clearRequest("iso");
-            await reload(); setNotice(`ISO download ${result.status}. Nex Core downloads to the selected host storage; follow Task history and wait for a succeeded result before use.`);
+            setTransfer({ id: result.id, name: payload.name, source: "download" });
+            await reload();
           });
           return;
         }
@@ -225,8 +259,8 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
         const query = new URLSearchParams({ storage_id: uploadStorage, name: image.name, request_id: requestID("iso", payload) });
         const result = await startIsoUpload<Media>(`media?${query}`, image);
         clearRequest("iso");
-        if (mounted.current) { setFile(null); if (input.current) input.current.value = ""; }
-        await reload(); if (mounted.current) setNotice(`ISO received by Controller; host transfer ${result.status}. Wait for a succeeded result before creating a VM.`);
+        if (mounted.current) { setFile(null); if (input.current) input.current.value = ""; setTransfer({ id: result.id, name: image.name, source: "upload" }); }
+        await reload();
       }, false); }}>
         <label>Destination storage<select required value={uploadStorage} onChange={e => setUploadStorage(e.target.value)} disabled={busy || uploading}><option value="">Select ISO-ready storage</option>{isoReadyStorage.map(s => <option key={s.id} value={s.id}>{s.name} · {hostName(s.host_id)}</option>)}</select></label>
         <label>ISO source<select value={isoSource} disabled={busy || uploading} onChange={e => { setIsoSource(e.target.value); setError(""); }}><option value="file">Upload from computer</option><option value="url">Download from public URL</option></select></label>
@@ -261,18 +295,46 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
 // An all-zero topology is the documented default of one socket, Count cores and one thread.
 const topology = (c: VMSpec["cpu"]) => c.sockets || c.cores || c.threads ? `${c.sockets} × ${c.cores} × ${c.threads} (sockets × cores × threads)` : `1 × ${c.count} × 1 (sockets × cores × threads)`;
 
-type DetailProps = { vm: VM; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[]; api: API; reload: () => Promise<void>; busy: boolean; unavailable: boolean; onNotice: (text: string) => void };
+// ejectInstallOffer reports whether to offer ejecting this VM's install ISO. After an install
+// finishes, the disc stays in the drive ahead of every bootable disk, so each start shows
+// "Press any key to boot from CD or DVD" and a key press in the console restarts the installer
+// (BUG-0202). It is offered, never applied for the operator: an installer may still be running,
+// and Nex does not guess that an install finished and rewrite the definition by itself.
+// It needs a running VM with a fresh report, because that is the only state Nex can observe
+// the VM in; a host that cannot take a media request is not offered the action at all.
+export function ejectInstallOffer(vm: VM, host?: Host): boolean {
+  const spec = vm.spec;
+  if (!spec?.media_id || vm.protected) return false;
+  const media = spec.boot.media_boot_order;
+  const disks = (spec.disks || []).map(d => d.boot_order).filter(order => order > 0);
+  // Nothing to fall back to, or the firmware already tries a disk first: no prompt to remove.
+  if (media <= 0 || !disks.length || disks.some(order => order < media)) return false;
+  if (vm.freshness !== "fresh" || vm.state !== "running") return false;
+  // The guest opened its own tray, so the drive the firmware would boot from is already empty.
+  // An older Core reports no observation at all; the recorded media then stands on its own.
+  if (vm.guest?.media === "empty" || vm.guest?.media === "no-drive") return false;
+  return Boolean(host && !host.revoked && host.connection === "fresh" && host.capabilities?.includes("vm-media-v1"));
+}
+
+type DetailProps = { vm: VM; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[]; api: API; reload: () => Promise<void>; busy: boolean; unavailable: boolean; onNotice: (text: string) => void; installMedia?: { busy: boolean; note: string; onEject: () => void } };
 
 // VMDetails shows the definition and observed state; Edit turns the same panel into the
 // editor, so a VM is read and changed in one place.
-export function VMDetails({ vm, hosts, storage, networks, media, api, reload, busy, unavailable, onNotice }: DetailProps) {
+export function VMDetails({ vm, hosts, storage, networks, media, api, reload, busy, unavailable, onNotice, installMedia }: DetailProps) {
   const spec = vm.spec;
   const host = hosts.find(h => h.id === vm.host_id);
   const [editing, setEditing] = useState(false);
   const blocker = editBlocker(vm, host);
+  const offerEject = !editing && Boolean(installMedia) && ejectInstallOffer(vm, host);
   return <><section className="panel"><div className="section-heading"><h2>VM details</h2><span className="actions">{status(vm.freshness)}{!editing && <button type="button" disabled={busy || unavailable || Boolean(blocker)} title={blocker || undefined} onClick={() => setEditing(true)}>Edit</button>}{!editing && <VMDelete vm={vm} host={host} api={api} reload={reload} busy={busy} unavailable={unavailable} onNotice={onNotice} />}</span></div>
     {vm.freshness !== "fresh" && <p className="warning">Current execution state is unknown. Last reported state: {vm.state || "unknown"}. An unreachable host does not prove that this VM stopped.</p>}
-    {editing && spec ? <VMEditor vm={vm} host={host} poolName={host?.hostname || ""} storage={storage} networks={networks} media={media} api={api} reload={reload} unavailable={unavailable} onNotice={onNotice} onClose={() => setEditing(false)} /> : <dl className="details"><dt>VM identity</dt><dd>{vm.id}</dd><dt>Assigned host</dt><dd><a href={`#/hosts/${vm.host_id}`}>{hosts.find(h => h.id === vm.host_id)?.hostname || vm.host_id}</a></dd><dt>Observed state</dt><dd>{vm.state || "unknown"}</dd><dt>Role</dt><dd>{vm.protected ? "Protected Controller appliance" : "Guest VM"}</dd>{spec && <>{spec.description && <><dt>Description</dt><dd>{spec.description}</dd></>}<dt>Guest OS</dt><dd>{guestNames[spec.guest_os] || "Not recorded"}</dd><dt>Virtual CPUs</dt><dd>{spec.cpu.count}<small>{topology(spec.cpu)} · {cpuNames[spec.cpu.model] || spec.cpu.model}</small></dd><dt>Memory</dt><dd>{spec.memory.size_mib} MiB<small>{spec.memory.mode === "dedicated" ? "Dedicated configured · locks host RAM while running on updated Nex Core. Existing VMs: upgrade Core, stop, then Edit → Save changes. Capacity stays committed when stopped." : "Maximum · a ceiling only; free pages return to the host when the guest reports them"}</small></dd><dt>Disks</dt><dd>{spec.disks?.length ? <ul className="plain">{spec.disks.map((d, i) => <li key={i}>{d.name} · {d.size_gib} GiB · {busNames[d.bus] || d.bus} · {d.thin ? "Thin" : "Thick"}{d.boot_order > 0 ? ` · boot ${d.boot_order}` : ""}<small>{storage.find(s => s.id === d.storage_id)?.name || d.storage_id}</small></li>)}</ul> : "None recorded"}</dd><dt>Networks</dt><dd>{spec.nics?.length ? <ul className="plain">{spec.nics.map((n, i) => <li key={i}>{networks.find(x => x.id === n.network_id)?.name || n.network_id} · {adapterNames[n.model] || n.model}{n.mtu ? ` · MTU ${n.mtu}` : ""}<small className="mono">{n.mac || "MAC derived from the VM identity"}</small></li>)}</ul> : "None"}</dd><dt>Install ISO</dt><dd>{spec.media_id ? media.find(m => m.id === spec.media_id)?.name || spec.media_id : "None · CD drive empty"}{spec.boot.media_boot_order > 0 && <small>CD drive boot order {spec.boot.media_boot_order}</small>}</dd><dt>Firmware</dt><dd>{spec.boot.firmware?.toUpperCase()}<small>Machine type {spec.boot.machine || "q35"}</small></dd><dt>Autostart</dt><dd>{spec.autostart ? "Starts when the host boots" : "Does not start when the host boots"}</dd></>}{vm.operation_id && <><dt>Creation task</dt><dd>{task(vm)}</dd></>}</dl>}
+    {offerEject && installMedia && <div className="warning install-media-offer" role="status">
+      <p><strong>The install ISO is still in the CD drive, ahead of the disks in the boot order.</strong> Every start shows “Press any key to boot from CD or DVD”, and a key press in the console starts the installer again. Eject it once the guest is installed; the VM then boots from its disk. The ISO stays in the library and can be inserted again from the Console tab.</p>
+      <p className="help">Do not eject while an installer is still running in this VM.</p>
+      {installMedia.note && <p className="task-error" role="alert">{installMedia.note}</p>}
+      <div className="actions"><button type="button" disabled={busy || unavailable || installMedia.busy} onClick={installMedia.onEject}>{installMedia.busy ? "Ejecting…" : "Eject install media"}</button></div>
+    </div>}
+    {editing && spec ? <VMEditor vm={vm} host={host} poolName={host?.hostname || ""} storage={storage} networks={networks} media={media} api={api} reload={reload} unavailable={unavailable} onNotice={onNotice} onClose={() => setEditing(false)} /> : <dl className="details"><dt>VM identity</dt><dd>{vm.id}</dd><dt>Assigned host</dt><dd><a href={`#/hosts/${vm.host_id}`}>{hosts.find(h => h.id === vm.host_id)?.hostname || vm.host_id}</a></dd><dt>Observed state</dt><dd>{vm.state || "unknown"}</dd><dt>Role</dt><dd>{vm.protected ? "Protected Controller appliance" : "Guest VM"}</dd>{spec && <>{spec.description && <><dt>Description</dt><dd>{spec.description}</dd></>}<dt>Guest OS</dt><dd>{guestNames[spec.guest_os] || "Not recorded"}</dd><dt>Virtual CPUs</dt><dd>{spec.cpu.count}<small>{topology(spec.cpu)} · {cpuNames[spec.cpu.model] || spec.cpu.model}</small></dd><dt>Memory</dt><dd>{spec.memory.size_mib} MiB<small>{spec.memory.mode === "dedicated" ? "Dedicated · the host locks this much RAM while the VM runs, and keeps the capacity committed to this VM while it is stopped" : "Maximum · a ceiling only; free pages return to the host when the guest reports them"}</small></dd><dt>Disks</dt><dd>{spec.disks?.length ? <ul className="plain">{spec.disks.map((d, i) => <li key={i}>{d.name} · {d.size_gib} GiB · {busNames[d.bus] || d.bus} · {d.thin ? "Thin" : "Thick"}{d.boot_order > 0 ? ` · boot ${d.boot_order}` : ""}<small>{storage.find(s => s.id === d.storage_id)?.name || d.storage_id}</small></li>)}</ul> : "None recorded"}</dd><dt>Networks</dt><dd>{spec.nics?.length ? <ul className="plain">{spec.nics.map((n, i) => <li key={i}>{networks.find(x => x.id === n.network_id)?.name || n.network_id} · {adapterNames[n.model] || n.model}{n.mtu ? ` · MTU ${n.mtu}` : ""}<small className="mono">{n.mac || "MAC derived from the VM identity"}</small></li>)}</ul> : "None"}</dd><dt>Install ISO</dt><dd>{spec.media_id ? media.find(m => m.id === spec.media_id)?.name || spec.media_id : "None · CD drive empty"}{spec.boot.media_boot_order > 0 && <small>CD drive boot order {spec.boot.media_boot_order}</small>}</dd><dt>Driver disc</dt><dd>{spec.drivers_media_id ? media.find(m => m.id === spec.drivers_media_id)?.name || spec.drivers_media_id : "None · second CD drive empty"}</dd><dt>Firmware</dt><dd>{spec.boot.firmware?.toUpperCase()}<small>Machine type {spec.boot.machine || "q35"}</small></dd><dt>Secure Boot</dt><dd>{secureBootText(spec.boot)}{spec.boot.firmware === "uefi" && !spec.boot.secure_boot && <small>Not recorded in this definition: a UEFI VM defined before the choice existed boots with the enrolled-keys firmware. Edit and save the VM to record it.</small>}</dd><dt>TPM</dt><dd>{tpmText(spec.boot)}</dd><dt>Autostart</dt><dd>{spec.autostart ? "Starts when the host boots" : "Does not start when the host boots"}</dd></>}{vm.operation_id && <><dt>Creation task</dt><dd>{task(vm)}</dd></>}</dl>}
     {!vm.protected && !editing && <p className="panel-note">Creation provisions a stopped VM. Use Start in the toolbar to start it, then open the Console tab. Select Edit to change the VM; changes a running guest can take apply while it runs.</p>}
   </section>
   <GuestTools vm={vm} />
@@ -292,6 +354,19 @@ const guestClipboardText: Record<string, string> = {
   waiting: "Waiting for spice-vdagent in the guest · Type into VM still works",
   "no-channel": "Channel missing · this VM was created before console clipboard support; recreate it to add the channel",
 };
+// A resize needs both halves: a VirtIO display in the VM and the guest's vdagent to act on the
+// request. Core now reports the pair rather than the device model alone (BUG-0201), and the
+// Controller sees only that verdict — no display model is in the definition it mirrors. It can
+// still name the missing half: the vdagent is the channel the clipboard reads "ready" for, so a
+// guest whose clipboard is ready and still cannot resize is one without a VirtIO display.
+// Blaming the display for every false answer would send an operator to recreate a perfectly
+// good VM when installing the guest tools is all that is needed.
+export function guestResizeText(g: Guest): string {
+  if (g.resize) return "Available · the console can resize the guest to the browser window";
+  if (g.clipboard === "ready") return "Not available · the guest is running its tools, so this VM's display is not VirtIO. Only a VM recreated with a VirtIO display can be resized.";
+  if (g.clipboard === "no-channel") return "Not available · this VM was created before the console agent channel existed, so nothing in the guest can act on a resize. Recreate it, then install the guest tools.";
+  return "Not available · the guest is not running the vdagent that changes its resolution. Install the guest tools; Console clipboard reads Ready exactly when resize becomes available. A VM whose display is not VirtIO cannot resize even then.";
+}
 export function GuestTools({ vm }: { vm: VM }) {
   const g = vm.guest;
   const running = vm.freshness === "fresh" && vm.state === "running";
@@ -304,7 +379,7 @@ export function GuestTools({ vm }: { vm: VM }) {
         {g.hostname && <><dt>Guest hostname</dt><dd>{g.hostname}</dd></>}
         <dt>IP addresses</dt><dd>{g.addresses?.length ? <ul className="plain">{g.addresses.map(a => <li key={a.interface + a.address} className="mono">{a.address} <small>{a.interface}</small></li>)}</ul> : g.agent === "connected" ? "None reported" : "Unknown until the guest agent answers"}</dd>
         <dt>Console clipboard</dt><dd>{guestClipboardText[g.clipboard] || g.clipboard}</dd>
-        <dt>Display resize</dt><dd>{g.resize ? "Available · VirtIO display; the console can resize the guest to the browser window" : "Not available · no VirtIO display in this VM's definition"}</dd>
+        <dt>Display resize</dt><dd>{guestResizeText(g)}</dd>
       </dl>}
     {g && running && (g.agent === "disconnected" || g.agent === "unresponsive") && <GuestToolsAdvisory />}
     {g && g.agent === "no-channel" && <p className="warning">This VM was created before guest tools support, so it has no guest agent channel. Recreate it to add the channel, then install the tools below. In the meantime the console's <strong>Type into VM</strong> still works.</p>}

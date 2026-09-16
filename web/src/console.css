@@ -2,29 +2,58 @@
 .console-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #cbd0d6; }
 .console-toolbar .muted { font-size: 11px; }
 .console-status { margin: 0; padding: 6px 10px; font-size: 12px; background: #fffbeb; color: #92400e; border-bottom: 1px solid #fcd34d; }
-.console-screen { position: relative; height: clamp(240px, 50vh, 720px); background: #000; overflow: hidden; }
+/* The screen takes the room the controls leave instead of pushing them out of the pane: its
+   clamp is the size it asks for, and flex lets it grow into spare space or give space back
+   when the clipboard is open or a drawer below the console is expanded (BUG-0207). */
+.console-screen { position: relative; flex: 1 1 auto; height: clamp(240px, 50vh, 720px); min-height: min(220px, 30vh); background: #000; overflow: hidden; }
 .console-collapsed .console-screen { height: clamp(300px, 65vh, 850px); }
+.console-drive { display: inline-flex; align-items: center; gap: 8px; }
+.console-hint { flex: 1 1 32ch; max-width: 56ch; font-size: 11px; line-height: 1.35; color: var(--muted); }
 .console-screen:fullscreen { height: 100vh; }
 .console-screen[data-phase="idle"]::after, .console-screen[data-phase="closed"]::after { content: "No console connection"; position: absolute; inset: 0; display: grid; place-items: center; color: #9ca3af; font-size: 13px; pointer-events: none; }
 .console-screen[data-phase="connecting"]::after { content: "Connecting to the VM display…"; position: absolute; inset: 0; display: grid; place-items: center; color: #9ca3af; font-size: 13px; pointer-events: none; }
 .console-screen canvas { outline: none; }
-section.console { padding: 0; overflow: hidden; margin-bottom: 12px; }
+/* The panel fits the area it is given rather than growing past it, so the toolbar (with Open
+   in new window), an open clipboard and the guest display stay on screen together instead of
+   the toolbar scrolling up under the tab strip (BUG-0207). Where the container has no definite
+   height, such as the host-local page, the max-height resolves to none and the panel keeps its
+   content height. The margin is subtracted so the pane does not scroll by exactly that much. */
+section.console { padding: 0; overflow: auto; margin-bottom: 12px; display: flex; flex-direction: column; max-height: calc(100% - 12px); }
+/* The controls give room back by scrolling an open clipboard, never by shrinking under the
+   display: with no min-height override they cannot go below the toolbar's own height. In a
+   pane too short even for that, the panel scrolls (overflow above) rather than hiding a
+   control, and the toolbar is what stays in view. */
+.console-controls { flex: 0 1 auto; display: flex; flex-direction: column; }
+.console-controls > .section-heading, .console-toolbar { flex: 0 0 auto; }
 .console .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 12px; }
 .console h2 { margin: 0; font-size: 15px; }
 .console .badge { font-size: 11px; }
 .console-toolbar select, .console-toolbar input { font-size: 12px; }
+/* Toolbar controls take the width they need: the page-wide "select { width: 100% }" made the
+   key-combination list claim a whole row, and rows here are display height (BUG-0207). */
+.console-toolbar > select { width: auto; max-width: 24ch; }
 .console-option { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
-.console-popout { font-size: 12px; margin-left: auto; }
-.console-clipboard { padding: 8px 10px; border-bottom: 1px solid #cbd0d6; background: #f8f9fa; display: grid; gap: 6px; }
+.console-popout { flex-shrink: 0; font-size: 12px; margin-left: auto; white-space: nowrap; }
+.console-clipboard { flex: 0 1 auto; min-height: 0; overflow: auto; padding: 8px 10px; border-bottom: 1px solid #cbd0d6; background: #f8f9fa; display: grid; gap: 6px 14px; grid-template-columns: minmax(0, 1fr); align-content: start; }
+.console-clip-column { display: grid; gap: 6px; align-content: start; min-width: 0; }
+/* Side by side where the panel is wide enough, so the guest display keeps its height. */
+@media (min-width: 760px) {
+  .console-clipboard { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .console-clip-wide { grid-column: 1 / -1; }
+}
 .console-clipboard label { display: grid; gap: 3px; font-size: 12px; }
 .console-clipboard textarea { width: 100%; box-sizing: border-box; font: 12px/1.4 ui-monospace, monospace; resize: vertical; }
 .console-clipboard .actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .console-screen[data-view="actual"] { overflow: auto; }
 section.console:fullscreen { display: flex; flex-direction: column; background: #fff; }
 section.console:fullscreen .console-screen { flex: 1; height: auto; min-height: 0; }
-.console-page { min-height: 100vh; display: flex; flex-direction: column; background: #f3f4f6; font-family: system-ui, sans-serif; }
+/* A window height, not just a floor: with only a minimum the console grew past the viewport
+   and the separate window scrolled, which put its own status note below the fold. */
+.console-page { min-height: 100vh; height: 100vh; height: 100dvh; display: flex; flex-direction: column; background: #f3f4f6; font-family: system-ui, sans-serif; }
 .console-page-bar { display: flex; align-items: center; gap: 12px; padding: 6px 12px; font-size: 12px; border-bottom: 1px solid #cbd0d6; background: #fff; }
-.console-page section.console { flex: 1; display: flex; flex-direction: column; margin: 0; border: 0; }
+/* The separate console window is nothing but the console: it takes the whole page, with no
+   panel margin to subtract and no cap to fit inside. */
+.console-page section.console { flex: 1; display: flex; flex-direction: column; margin: 0; border: 0; max-height: none; }
 .console-page .console-screen { flex: 1; height: auto; min-height: 240px; }
 .guest-advisory { display: block; }
 .guest-advisory p { margin: 0 0 8px; }

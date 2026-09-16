@@ -1,0 +1,35 @@
+{
+  "summary": "Require interactive agent questions where supported, with a prominent text fallback. API impact: none; contributor communication instructions only.",
+  "paths": [
+    "AGENTS.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor communication changes no Nex operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No client-facing endpoint, Controller operation, Core command or observed-result flow changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No feature scope or milestone status changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Contributor instructions introduce no runtime state."
+  },
+  "verification": {
+    "method": "Reviewed the communication rule and existing Claude/Cursor references to AGENTS.md. Independent read-only review passed. python3 scripts/check_docs.py --worktree passed for 85 uncommitted paths; python3 -m unittest discover -s tests -p test_repository_privacy.py passed (1 test); git diff --check passed. Client rendering is not exercised by this documentation change.",
+    "evidence": [
+      "AGENTS.md",
+      "CLAUDE.md",
+      ".cursor/rules/project.mdc",
+      "scripts/check_docs.py",
+      "tests/test_repository_privacy.py"
+    ]
+  }
+}

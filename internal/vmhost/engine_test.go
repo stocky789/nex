@@ -466,3 +466,25 @@ func TestApplianceDirectoryTraversableUnderPrivateUmask(t *testing.T) {
 		}
 	}
 }
+
+// A blanket 20 s cap killed virsh mid-shutdown: libvirt holds the domain job for as long as the
+// guest takes to stop, and a Windows guest held it for over three minutes. Killing the client
+// cancelled nothing on the host, it only destroyed Nex's evidence, so a completed shutdown was
+// reported as a failure (BUG-0213). Domain-lifecycle commands get a bound that exceeds a real
+// guest shutdown; queries keep the short one so a hung libvirt still fails fast instead of
+// holding the shared engine lock.
+func TestVirshTimeoutSeparatesDomainJobsFromQueries(t *testing.T) {
+	for _, command := range []string{"shutdown", "reboot", "reset", "start", "destroy",
+		"define", "undefine", "attach-device", "detach-device", "change-media", "domrename"} {
+		if got := virshTimeout(command); got <= 20*time.Second {
+			t.Errorf("%s holds libvirt's domain job and must outlast a guest shutdown, got %s", command, got)
+		}
+	}
+	// qemu-agent-command does contend for the job, but an unresponsive guest must not hold
+	// observation for minutes; it carries its own one-second libvirt timeout.
+	for _, command := range []string{"domstate", "dumpxml", "list", "domcapabilities", "net-list", "qemu-agent-command", ""} {
+		if got := virshTimeout(command); got != 20*time.Second {
+			t.Errorf("%s is a query and must keep the short bound so a hung libvirt fails fast, got %s", command, got)
+		}
+	}
+}

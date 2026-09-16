@@ -26,7 +26,7 @@ buildSync({
 // reload path that first showed the stale panel.
 let pending = {};
 globalThis.sessionStorage = { getItem: () => JSON.stringify(pending), setItem() {} };
-const { ManagedVMs, formTab, isoNameFromURL } = await import(`file://${outfile}`);
+const { ManagedVMs, VMDetails, formTab, isoNameFromURL, isoTransferNotice, ejectInstallOffer, guestResizeText } = await import(`file://${outfile}`);
 
 const props = {
   account: "operator", poolID: "pool-1", poolName: "pool", hosts: [], storage: [], networks: [],
@@ -75,5 +75,136 @@ assert.equal(taskTimestamp({ ...adopted, request_id: "adopt-outcome:core-b:histo
 assert.equal(taskTimestamp({ ...adopted, request_id: "adopt-outcome:core-a:other-operation" }).reobserved, false);
 assert.match(mainSource, /Reobserved from Core history/);
 assert.match(mainSource, /Original outcome time was not reported\./);
+
+// BUG-0204: the ISO banner follows the host transfer record, not the status the submission
+// returned. "queued" must stop being shown once the same page lists the import as succeeded.
+assert.match(isoTransferNotice("windows.iso", "queued"), /^The host transfer of windows\.iso is queued\. Wait for a succeeded result/);
+assert.match(isoTransferNotice("windows.iso", "dispatched"), /host transfer of windows\.iso is dispatched/);
+assert.match(isoTransferNotice("windows.iso", "succeeded"), /^windows\.iso is on the host and can be used/);
+assert.doesNotMatch(isoTransferNotice("windows.iso", "succeeded"), /queued|Wait for a succeeded result/);
+assert.match(isoTransferNotice("windows.iso", "failed"), /^The host transfer of windows\.iso failed/);
+assert.match(isoTransferNotice("windows.iso", "needs_attention"), /needs attention/);
+assert.match(isoTransferNotice("windows.iso", undefined), /has no host transfer record yet/);
+// A URL download never passes through the Controller, so its banner says what the host is doing.
+assert.match(isoTransferNotice("virtio-win.iso", "queued", "download"), /^The host download of virtio-win\.iso is queued/);
+assert.match(isoTransferNotice("virtio-win.iso", "succeeded", "download"), /^virtio-win\.iso is on the host/);
+
+// BUG-0202: after an install the ISO stays in the drive ahead of the disks, so every boot stops
+// at "Press any key to boot from CD or DVD". The eject is offered only where it is true and can
+// be submitted: a running VM, install media the firmware tries before any bootable disk, a live
+// drive that still holds it, and a host that can take a media request.
+const mediaHost = { id: "host-1", pool_id: "pool-1", connection: "fresh", revoked: false, capabilities: ["managed-vm-v1", "vm-media-v1"] };
+const installed = {
+  id: "vm-1", pool_id: "pool-1", host_id: "host-1", name: "win11", state: "running", freshness: "fresh",
+  protected: false, guest: { agent: "connected", clipboard: "ready", resize: false, media: "loaded" },
+  spec: {
+    description: "", guest_os: "windows", cpu: { count: 2, sockets: 0, cores: 0, threads: 0, model: "host-passthrough" },
+    memory: { mode: "dedicated", size_mib: 4096 },
+    disks: [{ storage_id: "s1", name: "system", size_gib: 64, bus: "sata", thin: true, boot_order: 2 }],
+    nics: [], boot: { firmware: "uefi", machine: "", media_boot_order: 1 }, media_id: "iso-1", autostart: false, start_after_create: false,
+  },
+};
+assert.equal(ejectInstallOffer(installed, mediaHost), true);
+assert.equal(ejectInstallOffer({ ...installed, state: "shut off" }, mediaHost), false, "a stopped VM is not offered the eject");
+assert.equal(ejectInstallOffer({ ...installed, freshness: "stale" }, mediaHost), false, "an unknown state is not offered the eject");
+assert.equal(ejectInstallOffer({ ...installed, protected: true }, mediaHost), false, "the appliance is managed from its host");
+assert.equal(ejectInstallOffer({ ...installed, spec: { ...installed.spec, media_id: "" } }, mediaHost), false, "an empty drive has nothing to eject");
+assert.equal(ejectInstallOffer({ ...installed, guest: { ...installed.guest, media: "empty" } }, mediaHost), false, "the guest already opened its tray");
+assert.equal(ejectInstallOffer({ ...installed, spec: { ...installed.spec, boot: { ...installed.spec.boot, media_boot_order: 3 } } }, mediaHost), false, "a disk already boots first");
+assert.equal(ejectInstallOffer({ ...installed, spec: { ...installed.spec, disks: [{ ...installed.spec.disks[0], boot_order: 0 }] } }, mediaHost), false, "no disk is in the boot order to fall back to");
+assert.equal(ejectInstallOffer(installed, { ...mediaHost, capabilities: ["managed-vm-v1"] }), false, "the host cannot take a media request");
+assert.equal(ejectInstallOffer(installed, { ...mediaHost, connection: "stale" }), false, "the host is not freshly connected");
+// A guest observation is absent on older Core builds; the recorded media then stands on its own.
+assert.equal(ejectInstallOffer({ ...installed, guest: null }, mediaHost), true);
+
+const detailProps = {
+  vm: installed, hosts: [mediaHost], storage: [], networks: [], media: [{ id: "iso-1", name: "windows.iso" }],
+  api: async () => ({}), reload: async () => {}, busy: false, unavailable: false, onNotice: () => {},
+  installMedia: { busy: false, note: "", onEject: () => {} },
+};
+const details = renderToStaticMarkup(createElement(VMDetails, detailProps));
+assert.match(details, /Eject install media/);
+assert.match(details, /Press any key to boot from CD or DVD/);
+assert.doesNotMatch(renderToStaticMarkup(createElement(VMDetails, { ...detailProps, vm: { ...installed, state: "shut off" } })), /Eject install media/);
+// Without the wiring there is no action to offer, so the panel must not advertise one.
+assert.doesNotMatch(renderToStaticMarkup(createElement(VMDetails, { ...detailProps, installMedia: undefined })), /Eject install media/);
+// A running request and a task that did not complete are both shown with the offer.
+const working = renderToStaticMarkup(createElement(VMDetails, { ...detailProps, installMedia: { busy: true, note: "Ejecting the install media…", onEject: () => {} } }));
+assert.match(working, /Ejecting…/);
+assert.match(working, /Ejecting the install media…/);
+assert.match(working, /<button type="button" disabled=""/);
+
+// BUG-0199: a UEFI VM whose definition predates the Secure Boot field is running with Secure
+// Boot on — that is the firmware libvirt gave it — and the details page must say so.
+assert.match(details, /Secure Boot/);
+assert.match(details, /On · the firmware runs only signed boot software/);
+assert.match(details, /Not recorded in this definition/);
+assert.match(details, /<dt>TPM<\/dt><dd>None<\/dd>/);
+const secured = (boot) => renderToStaticMarkup(createElement(VMDetails, { ...detailProps, vm: { ...installed, spec: { ...installed.spec, boot: { ...installed.spec.boot, ...boot } } } }));
+assert.match(secured({ secure_boot: "off" }), /Off · unsigned boot media and drivers are allowed/);
+assert.doesNotMatch(secured({ secure_boot: "on" }), /Not recorded in this definition/);
+assert.match(secured({ firmware: "bios" }), /Not available · BIOS firmware has no Secure Boot/);
+assert.match(secured({ tpm: "2.0" }), /TPM 2\.0 · emulated device in this VM/);
+// The second CD drive is part of the definition, so it is reported whether or not it holds a disc.
+assert.match(details, /None · second CD drive empty/);
+assert.match(
+  renderToStaticMarkup(createElement(VMDetails, { ...detailProps, vm: { ...installed, spec: { ...installed.spec, drivers_media_id: "iso-2" } }, media: [{ id: "iso-1", name: "windows.iso" }, { id: "iso-2", name: "virtio-win.iso" }] })),
+  /virtio-win\.iso/,
+);
+
+// BUG-0206: "Existing VMs: upgrade Core, stop, then Edit → Save changes" was shown for every
+// dedicated-memory VM, including one created on a Core that already applies the reservation.
+// The Controller cannot observe a VM's memory backing, so the row states the policy only.
+assert.match(details, /Dedicated · the host locks this much RAM while the VM runs/);
+assert.doesNotMatch(details, /upgrade Core, stop/);
+assert.doesNotMatch(details, /Existing VMs/);
+
+// BUG-0201 (UI half): resize is now reported from what the guest can do, not from the device
+// model, so the reason must not blame a missing VirtIO display for a guest that simply has no
+// tools installed — that sends an operator to recreate a VM that only needs the tools. The
+// vdagent behind a resize is the channel the clipboard reads "ready" for, so that is the one
+// case where the display can honestly be named.
+const resizing = { agent: "connected", clipboard: "ready", resize: true };
+assert.match(guestResizeText(resizing), /^Available · /);
+assert.match(guestResizeText({ ...resizing, resize: false }), /this VM's display is not VirtIO/);
+for (const clipboard of ["waiting", "disconnected", ""]) {
+  const text = guestResizeText({ ...resizing, clipboard, resize: false });
+  assert.match(text, /not running the vdagent/, clipboard);
+  assert.match(text, /Install the guest tools/, clipboard);
+  assert.doesNotMatch(text, /^Not available · no VirtIO display/, clipboard);
+}
+assert.match(guestResizeText({ ...resizing, clipboard: "no-channel", resize: false }), /created before the console agent channel existed/);
+// The panel renders that reason rather than the old device-model claim.
+const noTools = renderToStaticMarkup(createElement(VMDetails, { ...detailProps, vm: { ...installed, guest: { ...installed.guest, clipboard: "waiting", resize: false } } }));
+assert.match(noTools, /not running the vdagent that changes its resolution/);
+assert.doesNotMatch(noTools, /no VirtIO display in this VM's definition/);
+
+// BUG-0208: the login page probed GET /api/v1/session before any session could exist, so every
+// load of the sign-in page logged a failed request in the browser console. The probe now runs
+// only where it can succeed. The marker is a hint about this browser, never an authorization:
+// the Controller still authenticates every request, and no session state is kept here.
+const sessionStart = mainSource.indexOf("const signedInKey");
+const sessionEnd = mainSource.indexOf("function Brand()", sessionStart);
+assert.ok(sessionStart >= 0 && sessionEnd > sessionStart, "session probe helpers are present");
+const sessionFile = `${outdir}/main-session-probe.test.mjs`;
+writeFileSync(sessionFile, transformSync(mainSource.slice(sessionStart, sessionEnd), { loader: "tsx", format: "esm" }).code
+  + "\nexport { signedInBefore, rememberSignedIn };\n");
+const store = new Map();
+globalThis.localStorage = {
+  getItem: key => store.has(key) ? store.get(key) : null,
+  setItem: (key, value) => { store.set(key, String(value)); },
+  removeItem: key => { store.delete(key); },
+};
+const { signedInBefore, rememberSignedIn } = await import(`file://${sessionFile}?${Date.now()}`);
+assert.equal(signedInBefore(), false, "a browser that never signed in must not probe the session");
+rememberSignedIn(true);
+assert.equal(signedInBefore(), true, "a signed-in browser probes so a reload keeps its session");
+rememberSignedIn(false);
+assert.equal(signedInBefore(), false, "signing out or a 401 stops the probe again");
+globalThis.localStorage = { getItem() { throw new Error("storage disabled"); }, setItem() {}, removeItem() {} };
+assert.equal(signedInBefore(), true, "without storage, keep the previous behaviour and probe");
+// The probe is skipped, not merely silenced, and a 401 anywhere clears the marker.
+assert.match(mainSource, /if \(!signedInBefore\(\)\) \{\s*\n\s*setSession\(null\);/);
+assert.match(mainSource, /response\.status === 401 && requestGeneration === generation\.current\) \{\s*\n\s*generation\.current\+\+;\s*\n\s*rememberSignedIn\(false\);/);
 
 console.log("managed.test.mjs: ok");

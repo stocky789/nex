@@ -243,7 +243,10 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	// A v2 report without the repository capability is the Controller-first
 	// preflight. It carries no v2 storage data and cannot receive storage work.
 	version := protocol.Version
-	capabilities := []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.DeleteCapability}
+	// DriversDriveCapability is deliberately absent from the legacy v1 list below: a host
+	// defines the second CD drive either way, but the capability is the Controller's signal
+	// that it may send drive="drivers", and a strict v1 decoder must not be handed v2 names.
+	capabilities := []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.DriversDriveCapability}
 	if s.State.StorageProtocolLegacy {
 		version = protocol.LegacyVersion
 		capabilities = []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.MediaCapability, protocol.UpdateCapability, protocol.DeleteCapability}

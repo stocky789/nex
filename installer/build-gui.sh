@@ -46,7 +46,7 @@ p = p.with_name('ui.h')
 s = p.read_text()
 old = '#endif /* !_UI_H_ */'
 assert s.count(old) == 1
-s = s.replace(old, 'void cdebconf_gtk_nex_set_waiting(struct frontend *fe, gboolean waiting);\nvoid cdebconf_gtk_nex_progress(struct frontend *fe, const char *step, const char *info, gdouble fraction);\nvoid cdebconf_gtk_nex_completion(GtkWidget *question_box);\nvoid cdebconf_gtk_nex_failure(struct frontend *fe, GtkWidget *question_box);\n\n' + old)
+s = s.replace(old, 'void cdebconf_gtk_nex_set_waiting(struct frontend *fe, gboolean waiting);\nvoid cdebconf_gtk_nex_progress(struct frontend *fe, const char *step, const char *info, gdouble fraction);\nvoid cdebconf_gtk_nex_completion(GtkWidget *question_box);\nvoid cdebconf_gtk_nex_failure(struct frontend *fe, GtkWidget *question_box);\ngboolean cdebconf_gtk_nex_is_completion(struct frontend *fe);\n\n' + old)
 p.write_text(s)
 p = p.with_name('progress.c')
 s = p.read_text()
@@ -96,10 +96,25 @@ p = p.with_name('go.c')
 s = p.read_text()
 old = '    label = cdebconf_gtk_get_text(fe, "debconf/button-continue", "Continue");'
 assert s.count(old) == 1
-s = s.replace(old, '''    label = fe->questions && fe->questions->tag &&
-        !strcmp(fe->questions->tag, "finish-install/reboot_in_progress")
+s = s.replace(old, '''    label = cdebconf_gtk_nex_is_completion(fe)
         ? g_strdup("Restart now")
         : cdebconf_gtk_get_text(fe, "debconf/button-continue", "Continue");''')
+# BUG-0209: the completion screen is reached only after the disk has been written, so it
+# offers Restart now and nothing else. is_action_box_filled counts on the "Go Back" button
+# being there whenever the caller allows it, so the count and the button move together:
+# dropping the button alone would leave the screen with no Restart now button at all.
+old = '''    children = gtk_container_get_children(action_box);
+    if (CAN_GO_BACK(fe)) {'''
+assert s.count(old) == 1
+s = s.replace(old, '''    children = gtk_container_get_children(action_box);
+    if (CAN_GO_BACK(fe) && !cdebconf_gtk_nex_is_completion(fe)) {''')
+old = '''    if (CAN_GO_BACK(fe)) {
+        create_goback_button(fe);
+    }'''
+assert s.count(old) == 1
+s = s.replace(old, '''    if (CAN_GO_BACK(fe) && !cdebconf_gtk_nex_is_completion(fe)) {
+        create_goback_button(fe);
+    }''')
 old = '    if (!is_action_box_filled(fe)) {'
 assert s.count(old) == 1
 s = s.replace(old, '    cdebconf_gtk_nex_failure(fe, question_box);\n' + old)

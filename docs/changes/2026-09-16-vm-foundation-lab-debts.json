@@ -1,0 +1,35 @@
+{
+  "summary": "Record the outstanding host-verification debts against the existing VM foundation in the single open-gates table, so they are tracked rather than carried in review notes. Adds firmware variable store, Secure Boot, VM rename, enrolled-certificate, BUG-0196, BUG-0213, Windows 11 re-run, Phase 2 acceptance gate and VM usage items, with their shared disposable-host prerequisite and required ordering. API impact: none; status tracking only.",
+  "paths": [
+    "docs/plans/2026-09-14-production-readiness-handoff.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No implemented operator workflow changes. The items recorded are verification debts against existing behaviour; each guide page that documents an affected workflow already states that it was not walked through on a lab host, and those statements are corrected by the sessions themselves, not by this record.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No client endpoint, Controller operation, Core agent command or observed-result contract changes. This records which existing behaviour lacks host evidence; the firmware variable store probe named here gates an implementation slice whose own contract assessment belongs to that slice.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Records missing evidence against gates the platform plan already defines. No milestone status, delivery order or published built/outstanding item changes; the Phase 2 acceptance gate was already recorded as open in the platform plan's status line and in the VM creation system plan's checkboxes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Status and handoff documentation only. No runtime state is introduced and no durable record is created or moved. The state the listed sessions inspect is Core-owned: each VM's firmware and Secure Boot choice on the pool master's managed journal, and the host-side files that back it."
+  },
+  "verification": {
+    "method": "Documentation-only change to a status document. Verified the file was unmodified before editing (git status --short reported it clean) so no concurrent writer was displaced, and confirmed the added items against the repository: BUG-0196 and BUG-0213 in docs/BUG_LEDGER.md each state 'not verified on a host' in their own entries; BUG-0214 records the orphaned variable store as open; the Windows 11 re-run is required by docs/plans/2026-09-16-windows-11-lab-fixes.md's Acceptance section; the Phase 2 gate is recorded open in docs/plans/2026-09-08-nex-platform.md and in docs/plans/2026-09-10-vm-creation-system.md's unchecked boxes; and the absence of VM usage observation was confirmed by grep for domstats and dommemstat across internal/, which returns no matches. The Secure Boot and VM rename items were established by reading internal/vmhost/firmware.go and internal/vmhost/managed.go and are recorded here as unreproduced, which is what the table states. No lab session was run and none is claimed; scripts/check_docs.py --worktree currently fails on unrelated concurrent work (untracked stub test files under internal/) that belongs to another change.",
+    "evidence": [
+      "docs/plans/2026-09-14-production-readiness-handoff.md",
+      "docs/BUG_LEDGER.md",
+      "docs/plans/2026-09-16-windows-11-lab-fixes.md",
+      "docs/plans/2026-09-10-vm-creation-system.md",
+      "docs/plans/2026-09-08-nex-platform.md"
+    ]
+  }
+}

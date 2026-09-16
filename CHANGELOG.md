@@ -6,12 +6,85 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.2.7` →
-> Debian `0.2.7`).
+> development software. Builds use the newest numbered changelog heading (`0.2.8` →
+> Debian `0.2.8`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.2.8] — 2026-09-16
+
+### Major Feature
+
+- **Windows 11 now installs.** Virtual machines can be given a TPM 2.0, which Windows 11 requires
+  and Nex could not previously provide, so only the relaxed IoT editions would install. Standard
+  editions now install normally. The Create VM wizard turns the TPM on by default when you choose
+  Windows. A TPM cannot be removed from a VM afterwards: anything the guest sealed to it, such as
+  a BitLocker key, would be lost (BUG-0196).
+- **Secure Boot is now shown and can be changed.** It was always on and invisible. Existing VMs
+  keep exactly the firmware they were installed with, so nothing already running is affected. You
+  can turn it off for unsigned boot media or drivers, and a host that cannot provide the right
+  firmware now says so in those words instead of reporting an unexplained failure
+  (BUG-0199, BUG-0215).
+- **Every VM now has a second CD drive for a driver disc.** A Windows guest installing to a VirtIO
+  disk needs the VirtIO driver ISO available at the same time as the Windows ISO. Previously there
+  was one drive, so the discs had to be swapped part-way through Setup. Both can now be inserted
+  at once, and either can be changed while the VM is running (BUG-0198).
+
+### Minor Feature
+
+- Start a VM from inside its console. Opening the console first means you are already watching
+  when the guest boots, so the brief *Press any key to boot from CD or DVD* prompt is not missed
+  (BUG-0197).
+- After an installation finishes, Nex offers to eject the install disc, which otherwise keeps
+  re-offering the installer on every start (BUG-0202).
+- Remove a failed ISO download from the ISO library. An ISO already stored on a host still cannot
+  be removed and now says so plainly, rather than appearing to work (BUG-0203).
+- Per-VM CPU, memory and disk usage is now measured on the host and reported through the API.
+  Nothing displays it yet.
+
+### Bug Fixes
+
+- Shutting down a VM no longer reports *libvirt refused the shutdown request* when the guest
+  actually shut down. Windows guests often take longer to stop than the old one-size timeout
+  allowed, so a successful shutdown was reported as needing attention (BUG-0213).
+- Typing into a Windows console no longer loses capitals and symbols. `Nex-Test_Upper D:\Path`
+  arrived as `nex-test-upper d;\path`, which made passwords, paths and commands impossible to
+  type (BUG-0212).
+- *Resize guest to window* is now offered only when the guest can actually do it, instead of
+  whenever the display hardware supports it, and explains what to install when it cannot
+  (BUG-0201).
+- A Windows 11 guest is reported as Windows 11, not Windows 10 (BUG-0211).
+- Windows guests now keep the correct clock. The guest read the host's UTC time as local time
+  until it reached a time server. Windows guests also get the standard Hyper-V settings
+  (BUG-0210).
+- A download link that redirects to an insecure address now says so and suggests using a direct
+  secure link, instead of reporting a connection failure (BUG-0200).
+- The host's built-in storage is now called **Local storage**, not **ISO**, since it holds VM
+  disks as well. Hosts that already registered it keep the name they recorded (BUG-0205).
+- The ISO upload banner no longer says a transfer is queued after it has succeeded (BUG-0204).
+- A new VM with dedicated memory no longer shows upgrade instructions meant for older VMs
+  (BUG-0206).
+- The console's *Open in new window* link is no longer clipped, and the guest display stays usable
+  when the clipboard panel is open (BUG-0207).
+- The sign-in page no longer logs an error in the browser console before you sign in (BUG-0208).
+- The installer's progress and completion screens now use the same steps as the rest of the
+  installer, and the completion screen no longer offers **Go Back** (BUG-0209).
+
+### Miscellaneous
+
+- Deleting a VM now removes its TPM state and firmware variables, including when an earlier edit
+  removed the device. A VM whose firmware was switched from UEFI to BIOS can still leave its
+  firmware variable file behind; this is recorded and will be fixed with the firmware variable
+  store work (BUG-0214).
+- A VM's firmware can be changed while it is stopped. The guide previously said it could not,
+  which was wrong. An operating system already installed under one firmware will usually not boot
+  under the other, so choose it before installing.
+- Running the test suite on a workstation with virtualisation tools installed no longer issues
+  commands to that machine's own hypervisor, which raised repeated password prompts (BUG-0216).
+- The API reference now documents the TPM, Secure Boot, driver disc and usage fields, and the
+  media delete operation.
 
 ## [0.2.7] — 2026-09-15
 

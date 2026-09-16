@@ -4,6 +4,8 @@ libvirt-daemon-system
 libvirt-clients
 virtinst
 ovmf
+swtpm
+swtpm-tools
 openssh-server
 nftables
 chrony

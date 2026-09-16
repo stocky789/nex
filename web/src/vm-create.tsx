@@ -8,6 +8,7 @@ export const readyHost = (h: Host) => !h.revoked && h.connection === "fresh" && 
 
 export type DiskRow = { storage_id: string; name: string; size_gib: number; bus: string; thin: boolean; boot_order: number };
 export type NICRow = { network_id: string; model: string; mac: string; mtu: number };
+export type BootRow = { firmware: string; machine: string; media_boot_order: number; secure_boot: string; tpm: string };
 // Draft is the request body itself, so a restored uncertain submission spreads straight back in.
 type Draft = {
   host_id: string; name: string; description: string; guest_os: string;
@@ -15,8 +16,8 @@ type Draft = {
   memory: { mode: string; size_mib: number };
   disks: DiskRow[];
   nics: NICRow[];
-  boot: { firmware: string; machine: string; media_boot_order: number };
-  media_id: string; start_after_create: boolean; autostart: boolean;
+  boot: BootRow;
+  media_id: string; drivers_media_id: string; start_after_create: boolean; autostart: boolean;
 };
 type Props = { poolID: string; poolName: string; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[]; restored: () => Partial<Draft>; create: (payload: Record<string, unknown>) => Promise<void>; busy: boolean; unavailable: boolean; setTab: (tab: string) => void; onClose: () => void };
 
@@ -27,8 +28,8 @@ const blank: Draft = {
   memory: { mode: "dedicated", size_mib: 2048 },
   disks: [{ storage_id: "", name: "system", size_gib: 20, bus: "virtio", thin: true, boot_order: 1 }],
   nics: [{ network_id: "", model: "virtio", mac: "", mtu: 0 }],
-  boot: { firmware: "uefi", machine: "", media_boot_order: 0 },
-  media_id: "", start_after_create: false, autostart: false,
+  boot: { firmware: "uefi", machine: "", media_boot_order: 0, secure_boot: "on", tpm: "none" },
+  media_id: "", drivers_media_id: "", start_after_create: false, autostart: false,
 };
 export const guestNames: Record<string, string> = { linux: "Linux", windows: "Windows", other: "Other" };
 export const busNames: Record<string, string> = { virtio: "VirtIO", sata: "SATA", scsi: "SCSI" };
@@ -46,6 +47,33 @@ export const adapterNotes: Record<string, string> = {
 };
 export const cpuNames: Record<string, string> = { "host-passthrough": "Host passthrough", "host-model": "Host model", max: "Maximum host CPU" };
 export const cpuName = (model: string) => cpuNames[model] || `QEMU model · ${model}`;
+
+// A host defines a VM's second CD drive, for a driver disc beside the install media, only when
+// its Core reports this capability; an older Core would ignore the drive and silently create a
+// VM whose driver ISO is nowhere.
+export const driversDriveReady = (h?: Host) => Boolean(h && !h.revoked && h.connection === "fresh" && h.capabilities?.includes("vm-media-drivers-drive-v1"));
+
+// defaultTPM is the emulated TPM a new VM gets for its guest OS. Windows 11 refuses to install
+// without a TPM 2.0 (BUG-0196), so a Windows guest gets one; nothing else needs one, and a TPM
+// changes measured boot and can bind BitLocker keys, so it is not added to every VM.
+export const defaultTPM = (guestOS: string) => guestOS === "windows" ? "2.0" : "none";
+
+// Secure Boot and an emulated TPM are UEFI features. effectiveBoot is what a BIOS VM is actually
+// created with, whatever the (disabled) controls last held, so the review page, the submitted
+// definition and the VM Core defines all say the same thing. The protocol also refuses
+// secure_boot "on" without UEFI.
+export function effectiveBoot<T extends { firmware: string; secure_boot: string; tpm: string }>(boot: T): T {
+  return boot.firmware === "uefi" ? boot : { ...boot, secure_boot: "", tpm: "none" };
+}
+// secureBootText mirrors the protocol's VMBoot.SecureBootEnabled: a UEFI definition with no
+// recorded choice is running with Secure Boot on, because that is the firmware libvirt selected
+// for every UEFI VM defined before the field existed (BUG-0199).
+export const secureBootText = (boot: { firmware: string; secure_boot?: string }) =>
+  boot.firmware !== "uefi" ? "Not available · BIOS firmware has no Secure Boot"
+    : boot.secure_boot === "off" ? "Off · unsigned boot media and drivers are allowed"
+    : "On · the firmware runs only signed boot software";
+export const tpmText = (boot: { tpm?: string }) =>
+  boot.tpm === "2.0" ? "TPM 2.0 · emulated device in this VM" : "None";
 // Unicast, lower-case, colon-separated: the only manual form the protocol accepts.
 const macPattern = "[0-9a-f][02468ace](:[0-9a-f]{2}){5}";
 const staleText = "Some selections are no longer validated on this host. Reselect them before continuing.";
@@ -123,9 +151,13 @@ export function autoDiskName(pool: string, vm: string, index: number) {
 // durable request identity, so an uncertain outcome keeps the same request on retry.
 export function VMWizard({ poolID, poolName, hosts, storage, networks, media, restored, create, busy, unavailable, setTab, onClose }: Props) {
   const [step, setStep] = useState(0);
+  // The TPM follows the guest OS until the operator sets it themselves; a restored draft that
+  // already carries one keeps it.
+  const [tpmChosen, setTPMChosen] = useState(() => Boolean(restored().boot?.tpm));
   const [draft, setDraft] = useState<Draft>(() => {
     const r = restored();
     const d = { ...blank, ...r, cpu: { ...blank.cpu, ...r.cpu }, memory: { ...blank.memory, ...r.memory }, boot: { ...blank.boot, ...r.boot } };
+    if (!r.boot?.tpm) d.boot = { ...d.boot, tpm: defaultTPM(d.guest_os) };
     // blank.disks is only a shape template (name "system"); a fresh wizard must start from
     // autoDiskName so renameVM can carry the label with the VM name. Restored drafts keep
     // their own disks, including an operator override.
@@ -146,6 +178,10 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
   const hostNetworks = readyNetworks(draft.host_id);
   const hostMedia = media.filter(m => m.host_id === draft.host_id && m.status === "succeeded");
   const selectedMedia = media.find(m => m.id === draft.media_id);
+  const selectedDrivers = media.find(m => m.id === draft.drivers_media_id);
+  const driversReady = driversDriveReady(selectedHost);
+  const uefi = draft.boot.firmware === "uefi";
+  const boot = effectiveBoot(draft.boot);
   const maxCPUs = Math.min(selectedHost?.inventory?.cpu_count || 64, 64);
   const maxMiB = Math.min(selectedHost?.inventory ? Math.floor(selectedHost.inventory.memory_bytes / 1024 ** 2) : 262144, 262144);
   const order = bootKeys(draft);
@@ -162,17 +198,19 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
   const staleDisks = draft.disks.some(d => d.storage_id && !hostStorage.some(s => s.id === d.storage_id));
   const staleNICs = draft.nics.some(n => n.network_id && !hostNetworks.some(x => x.id === n.network_id));
   const staleMedia = Boolean(draft.media_id) && !hostMedia.some(m => m.id === draft.media_id);
-  const mediaIssue = staleMedia ? "That ISO is no longer available on this host. Choose another or continue without install media." : "";
+  const staleDrivers = Boolean(draft.drivers_media_id) && !hostMedia.some(m => m.id === draft.drivers_media_id);
+  const mediaIssue = staleMedia ? "That ISO is no longer available on this host. Choose another or continue without install media."
+    : staleDrivers ? "That driver disc is no longer available on this host. Choose another or continue without one." : "";
   const stepIssue = ["", topoIssue, diskIssue || (staleDisks ? staleText : ""), macIssue || (staleNICs ? staleText : ""), mediaIssue, ""][step];
   const hostReady = Boolean(selectedHost && readyHost(selectedHost));
-  const blocked = Boolean(vmNameIssue(draft.name)) || !hostReady || staleDisks || staleNICs || staleMedia || Boolean(topoIssue || diskIssue || macIssue);
+  const blocked = Boolean(vmNameIssue(draft.name)) || !hostReady || staleDisks || staleNICs || staleMedia || staleDrivers || Boolean(topoIssue || diskIssue || macIssue);
   const setTopo = (field: "sockets" | "cores" | "threads", raw: number) =>
     setDraft(d => renumber({ ...d, cpu: applyTopology(d.cpu, field, raw) }));
 
   function chooseHost(id: string) {
     const s = storage.filter(x => storageUsable(x, id));
     const n = readyNetworks(id);
-    edit({ host_id: id, media_id: "", disks: draft.disks.map(d => ({ ...d, storage_id: s.length === 1 ? s[0].id : "" })), nics: draft.nics.map(x => ({ ...x, network_id: n.length === 1 ? n[0].id : "" })) });
+    edit({ host_id: id, media_id: "", drivers_media_id: "", disks: draft.disks.map(d => ({ ...d, storage_id: s.length === 1 ? s[0].id : "" })), nics: draft.nics.map(x => ({ ...x, network_id: n.length === 1 ? n[0].id : "" })) });
   }
   // Renaming the VM carries the derived disk names with it, but only while a disk still holds
   // the name we generated: once the operator types their own label it is left alone.
@@ -193,11 +231,11 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
 
   return <section className="panel form-panel vm-wizard" aria-label="Create VM">
     <div className="section-heading"><h2 ref={heading} tabIndex={-1}>Create VM · {step + 1} of 6: {steps[step]}</h2><button disabled={busy} onClick={onClose}>Close</button></div>
-    <form onSubmit={e => { e.preventDefault(); if (step < 5) go(step + 1); else void create({ ...draft, pool_id: poolID }); }}>
+    <form onSubmit={e => { e.preventDefault(); if (step < 5) go(step + 1); else void create({ ...draft, boot, pool_id: poolID }); }}>
       {step === 0 && <>
         <label>VM name<input required maxLength={200} ref={el => { el?.setCustomValidity(vmNameIssue(draft.name)); }} value={draft.name} autoFocus onChange={e => renameVM(e.target.value)} /></label>
         <label>Description<textarea rows={2} maxLength={4096} value={draft.description} onChange={e => edit({ description: e.target.value })} /><small>Optional. At most 4096 characters; stored with the VM definition on the pool master.</small></label>
-        <label>Guest operating system<select value={draft.guest_os} onChange={e => edit({ guest_os: e.target.value })}><option value="linux">Linux</option><option value="windows">Windows</option><option value="other">Other</option></select><small>A hint used for device advice only. Nex does not install or configure the guest.</small></label>
+        <label>Guest operating system<select value={draft.guest_os} onChange={e => edit({ guest_os: e.target.value, ...(tpmChosen ? {} : { boot: { ...draft.boot, tpm: defaultTPM(e.target.value) } }) })}><option value="linux">Linux</option><option value="windows">Windows</option><option value="other">Other</option></select><small>Chooses the firmware defaults on the Boot and media step: a Windows guest starts with an emulated TPM 2.0, which Windows 11 requires. Nex does not install or configure the guest.</small></label>
         <label>Placement host<select required value={draft.host_id} onChange={e => chooseHost(e.target.value)}><option value="">Select host</option>{hosts.map(h => <option key={h.id} value={h.id} disabled={!readyHost(h)}>{h.hostname} · {h.connection}{!h.capabilities?.includes("managed-vm-v1") ? " · agent upgrade required" : ""}</option>)}</select></label>
         <p className="help">The VM belongs to this pool and is assigned to the selected host. Local storage, networks and ISO images must be validated for that host.</p>
         {!hosts.some(readyHost) && <p className="warning">A freshly connected host with managed-VM support is required. Enroll, reconnect or upgrade the host agent first.</p>}
@@ -263,12 +301,31 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
         {!hostNetworks.length && <p className="help">No verified network on this host. <button type="button" onClick={() => setTab("Networking")}>Open Networking</button></p>}
       </>}
       {step === 4 && <>
-        <label>Firmware<select value={draft.boot.firmware} onChange={e => edit({ boot: { ...draft.boot, firmware: e.target.value } })}><option value="uefi">UEFI</option><option value="bios">BIOS</option></select></label>
-        <label>Install ISO<select value={draft.media_id} aria-describedby={mediaIssue ? "vm-media-issue" : undefined} onChange={e => edit({ media_id: e.target.value })}>
+        <div className="vm-fields">
+          <label>Firmware<select value={draft.boot.firmware} onChange={e => edit({ boot: { ...draft.boot, firmware: e.target.value } })}><option value="uefi">UEFI</option><option value="bios">BIOS</option></select></label>
+          <label>Secure Boot<select value={uefi ? (boot.secure_boot === "off" ? "off" : "on") : "unavailable"} disabled={!uefi} title={uefi ? undefined : "Secure Boot needs UEFI firmware."} onChange={e => edit({ boot: { ...draft.boot, secure_boot: e.target.value } })}>
+            {!uefi && <option value="unavailable">Not available with BIOS</option>}
+            <option value="on">On · only signed boot software runs</option>
+            <option value="off">Off · unsigned boot media and drivers allowed</option>
+          </select></label>
+          <label>TPM<select value={uefi ? (boot.tpm === "2.0" ? "2.0" : "none") : "unavailable"} disabled={!uefi} title={uefi ? undefined : "An emulated TPM is offered with UEFI firmware."} onChange={e => { setTPMChosen(true); edit({ boot: { ...draft.boot, tpm: e.target.value } }); }}>
+            {!uefi && <option value="unavailable">Not available with BIOS</option>}
+            <option value="2.0">TPM 2.0 · emulated device</option>
+            <option value="none">None</option>
+          </select></label>
+        </div>
+        <p className="help">Windows 11 refuses to install without Secure Boot and a TPM 2.0, so a Windows guest starts with both. Turn Secure Boot off to boot unsigned media or load unsigned drivers. The emulated TPM's state belongs to this VM and is removed with it; a guest that stores BitLocker keys in it cannot unlock without it.</p>
+        <label>Install ISO<select value={draft.media_id} aria-describedby={mediaIssue ? "vm-media-issue" : undefined} onChange={e => edit({ media_id: e.target.value, ...(e.target.value && e.target.value === draft.drivers_media_id ? { drivers_media_id: "" } : {}) })}>
           <option value="">No install media</option>
           {hostMedia.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
           {staleMedia && <option value={draft.media_id} disabled>{selectedMedia?.name || draft.media_id} · not available</option>}
         </select></label>
+        <label>Driver disc<select value={draft.drivers_media_id} disabled={!driversReady} title={driversReady ? undefined : "This host's Nex Core does not provide a second CD drive yet."} onChange={e => edit({ drivers_media_id: e.target.value })}>
+          <option value="">No driver disc</option>
+          {hostMedia.filter(m => m.id !== draft.media_id).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          {staleDrivers && <option value={draft.drivers_media_id} disabled>{selectedDrivers?.name || draft.drivers_media_id} · not available</option>}
+        </select></label>
+        <p className="help">Optional second CD drive, beside the install ISO. A Windows guest installing to a VirtIO disk needs the virtio-win driver ISO here: Setup lists no disk until its driver is loaded from this drive.{driversReady ? "" : " This host's Nex Core does not provide a second CD drive yet; upgrade it to attach a driver disc."}</p>
         {mediaIssue && <p className="task-error" id="vm-media-issue">{mediaIssue}</p>}
         {!hostMedia.length && <p className="help">No transferred ISO is available on this host. <button type="button" onClick={() => setTab("ISO library")}>Open ISO library</button></p>}
         <fieldset>
@@ -288,7 +345,10 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
           <dt>Disks</dt><dd><ul className="plain">{draft.disks.map((d, i) => <li key={i}>{d.name} · {storage.find(s => s.id === d.storage_id)?.name || "Unavailable"} · {d.size_gib} GiB · {busNames[d.bus] || d.bus} · {d.thin ? "Thin" : "Thick"}</li>)}</ul></dd>
           <dt>Network interfaces</dt><dd>{draft.nics.length ? <ul className="plain">{draft.nics.map((n, i) => <li key={i}>{(x => x ? `${x.name} · ${describeNetwork(x)}` : "Unavailable")(networks.find(x => x.id === n.network_id))} · {adapterNames[n.model] || n.model} · {n.mac ? <span className="mono">{n.mac}</span> : "Automatic MAC"}{n.mtu ? ` · MTU ${n.mtu}` : ""}</li>)}</ul> : "None"}</dd>
           <dt>Firmware</dt><dd>{draft.boot.firmware.toUpperCase()}</dd>
+          <dt>Secure Boot</dt><dd>{secureBootText(boot)}</dd>
+          <dt>TPM</dt><dd>{tpmText(boot)}</dd>
           <dt>Install ISO</dt><dd>{draft.media_id ? selectedMedia?.name || "Unavailable" : "None"}</dd>
+          <dt>Driver disc</dt><dd>{draft.drivers_media_id ? selectedDrivers?.name || "Unavailable" : "None · second CD drive empty"}</dd>
           <dt>Boot order</dt><dd><ol>{order.map(k => <li key={k}>{bootLabel(k)}</li>)}</ol></dd>
         </dl>
         <fieldset>

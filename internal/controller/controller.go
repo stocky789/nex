@@ -296,6 +296,7 @@ func (c *Controller) Handler() http.Handler {
 	m.HandleFunc("GET /api/v1/media", c.admin(c.media))
 	m.HandleFunc("POST /api/v1/media", c.admin(c.media))
 	m.HandleFunc("POST /api/v1/media/download", c.admin(c.downloadMedia))
+	m.HandleFunc("DELETE /api/v1/media/{id}", c.admin(c.deleteMedia))
 	m.HandleFunc("POST /api/v1/vms", c.admin(c.createVM))
 	m.HandleFunc("PUT /api/v1/vms/{id}", c.admin(c.updateVM))
 	m.HandleFunc("DELETE /api/v1/vms/{id}", c.admin(c.deleteVM))

@@ -801,7 +801,7 @@ func PoolVMHandler(s *Store) http.Handler {
 // definition the pool master owns.  Re-inserting the ISO that definition already names does
 // not: it reconnects a tray, which is how an operator recovers a disc the guest ejected.
 func poolVMMediaChangesDefinition(v protocol.VMCreateSpec, req protocol.VMMediaRequest) bool {
-	return !reflect.DeepEqual(protocol.ApplyVMMedia(v, req.Action, req.MediaID), v)
+	return !reflect.DeepEqual(protocol.ApplyVMMedia(v, req.Action, req.Drive, req.MediaID), v)
 }
 
 // PoolVMMediaCommand expresses a shared VM's media change as the same durable prior→next
@@ -823,7 +823,7 @@ func PoolVMMediaCommand(ctx context.Context, s *Store, cmd protocol.Command) pro
 	if err != nil || !shared || !poolVMMediaChangesDefinition(v, *cmd.VMMedia) {
 		return cmd
 	}
-	next := protocol.ApplyVMMedia(v, cmd.VMMedia.Action, cmd.VMMedia.MediaID)
+	next := protocol.ApplyVMMedia(v, cmd.VMMedia.Action, cmd.VMMedia.Drive, cmd.VMMedia.MediaID)
 	next.Revision, next.StartAfterCreate = v.Revision+1, false
 	update := protocol.Command{OperationID: cmd.OperationID, Kind: "vm-update", VM: &next}
 	if vmhost.ValidateManagedCommand(update) != nil {

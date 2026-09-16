@@ -1,0 +1,33 @@
+{
+  "summary": "Stop the release-version test pinning the newest CHANGELOG heading to a literal version. Bumping the changelog to 0.2.8 failed test_real_changelog_parses_and_is_ordered_newest_first because it asserted the head was exactly 0.2.7, so every release broke this test for the one reason that is not a defect. It now asserts the property it is named for: the file parses, excludes the Unreleased placeholder, is ordered newest first, and its head is what release-version reports. Test-only; no product behaviour changes.",
+  "paths": [
+    "tests/test_release_version.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "A repository test changed. No operator workflow, screen, command, permission, error or recovery step is affected, and no guide page describes this test.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No client endpoint, Controller operation, Core agent command or observed-result contract is involved. The change is confined to an assertion in a test that reads CHANGELOG.md and the release-version helper; neither is part of any interface between Nex Controller and Nex Core, nor of the client-facing API.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone status, delivery order or published built/outstanding item changes. This removes a recurring false failure from the release process rather than altering what is delivered.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Test-only change. No runtime state is introduced, read or moved, and no durable record exists to recover."
+  },
+  "verification": {
+    "method": "python3 -m unittest discover -s tests -p 'test_release*.py': 20 tests OK, where the same suite failed before this change with \"AssertionError: '0.2.8' != '0.2.7'\" after the changelog heading was added. Confirmed the replacement assertion is not weaker rather than assuming it: feeding the parser a CHANGELOG whose headings were reordered so the file is no longer newest-first makes the ordering comparison evaluate False, which fails the test, so genuine disorder is still caught. python3 scripts/release-version.py --current returns 0.2.8, matching the new head-of-file assertion. Also reviewed the 0.2.8 changelog section against docs/BUG_LEDGER.md and confirmed all 21 entries from BUG-0196 to BUG-0216 appear in it; no changelog text was added or altered by this change. NOT RUN: no build, no packaging, no release workflow and no lab; this does not establish that a 0.2.8 artifact builds or publishes.",
+    "evidence": [
+      "tests/test_release_version.py",
+      "scripts/release-version.py",
+      "CHANGELOG.md"
+    ]
+  }
+}

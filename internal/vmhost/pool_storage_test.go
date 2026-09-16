@@ -256,3 +256,59 @@ func TestPoolSMBCredentialPreservesDomain(t *testing.T) {
 		t.Fatalf("mount credential %q: %v", mount, err)
 	}
 }
+
+// The local repository a host registers for itself holds VM disks as well as ISO images, so
+// its default name must not present it as ISO media. That name is a durable pool-master
+// record: a changed default may only name a host registering this path for the first time. An existing
+// registration, whatever it is called, is never renamed, duplicated or re-registered, and a
+// fresh Controller re-adopts it under the name the host stored.
+func TestDefaultLocalStorageNameIsAccurateAndNeverRenamesAnExistingRegistration(t *testing.T) {
+	ctx := context.Background()
+	nics := []protocol.NIC{{Name: "nex0", Kind: "physical", Master: "nexbr0"}, {Name: "nexbr0", Kind: "bridge"}}
+	// The property, not a chosen wording: the name must not present the repository as ISO media.
+	if strings.Contains(strings.ToLower(DefaultStorageName), "iso") || strings.TrimSpace(DefaultStorageName) == "" {
+		t.Fatalf("default local repository name %q names ISO media, although the repository holds VM disks too", DefaultStorageName)
+	}
+	registrations := func(e *ManagedEngine) []protocol.StorageRegistration {
+		t.Helper()
+		var out []protocol.StorageRegistration
+		for _, j := range journalsOf(t, e) {
+			if j.Command.Storage != nil {
+				out = append(out, *j.Command.Storage)
+			}
+		}
+		return out
+	}
+	fresh := NewManaged(filepath.Join(t.TempDir(), "state"))
+	if err := fresh.RegisterDefaults(ctx, "pool-1", "host-1", nics); err != nil {
+		t.Fatal(err)
+	}
+	if got := registrations(fresh); len(got) != 1 || got[0].Name != DefaultStorageName || got[0].Path != DefaultStoragePath {
+		t.Fatalf("fresh host default storage: %+v", got)
+	}
+	for _, existing := range []string{"ISO", "Operator's own name"} {
+		t.Run(existing, func(t *testing.T) {
+			e := startEngine(t)
+			s := protocol.StorageRegistration{ID: "existing-store", PoolID: "pool-1", HostID: "host-1", Name: existing, Path: DefaultStoragePath}
+			j := managedJournal{Command: protocol.Command{OperationID: "existing-op", Kind: "storage-register", Storage: &s}, Result: protocol.Result{OperationID: "existing-op", Status: "succeeded"}}
+			if err := e.save(j); err != nil {
+				t.Fatal(err)
+			}
+			// An upgraded Core calls this on every uplink change, not only at first connection.
+			for i := 0; i < 2; i++ {
+				if err := e.RegisterDefaults(ctx, "pool-1", "host-1", nics); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := registrations(e)
+			if len(got) != 1 || got[0].ID != s.ID || got[0].Name != existing || got[0].Path != DefaultStoragePath {
+				t.Fatalf("existing registration changed: %+v", got)
+			}
+			// A fresh Controller adopts the host's stored record, not the new default.
+			applied, _ := e.Applied(ctx)
+			if len(applied.Storage) != 1 || applied.Storage[0].ID != s.ID || applied.Storage[0].Name != existing {
+				t.Fatalf("adoption reported %+v", applied.Storage)
+			}
+		})
+	}
+}

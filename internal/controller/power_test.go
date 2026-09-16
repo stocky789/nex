@@ -81,7 +81,7 @@ func TestPowerAcceptedAfterFailedAutomaticStart(t *testing.T) {
 	guest.ID, guest.StartAfterCreate = "12345678-1234-4234-8234-123456789012", true
 	managed := hostDefaults(host.HostID)
 	managed.VMs = []protocol.VMCreateSpec{guest}
-	managed.Outcomes = []protocol.ManagedOutcome{{OperationID: "op-create:start", Kind: "vm-power", ID: guest.ID, Name: guest.Name, Status: "failed", Error: "VM created but not started: libvirt refused the start request; inspect the VM on its host"}}
+	managed.Outcomes = []protocol.ManagedOutcome{{OperationID: "op-create:start", Kind: "vm-power", ID: guest.ID, Name: guest.Name, Status: "failed", Error: "VM created but not started: libvirt did not confirm the start request; inspect the VM on its host"}}
 	now := time.Now().UTC()
 	inv := &protocol.Inventory{ObservedAt: now, Hostname: "core", CPUCount: 8, MemoryBytes: 16 << 30, Managed: managed,
 		NICs:   []protocol.NIC{{Name: "nex0", Kind: "physical", Master: "br0"}, {Name: "br0", Kind: "bridge"}},

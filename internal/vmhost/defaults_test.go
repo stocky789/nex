@@ -264,7 +264,7 @@ func TestStartAfterCreateStartsOnceAndRecordsFailure(t *testing.T) {
 		calls := startVirsh(t, "shut off", true)
 		e := startEngine(t)
 		j := create()
-		if err := e.startCreated(ctx, &j); err != nil || !strings.Contains(j.Start, "libvirt refused the start request") || j.Stage != "started" {
+		if err := e.startCreated(ctx, &j); err != nil || !strings.Contains(j.Start, "libvirt did not confirm the start request") || j.Stage != "started" {
 			t.Fatalf("%v %+v", err, j)
 		}
 		if err := e.startCreated(ctx, &j); err != nil || startCalls(t, calls) != 1 {

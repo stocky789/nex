@@ -306,8 +306,39 @@ func runCommand(ctx context.Context, dir, name string, args ...string) ([]byte, 
 	}
 	return out.Bytes(), nil
 }
+// virshTimeout bounds one virsh call, by whether the command takes libvirt's per-domain job.
+//
+// A command that takes the job waits for it, and libvirt holds it for the whole of the operation
+// in progress — for a shutdown, as long as the guest takes to stop. A Windows guest was observed
+// holding remoteDispatchDomainShutdown for over three minutes while Nex's own polls logged
+// "cannot acquire state change lock". Killing the client at 20 s cancelled none of that; it only
+// destroyed Nex's evidence of what happened, and a completed shutdown was reported as a refusal
+// (BUG-0213). So every job-taking command needs a bound that exceeds a real guest operation, not
+// a libvirt round trip: detach-device already waits on the guest to release a device, and even a
+// quick define or domrename blocks behind a long-running job on the same domain.
+//
+// Queries keep the short bound deliberately. They do not take the job, and a hung libvirt must
+// fail fast rather than stall Core's shared engine lock. Guest-agent calls stay here too: they do
+// contend for the job, but an unresponsive guest must never hold observation for minutes, and
+// they already carry their own one-second libvirt timeout.
+func virshTimeout(command string) time.Duration {
+	switch command {
+	case "shutdown", "reboot", "reset", "start", "destroy",
+		"define", "undefine", "attach-device", "detach-device", "change-media", "domrename":
+		return 5 * time.Minute
+	}
+	return 20 * time.Second
+}
+
 func (e *Engine) virsh(ctx context.Context, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	command := ""
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			command = a
+			break
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, virshTimeout(command))
 	defer cancel()
 	return run(ctx, "virsh", append([]string{"--connect", e.config.VirshURI}, args...)...)
 }

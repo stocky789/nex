@@ -52,6 +52,35 @@ unexecuted items are kept apart.
 | Latest ISO full installation | The tenth ISO passed artifact audit and the native wizard only. The full BIOS install/persistence evidence belongs to the seventh ISO. UEFI and physical hardware are unaccepted. |
 | Release and CI | Needs real hosted GitHub/Gitea runs, a supported-version/hardware scope, source-delivery/component/firmware evidence and an artwork redistribution review. |
 
+### VM foundation, added 2026-09-16
+
+Recorded during a roadmap position review. These are host-verification debts against the
+existing VM foundation, not new scope, and they share one disposable nested-KVM host. That
+host must be separate from the one carrying the Windows 11 defect work, because these items
+reboot it. Ordering matters: the firmware probe decides an implementation shape, so it runs
+before the slice it gates is built, and the rest run after that slice lands.
+
+**Partly discharged 2026-09-16.** A disposable lab on a contributor workstation ran the Nex Core
+engine against real libvirt 12.7 / QEMU 11.1 / swtpm 0.10.2 and closed the TPM and graceful-shutdown
+items and two thirds of the Windows 11 re-run; see the [verification report](../qa/2026-09-16-windows-11-fix-verification.md)
+for what it did and did not establish. It was **not** Nex Core: no ISO was built, no Controller ran,
+and the library versions are newer than Core ships, so nothing below about packaging, the installer
+or the browser is affected. The firmware items were deliberately untouched — they need the probe
+first, on a host that may be rebooted.
+
+| Item | Missing evidence or prerequisite |
+|---|---|
+| Firmware variable store probe | **Gates the firmware slice; run first.** Whether libvirt accepts `<os firmware='efi'>` with an explicit `<nvram>` path carrying no template attribute and still resolves firmware autoselect. Established from libvirt source only. If it refuses, the fallback is an explicit `<loader>` read from the host's firmware descriptors, which is a different implementation. |
+| Secure Boot takes effect in a guest | A guest must report Secure Boot enabled, then disabled after the setting is changed (`mokutil --sb-state` or equivalent). Nex currently accepts the change, reports it applied, and the guest keeps its previous state; enforcement lives in the firmware variable store, which no code re-instantiates. Unit tests cannot establish this. |
+| UEFI VM rename keeps its firmware variables | Rename a UEFI VM, then confirm the guest still boots with its boot entries intact. The variable store path libvirt generates is keyed on the domain name, which Nex rewrites on a stopped edit. Found by code reading; never reproduced. |
+| Orphaned firmware variable store | **Assigned to this slice, 2026-09-16.** BUG-0214 is closed here rather than by a separate fix, by project-owner decision. Still to establish: whether the orphan occurs as recorded, and whether a bare `undefine` succeeds for a defined-but-never-started VM. Both are gated on file existence in libvirt, so the failure is intermittent by VM lifecycle. Note the related decision that firmware stays changeable on a stopped VM, so refusing the transition is not an available fix. |
+| Enrolled Secure Boot certificates | Which Microsoft certificates the host's enrolled-keys template actually holds. The 2011 UEFI CA expired in June 2026, so a 2011-only template refuses a bootloader signed with the 2023 chain and presents to an operator as "Secure Boot is on and Windows will not start". Not visible from Nex's code. **Unchanged by the 2026-09-16 lab:** that host had no enrolled-keys build at all, so one was generated locally with `virt-fw-vars --enroll-redhat`. Those are not Microsoft's certificates and prove nothing about Core's shipped template. |
+| ~~Virtual TPM (BUG-0196)~~ **closed 2026-09-16** | Verified on real libvirt/QEMU/swtpm: the `tpm-crb` device reached the live domain, swtpm manufactured an EK certificate and the guest wrote TPM state, Windows reported `IsActivated_InitialValue: TRUE, SpecVersion: 2.0`, and **Windows 11 Enterprise LTSC — the non-IoT edition — installed and booted**. Deleting a TPM VM removed its swtpm directory and NVRAM. Evidence: [verification report](../qa/2026-09-16-windows-11-fix-verification.md). **Still open:** the TPM and Secure Boot failing *independently* was not exercised — both were present throughout. |
+| ~~Graceful shutdown (BUG-0213)~~ **closed 2026-09-16** | Verified by A/B on one Windows guest with the guest agent connected, which is the condition that makes libvirt's shutdown hold the domain job. Pre-fix binary: `wall=20.138s`, `needs_attention`, `virsh failed: signal: killed` — the recorded symptom. Fixed binary: `wall=1m0.073s`, `succeeded`. The guest reached `shut off` 17 s after the pre-fix run had declared failure, confirming that report was false. **Still open:** the original entry's unexplained ~4 minute delay is not accounted for; this reproduced a 20 s kill, not that delay. |
+| Windows 11 walkthrough re-run | **Two of three done 2026-09-16.** Non-IoT Windows 11 (Enterprise LTSC) installed with a TPM present, and a clean shutdown reported succeeded. **Still open: a VirtIO *system disk* install using the driver disc.** virtio-win was delivered on the second CD drive and installed after the fact, but the guest's system disk was SATA, so loading a storage driver at Setup's disk-selection step was never exercised — which is the half W3 was actually about. |
+| Phase 2 acceptance gate | Never executed end to end on one build. Its halves were run in different labs on different code, and the "reboot it and verify persisted data" clause has no evidence at all. Folded into the VM creation system slice by decision on 2026-09-10; see that plan's open checkboxes. |
+| VM CPU/RAM/disk usage | **Core side implemented 2026-09-16**, UI not. Core samples each active VM with `virsh domstats --raw --nowait` and reports CPU/memory/disk on the host inventory; Controller validates and passes it through on `GET /api/v1/vms`. `--nowait` is deliberate: without it the probe takes the domain's job and would stall behind exactly the long shutdown BUG-0213 describes. **Still open:** no UI surfaces it, and it has never run against real libvirt — key names and units come from libvirt's reference, and whether `domstats` works on Core's read-only connection is unconfirmed. Roadmap item 8 therefore stays open. |
+
 **BUG-0097 nested UEFI remains explicitly excluded.** Do not work on it or claim
 UEFI/Secure Boot acceptance from BIOS tests. Never infer host death or writable
 exclusion from a timeout.

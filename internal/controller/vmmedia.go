@@ -105,7 +105,7 @@ func (c *Controller) mirrorVMMedia(tx *sql.Tx, opID string) error {
 	if err := json.Unmarshal([]byte(createRaw), &create); err != nil || create.VM == nil {
 		return err
 	}
-	v := protocol.ApplyVMMedia(*create.VM, req.Action, req.MediaID)
+	v := protocol.ApplyVMMedia(*create.VM, req.Action, req.Drive, req.MediaID)
 	create.VM = &v
 	updated, err := json.Marshal(create)
 	if err != nil {

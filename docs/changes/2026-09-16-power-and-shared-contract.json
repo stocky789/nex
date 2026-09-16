@@ -1,0 +1,81 @@
+{
+  "summary": "Report a completed shutdown as succeeded instead of needing attention (W18/BUG-0213): bound virsh by command so libvirt's domain job is not killed mid-shutdown, and settle a failed power call by observing the domain. Carries the shared protocol contract the Windows 11 lab fixes are built on (Secure Boot, TPM, second CD drive, guest resize truth) and refuses removing a TPM, which libvirt cannot clean up after. API impact: changed contract. Also carries the central bug ledger entries BUG-0196 through BUG-0214 for the whole Windows 11 lab fix set, appended in one place so the IDs cannot collide between lanes. Adds BUG-0215, a Secure Boot host-capability preflight found while verifying these fixes on real libvirt. Adds BUG-0216: the Go test suite reached the developer's real hypervisor through unstubbed virsh calls. Reconciles the batch into the roadmap, the open-debt tracker and the lab-fix plan, adds a handover document, and bumps the release to 0.2.8 with operator-facing notes.",
+  "paths": [
+    "docs/plans/2026-09-16-windows-11-lab-fixes.md",
+    "internal/agent/pool_vm.go",
+    "internal/agent/run.go",
+    "internal/controller/power_test.go",
+    "internal/controller/vmmedia.go",
+    "internal/protocol/guest.go",
+    "internal/protocol/managed.go",
+    "internal/protocol/managed_test.go",
+    "internal/protocol/vmmedia.go",
+    "internal/protocol/vmmedia_test.go",
+    "internal/vmhost/defaults_test.go",
+    "internal/vmhost/engine.go",
+    "internal/vmhost/engine_test.go",
+    "internal/vmhost/power_test.go",
+    "web/package.json",
+    "docs/qa/2026-09-16-windows-11-fix-verification.md",
+    "internal/vmhost/firmware.go",
+    "internal/vmhost/firmware_test.go",
+    "internal/vmhost/stubs_test.go",
+    "internal/agent/stubs_test.go",
+    "internal/localcore/stubs_test.go",
+    "docs/api/local-openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/api/local.html",
+    "tests/test_host_tool_isolation.py",
+    "CHANGELOG.md",
+    "docs/plans/2026-09-16-windows-11-batch-handover.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/BUG_LEDGER.md",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/changes/2026-09-16-power-and-shared-contract.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Guide impact: none in this record. The power change corrects a task outcome an operator reads but adds no step: a shutdown that worked is now reported as succeeded rather than needs_attention, so the documented VM power workflow is unchanged and its existing troubleshooting wording stays accurate. The operator-visible firmware, TPM, driver-disc, console and media workflows this contract enables are documented in the guide by the records that implement them (docs/changes/2026-09-16-vm-firmware-tpm-drivers.json, -vm-ui-fixes.json, -console-fixes.json, -media-library-fixes.json, -guest-facts-and-installer.json).",
+    "pages": []
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "API impact: changed contract. VMBoot gains secure_boot and tpm; VMCreateSpec gains drivers_media_id; VMMediaRequest gains drive with capability vm-media-drivers-drive-v1; GuestInfo gains drivers_media and redefines resize as guest-derived rather than device-model-derived. Every new field is omitted by default, so an older Controller and an older Core keep their current behaviour, and the second CD drive is advertised by capability rather than assumed. ValidateVMSpec rejects invalid values on both sides; NeedsStop makes Secure Boot and TPM stop-required and refuses removing a TPM outright. The vm-power contract is unchanged in shape: only the reported outcome of a power request whose virsh call failed after the guest acted changes, from needs_attention to succeeded where observation proves it.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ],
+    "contracts": [
+      "vm-power",
+      "vm-media",
+      "vm-create",
+      "vm-update",
+      "vm-media-drivers-drive-v1",
+      "GuestInfo"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Roadmap impact: none. The published roadmap page carries one relevant claim, \"UEFI installation and Secure Boot - neither has been verified yet\", and it stays accurate: the lab verified Secure Boot FIRMWARE SELECTION for a guest, not Secure Boot enforcement, and it did not install Nex Core under UEFI at all. Editing that line would overclaim. Internal planning documents were reconciled instead - roadmap item 8 annotated as Core-implemented and UI-open in docs/plans/2026-09-08-nex-platform.md, the VM foundation debt table updated with what this lab closed and what it did not, and a handover added - but those are plans, not the published roadmap area this assessment covers.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "State owner: Core. secure_boot, tpm and drivers_media_id are fields of the VM definition, which lives in the pool master's managed journal and returns to a fresh Controller through the existing inventory and adoption path; no Controller table, cache or file holds the only copy of any of them. The emulated TPM's own state stays on the host under libvirt's swtpm directory, keyed by the VM UUID, alongside the NVRAM libvirt already keeps per VM. The power change adds no state at all: it reads the domain rather than remembering anything.",
+    "record": "protocol.VMCreateSpec in the pool master's managed journal (vm-create/vm-update entries), reported through Inventory.managed and re-adopted unchanged by a fresh Controller."
+  },
+  "verification": {
+    "method": "go build ./... clean; go vet ./internal/... clean; go test -count=1 -race ./internal/... all packages ok (agent, controller, localcore, nexupdate, protocol, vmhost, websecurity, wsock). npm --prefix web run test: console, managed, storage and vm-create suites ok; npx tsc --noEmit clean. Each regression check was proved to fail without its fix by reverting only that fix by hand and re-running, then restoring it: (1) TestManagedPowerPostEffectFailureIsUncertain/shutdown and /force-stop both reported needs_attention with 'libvirt did not confirm the shutdown request' while the domain had reached shut off, reproducing the lab symptom, and reboot/force-reboot stayed uncertain in both runs, confirming the uncertainty property was not weakened; (2) TestManagedDeleteRemovesStateAnEditDroppedLater failed on both its --tpm and --nvram cases, undefine carrying neither flag for state an edit had dropped. TestVirshTimeoutSeparatesDomainJobsFromQueries and TestNeedsStopRefusesRemovingATPM are new and pass. NATIVE VERIFICATION 2026-09-16 on a disposable workstation lab (libvirt 12.7.0, QEMU 11.1.1, swtpm 0.10.2), driving the real managed engine: Windows 11 Enterprise LTSC installed and booted with an emulated TPM 2.0 that Windows reported as activated; two CD drives with preserved aliases and a live insert into the drivers drive; libvirt selected the enrolled-keys Secure Boot firmware with SMM; localtime and Hyper-V present; guest facts corrected Windows 10 to Windows 11; the HTTPS-downgrade refusal reported distinctly against the real virtio-win URL; and an A/B of the pre-fix and fixed power binaries on one guest reproduced the false shutdown failure and its fix. Full detail and limits in docs/qa/2026-09-16-windows-11-fix-verification.md. STILL NOT VERIFIED: no Nex Core ISO was built or installed, no Controller ran, installer screens were not compiled, and the library versions are newer than Core ships. The lab outcome that motivated it \u2014 a Windows guest shutdown reported as succeeded end to end, a standard Windows 11 edition installing with a TPM present, and a VirtIO install using the driver disc \u2014 remains outstanding and is recorded as such in docs/plans/2026-09-16-windows-11-lab-fixes.md and docs/BUG_LEDGER.md. The libvirt TPM-cleanup limitation behind BUG-0214 comes from reading libvirt's source (qemuExtDevicesCleanupHost iterating def->tpms), not from documented contract or a host observation.",
+    "evidence": [
+      "docs/qa/2026-09-16-windows-11-fix-verification.md",
+      "docs/BUG_LEDGER.md",
+      "docs/plans/2026-09-16-windows-11-lab-fixes.md",
+      "docs/qa/2026-09-16-windows-11-uefi-lab.md"
+    ]
+  }
+}

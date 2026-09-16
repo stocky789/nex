@@ -1532,12 +1532,51 @@ and maps Ctrl+letter to its control byte and arrow/Home/End keys to escape seque
 ## VM media change (CD/DVD)
 
 API impact: **new contract** — `mediaVM` (`POST /api/v1/vms/{id}/media`), durable command
-`vm-media`, host capability `vm-media-v1`. Body: `{request_id, action: insert|eject, media_id?}`
+`vm-media`, host capability `vm-media-v1`. Body:
+`{request_id, action: insert|eject, drive?, media_id?}`
 (`media_id` required for insert, forbidden for eject). Queued like `vm-power`; Core inserts or
 ejects the SATA CDROM via `virsh change-media` (`--live` added while the domain is running,
 always `--config`), attaching an empty tray first when the domain has none (stopped VMs only:
 SATA cannot hot-plug), and journals the current `media_id` on the pool-master managed record
 for re-adoption.
+
+**Changed contract, 0.2.8 — a second CD drive.** Every VM defined by a host reporting
+`vm-media-drivers-drive-v1` carries two SATA CD drives: the install drive, and a **driver disc**
+drive for the disc an installer needs alongside its install media. A Windows guest installing to
+a VirtIO disk needs the virtio-win ISO in that second drive; with one drive the operator had to
+swap discs mid-Setup, which is the workaround W3 recorded. `drive` names which drive a request
+applies to: `install` (or omitted, which is what every Controller sent before this existed) or
+`drivers`. `VMCreateSpec.drivers_media_id` is the durable record of the driver disc, journaled on
+the pool master beside `media_id` and re-adopted the same way; it must differ from `media_id`.
+Core resolves a drive to its libvirt target through the user aliases `ua-nex-cdrom-install` and
+`ua-nex-cdrom-drivers`, so the target letters libvirt assigns never matter. A domain defined by
+an older Core carries neither alias and exactly one cdrom, which is always the install drive, so
+a host that predates this keeps working and simply has no drivers drive. A Controller must not
+send `drive: "drivers"` to a host that does not report the capability.
+
+**Changed contract, 0.2.8 — firmware, Secure Boot and TPM.** `VMBoot` gains `secure_boot`
+(`on`, `off`, or omitted) and `tpm` (`2.0`, `none`, or omitted). Both are durable fields of the
+VM definition on the pool master and return to a fresh Controller through the existing
+inventory and adoption path; neither adds Controller-owned state.
+
+Secure Boot is now stated explicitly in the domain rather than inferred by libvirt from
+`firmware='efi'`. **Omitted means on, with the Microsoft keys enrolled** — exactly what libvirt
+already selected for every UEFI VM defined before the field existed, so a definition re-sent
+unchanged keeps the firmware its guest was installed with. `off` selects the plain OVMF build
+with no enrolled keys, for unsigned boot media or drivers. Secure Boot requires UEFI; requesting
+it with BIOS is rejected. A Secure Boot domain also carries SMM, which OVMF needs to protect the
+variable store.
+
+`tpm: "2.0"` adds an emulated TPM 2.0 (`tpm-crb`, swtpm backend). It is refused when the host's
+`virsh domcapabilities` does not offer the emulator backend, rather than defining a device that
+cannot start. Windows 11 requires a TPM, and its absence is why the non-IoT editions could not
+install at all (BUG-0196).
+
+Changing Secure Boot or the TPM requires the VM to be shut off, like firmware and machine type.
+**Removing a TPM is refused outright at any time**: anything the guest sealed to it, including a
+Windows BitLocker key, would be lost, and libvirt cleans TPM state by iterating the devices the
+persistent definition still carries, so a redefine without `<tpm>` would orphan that state with
+nothing left to remove it (BUG-0214). Create the VM again without a TPM instead.
 
 An eject first reads the CD drive from the domain definition — the live one while the VM is
 running, the persistent one otherwise — and succeeds without calling `virsh` when the domain
@@ -1577,6 +1616,22 @@ operator to inspect. A media change is never replayed blindly.
 
 Compatibility: older Core without `vm-media-v1` is refused with 409.
 
+**Changed contract, 0.2.8 — removing a failed ISO import.** `DELETE /api/v1/media/{id}`
+(`deleteMedia`) removes the library record of an `iso-import` whose operation is `failed` or
+`needs_attention`, so a download that failed does not occupy the library forever with no way to
+clear it (BUG-0203). Administrator session, same Origin and `X-CSRF-Token`, audited as
+`media.discard`. Only Controller-owned staging bytes of the failed upload are deleted; no Core
+command is issued and no host state is touched.
+
+It answers **409** while the import is still queued or dispatched, **409** when another media
+transfer holds the staging lock, and **409 when the import SUCCEEDED**: the ISO then lives on its
+host, Core has no media-removal command, and Controller will not drop a record for bytes it
+cannot delete. Removing a stored ISO therefore remains unavailable until Core gains that call —
+this is a deliberate refusal, not an oversight. **404** for an unknown id.
+
+Retrying a failed download is `POST /api/v1/media/download` again under a **new** `request_id`;
+no second endpoint was added for what an existing one already covers.
+
 ## Guest tools observation
 
 API impact: **changed contract** — the report inventory member `vms[].guest` (`GuestInfo`)
@@ -1593,9 +1648,15 @@ attached but unanswered. Agents are asked after every VM was observed, oldest ca
 only while the probe deadline leaves room for a question. Loopback and link-local addresses
 are dropped, at most 32 addresses are reported, `os` is bounded to 4096 bytes and `hostname`
 and interface names to 200; Controller refuses a report beyond those limits or with an
-unknown `agent`, `clipboard` or `media` value (an absent `media` is an older Core). `agent` is `connected`, `unresponsive`, `disconnected` or
-`no-channel`; `clipboard` is `ready`, `waiting` or `no-channel`; `resize` is true for a
-VirtIO display. The same live definition reports `media`: `loaded` when the CD drive's tray
+unknown `agent`, `clipboard`, `media` or `drivers_media` value (an absent `media` is an older
+Core). `agent` is `connected`, `unresponsive`, `disconnected` or
+`no-channel`; `clipboard` is `ready`, `waiting` or `no-channel`; `resize` is true only when the
+guest can actually follow a console resize request — the VM has a VirtIO display **and** the
+guest has opened the qemu-vdagent channel, which is the agent that applies the new resolution.
+A VirtIO display alone only means the host would send the request; a guest without the driver
+ignores it, and Nex advertising the control then does nothing (BUG-0201). The same live
+definition reports `media`, and `drivers_media` for the second (driver disc) CD drive: `loaded`
+when that drive's tray
 holds a `<source file>` or `<source dev>` and is not `tray='open'`, `empty` when the drive
 holds none, and `no-drive` when the VM has no CD drive; it is absent from Core builds that do
 not observe it. A guest owns its tray while it runs — a Debian installer ejects the disc it
@@ -1608,6 +1669,61 @@ observation, not health: a connected agent proves nothing about guest applicatio
 Compatibility: shared upgrade rule; an older Core never sends the member and the UI shows guest
 tools as unknown. No pool-scoped setting is introduced.
 Evidence: [console features QA report](qa/console-features/checks.md).
+
+## VM usage observation
+
+API impact: **changed contract** — the report inventory member `vms[].usage` (`VMUsage`) and
+the `usage` check are new; `GET /api/v1/vms` passes `usage` through for a VM observed running
+in a fresh, libvirt-healthy report and omits it otherwise. No route, command or capability
+changes.
+
+Core samples every active VM on each probe with
+`virsh domstats --raw --nowait --cpu-total --balloon --vcpu --block <uuid>`, one call per VM.
+`--nowait` is what makes the query safe: without it libvirt waits for the domain's job, which
+is held for the whole of the operation in progress — a Windows guest held one shutdown for over
+three minutes (BUG-0213) — so the probe would stall behind exactly the VM an operator is
+watching. With it, libvirt returns the counters it can read without the job (CPU time, balloon
+allocation, vCPU count) and omits the ones behind the QEMU monitor (host RSS, block sizes).
+That is why `memory_host_bytes`, `disk_used_bytes` and `disk_capacity_bytes` are nullable:
+absent means the host could not read the number, which is never the same fact as zero.
+`dominfo` is avoided here for the same reason the libvirt state probe avoids it.
+
+`cpu.time` is a cumulative counter, so **Core keeps the previous sample per VM and reports the
+rate itself**; a Controller that subtracted two counters would be deriving pool state the host
+already knows. `cpu_percent` is whole percent of the VM's own allocated vCPUs averaged over
+`sample_window_ms`, and is absent until a second sample exists — a VM that just started, an
+agent that just restarted and a VM whose counter reset all report no rate for one probe rather
+than a wrong one. A counter that went backwards, a non-positive window, a window older than two
+minutes, and an implausible vCPU count are each refused rather than guessed at. The value is
+clamped at 1000 because above that the arithmetic is reporting a broken counter, not a busy VM;
+the multiplication is bounds-checked before it is performed, since an overflowed product lands
+on a plausible small number rather than an obvious one. Controller refuses a report carrying a
+rate with no window, a window above 300000 ms, or a percentage above the same clamp; a window
+without a rate is accepted, because that is a host that measured a gap and declined to turn it
+into a rate.
+
+`memory_assigned_bytes` and `memory_maximum_bytes` are allocation, never usage. Nex does not
+report memory used **inside** the guest: that needs balloon statistics a Nex VM definition does
+not enable, and the guest agent has no command for it. Disk figures count only the VM's own
+images, identified by the per-VM directory Nex writes them into; a mounted installer ISO and a
+firmware variable store are not the VM's storage and are left uncounted rather than guessed at.
+
+The probe is separate from the libvirt state probe, so a slow sample never hides VM power
+states. A VM that cannot be sampled within the probe deadline re-reports its previous sample
+unchanged with that sample's own `observed_at`, so a client sees an older number rather than a
+gap; a sample older than two minutes is dropped instead. A VM libvirt declines to answer for is
+skipped and the check stays healthy — the check fails only when active domains cannot be
+listed, which is the condition the libvirt probe already fails on. Reporting a working host as
+failed over a cosmetic counter would be worse than the missing number.
+
+Compatibility: shared upgrade rule; an older Core never sends the member and clients show no
+usage. Controller must be upgraded before Core, because report JSON is decoded with
+`DisallowUnknownFields`. No pool-scoped setting is introduced: usage is observed state with no
+durable record, recomputed from the host on every report.
+
+Not yet delivered: no operator-facing surface renders these figures, so Phase 2 roadmap item 8
+remains open. Unverified: no host has run this probe; the units and key names are read from
+libvirt's reference, and `domstats` has not been confirmed on Core's read-only connection.
 
 ## Software updates
 

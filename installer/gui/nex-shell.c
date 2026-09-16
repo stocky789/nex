@@ -3,25 +3,32 @@
  * Question rendering, navigation and installation remain owned by d-i.
  */
 
+/* The wizard's own steps, then the one it does not have. The operator reaches these
+ * screens straight out of nex-wizard.c, so the rail has to continue that list instead of
+ * renaming the journey halfway through it (BUG-0209). Keep the first five in step with the
+ * names[] arrays in nex-wizard.c.
+ */
 static const char *nex_stages[] = {
-    "Region", "Network", "Access", "Storage", "Installation"
+    "Welcome", "Host", "Network", "Disk", "Review", "Install"
 };
 
 /* Template namespaces are stable across translations. An unrecognised
  * question deliberately has no highlighted stage; these are not checkpoints.
+ * Stages match the wizard page that collected the same setting, so a question the
+ * wizard could not preseed lands on the step the operator already recognises.
  */
 static int nex_question_stage(const char *tag)
 {
     static const struct { const char *prefix; int stage; } namespaces[] = {
-        { "localechooser/", 0 },
-        { "keyboard-configuration/", 0 }, { "console-setup/", 0 },
-        { "tzsetup/", 0 }, { "clock-setup/", 0 },
-        { "netcfg/", 1 }, { "ethdetect/", 1 },
-        { "passwd/", 2 }, { "user-setup/", 2 },
+        { "localechooser/", 1 },
+        { "keyboard-configuration/", 1 }, { "console-setup/", 1 },
+        { "tzsetup/", 1 }, { "clock-setup/", 1 },
+        { "passwd/", 1 }, { "user-setup/", 1 },
+        { "netcfg/", 2 }, { "ethdetect/", 2 },
         { "partman/", 3 }, { "partman-", 3 },
-        { "base-installer/", 4 }, { "bootstrap-base/", 4 },
-        { "apt-setup/", 4 }, { "pkgsel/", 4 }, { "tasksel/", 4 },
-        { "grub-installer/", 4 }, { "finish-install/", 4 }
+        { "base-installer/", 5 }, { "bootstrap-base/", 5 },
+        { "apt-setup/", 5 }, { "pkgsel/", 5 }, { "tasksel/", 5 },
+        { "grub-installer/", 5 }, { "finish-install/", 5 }
     };
     unsigned int i;
 
@@ -30,7 +37,7 @@ static int nex_question_stage(const char *tag)
     if (!strcmp(tag, "debian-installer/language") ||
         !strcmp(tag, "debian-installer/country") ||
         !strcmp(tag, "debian-installer/locale"))
-        return 0;
+        return 1;
     for (i = 0; i < G_N_ELEMENTS(namespaces); i++)
         if (g_str_has_prefix(tag, namespaces[i].prefix))
             return namespaces[i].stage;
@@ -48,6 +55,15 @@ static GtkWidget *nex_label(const char *text, const char *name)
 /* Read existing diagnostic tails only when requested; never log answers here. */
 #include <stdio.h>
 #include "template.h"
+
+/* The completion question. It is asked once the install has already written the disk,
+ * which is why that screen offers no way back and no Go Back button (see build-gui.sh).
+ */
+gboolean cdebconf_gtk_nex_is_completion(struct frontend *fe)
+{
+    return fe->questions != NULL && fe->questions->tag != NULL &&
+        !strcmp(fe->questions->tag, "finish-install/reboot_in_progress");
+}
 
 static gboolean nex_has_failure(struct frontend *fe)
 {
@@ -159,15 +175,15 @@ static void nex_update_shell(struct frontend *fe)
     GtkWidget *label;
     gchar *markup;
     char *info;
-    gboolean complete = question != NULL && question->tag != NULL &&
-        !strcmp(question->tag, "finish-install/reboot_in_progress");
+    gboolean complete = cdebconf_gtk_nex_is_completion(fe);
     int stage = -1;
     unsigned int i;
     static const char *hints[] = {
-        "Set the language, keyboard and time for this host.",
+        "Nex Core is installing on this host.",
+        "Set the name, keyboard, time and root password for this host.",
         "Choose the connection and identity for this host.",
-        "Set a strong root password for local recovery access.",
         "Check the target disk carefully. Writing changes can erase its data.",
+        "Review the settings collected before any disk is written.",
         "Follow the installation progress and any prompts below."
     };
 
@@ -188,10 +204,17 @@ static void nex_update_shell(struct frontend *fe)
         g_free(key);
         if (label == NULL)
             continue;
-        markup = g_markup_printf_escaped(
-            i == (unsigned int)stage
-                ? "<span foreground='#2456D9'><b>%s</b>  •</span>"
-                : "<span foreground='#17233B'>%s</span>", nex_stages[i]);
+        /* Steps the wizard already took keep the wizard's own completed mark, so the
+         * rail reads as one journey across the hand-off instead of restarting.
+         */
+        if (stage >= 0 && i < (unsigned int)stage)
+            markup = g_markup_printf_escaped(
+                "<span foreground='#397057'>✓   %s</span>", nex_stages[i]);
+        else
+            markup = g_markup_printf_escaped(
+                i == (unsigned int)stage
+                    ? "<span foreground='#2456D9'><b>%s</b>  •</span>"
+                    : "<span foreground='#65738A'>%s</span>", nex_stages[i]);
         gtk_label_set_markup(GTK_LABEL(label), markup);
         g_free(markup);
     }
@@ -384,7 +407,7 @@ static void create_main_widgets(struct frontend *fe, GtkWidget *window)
     rail = gtk_vbox_new(FALSE, 0);
     gtk_container_set_border_width(GTK_CONTAINER(rail), 16);
     gtk_container_add(GTK_CONTAINER(rail_surface), rail);
-    gtk_box_pack_start(GTK_BOX(rail), nex_label("Installation", "nex-caption"), FALSE, FALSE, 10);
+    gtk_box_pack_start(GTK_BOX(rail), nex_label("Steps", "nex-caption"), FALSE, FALSE, 10);
     for (i = 0; i < G_N_ELEMENTS(nex_stages); i++) {
         gchar *key = g_strdup_printf("nex-stage-%u", i);
         label = nex_label(nex_stages[i], "nex-stage");
@@ -393,7 +416,7 @@ static void create_main_widgets(struct frontend *fe, GtkWidget *window)
         g_free(key);
         gtk_box_pack_start(GTK_BOX(rail), label, FALSE, FALSE, 13);
     }
-    label = nex_label("• Current section", "nex-caption");
+    label = nex_label("✓  Done\n•  Current step", "nex-caption");
     gtk_box_pack_end(GTK_BOX(rail), label, FALSE, FALSE, 6);
     gtk_box_pack_start(GTK_BOX(body), rail_surface, FALSE, FALSE, 0);
 

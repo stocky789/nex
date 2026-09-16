@@ -71,7 +71,7 @@ func (c *Controller) deleteVM(w http.ResponseWriter, r *http.Request, user, csrf
 		fail(w, 409, "a change, power, media or delete request for this VM is still pending; wait for its task")
 		return
 	}
-	state, freshness, _ := c.observeVM(host, id, revoked, inventory)
+	state, freshness, _, _ := c.observeVM(host, id, revoked, inventory)
 	if freshness != "fresh" {
 		fail(w, 409, "current VM state is unknown; wait for a fresh host report")
 		return

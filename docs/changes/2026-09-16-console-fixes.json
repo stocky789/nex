@@ -1,0 +1,43 @@
+{
+  "summary": "Fix four VM console defects from the Windows 11 UEFI lab report. BUG-0212 (W17): Type into VM sent a bare keysym with no key code and no Shift, so a Windows guest received the unshifted character on that key position and lost every capital, `_` became `-` and `:` became `;`; typing now presses the US-layout key position for each character, holding Shift where the character needs it, and passes the KeyboardEvent code noVNC turns into the QEMU scancode the guest actually reads. BUG-0197 (W2): a Start VM control in the console toolbar lets the operator attach before the guest boots, so the five-second \"Press any key to boot from CD or DVD\" prompt can be answered instead of missed. W3 (console half): the toolbar takes one control group per CD drive, so a driver disc sits beside the install media, and degrades to the single CD/DVD control on a host that reports one drive. BUG-0207 (W12): the console panel now fits the pane it is given, so the toolbar with Open in new window is never scrolled under the tab strip and the display stays visible with the clipboard open and the Recent tasks drawer expanded; the clipboard lays out in two columns where there is room, the key-combination list no longer claims a whole toolbar row, and the separate console window is a window height instead of a minimum, so it no longer scrolls its own status note below the fold. W6: the resize option is shown disabled with an explanation when the guest has not reported that it can resize, instead of silently doing nothing, and a console with no guest report at all (a host console, an older Core, a VM before its first report) no longer offers it either - the old fallback assumed the capability where there was no evidence for it. API impact: none (this change is a React component and its stylesheet; it calls callbacks its parent supplies).",
+  "paths": [
+    "web/src/console.tsx",
+    "web/src/console.css",
+    "web/src/console.test.mjs",
+    "docs/guide/vm-console.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operator behaviour changed in four visible ways: a Start VM control on the console toolbar and why it is the one that catches the firmware boot prompt, two named CD/DVD drives (Install media and Driver disc) with the single-drive fallback on older Nex Core, what Type into VM now does with capitals and shifted symbols and the remaining guest-layout limit, and the resize option appearing disabled with a reason, including the host console and any console with no guest report, where it is not offered at all. The panel layout change is described where it affects the operator (the clipboard shares the panel height with the display). Troubleshooting entries for the missed boot prompt, wrong typed characters, no disks in Windows Setup and an unavailable resize were added or corrected, and the Verification section states that the new behaviour was exercised in a browser harness rather than against a guest.",
+    "pages": [
+      "docs/guide/vm-console.md"
+    ],
+    "verification": [
+      "web/src/console.test.mjs",
+      "docs/qa/2026-09-16-windows-11-uefi-lab.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none for these files. The console is a React component: it renders what its parent passes and calls the parent's callbacks, and its key events travel over the existing console WebSocket bridge, whose contract is unchanged. The prop contract it defines (ConsoleMedia.drives with a ConsoleDrive per drive, and power with a start callback) is internal to the web bundle. The Controller/Core contracts behind those props - the media request's drive field, the second drive's capability, the VM start request and guest.resize being reported from the guest - are changed in the Core, media and guest lanes of the same change set and are recorded and referenced there.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Defect fixes inside the existing VM console slice; no milestone's status or built/outstanding items change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Nothing new is persisted. The toolbar renders host-reported state (drive contents, guest resize capability, VM power state) that the parent passes in, and every change it offers is a request the parent sends to the host; the only stored value remains the existing per-browser View preference in localStorage, which is a display preference and not pool state."
+  },
+  "verification": {
+    "method": "From web/: `npm run typecheck` (tsc --noEmit, clean), `npm test` (runs every src/*.test.mjs; all four passed) and `npm run build` (esbuild bundle, clean). The new `node src/console.test.mjs` asserts the exact sendKey sequence per character, that every printable ASCII character is read back unchanged by a decoder written independently of the implementation table, that `_` is Shift+Minus and `:` is Shift+Semicolon, and renders the component with react-dom/server to check the Start control's visibility and busy state, one-drive versus two-drive toolbars, the busy and note states, and the disabled resize option. It was run against the reverted mapping and failed, reporting the exact corruption class from the lab report (`\" 1'3457'908=,-./...\"` for printable ASCII, capitals lowercased). Browser review: the real component was rendered in headless Chromium inside a copy of the Controller workspace chrome with a stand-in for the VNC transport (no VM attached), at 1440x1000 and 900x700, with the same pages built from the previous commit for comparison. Before the fix, at 1440x1000 with the clipboard open, the pane scrolled (665 px visible, 1020 px of content), 278 px of the 500 px display was hidden behind the Recent tasks drawer and scrolling to the display moved the whole toolbar, including Open in new window, out of view under the tab strip; after it the panel fits the pane (no pane scrolling), the popout link stays in view and the display keeps 426 px, or 270 px with the clipboard open. Typing the lab report's string through the component produced 120 key events that a US-layout guest reads back as the string sent, capitals, `_`, `:` and `\\` intact. The separate console window went from 1112 px of content in a 1000 px viewport to exactly 1000 px. One layout defect was found and fixed during that review: at 900x700 the toolbar could shrink behind the display, which the browser caught as clicks landing on the canvas. Not verified: no Windows or Linux guest, no VM, no host and no Controller were involved, so the boot-prompt timing, real guest keyboard handling, the second drive's guest-visible behaviour and guest-reported resize were not exercised; that walkthrough remains outstanding for the change set's acceptance.",
+    "evidence": [
+      "web/src/console.test.mjs",
+      "web/src/console.tsx",
+      "web/src/console.css",
+      "docs/qa/2026-09-16-windows-11-uefi-lab.md"
+    ]
+  }
+}

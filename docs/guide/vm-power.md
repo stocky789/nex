@@ -6,7 +6,9 @@ This development workflow starts, shuts down, reboots, force-reboots and force-s
 virtual machine from Nex Controller. Each request becomes a durable task for the VM's
 assigned host; the host's next report shows the resulting state. Shut down and Reboot are
 ACPI requests that a guest without ACPI support, such as a firmware boot menu, ignores.
-Force reboot is a hard guest reset, not ACPI. Editing a VM is covered in
+Force reboot is a hard guest reset, not ACPI. It also covers the offer to eject install
+media once a guest is installed, so the VM stops stopping at "Press any key to boot from
+CD or DVD" on every start. Editing a VM is covered in
 [Edit a virtual machine](edit-virtual-machine.md); deletion is covered in
 [Delete a virtual machine](delete-virtual-machine.md).
 
@@ -36,6 +38,16 @@ Force reboot is a hard guest reset, not ACPI. Editing a VM is covered in
    task is queued behind automatically on an updated host, without opening a busy-error dialog.
 4. Follow the `vm-power` task under **Recent tasks** or **Task history**, then check the
    observed state under the VM's name after the next host report.
+5. After you install a guest from an ISO, open the VM's **General** tab. While the VM is
+   running with its install ISO still in the CD drive ahead of every bootable disk, the
+   page offers **Eject install media** above the details, with the reason: every start
+   shows "Press any key to boot from CD or DVD", and a key press in the console starts the
+   installer again. Select it once the guest is installed, and only then: ejecting while an
+   installer is still running interrupts it. Nex never ejects by itself and never rewrites
+   the VM's definition for you.
+6. The eject is the same durable `vm-media` task as the console's **Eject** control. Follow
+   it under **Recent tasks**; the offer disappears once the host reports the empty drive.
+   The ISO stays in the pool's library and can be inserted again from the **Console** tab.
 
 ## Expected result
 
@@ -47,6 +59,11 @@ resets a running guest immediately; the VM stays in the running set unless the g
 to come back. Queue order waits for task completion; it does not wait for an ACPI shutdown
 to finish. Check observed state before asking for the next state change. **Activity**
 records `vm-power` with the administrator.
+
+After **Eject install media**, the `vm-media` task shows `succeeded` when the host issued the
+change, the **Install ISO** row becomes `None · CD drive empty`, and the offer disappears at
+the next host report. The boot order is deliberately unchanged: the empty CD drive keeps its
+place, so the firmware skips it and boots the disk, and inserting an ISO again needs no edit.
 
 ## Troubleshooting
 
@@ -84,6 +101,16 @@ records `vm-power` with the administrator.
   and can lose unsaved guest data.
 - **Force stop of the Controller appliance:** stopping the appliance VM interrupts central
   management; recover it from the host-local page.
+- **No Eject install media offer, but the VM still boots from the ISO:** the offer appears
+  only for a running VM with a fresh host report whose recorded install ISO is ahead of a
+  bootable disk, on a host reporting `vm-media-v1`. Use the console's **Eject** control, or
+  **Edit** to change the CD drive boot order, when the offer does not apply — for example
+  while the VM is stopped, when no disk has a boot order yet, or when the guest already
+  opened its own tray.
+- **The eject task reports `failed` or `needs_attention`:** the message is shown with the
+  offer. The recorded ISO is unchanged unless the host reported the change, so check the VM
+  on its host, then use the offer or the console control again; the retry is the same
+  request, not a second change.
 
 ## Verification
 
@@ -91,3 +118,9 @@ Start, Reboot and Force stop were walked through in a disposable nested-KVM lab;
 a cooperating guest and physical hardware were not. Queueing was checked with simulation. See the
 [console QA report](../qa/console/checks.md), [toolbar QA report](../qa/controller-toolbar/checks.md)
 and [power queue checks](../qa/power-queue/checks.md).
+
+The **Eject install media** offer has been exercised only against the Controller UI rendered
+with fixed sample data in a browser (the offer's wording, its conditions and the greyed cases)
+and by the `web/src/managed.test.mjs` regression check. Ejecting the ISO of a real installed
+guest through this offer, and the resulting boot without the "Press any key" prompt, have not
+been run on a host yet; that walkthrough is outstanding.

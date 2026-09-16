@@ -46,6 +46,50 @@ type VM struct {
 	State string `json:"state"`
 	// Guest is present for running VMs on Core builds that observe guest channels.
 	Guest *GuestInfo `json:"guest,omitempty"`
+	// Usage is present for running VMs on Core builds that sample it. It is absent for
+	// stopped VMs and whenever the host could not sample this VM within its probe deadline.
+	Usage *VMUsage `json:"usage,omitempty"`
+}
+
+// VMUsage is what the host measured of a running VM's resource consumption. It is sampled
+// from libvirt without taking the domain's job, so libvirt answers some of it only when no
+// other operation holds the VM: every optional member is honest-unknown when absent, which
+// is a different fact from the number being zero. Nothing here is durable. The host keeps
+// the previous CPU counter in memory and reports the rate itself, because a Controller that
+// subtracted two cumulative counters would be deriving pool state a host already knows.
+type VMUsage struct {
+	// ObservedAt is when this sample was taken, not when it was reported. A host that could
+	// not resample a VM within its probe deadline re-reports the previous sample unchanged,
+	// so this timestamp is the only honest statement of how old these numbers are.
+	ObservedAt time.Time `json:"observed_at"`
+	// SampleWindowMS is the wall-clock gap between the two samples CPUPercent averages over,
+	// floored at 1 so a rate never arrives with a window rounded away to zero. It is zero
+	// when CPUPercent is absent.
+	SampleWindowMS uint32 `json:"sample_window_ms"`
+	// CPUPercent is whole percent of this VM's own allocated vCPUs, rounded, averaged over
+	// SampleWindowMS: 100 means every vCPU was busy for the whole window. It is absent until
+	// a second sample exists, so a VM that just started, an agent that just restarted and a
+	// VM whose counter reset all report no rate for one probe instead of a wrong one. The
+	// host threads emulating the VM's devices are included, so a busy VM can pass 100; the
+	// value is clamped at 1000, because anything above that is arithmetic, not observation.
+	CPUPercent *uint16 `json:"cpu_percent,omitempty"`
+	// MemoryAssignedBytes is what the guest currently may use and MemoryMaximumBytes its
+	// configured ceiling. This is allocation, never usage. Nex does not report memory used
+	// inside the guest: that needs balloon statistics a Nex VM definition does not enable,
+	// and the guest agent has no command for it.
+	MemoryAssignedBytes uint64 `json:"memory_assigned_bytes"`
+	MemoryMaximumBytes  uint64 `json:"memory_maximum_bytes"`
+	// MemoryHostBytes is the resident host memory this VM's process occupies: what the VM
+	// costs the host, not what the guest is using. Absent when libvirt could not read it
+	// without waiting for another operation on this VM.
+	MemoryHostBytes *uint64 `json:"memory_host_bytes,omitempty"`
+	// DiskUsedBytes is the space this VM's own disk images occupy in their repository right
+	// now, and DiskCapacityBytes the virtual size the guest sees; a thin disk grows towards
+	// the second. CD drives, firmware variable stores and any image outside the per-VM
+	// directory Nex writes are not counted. Both are absent when libvirt could not read them
+	// without waiting for another operation on this VM.
+	DiskUsedBytes     *uint64 `json:"disk_used_bytes,omitempty"`
+	DiskCapacityBytes *uint64 `json:"disk_capacity_bytes,omitempty"`
 }
 
 // ManagedState lists succeeded registrations and VM definitions from the host journal.

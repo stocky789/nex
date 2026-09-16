@@ -17,8 +17,10 @@ type GuestInfo struct {
 	// spice-vdagent), "waiting" when the channel exists but nothing opened it, or
 	// "no-channel" when the VM was defined without console clipboard support.
 	Clipboard string `json:"clipboard"`
-	// Resize is true when the VM has a VirtIO display, so the console can ask the guest
-	// to change its resolution to the browser's size.
+	// Resize is true when the guest itself can follow a console resize request: the VM has a
+	// VirtIO display *and* the guest is running the agent that acts on it. A VirtIO display
+	// alone only means QEMU would accept the request; a guest without the driver ignores it,
+	// and offering the control then does nothing (BUG-0201).
 	Resize bool `json:"resize"`
 	// Media is the live CD drive of the running VM: "loaded" when its tray holds media,
 	// "empty" when the drive is there but holds none (a guest can open its own tray, for
@@ -27,6 +29,9 @@ type GuestInfo struct {
 	// currently sees, never what Nex recorded; the durable media_id changes only through a
 	// media request.
 	Media string `json:"media,omitempty"`
+	// DriversMedia is the same observation for the VM's second (driver disc) CD drive.
+	// Empty from Core builds that define only one drive.
+	DriversMedia string `json:"drivers_media,omitempty"`
 }
 
 // Media observations reported in GuestInfo.Media.

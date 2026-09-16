@@ -137,7 +137,32 @@ type VMBoot struct {
 	Firmware       string `json:"firmware"`
 	Machine        string `json:"machine"`
 	MediaBootOrder int    `json:"media_boot_order"`
+	// SecureBoot is "on" or "off" for UEFI. "" keeps the host default, which is on: that is
+	// what libvirt already selected for every UEFI VM defined before this field existed, so
+	// an older definition re-sent unchanged keeps the firmware it was installed with.
+	SecureBoot string `json:"secure_boot,omitempty"`
+	// TPM is "2.0" for an emulated TPM 2.0 device, "none" or "" for no TPM. "" is no TPM so
+	// that a definition written before this field existed keeps exactly the devices it had.
+	TPM string `json:"tpm,omitempty"`
 }
+
+// Secure Boot and TPM values accepted in VMBoot.
+const (
+	SecureBootDefault = ""
+	SecureBootOn      = "on"
+	SecureBootOff     = "off"
+	TPMNone           = "none"
+	TPM20             = "2.0"
+)
+
+// SecureBootOn reports whether this definition boots with Secure Boot: UEFI with the field
+// unset or "on". BIOS never has it.
+func (b VMBoot) SecureBootEnabled() bool {
+	return b.Firmware == "uefi" && b.SecureBoot != SecureBootOff
+}
+
+// TPMEnabled reports whether this definition carries an emulated TPM device.
+func (b VMBoot) TPMEnabled() bool { return b.TPM == TPM20 }
 
 // VMCreateSpec is a VM's complete definition. It is the vm-create payload and, at a later
 // Revision, the vm-update payload; the host journals every revision and reports the current one.
@@ -154,7 +179,11 @@ type VMCreateSpec struct {
 	NICs             []VMNIC  `json:"nics"`
 	Boot             VMBoot   `json:"boot"`
 	MediaID          string   `json:"media_id"`
-	StartAfterCreate bool     `json:"start_after_create"`
+	// DriversMediaID is the ISO in the VM's second CD drive, for a driver disc an installer
+	// needs alongside the install media (Windows and VirtIO storage, for example). Empty
+	// leaves that drive empty; the drive itself always exists.
+	DriversMediaID   string `json:"drivers_media_id,omitempty"`
+	StartAfterCreate bool   `json:"start_after_create"`
 	Autostart        bool     `json:"autostart"`
 	// Revision is 0 at creation and current + 1 for each edit; Core refuses any other value.
 	Revision int `json:"revision"`
@@ -206,6 +235,20 @@ func NeedsStop(cur, next VMCreateSpec) ([]VMChange, error) {
 	add(cur.CPU != next.CPU, "the CPU configuration")
 	add(cur.Memory != next.Memory, "the memory")
 	add(cur.Boot.Firmware != next.Boot.Firmware || cur.Boot.Machine != next.Boot.Machine, "the firmware or machine type")
+	add(cur.Boot.SecureBootEnabled() != next.Boot.SecureBootEnabled(), "Secure Boot")
+	// Adding a TPM to a stopped VM is an ordinary edit. REMOVING one is refused outright, for
+	// two reasons that point the same way. It destroys whatever the guest sealed to that TPM —
+	// a Windows guest stores its BitLocker key there, and dropping the device silently leaves an
+	// unbootable guest. And libvirt cleans a domain's TPM state by iterating the devices the
+	// persistent definition still carries, so a redefine without <tpm> orphans
+	// /var/lib/libvirt/swtpm/<uuid>, holding the endorsement key and the sealed secrets, with
+	// nothing left to clean it up at delete (BUG-0214). Refusing the transition keeps the
+	// definition and the host state in step, so deletion always removes what the VM created.
+	// An operator who genuinely wants no TPM deletes the VM and creates it again.
+	if cur.Boot.TPMEnabled() && !next.Boot.TPMEnabled() {
+		return nil, errors.New("a VM's TPM cannot be removed after creation: anything the guest sealed to it, including a Windows BitLocker key, would be lost. Delete the VM and create it without a TPM instead")
+	}
+	add(cur.Boot.TPMEnabled() != next.Boot.TPMEnabled(), "the TPM")
 	add(cur.Boot.MediaBootOrder != next.Boot.MediaBootOrder, "the boot order")
 	before := map[string]VMDisk{}
 	for _, d := range cur.Disks {
@@ -307,6 +350,23 @@ func ValidateVMSpec(v VMCreateSpec) error {
 	}
 	if v.Boot.Machine != "" && !machineType.MatchString(v.Boot.Machine) {
 		return errors.New("machine type must be a plain libvirt machine name such as q35")
+	}
+	switch v.Boot.SecureBoot {
+	case SecureBootDefault, SecureBootOff:
+	case SecureBootOn:
+		if v.Boot.Firmware != "uefi" {
+			return errors.New("Secure Boot needs UEFI firmware")
+		}
+	default:
+		return errors.New("secure boot must be on or off")
+	}
+	switch v.Boot.TPM {
+	case "", TPMNone, TPM20:
+	default:
+		return errors.New("TPM must be 2.0 or none")
+	}
+	if v.DriversMediaID != "" && v.DriversMediaID == v.MediaID {
+		return errors.New("the driver disc must differ from the install media")
 	}
 	if len(v.Disks) < 1 || len(v.Disks) > 8 {
 		return errors.New("a VM needs 1 to 8 disks")

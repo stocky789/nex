@@ -105,6 +105,10 @@ Later updates come from the signed Nex APT archive; see [software updates](softw
    unchecked and resets whenever you return to Review. This is the
    destructive confirmation; do not expect another routine erase question.
 8. Let installation finish. A single Nex progress panel stays in place during and between backend steps.
+   The step list on the left continues the wizard's own steps — **Welcome**, **Host**,
+   **Network**, **Disk**, **Review**, then **Install** — with the steps you completed marked
+   with a tick and the current one marked with a bullet, so the position does not restart when
+   installation begins.
    The indicator describes the current step, not an estimated overall completion percentage.
    Error and recovery prompts appear when your input is needed.
    Packages are bundled; a mirror or working network is not required.
@@ -119,7 +123,9 @@ Later updates come from the signed Nex APT archive; see [software updates](softw
    Select the same disposable OS disk for GRUB. This is the advanced/manual alternative;
    the graphical per-NIC editor and its whole-disk confirmation do not apply to this path.
 10. In the GUI, wait for **Nex Core installation complete**, eject the ISO and choose **Restart now**
-    to boot the installed disk. Minimal mode retains its native final restart prompt. Sign in as `root` at the local console using
+    to boot the installed disk. **Restart now** is the only button on that screen: the disk has
+    already been written, so there is nothing to go back to and no back button is offered.
+    Minimal mode retains its native final restart prompt. Sign in as `root` at the local console using
     your chosen password. Before login, the console should show the local web UI URL once
     `nex-core-local` has a management address. Continue with [host verification](verify-nex-core.md).
     Neither path creates an ordinary user account; Debian service accounts remain.
@@ -189,5 +195,15 @@ the [Nex wizard](../qa/iso/2026-09-08-nex-wizard.md), [usability](../qa/iso/2026
 [previous custom shell](../qa/iso/2026-09-08-custom-installer.md).
 
 Physical NICs, switch VLANs, Xen installation and UEFI/Secure Boot remain unverified.
+
+The step list and the completion screen's single **Restart now** button were changed after the
+[Windows 11 UEFI lab](../qa/2026-09-16-windows-11-uefi-lab.md) recorded issue W14. That change
+has **not** been exercised in an installer run: the installer shell is compiled inside the ISO
+builder, and only source-level checks were run (`bash installer/check.sh`, the
+`installer/build-gui.sh` patch asserts against pristine cdebconf 0.280 source, and a
+compiler syntax check of the patched frontend). No ISO was built or booted, so the screens
+above are described from the source, not from a capture. An installer run still needs to
+confirm that the completion page shows **Restart now**, that it shows no back button, and
+that **Go Back** still works on every earlier screen.
 
 [Return to the guide](README.md)

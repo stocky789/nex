@@ -62,6 +62,7 @@
 <li><a href="#updateVM">PUT /api/v1/vms/{id}</a></li>
 <li><a href="#deleteVM">DELETE /api/v1/vms/{id}</a></li>
 <li><a href="#downloadMedia">POST /api/v1/media/download</a></li>
+<li><a href="#deleteMedia">DELETE /api/v1/media/{id}</a></li>
 </ul></nav>
 <section><h2>refresh-inventory</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -5185,6 +5186,129 @@
     }
   }
 }</pre></details></section>
+<section id="deleteMedia"><h2>DELETE <code>/api/v1/media/{id}</code></h2>
+<p>Remove a failed ISO import from the library</p><p>Implemented in development product 0.2.8, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Removes the library record of an iso-import whose operation is failed or needs_attention, so a download that failed does not occupy the library forever with no way to clear it (BUG-0203). Retrying a failed download is POST /api/v1/media/download again under a NEW request_id; there is no separate retry operation. 409 when the import is still queued or dispatched, and 409 when it SUCCEEDED: the ISO then lives on its host, Nex Core has no media-removal command, and Controller will not drop a record for bytes it cannot delete. 409 while another media transfer holds the staging lock. 404 for an unknown id. Only Controller-owned staging bytes of a failed upload are deleted; no Core command is issued and no host state is touched. The removal is audited as media.discard.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;deleteMedia&quot;,
+  &quot;summary&quot;: &quot;Remove a failed ISO import from the library&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.2.8, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Removes the library record of an iso-import whose operation is failed or needs_attention, so a download that failed does not occupy the library forever with no way to clear it (BUG-0203). Retrying a failed download is POST /api/v1/media/download again under a NEW request_id; there is no separate retry operation. 409 when the import is still queued or dispatched, and 409 when it SUCCEEDED: the ISO then lives on its host, Nex Core has no media-removal command, and Controller will not drop a record for bytes it cannot delete. 409 while another media transfer holds the staging lock. 404 for an unknown id. Only Controller-owned staging bytes of a failed upload are deleted; no Core command is issued and no host state is touched. The removal is audited as media.discard.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.2.8&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Media (iso-import) identifier.&quot;
+    },
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;The library record was removed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: {
+              &quot;id&quot;: {
+                &quot;type&quot;: &quot;string&quot;
+              },
+              &quot;deleted&quot;: {
+                &quot;type&quot;: &quot;boolean&quot;
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;No valid administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF token rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;No such media record.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;The import is still running, or it succeeded and its ISO is stored on a host.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          },
+          &quot;example&quot;: {
+            &quot;error&quot;: &quot;request rejected&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller storage or audit failure; nothing was removed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
 <section id="schemas"><h2>Schemas and authentication</h2>
 <h3>securitySchemes</h3>
 <details id="AdminSession"><summary>AdminSession</summary><pre>{
@@ -5418,6 +5542,17 @@
         }
       ],
       &quot;description&quot;: &quot;Host observation of the running guest through its virtio channels; absent for VMs that are not running and from Core builds that predate guest observation.&quot;
+    },
+    &quot;usage&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/VMUsage&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Host observation of a running VM&#x27;s resource consumption; absent for VMs that are not running, from Core builds that predate usage observation, and whenever the host could not sample the VM within its probe deadline.&quot;
     }
   },
   &quot;required&quot;: [
@@ -5426,6 +5561,86 @@
     &quot;state&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.VM&quot;
+}</pre></details>
+<details id="VMUsage"><summary>VMUsage</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;,
+      &quot;description&quot;: &quot;When the sample was taken, not when it was reported. A host that could not resample a VM re-reports the previous sample unchanged, so this is the only honest statement of how old the numbers are.&quot;
+    },
+    &quot;sample_window_ms&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;description&quot;: &quot;Wall-clock gap the CPU rate averages over, floored at 1; zero when cpu_percent is absent. Rejected above 300000.&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;cpu_percent&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;type&quot;: &quot;integer&quot;,
+          &quot;minimum&quot;: 0
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Whole percent of the VM&#x27;s own allocated vCPUs, averaged over sample_window_ms; 100 means every vCPU was busy throughout. Absent until a second sample exists, so a VM that just started or whose counter reset reports no rate rather than a wrong one. Clamped at 1000.&quot;
+    },
+    &quot;memory_assigned_bytes&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;description&quot;: &quot;What the guest currently may use. Allocation, never usage.&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;memory_maximum_bytes&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;description&quot;: &quot;The VM&#x27;s configured memory ceiling.&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;memory_host_bytes&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;type&quot;: &quot;integer&quot;,
+          &quot;minimum&quot;: 0
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Resident host memory the VM&#x27;s process occupies: what the VM costs the host, not what the guest uses. Absent when libvirt could not read it without waiting for another operation on this VM.&quot;
+    },
+    &quot;disk_used_bytes&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;type&quot;: &quot;integer&quot;,
+          &quot;minimum&quot;: 0
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Space the VM&#x27;s own disk images occupy in their repository now. CD drives, firmware variable stores and images outside the per-VM directory are not counted. Absent when libvirt could not read it without waiting for another operation on this VM.&quot;
+    },
+    &quot;disk_capacity_bytes&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;type&quot;: &quot;integer&quot;,
+          &quot;minimum&quot;: 0
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Virtual size the guest sees; a thin disk grows towards it. Absent under the same condition as disk_used_bytes.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;observed_at&quot;,
+    &quot;sample_window_ms&quot;,
+    &quot;memory_assigned_bytes&quot;,
+    &quot;memory_maximum_bytes&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.VMUsage&quot;
 }</pre></details>
 <details id="Inventory"><summary>Inventory</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -7441,6 +7656,17 @@
         }
       ],
       &quot;description&quot;: &quot;Latest host guest observation for a VM observed running in a fresh report; omitted otherwise.&quot;
+    },
+    &quot;usage&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/VMUsage&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Host observation of a running VM&#x27;s resource consumption; absent for VMs that are not running, from Core builds that predate usage observation, and whenever the host could not sample the VM within its probe deadline.&quot;
     }
   },
   &quot;required&quot;: [
@@ -9553,6 +9779,24 @@
       &quot;type&quot;: &quot;integer&quot;,
       &quot;minimum&quot;: 0,
       &quot;description&quot;: &quot;0 keeps the CD drive out of the boot order; any other value joins the disks&#x27; contiguous 1..N numbering. Every VM has the drive, so the order is kept while it is empty and an ISO can be ejected from a running guest.&quot;
+    },
+    &quot;secure_boot&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;&quot;,
+        &quot;on&quot;,
+        &quot;off&quot;
+      ],
+      &quot;description&quot;: &quot;UEFI Secure Boot. Omitted means on with the Microsoft keys enrolled, which is exactly what libvirt already selected for every UEFI VM defined before this field existed, so a definition re-sent unchanged keeps the firmware its guest was installed with. off selects the plain OVMF build with no enrolled keys, for unsigned boot media or drivers. Requires uefi; on with bios is rejected. Core refuses the VM when the host&#x27;s domain capabilities do not offer a matching firmware build, naming the setting rather than passing libvirt&#x27;s firmware-selection error through. Changing it requires the VM to be shut off.&quot;
+    },
+    &quot;tpm&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;&quot;,
+        &quot;none&quot;,
+        &quot;2.0&quot;
+      ],
+      &quot;description&quot;: &quot;Emulated TPM. 2.0 adds a tpm-crb device backed by swtpm; omitted and none add no device, so a definition written before this field keeps exactly the devices it had. Windows 11 requires a TPM and refuses to install without one. Core refuses the VM when the host&#x27;s domain capabilities do not advertise the emulator backend, rather than defining a device that cannot start. Changing it requires the VM to be shut off, and REMOVING a TPM is refused outright at any time: anything the guest sealed to it, including a Windows BitLocker key, would be lost, and libvirt cleans TPM state by iterating the devices the persistent definition still carries, so a redefine without it would orphan that state.&quot;
     }
   },
   &quot;required&quot;: [
@@ -9561,7 +9805,7 @@
     &quot;media_boot_order&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.VMBoot&quot;,
-  &quot;description&quot;: &quot;Firmware, machine type and the install media&#x27;s place in the boot order. Boot order is per device (libvirt forbids mixing per-device boot with an os/boot device list), so at least one disk or the install media must carry a non-zero order.&quot;
+  &quot;description&quot;: &quot;Firmware, Secure Boot, TPM, machine type and the install media&#x27;s place in the boot order. Boot order is per device (libvirt forbids mixing per-device boot with an os/boot device list), so at least one disk or the install media must carry a non-zero order.&quot;
 }</pre></details>
 <details id="VMCreateSpec"><summary>VMCreateSpec</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -9633,6 +9877,10 @@
     &quot;media_id&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;description&quot;: &quot;Install ISO (Media.id), empty for none. The ISO must be imported and verified on the placement host; it may live on any storage that host can read and does not need to share a repository with the VM&#x27;s disks. Every VM has the CD drive, so a non-zero boot.media_boot_order does not require media_id: an emptied drive keeps its place in the boot order.&quot;
+    },
+    &quot;drivers_media_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;ISO in the VM&#x27;s second CD drive, for a driver disc an installer needs alongside its install media - a Windows guest installing to a VirtIO disk needs the virtio-win ISO here. Empty leaves that drive empty; the drive itself always exists on a host reporting vm-media-drivers-drive-v1. Must differ from media_id.&quot;
     },
     &quot;start_after_create&quot;: {
       &quot;type&quot;: &quot;boolean&quot;,
@@ -9978,6 +10226,10 @@
     &quot;media_id&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;description&quot;: &quot;Install ISO (Media.id), empty for none. The ISO must be imported and verified on the placement host; it may live on any storage that host can read and does not need to share a repository with the VM&#x27;s disks. Every VM has the CD drive, so a non-zero boot.media_boot_order does not require media_id: an emptied drive keeps its place in the boot order.&quot;
+    },
+    &quot;drivers_media_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;ISO in the VM&#x27;s second CD drive, for a driver disc an installer needs alongside its install media - a Windows guest installing to a VirtIO disk needs the virtio-win ISO here. Empty leaves that drive empty; the drive itself always exists on a host reporting vm-media-drivers-drive-v1. Must differ from media_id.&quot;
     },
     &quot;start_after_create&quot;: {
       &quot;type&quot;: &quot;boolean&quot;,
@@ -10421,7 +10673,7 @@
     },
     &quot;resize&quot;: {
       &quot;type&quot;: &quot;boolean&quot;,
-      &quot;description&quot;: &quot;True when the VM has a VirtIO display, so the console can ask the guest to adopt the browser&#x27;s resolution (needs a virtio-gpu driver in the guest).&quot;
+      &quot;description&quot;: &quot;True only when the guest can actually follow a console resize request: the VM has a VirtIO display and the guest has opened the qemu-vdagent channel, which is the agent that applies the new resolution. A VirtIO display alone only means the host would send the request; a guest without the driver ignores it (BUG-0201).&quot;
     },
     &quot;media&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -10431,6 +10683,15 @@
         &quot;no-drive&quot;
       ],
       &quot;description&quot;: &quot;The live CD drive of the running VM: loaded when its tray holds media, empty when the drive holds none (a guest can eject its own disc, for example an installer after the base system), no-drive when the VM has no CD drive. Absent from Core builds that do not observe it. It reports what the guest sees; the durable media_id changes only through a media request.&quot;
+    },
+    &quot;drivers_media&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;loaded&quot;,
+        &quot;empty&quot;,
+        &quot;no-drive&quot;
+      ],
+      &quot;description&quot;: &quot;The same live observation as media, for the VM&#x27;s second (driver disc) CD drive. Absent from Core builds that define only one CD drive.&quot;
     }
   },
   &quot;required&quot;: [
@@ -10459,6 +10720,15 @@
         &quot;insert&quot;,
         &quot;eject&quot;
       ]
+    },
+    &quot;drive&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;&quot;,
+        &quot;install&quot;,
+        &quot;drivers&quot;
+      ],
+      &quot;description&quot;: &quot;Which of the VM&#x27;s two CD drives the request applies to: install (or omitted, which is what every Controller sent before the second drive existed) or drivers. Core resolves the drive through libvirt user aliases, so the target letters libvirt assigns never matter. A Controller must not send drivers to a host that does not report vm-media-drivers-drive-v1.&quot;
     },
     &quot;media_id&quot;: {
       &quot;type&quot;: &quot;string&quot;,

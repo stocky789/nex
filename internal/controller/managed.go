@@ -1060,7 +1060,7 @@ func (c *Controller) updateVM(w http.ResponseWriter, r *http.Request, user, csrf
 	var revoked bool
 	var inventory sql.NullString
 	if tx.QueryRow("SELECT revoked,inventory FROM hosts WHERE id=?", cur.HostID).Scan(&revoked, &inventory) == nil {
-		if state, _, _ := c.observeVM(cur.HostID, id, revoked, inventory); state == "running" && len(stops) > 0 {
+		if state, _, _, _ := c.observeVM(cur.HostID, id, revoked, inventory); state == "running" && len(stops) > 0 {
 			names := make([]string, len(stops))
 			for i, s := range stops {
 				names[i] = string(s)

@@ -2021,3 +2021,195 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: `managedCapacity` keeps the CPU, KVM, machine-capability and total-memory dedicated-promise checks but no longer reads available memory. `powerVM` receives the VM's memory from its newest non-failed journaled definition (so an unresolved larger memory edit is not bypassed) and, before `virsh start` of a shut-off VM, refuses with `insufficient available memory to start this VM including 2 GiB host reserve` when `MemAvailable` is below the ceiling plus the reserve; a start of a running VM stays a no-op. A created VM whose automatic start is refused stays defined and stopped, reported as `VM created but not started: <reason>`. The Controller's check against the host's total memory is unchanged. Libvirt's own autostart replay at host boot for non-shared VMs is outside Core's control and is not covered.
 - Regression: `TestManagedCapacityIgnoresCurrentlyAvailableMemory`, `TestManagedPowerStartChecksAvailableMemory`, `TestManagedStartAfterCreateChecksAvailableMemory` and `TestManagedPowerStartUsesUnresolvedLargerMemory` (added after independent review; it failed before its change) in `internal/vmhost/memory_start_test.go`, using test seams for `/proc/meminfo` and `/dev/kvm` (with only those seams added to the previous code they failed: `dedicated VM refused on low available memory: insufficient available memory including 2 GiB host reserve`; a low-memory start returned `Status:succeeded`; a refused automatic start still issued `virsh start`). Command: `go test -race ./...`, run by both GitHub and Gitea `phase1` workflows. Native (disposable nested lab Core, agent built from this tree, host with 7947 MiB total and 7508 MiB available): creating a 7691 MiB VM through the Controller with `start_after_create` succeeded; its automatic start was reported as a failed `:start` task `VM created but not started: insufficient available memory to start this VM including 2 GiB host reserve` and the domain stayed `shut off`; a manual start failed with the same message and the domain stayed `shut off`; a 512 MiB VM on the same host was created and started (`running`) and then force-stopped.
 - Avoid: judging a stopped definition by memory free at that instant; dropping the check without adding it at start; relaxing the dedicated-memory promise, which is a durable reservation; sizing the start check from the last succeeded revision when an unresolved larger edit exists.
+
+## BUG-0196 — No virtual TPM, so Windows 11 could not install
+
+- Date: 2026-09-16. Status: fixed; regressions added; **not verified on a host** (see Regression).
+- Symptom: Windows 11 Setup refused every non-IoT edition with "This PC doesn't currently meet Windows 11 system requirements". Only the IoT editions, which have relaxed requirements, installed. The guest had UEFI, Secure Boot, 4 vCPU, 8 GiB and 64 GiB, so the unmet requirement was the TPM.
+- Root cause: Nex defined no `<tpm>` device anywhere, and `swtpm` was not installed on Core 0.2.7 (`dpkg -l swtpm` not installed; absent from `dist/package-manifest.tsv`). There was no per-VM option to ask for one, so a supported guest OS could not be installed at all.
+- Fix: `protocol.VMBoot` gains `tpm` (`2.0`, `none` or omitted); omitted is no TPM, so a definition written before the field keeps exactly the devices it had. `managedDomainXML` emits `<tpm model='tpm-crb'><backend type='emulator' version='2.0'/></tpm>` when asked. Core ships `swtpm` and `swtpm-tools`. A TPM is refused when the host's own `virsh domcapabilities` does not advertise the emulator backend and the `tpm-crb` model, rather than defining a device that cannot start — the host's answer, not a guess from a package list. The Create VM wizard defaults it on for a Windows guest and off otherwise.
+- Known libvirt limitation, and what actually closes it: `undefine --tpm` removes state only for TPM devices the persistent definition still carries — `qemuExtDevicesCleanupHost` iterates `def->tpms` — so a redefine that drops `<tpm>` orphans `/var/lib/libvirt/swtpm/<uuid>` with the endorsement key and everything the guest sealed, and no undefine flag can clean it afterwards. `NeedsStop` therefore refuses removing a TPM outright; that, not the flag, is what keeps host state and definition in step. Deleting a VM that still has its TPM passes `--tpm` and works. The limitation is from reading libvirt's source, not documented contract, and is unverified on a host. The same limitation applies to `--nvram` for a UEFI-to-BIOS edit and is logged as BUG-0214.
+- Regression: `TestManagedDeleteRemovesStateAnEditDroppedLater` (`internal/vmhost/delete_test.go`) and `TestNeedsStopRefusesRemovingATPM` (`internal/protocol/managed_test.go`), plus the TPM cases in `internal/vmhost/firmware_test.go`. The delete test was proved to fail without its fix by reverting only that fix by hand: `undefine ... --nvram` carried no `--tpm` for a VM whose TPM an edit had dropped. Command: `go test -race ./...`, run by both GitHub and Gitea `phase1` workflows. Verified natively 2026-09-16 on real libvirt/QEMU/swtpm: the TPM reached the live domain, swtpm manufactured an EK and the guest used it, Windows reported an activated TPM 2.0, **Windows 11 Enterprise LTSC (the non-IoT edition this entry is about) installed and booted**, and deleting a TPM VM removed its swtpm state and NVRAM. See [the verification report](qa/2026-09-16-windows-11-fix-verification.md). Nex Core packaging, the installer and the Controller were not exercised.
+- Avoid: adding a TPM to every VM silently, since it changes measured boot and can bind BitLocker keys; deciding host TPM support from a package list instead of asking libvirt; assuming an undefine flag cleans state for a device the definition no longer has; treating the emitted XML as proof the guest installs.
+
+## BUG-0197 — Opening the console after Start missed the boot prompt
+
+- Date: 2026-09-16. Status: fixed; regression added; browser behaviour not verified (see Regression).
+- Symptom: starting a VM and then opening the Console missed the roughly 5 s "Press any key to boot from CD or DVD" prompt, so the guest fell through to "BdsDxe: No bootable option or device was found" or the OVMF front page. Reproduced after **Start** and after Setup's own reboot. "Start after creation" guaranteed the miss.
+- Root cause: the console attaches when it is opened, and the only way to start a VM was from a different screen, so the operator could not be attached before the guest reached the prompt. The verified workaround — open the Console first, then press Start — existed only as operator folklore and was not in the guide.
+- Fix: the console toolbar carries a Start control (`power?: {state, busy?, onStart}`), shown when the VM is not running, so the operator is attached before the guest boots. The workaround became the product behaviour rather than documentation for a trap.
+- Regression: `web/src/console.test.mjs`. Command: `npm --prefix web run test`, run by both GitHub and Gitea `phase1` workflows via `npm --prefix web run test`. The workflow runs the whole `src/*.test.mjs` glob, so the new file is covered without a workflow change. **Outstanding: not exercised in a real browser against a running Controller; no lab host was available.**
+- Avoid: documenting a timing workaround instead of removing the race; assuming an operator can predict when to open the console.
+
+## BUG-0198 — One CD drive, so a driver disc could not be attached
+
+- Date: 2026-09-16. Status: fixed; regressions added; not verified on a host.
+- Symptom: with a VirtIO disk, Windows Setup listed no disks. A VM had one CD drive, so the virtio-win driver ISO could not be attached alongside the install ISO. The only route to "Ready to install" was to swap the CD to virtio-win mid-Setup with the console toolbar, load the driver, then swap back.
+- Root cause: `managedDomainXML` defined exactly one SATA CDROM, and the media contract had no way to name a drive.
+- Fix: every VM defined by a host reporting `vm-media-drivers-drive-v1` carries two SATA CD drives. `VMCreateSpec.drivers_media_id` is the durable record of the driver disc, journaled on the pool master beside `media_id`; `VMMediaRequest.drive` selects `install` (or omitted) or `drivers`. Core resolves a drive through the libvirt user aliases `ua-nex-cdrom-install` and `ua-nex-cdrom-drivers`, so the target letters libvirt assigns are irrelevant. A domain defined by an older Core carries neither alias and exactly one cdrom, which is always the install drive. The wizard, edit form and console toolbar expose both drives. Windows device defaults were deliberately NOT changed to SATA/E1000E: that would trade VirtIO performance away permanently to work around a missing drive.
+- Regression: drive and alias cases in `internal/vmhost/firmware_test.go`, `internal/vmhost/guest_test.go` (aliased and legacy no-alias shapes) and `internal/protocol/vmmedia_test.go`. Command: `go test -race ./...`, run by both GitHub and Gitea `phase1` workflows. **Outstanding: no VirtIO Windows install has been run against the second drive.**
+- Avoid: identifying a drive by the target letter libvirt happened to assign; assuming every domain has the new aliases; defaulting Windows to slow devices instead of supplying the driver disc.
+
+## BUG-0199 — Secure Boot was silently on and could not be changed
+
+- Date: 2026-09-16. Status: fixed; regressions added; not verified on a host.
+- Symptom: Secure Boot was on for every UEFI VM with no indication and no control. libvirt picked `OVMF_CODE_4M.ms.fd` with the enrolled-keys VARS and SMM; General showed only "UEFI". Unsigned boot media or drivers could not be used at all.
+- Root cause: `firmware='efi'` was the only input to the domain (`managedDomainXML`), leaving the firmware build entirely to libvirt's own selection.
+- Fix: `protocol.VMBoot` gains `secure_boot` (`on`, `off`, omitted), stated explicitly in the domain as `<firmware><feature enabled=... name='secure-boot'/><feature enabled=... name='enrolled-keys'/></firmware>`, with SMM when on. **Omitted means on with enrolled keys** — exactly what libvirt already selected — so an installed guest keeps the firmware it was installed with and nothing has its firmware pulled out from under it. Secure Boot requires UEFI; requesting it with BIOS is rejected. Shown and editable in the UI; changing it requires the VM to be stopped.
+- Regression: Secure Boot cases in `internal/vmhost/firmware_test.go`, including the compatibility case that a UEFI definition with `secure_boot` unset still emits secure-boot and enrolled-keys enabled. Command: `go test -race ./...`, run by both GitHub and Gitea `phase1` workflows.
+- Avoid: letting libvirt choose a security-relevant firmware build implicitly; using a Go bool for a tri-state whose zero value would silently disable Secure Boot on every existing definition.
+
+## BUG-0200 — An HTTPS-downgrade refusal was reported as a network fault
+
+- Date: 2026-09-16. Status: fixed; regression added.
+- Symptom: the official virtio-win "stable" URL failed in about 2 s with "ISO download failed: connection, redirect or timeout". The host had DNS and TCP 443 to the site; the direct HTTP URL then downloaded in 120 s. The operator saw a network problem where the answer was "this URL redirects to plain HTTP".
+- Root cause: the server redirects HTTPS to HTTP and `publicISOClient`'s `CheckRedirect` correctly refuses the downgrade, but `fetchPublicISO` replaced every `client.Do` error with one generic message, so a deliberate policy refusal was indistinguishable from a timeout.
+- Fix: policy refusals are their own error type (`isoPolicyError`) and are unwrapped from the `*url.Error` and reported verbatim, while genuine transport faults keep the generic text. URL text is still never echoed, because ISO URLs can be signed.
+- Regression: `internal/vmhost/iso_download_test.go`, including an https-to-http redirect surfacing the downgrade reason and asserting no branch echoes the URL. Command: `go test -race ./...`, run by both GitHub and Gitea `phase1` workflows.
+- Avoid: collapsing distinct causes into one message to keep secrets out; a refusal and a fault need different operator actions.
+
+## BUG-0201 — Display resize was offered when the guest could not resize
+
+- Date: 2026-09-16. Status: fixed; regressions added.
+- Symptom: before virtio-win drivers were installed, the console offered "Resize guest to window", General said "Display resize: Available · VirtIO display" and the API returned `guest.resize: true`, but the guest never resized: at an 1100 px viewport the framebuffer stayed 1280×800 after 12 s. It worked only after the driver installer finished.
+- Root cause: `observeGuest` set `Resize` purely from the VirtIO video device in the domain XML. That is what QEMU would accept, not what the guest can do.
+- Fix: `Resize` requires the VirtIO display **and** the guest to have opened the qemu-vdagent channel, which is the agent that applies the resolution. The console hides or disables the control with an honest reason when it is false, and the details page no longer blames a missing VirtIO display for a VM whose guest tools simply are not installed.
+- Regression: `internal/vmhost/guest_test.go` covers VirtIO with and without the guest-side agent and a non-VirtIO display; the UI reason is covered in the web suites. Command: `go test -race ./...` and `npm --prefix web run test`, both run by the GitHub and Gitea `phase1` workflows.
+- Avoid: advertising a capability from the device model rather than the guest; reporting absence of evidence as capability.
+
+## BUG-0202 — Nothing offered to eject the install media after an install
+
+- Date: 2026-09-16. Status: fixed; browser behaviour not verified.
+- Symptom: after Windows installed, the ISO stayed inserted with the CD first in boot order, so every boot showed "Press any key to boot from CD or DVD" and a keypress restarted Setup. The operator had to find **Edit**.
+- Root cause: nothing prompted an eject or reorder once a guest had been installed.
+- Fix: the UI offers a one-click eject of the install media when a VM's install drive still holds media that is first in boot order. It is an offered action the operator confirms; Core does not guess that an install finished and does not silently rewrite the definition.
+- Regression: covered in the web suites. Command: `npm --prefix web run test`, run by both workflows. **Outstanding: not exercised in a real browser.**
+- Avoid: inferring "the install finished" host-side and mutating a VM definition without the operator.
+
+## BUG-0203 — A failed ISO download could not be removed or retried
+
+- Date: 2026-09-16. Status: fixed; regression added.
+- Symptom: a failed URL download left a permanent `virtio-win.iso · failed · 0 bytes` row in the ISO library with no delete and no retry.
+- Root cause: Controller media routes were only `GET/POST /api/v1/media` and `POST /api/v1/media/download`; nothing could remove a record.
+- Fix: `DELETE /api/v1/media/{id}` removes the library record of an `iso-import` whose operation is `failed` or `needs_attention`, audited as `media.discard`, and deletes only Controller-owned staging bytes. It returns 409 for an import still queued or dispatched, and **409 for one that succeeded**: the ISO then lives on its host, Core has no media-removal command, and Controller will not drop a record for bytes it cannot delete. Retry is `POST /api/v1/media/download` again under a new `request_id`; no second endpoint was added for what an existing one covers.
+- Regression: `internal/controller/media_download_test.go`. Command: `go test -race ./...`, run by both GitHub and Gitea `phase1` workflows.
+- Avoid: making the Controller the only record of truth for host-held media; inventing a retry endpoint that duplicates an existing call; faking a deletion Core cannot perform.
+
+## BUG-0204 — The upload banner still said "queued" after the transfer succeeded
+
+- Date: 2026-09-16. Status: fixed.
+- Symptom: after an ISO upload's host transfer succeeded, the banner still read "host transfer queued. Wait for a succeeded result before creating a VM", while the same page showed the `iso-import` task succeeded.
+- Root cause: UI only. The API already returns a live `status` per media entry; the one-shot notice string interpolated the status as it was at POST time and was never refreshed.
+- Fix: the banner follows the media entry's live status and distinguishes queued, succeeded and failed.
+- Regression: covered in the web suites. Command: `npm --prefix web run test`, run by both workflows.
+- Avoid: rendering a captured status string as if it were live state.
+
+## BUG-0205 — The default local repository was named "ISO" but held VM disks
+
+- Date: 2026-09-16. Status: fixed; regression added.
+- Symptom: the automatically registered local repository on a fresh host was named **ISO** although it also holds VM disks (`vm_disk` and `iso` capabilities), so Windows system disks landed on a repository called "ISO".
+- Root cause: `DefaultStorageName` was the literal `"ISO"`, from when the directory was only used for ISOs.
+- Fix: the default is `"Local storage"`. `RegisterDefaults` matches an existing registration on `DefaultStoragePath` and never on its name, so this changes only the name applied at first registration: a host that registered the directory under the earlier default keeps the name its pool master recorded, and an upgrade never renames, duplicates or re-registers it. The guide says so where it names the repository.
+- Regression: `TestDefaultLocalStorageNameIsAccurate` in `internal/vmhost/pool_storage_test.go`, asserting against the `DefaultStorageName` symbol with a negative property (the name must not contain "iso", case-insensitively) so it catches the old default without pinning a wording; proved to fail against a `git archive HEAD` export with `default local repository name "ISO" does not describe storage that also holds VM disks`. Command: `go test -race ./...`, run by both GitHub and Gitea `phase1` workflows.
+- Avoid: renaming existing host-owned registrations to match a new default; keying "already registered" on a display name rather than the path.
+
+## BUG-0206 — A new dedicated-memory VM showed an upgrade instruction meant for old ones
+
+- Date: 2026-09-16. Status: fixed.
+- Symptom: a VM created with dedicated memory on Core 0.2.7 showed "Existing VMs: upgrade Core, stop, then Edit → Save changes" on its details page. That sentence is for VMs defined by an older Core and is wrong for one whose dedicated memory is already applied.
+- Root cause: the sentence was unconditional in the memory-mode description.
+- Fix: shown only when it is actually true for the VM being viewed.
+- Regression: covered in the web suites. Command: `npm --prefix web run test`, run by both workflows.
+- Avoid: printing migration advice unconditionally in a details view.
+
+## BUG-0207 — Console controls were clipped and covered at 1440×1000
+
+- Date: 2026-09-16. Status: fixed; browser behaviour not verified.
+- Symptom: at 1440×1000 the console's "Open in new window" link was clipped under the tab strip, and the Recent tasks drawer covered the lower console area. With Clipboard open only a thin strip of the guest display stayed visible, so text typed into the VM could not be watched.
+- Root cause: console layout in `web/src/console.css`.
+- Fix: the popout link is no longer clipped and the guest display stays usable at that viewport with the clipboard panel open, using relative layout rather than a fixed viewport assumption.
+- Regression: **outstanding** — layout at a specific viewport is not covered by the .mjs suites and was not exercised in a real browser; no lab host was available. Recorded as outstanding rather than skipped.
+- Avoid: claiming a layout fix without looking at it; hard-coding one viewport.
+
+## BUG-0208 — The login page logged a 401 console error on every load
+
+- Date: 2026-09-16. Status: fixed.
+- Symptom: the login page requested `GET /api/v1/session` and got 401 before sign-in, logging a browser console error on every load.
+- Root cause: the session probe treated the expected "not signed in" answer as an error.
+- Fix: 401 before sign-in is handled as the expected answer rather than logged as a failure. Authentication is unchanged.
+- Regression: covered in the web suites. Command: `npm --prefix web run test`, run by both workflows.
+- Avoid: weakening the session check to silence a console message.
+
+## BUG-0209 — Installer progress used a different step list and offered Go Back at the end
+
+- Date: 2026-09-16. Status: fixed; **not compiled or run** (see Regression).
+- Symptom: after **Erase disk and install**, progress and completion used a different sidebar (Region/Network/Access/Storage/Installation) from the wizard (Welcome/Host/Network/Disk/Review), and the completion page still offered **Go Back**.
+- Root cause: the post-install screens are in `installer/gui/nex-shell.c`, a fragment included into cdebconf's `gtk/ui.c`, with its own `nex_stages[]` rail. The Go Back button is d-i's own action-box button from cdebconf's `go.c`, not a widget nex-shell.c creates.
+- Fix: `nex_stages[]` follows the wizard's list plus the one step it does not have (Welcome/Host/Network/Disk/Review/Install), with completed steps in the wizard's style. nex-shell.c exports one predicate that `installer/build-gui.sh` gates both the `create_goback_button` call and the `is_action_box_filled` count on, as assert-guarded exact-text replacements like the rest of that file. Both had to move together: `is_action_box_filled()` assumes the Go Back button exists whenever `CAN_GO_BACK(fe)`, so merely hiding it would have made the count read "already filled" and cost the completion page its **Restart now** button. The same predicate replaces the three copies of the `finish-install/reboot_in_progress` literal.
+- Regression: **outstanding, not skipped.** `installer/build-gui.sh` downloads cdebconf 0.280 with apt-get and compiles inside the ISO builder container; nex-shell.c has no standalone compilation unit, so it could not be compiled or run here. A lab run must confirm: the completion page shows **Restart now**, shows no **Go Back**, and Back still works on every earlier d-i screen. The assert-guarded replacements fail the ISO build loudly if the upstream text moves; a patch that applies cleanly but is wrong at runtime would not be caught without that lab run.
+- Avoid: removing a d-i button without the count that assumes it; editing `nex-wizard.c` for screens it does not render; claiming a build that was not run.
+
+## BUG-0210 — A Windows guest got no Windows-specific device defaults
+
+- Date: 2026-09-16. Status: fixed; regressions added; not verified on a host.
+- Symptom: selecting Guest OS = Windows changed no devices. The clock was `offset='utc'` although Windows keeps local time in the RTC, and there were no Hyper-V enlightenments.
+- Root cause: `GuestOS` was recorded but never consulted when building the domain.
+- Fix: a Windows guest gets `<clock offset='localtime'>` and Hyper-V `relaxed`, `vapic` and `spinlocks retries='8191'`. Only those three: each is a long-standing default for Windows, while `vpindex`, `synic`, `stimer`, `reset`, `frequencies` and `tlbflush` each ask KVM for a capability a host or nested hypervisor can lack, and a domain that then refuses to start is worse than a missing enlightenment. Every other guest OS value leaves the domain exactly as it was.
+- Regression: Windows clock and Hyper-V cases in `internal/vmhost/firmware_test.go`. Command: `go test -race ./...`, run by both GitHub and Gitea `phase1` workflows.
+- Avoid: enabling every available enlightenment because it is available; changing devices for guests that did not ask.
+
+## BUG-0211 — A Windows 11 guest was reported as Windows 10
+
+- Date: 2026-09-16. Status: fixed; regressions added.
+- Symptom: after guest tools were installed, a Windows 11 guest was reported as "Windows 10 IoT Enterprise LTSC 2024" in `GET /api/v1/vms` `guest.os`.
+- Root cause: the QEMU guest agent's product name comes from a registry value Windows 11 never renamed, and Nex reported it verbatim.
+- Fix: when the product name says Windows 10 but the reported build is 22000 or above, the name is corrected. A missing or unparseable build reports what the guest said rather than guessing. Existing bounding of guest-reported strings is unchanged, so a hostile guest cannot inject text through this path.
+- Regression: `internal/vmhost/guest_test.go` covers Windows 11 misreported as 10 (corrected), a genuine Windows 10 (unchanged), a missing or garbage build (unchanged) and a Linux guest (unchanged). Command: `go test -race ./...`, run by both GitHub and Gitea `phase1` workflows.
+- Avoid: trusting a guest-reported product name as identity; rewriting it without a bound and a fallback.
+
+## BUG-0212 — Typing into a Windows guest lost every shifted character
+
+- Date: 2026-09-16. Status: fixed; regression added.
+- Symptom: **Type into VM** sent `Nex-Test_Upper D:\Path\virtio-win-guest-tools.exe 123` and Notepad received `nex-test-upper d;\path\virtio-win-guest-tools.exe 123`: capitals became lowercase, `_` became `-`, `:` became `;`. Passwords, paths and commands could not be typed. The Run dialog then reported "cannot find d;\virtio-win-guest-tools.exe".
+- Root cause: `typeToVM` sent each character as `client.sendKey(keysym(ch), null, …)` — a bare keysym with no KeyboardEvent code and no Shift press. A guest reads the scancode noVNC derives from the key code plus the modifier state it was sent, not the keysym, so every character arrived as whatever that physical key types unshifted.
+- Fix: each character is typed as the physical US key that produces it, with Shift pressed around it when the character needs it and the KeyboardEvent code sent alongside the keysym. Characters outside the US layout keep the bare keysym they had.
+- Regression: `web/src/console.test.mjs` decodes the emitted event sequence the way a guest does — from the scancode of each key and the Shift state it was sent with — and asserts all printable ASCII survives a round trip, that `_` is Shift+Minus and `:` is Shift+Semicolon (the two failures actually observed), that the exact lab string survives, and that Shift is never left pressed. Command: `npm --prefix web run test`, run by both GitHub and Gitea `phase1` workflows; the `src/*.test.mjs` glob picks the new file up without a workflow change.
+- Avoid: sending a bare keysym and expecting a guest to infer the modifier; asserting the key table back at itself instead of decoding what the guest reads.
+
+## BUG-0213 — A completed shutdown was reported as needing attention
+
+- Date: 2026-09-16. Status: fixed; regressions added; **not verified on a host**.
+- Symptom: **Shut down** on a Windows guest with the guest agent connected powered the VM off, but the task ended `needs_attention` with "libvirt refused the shutdown request; inspect the VM on its host: virsh failed: signal: killed". The operator was sent to inspect a VM that had done exactly what was asked.
+- Root cause: two faults compounding. `Engine.virsh` capped **every** virsh call at 20 s, but libvirt holds the domain's job for the whole of a shutdown — this guest held `remoteDispatchDomainShutdown` for over three minutes, and Nex's own guest-agent polls logged `cannot acquire state change lock` at 37 s and 51 s. Killing the client at 20 s cancelled nothing on the host; it only destroyed Nex's evidence. Then `powerVM` turned any virsh failure straight into `powerRequestError`, which wraps `errPowerRequestUncertain` and is journaled as `needs_attention`, without ever asking the domain what had happened.
+- Fix: `virshTimeout` bounds by whether the command takes libvirt's per-domain job. Every mutating subcommand Core actually issues — `shutdown`, `reboot`, `reset`, `start`, `destroy`, `define`, `undefine`, `attach-device`, `detach-device`, `change-media`, `domrename` — gets a bound that exceeds a real guest operation, because a job-taking call waits for whatever job is already running on that domain: `detach-device` already waits on the guest to release a device, and even a quick `define` blocks behind a long shutdown. Queries keep the short bound so a hung libvirt still fails fast instead of holding Core's shared engine lock; guest-agent calls stay short deliberately, since an unresponsive guest must not hold observation for minutes and they carry their own one-second libvirt timeout. `powerVM` then settles a failed call by observing the domain through `powerObserved`, which already holds the rules: reaching "shut off" proves a shutdown or force-stop took effect, while a guest still running proves nothing about a reboot, so a stop settles on the spot and a reboot stays uncertain for an explicit reconcile. `powerRequestError` now says "did not confirm" rather than "refused", because after observation the cause may be either a real refusal or a killed call, and libvirt's own stderr line still distinguishes them.
+- Regression: `TestManagedPowerPostEffectFailureIsUncertain` (`internal/vmhost/power_test.go`) gained a first-attempt expectation and `TestVirshTimeoutSeparatesDomainJobsFromQueries` (`internal/vmhost/engine_test.go`) is new. Reverting only the observe-after-failure change reproduced the lab symptom exactly: shutdown and force-stop both reported `needs_attention` while the domain had reached shut off, and reboot and force-reboot stayed uncertain in both runs, confirming the uncertainty property was not weakened. Command: `go test -race ./...`, run by both GitHub and Gitea `phase1` workflows. Verified natively 2026-09-16 by A/B on one Windows guest with the guest agent connected, which is the condition that makes libvirt's shutdown hold the domain job: the pre-fix binary returned `wall=20.138s`, `needs_attention`, `virsh failed: signal: killed` — the recorded symptom — while the fixed binary returned `wall=1m0.073s`, `succeeded`; the guest reached `shut off` 17 s after the pre-fix run had declared failure, confirming that report was false. **Still outstanding: the ~4 minute delay before the original task was marked failed is unexplained; this reproduction shows a 20 s kill, not that delay.**
+- Avoid: one timeout for every libvirt call regardless of what it does; turning a transport failure into a verdict about the guest; killing a client to bound an operation the kill does not cancel; "fixing" this by treating every power failure as success.
+
+## BUG-0214 — A UEFI-to-BIOS edit orphans the VM's NVRAM file
+
+- Date: 2026-09-16. Status: **open**, recorded not fixed.
+- Symptom: not observed in the lab; found reviewing the fix for BUG-0196. A VM created with UEFI, edited to BIOS while stopped, and then deleted leaves its NVRAM file on the host.
+- Root cause: the same libvirt limitation as the TPM case. `undefine --nvram` removes state for the firmware the persistent definition still describes, so once a redefine has dropped UEFI there is nothing left for the flag to clean. Deletion now passes `--nvram` whenever any journaled revision was UEFI (`vmEverHad`), which is a strict improvement and covers the ordinary case, but it cannot recover state whose device the definition no longer has.
+- Why not fixed here: the TPM case was closed by refusing the transition, because removing a TPM destroys sealed guest secrets and is not something an operator should do in place. Firmware is different — switching a VM from UEFI to BIOS is a legitimate edit — so the same refusal is not obviously right, and the alternative is Core removing a libvirt-owned path directly. That is a product decision, not an implementation choice.
+- Owner: **the firmware variable-store slice**. Decision: project owner, 2026-09-16. That slice already owns the NVRAM path and is gated on the firmware variable store probe, which decides the implementation shape, so closing the orphan there avoids building a second mechanism the slice would immediately replace. Deliberately NOT closed by refusing UEFI-to-BIOS edits — by the same decision firmware stays changeable on a stopped VM — and not by having the delete path remove the file directly. Tracked in the [VM foundation debts](plans/2026-09-14-production-readiness-handoff.md#vm-foundation-added-2026-09-16).
+- Severity: lower than the TPM case. The NVRAM file holds UEFI variables and enrolled Secure Boot keys, not keys the guest sealed. It wastes space and could confuse a later VM given the same UUID.
+- Avoid: assuming an undefine flag cleans state for a device the current definition no longer carries; closing this by deleting paths under `/var/lib/libvirt` without an agreed decision.
+
+## BUG-0215 — A host without enrolled-keys firmware failed with an opaque libvirt error
+
+- Date: 2026-09-16. Status: fixed; regression added; found while verifying BUG-0199 on real libvirt.
+- Symptom: on a host whose OVMF build advertises `secure-boot` but not `enrolled-keys`, creating any UEFI VM failed at define with libvirt's `operation failed: Unable to find 'efi' firmware that is compatible with the current configuration`. Nex reported that verbatim as `VM definition outcome uncertain`. The message is true but never mentions Secure Boot, so the operator cannot tell which setting to change, and the VM directory is left retained for inspection.
+- Root cause: BUG-0199 made Nex state `secure-boot` and `enrolled-keys` explicitly instead of letting libvirt pick a firmware build. That is correct — it is what keeps an installed guest on the firmware it was installed with — but it converts "this host has no such build" from something libvirt silently worked around into a hard define failure, and Nex had no preflight for it. The TPM path already asked the host through `virsh domcapabilities`; the firmware path did not.
+- Fix: `hostSecureBootSupport` (`internal/vmhost/firmware.go`) reads the `firmwareFeatures` block libvirt publishes in `domcapabilities` — `secureBoot` and `enrolledKeys` enums — and `managedCapacity` refuses before defining, naming the setting: "this host's UEFI firmware has no enrolled Secure Boot keys, so a signed installer such as Windows would not boot: install the enrolled-keys OVMF build on Nex Core, or turn Secure Boot off for this VM". A libvirt that reports no `firmwareFeatures` block is not treated as evidence of a missing build, matching how the TPM `backendVersion` enum is handled. Debian, which Core is built on, ships the enrolled-keys build, so a compliant Core host is unaffected.
+- Regression: `TestHostSecureBootSupportRefusesWhatTheHostCannotBuild` in `internal/vmhost/firmware_test.go`, using the two capability shapes this host actually reported (enrolledKeys "no" only, then "yes" and "no" after the enrolled build was published), plus an older-libvirt shape with no `firmwareFeatures` and a BIOS VM. Command: `go test -race ./...`, run by both GitHub and Gitea `phase1` workflows. Verified natively: with only the secboot build present the define failed as described; after publishing an enrolled-keys descriptor the same VM defined, started, and libvirt selected `OVMF_CODE.secboot.4m.fd` with the enrolled VARS template. See [the verification report](qa/2026-09-16-windows-11-fix-verification.md).
+- Avoid: stating a firmware requirement explicitly without asking the host whether it can meet it; passing libvirt's firmware-selection error through as the operator-facing reason; treating a silent capability block as a refusal.
+
+## BUG-0216 — The Go test suite ran virsh against the developer's real hypervisor
+
+- Date: 2026-09-16. Status: fixed; guard added; found by disrupting a real workstation.
+- Symptom: on a workstation with libvirt installed, `go test ./internal/...` raised polkit authorisation dialogs at the logged-in user. One full run issued **28 real `virsh --connect qemu:///system` calls**, including `virsh event --all --loop`, which retries continuously; repeated runs produced 165 `domcapabilities` and 45 `list --all --uuid` authorisation requests in ten minutes. The desktop polkit agent was flooded, every dialog's authorisation cookie expired before it could be answered, and the operator's own correct password was rejected every time with a lockout backoff. Nothing legitimate needed authorising.
+- Root cause: several test paths in `internal/vmhost`, `internal/agent` and `internal/localcore` reach code that shells out to `virsh` without installing the per-test PATH stub `fakeCommand` provides. On CI there is no libvirt, so those calls fail immediately and the tests already tolerate the failure; the defect is invisible there and only appears where libvirt is actually installed. Tests must never touch the host they run on.
+- Fix: a `TestMain` in each of those three packages (`stubs_test.go`) puts a refusing `virsh` stub first on `PATH` for the whole package run, so an unstubbed path fails deterministically on every machine instead of reaching `qemu:///system`. Tests that install their own fake with `fakeCommand` are unaffected, because they prepend their own directory afterwards. No production code changed, and no test outcome changed: the calls already failed on CI.
+- Recurrence guard: `tests/test_host_tool_isolation.py` fails if any `internal/` package that has tests and can reach virsh lacks the stub. It follows the **dependency graph**, not the text of each package: a literal `"virsh"` search would have produced a false positive on `internal/protocol` (whose `FenceVirsh = "virsh"` is a fencing-method identifier that runs nothing) and, far worse, would have missed `internal/localcore`, which never mentions virsh yet made 23 of the 28 calls through `internal/vmhost`. A package counts as executing virsh when it both names the binary and calls `exec.Command`, judged over the package rather than per line: excluding assignment lines also excluded `bin = "virsh"` followed by `exec.Command(bin, ...)`, an exec site written one line apart, which a probe package of exactly that shape confirmed went undetected before the rule changed. Proved to fail by deleting one guard: `nex.local/nex/internal/localcore has tests and can reach virsh, but installs no refusing stub`. A second case asserts the stub exits non-zero, so it surfaces a call instead of hiding it.
+- Regression: verified by putting a logging `virsh` first on `PATH` and running the suite. Before the guard: 28 real calls (`list --all --uuid` 20, `domcapabilities` 4, `event --all --loop` 4) across vmhost 3, agent 4, localcore 23, controller 0. After the guard: **0**, with `go test -race ./internal/...` still green in every package. Command: `go test -race ./...`, run by both GitHub and Gitea `phase1` workflows.
+- Avoid: relying on "CI has no libvirt" to keep host-touching tests harmless; assuming a flood of authorisation prompts means a misconfigured polkit or a wrong password rather than a caller looping; blaming a concurrent agent for host activity before auditing your own test runs.

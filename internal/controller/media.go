@@ -221,6 +221,58 @@ func (c *Controller) media(w http.ResponseWriter, r *http.Request, user, csrf st
 	committed = true
 	write(w, 201, resourceResponse(cmd, op))
 }
+
+// deleteMedia clears an import that never became pool content. An imported ISO belongs to
+// its host: the file and the durable record live in the pool master's Core journal, which
+// re-adopts the entry on every report, so the Controller must not pretend to delete one and
+// refuses. A failed or abandoned import published nothing on the host, so the only thing
+// left is this Controller's own request row; the host's journal outcome and the task and
+// audit history stay untouched. Should the host later report the ISO as applied after all,
+// adoption recreates the entry from Core's record, which remains the only source of truth.
+func (c *Controller) deleteMedia(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	id := r.PathValue("id")
+	if !identifierValid(id) {
+		fail(w, 404, "media not found")
+		return
+	}
+	// Staging is shared with an active upload, which may be writing this entry right now.
+	if !c.mediaMu.TryLock() {
+		fail(w, 409, "another media transfer is active; retry shortly")
+		return
+	}
+	defer c.mediaMu.Unlock()
+	tx, err := c.db.Begin()
+	if err != nil {
+		fail(w, 500, "storage unavailable")
+		return
+	}
+	defer tx.Rollback()
+	var status string
+	if tx.QueryRow("SELECT o.status FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.id=? AND r.kind='iso-import'", id).Scan(&status) != nil {
+		fail(w, 404, "media not found")
+		return
+	}
+	switch status {
+	case "failed", "needs_attention":
+	case "succeeded":
+		fail(w, 409, "this ISO is stored on its host; Nex Core cannot remove imported media yet, so it cannot be removed from the library here")
+		return
+	default:
+		fail(w, 409, "this import is still running; wait for its task to finish")
+		return
+	}
+	if _, err = tx.Exec("DELETE FROM managed_resources WHERE id=? AND kind='iso-import'", id); err != nil {
+		fail(w, 500, "media removal failed")
+		return
+	}
+	if c.audit(tx, user, "media.discard", id) != nil || tx.Commit() != nil {
+		fail(w, 500, "media removal failed")
+		return
+	}
+	// Controller-owned scratch space only: staged upload bytes of an import that failed.
+	os.Remove(filepath.Join(c.cfg.DataDir, "media", id))
+	write(w, 200, map[string]any{"id": id, "deleted": true})
+}
 func (c *Controller) agentMedia(w http.ResponseWriter, r *http.Request, host string) {
 	id := r.PathValue("id")
 	if len(id) != 64 {

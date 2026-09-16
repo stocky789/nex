@@ -4,9 +4,10 @@
 
 This development workflow changes an existing VM's definition from its **General** tab in
 Nex Controller: name, description and guest OS hint; vCPUs, topology and CPU model; memory
-mode and size; disks and network interfaces (add and remove); firmware, machine type, boot
-order and install ISO; and autostart. What a running guest can take is applied while it runs;
-the rest waits for the VM to be stopped and the form says so per field. Deleting a VM is
+mode and size; disks and network interfaces (add and remove); firmware, machine type, Secure
+Boot, TPM, boot order, install ISO and driver disc; and autostart. What a running guest can
+take is applied while it runs; the rest waits for the VM to be stopped and the form says so
+per field. Deleting a VM is
 covered in [Delete a virtual machine](delete-virtual-machine.md). Resizing a disk, moving a
 disk to other storage and moving a VM to another host are not available in this build.
 
@@ -27,8 +28,8 @@ disk to other storage and moving a VM to another host are not available in this 
    the VM is running and which fields therefore wait for a stop.
 2. Change what you need:
    - **Name**, **Virtual CPUs**, **Sockets / Cores / Threads**, **CPU model**, **Memory mode**,
-     **Memory (MiB)**, **Firmware**, **Machine type** and every **Boot order** field are only
-     editable while the VM is stopped.
+     **Memory (MiB)**, **Firmware**, **Machine type**, **Secure Boot**, **TPM** and every
+     **Boot order** field are only editable while the VM is stopped.
      The CPU selector contains the named models this host can run, plus Host passthrough and
      Host model; choose a baseline reported by every intended destination before migration.
      Nex Core checks that named model again before applying the edit.
@@ -47,9 +48,27 @@ disk to other storage and moving a VM to another host are not available in this 
      MAC; **Remove** detaches one. Both work on a running VM. An existing interface's network,
      adapter model, MAC and MTU change only while stopped. Existing interfaces show their
      actual MAC, which stays fixed across later edits.
+   - **Secure Boot** and **TPM**: **Secure Boot** is **On · only signed boot software runs** or
+     **Off · unsigned boot media and drivers allowed**; **TPM** is **TPM 2.0 · emulated device**
+     or **None**. Both are disabled with **Not available with BIOS** on a BIOS VM. A UEFI VM
+     created before these fields existed shows **On** and **None**, which is what it is already
+     running: libvirt gave every UEFI VM the enrolled-keys firmware, and no VM had a TPM.
+     Leaving them alone changes nothing about how the guest boots. Both are part of the
+     firmware a guest is installed against, so both need the VM stopped, and both can break an
+     installed guest: turning Secure Boot off or on changes the firmware build, and removing a
+     TPM leaves a guest that sealed BitLocker keys to it unable to unlock. Record a BitLocker
+     recovery key inside the guest before touching its TPM.
    - **Install ISO**: choose another ISO already on this VM's host, or **No install media**
      to eject the current one. The ISO library does not have to be the repository that holds
      the VM's disks. Both work while the VM runs; the CD drive keeps its place in the boot order.
+   - **Driver disc**: the second CD drive, for the virtio-win ISO a Windows installer needs
+     beside its install media. Choose another ISO on this host or **No driver disc**; the list
+     excludes whatever **Install ISO** holds. It changes while the VM runs and is never in the
+     boot order. The field is disabled, with *This host's Nex Core does not provide a second CD
+     drive yet*, on a host running an older Nex Core. A VM defined before the second drive
+     existed gains it the first time it is saved: with the VM stopped the drive is there at the
+     next start, and a running VM gets the drive added to its definition (SATA cannot be
+     hot-plugged, so the guest sees it after its next stop and start).
 3. Select **Save changes**. Controller checks the definition against the host and pool the
    same way creation does and queues a `vm-update` task for the host. Select **Cancel** to
    discard the form.
@@ -84,6 +103,21 @@ stop and start), and a changed ISO is visible in the guest's CD drive. **Activit
   older than 0.2.4 this is the CD drive's boot order. Shut the VM down, then **Edit → Save
   changes** once; set **CD drive boot order** in the same edit if you want the drive to boot
   first again.
+- **"stop the VM first to change Secure Boot" or "… the TPM":** both are firmware, not
+  devices a running guest can take. Shut the VM down, then edit.
+- **"this host cannot provide a virtual TPM" / "this host has no emulated TPM backend":**
+  adding a TPM was refused because that host's libvirt offers no emulated TPM, which means
+  `swtpm` and `swtpm-tools` are missing. Nex Core installs both; install them on the host and
+  restart `libvirtd`, then submit the edit again. The VM is unchanged.
+- **"VM TPM differs from the requested configuration" or "VM Secure Boot differs from the
+  requested configuration":** the host applied the definition but its own read-back does not
+  carry the TPM or the Secure Boot state that was asked for. Nex does not report that as
+  success. Inspect the VM on its host and its libvirt log; the most likely cause is a host
+  whose firmware or swtpm packages changed underneath it.
+- **A Windows guest's clock jumps after an upgrade and a stopped save:** a Windows VM now keeps
+  **local time** in its virtual RTC, which is what Windows expects, instead of UTC. A guest
+  that had been compensating shows the difference once and then settles at the next Windows
+  time sync. If a guest must keep UTC in the RTC, set **Guest operating system** to **Other**.
 - **"storage, size and provisioning cannot be changed after creation":** add a new disk
   instead, or plan a replacement VM; disk resize is not yet available.
 - **"a change or power request for this VM is still pending":** one request per VM is in
@@ -109,4 +143,12 @@ stop and start), and a changed ISO is visible in the guest's CD drive. **Activit
 See the [edit QA report](../qa/vm-edit/checks.md) and the
 [physical reservation QA report](../qa/dedicated-memory/checks.md) for executed checks and
 untested limits.
+
+**Secure Boot, TPM and driver disc editing are not lab-verified.** They are covered by Nex Core
+unit tests over the generated libvirt definition, the drive-by-alias resolution, the live-edit
+path for a VM that predates the second CD drive, and the TPM state removal on delete
+(`internal/vmhost/firmware_test.go`), and by Controller UI tests. Not exercised on a host: the
+compatibility case that matters most — an installed Windows VM created before these fields
+existed, saved once after a Core upgrade, continuing to boot with the same firmware — and
+adding a driver disc to a VM that predates the second drive.
 

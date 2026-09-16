@@ -136,7 +136,7 @@ func TestManagedCurrentAndAppliedFollowRevisions(t *testing.T) {
 		t.Fatal("fixture should lack targets")
 	}
 	only := []managedJournal{entry}
-	if cur, err = managedCurrent(only, v0.ID); err != nil || cur.Targets[0] != "vda" || cur.MediaTarget != "sda" {
+	if cur, err = managedCurrent(only, v0.ID); err != nil || cur.Targets[0] != "vda" || cur.MediaTarget != "sda" || cur.DriversTarget != "sdb" {
 		t.Fatalf("derived targets %+v %v", cur, err)
 	}
 }
@@ -149,7 +149,7 @@ func TestManagedApplyLiveReconcilesDevices(t *testing.T) {
 	cur := managedTestVM()
 	cur.NICs = []protocol.VMNIC{{NetworkID: "n", Model: "virtio"}, {NetworkID: "n", Model: "e1000e", MAC: "52:54:00:aa:bb:cc"}}
 	nets := []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}, {Kind: "bridge", Source: "br0"}}
-	actual, err := managedDomainXML(cur, nets, []string{"/vm/disk-0.qcow2"}, []string{"vda"}, "sda", "/iso/old.iso")
+	actual, err := managedDomainXML(cur, nets, []string{"/vm/disk-0.qcow2"}, []string{"vda"}, "sda", "/iso/old.iso", "sdb", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,13 +163,15 @@ esac`)
 	next := cur
 	next.Disks = append(next.Disks, protocol.VMDisk{StorageID: "s", Name: "data", SizeGiB: 5, Bus: "scsi"})
 	next.NICs = []protocol.VMNIC{{NetworkID: "n", Model: "e1000e", MAC: "52:54:00:aa:bb:cc"}, {NetworkID: "n", Model: "virtio", MAC: "52:54:00:00:00:01"}}
-	expected, err := managedDomainXML(next, nets, []string{"/vm/disk-0.qcow2", "/vm/disk-1.qcow2"}, []string{"vda", "sdb"}, "sda", "")
+	// The driver disc drive keeps sdb across the edit, the way managedUpdateLayout reserves it,
+	// so the new disk takes the next free SATA letter rather than renaming a device.
+	expected, err := managedDomainXML(next, nets, []string{"/vm/disk-0.qcow2", "/vm/disk-1.qcow2"}, []string{"vda", "sdc"}, "sda", "", "sdb", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	e := NewManaged(t.TempDir())
 	os.MkdirAll(e.stateDir, 0700)
-	if err = e.applyLive(context.Background(), cur.ID, expected, ""); err != nil {
+	if err = e.applyLive(context.Background(), cur.ID, expected, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(calls)
@@ -192,14 +194,14 @@ esac`)
 	// The guest can empty its own tray: the live drive is then already in the wanted state
 	// and virsh refuses an eject on it, so only the persistent definition is changed.
 	livePath := filepath.Join(t.TempDir(), "live.xml")
-	live, err := managedDomainXML(cur, nets, []string{"/vm/disk-0.qcow2"}, []string{"vda"}, "sda", "")
+	live, err := managedDomainXML(cur, nets, []string{"/vm/disk-0.qcow2"}, []string{"vda"}, "sda", "", "sdb", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	os.WriteFile(livePath, live, 0600)
 	t.Setenv("MANAGED_LIVE_XML", livePath)
 	os.Remove(calls)
-	if err = e.applyLive(context.Background(), cur.ID, expected, ""); err != nil {
+	if err = e.applyLive(context.Background(), cur.ID, expected, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	b, _ = os.ReadFile(calls)
@@ -214,7 +216,7 @@ esac`)
 	}
 	var got managedDomain
 	xml.Unmarshal(expected, &got)
-	if got.Devices.Disks[1].Target.Dev != "sdb" || got.Devices.Disks[2].Device != "cdrom" || got.Devices.Disks[2].Source != nil {
+	if got.Devices.Disks[1].Target.Dev != "sdc" || got.Devices.Disks[2].Device != "cdrom" || got.Devices.Disks[2].Source != nil {
 		t.Fatalf("expected definition %+v", got.Devices.Disks)
 	}
 }

@@ -1,0 +1,48 @@
+{
+  "summary": "Core measures per-VM CPU, memory and disk usage and reports it on the host inventory; Controller validates the new member and passes it through on GET /api/v1/vms. A new agent probe samples each active VM with `virsh domstats --raw --nowait`, which returns what libvirt can read without taking the domain's job, so the probe cannot stall behind a long-running operation on the VM being watched. CPU time is a cumulative counter, so Core keeps the previous sample and reports the rate itself rather than leaving a Controller to subtract two counters. Members libvirt answers only behind the QEMU monitor are nullable, so absent is distinguishable from zero. This delivers the measurement half of Phase 2 roadmap item 8; no operator-facing surface renders the figures yet, so that item stays open. API impact: changed contract.",
+  "paths": [
+    "internal/protocol/protocol.go",
+    "internal/agent/probes.go",
+    "internal/agent/usage_test.go",
+    "internal/controller/monitor.go",
+    "internal/controller/appliance.go",
+    "internal/controller/delete.go",
+    "internal/controller/managed.go",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No operator workflow changes. The measurement is reported by the host and exposed on the API, but nothing in the web UI renders it yet, so there is no screen, control, error or recovery step for an operator to follow. The guide is updated in the same change as the UI surface that makes these figures visible; writing instructions for a panel that does not exist would document a workflow nobody can perform.",
+    "pages": []
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "Changed contract. The report inventory member vms[].usage (protocol.VMUsage, new schema) and the `usage` health check are new, and GET /api/v1/vms passes `usage` through for a VM observed running in a fresh libvirt-healthy report. No route, agent command, capability or protocol version changes, and no existing member is altered. Controller bounds the new member in validateInventory: a rate paired with no window, a window above 300000 ms, or a percentage above the host's own 1000 clamp is refused, while a window without a rate is accepted because that is a host that measured a gap and declined to turn it into a rate; the asymmetry is deliberate, since a validateInventory failure discards the whole host report. Compatibility follows the shared upgrade rule: an older Core omits the member and clients show no usage, and Controller must be upgraded before Core because report JSON is decoded with DisallowUnknownFields. Affected contracts: protocol.VM, protocol.VMUsage, the host inventory report, and GET /api/v1/vms (ManagedAppliance).",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Delivers part of an existing Phase 2 item rather than changing milestone status, delivery order or published built/outstanding items. Roadmap item 8's usage requirement remains open until an operator-facing surface renders the figures, and the production-readiness handoff already records that.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Usage is observed state with no durable record anywhere. Core measures it from libvirt on each probe and reports it; the previous CPU counter is held only in the agent's process memory so a rate can be computed, is dropped when a VM leaves the active list, and costs at most one probe of no rate after an agent restart. Nothing is written to the host journal and nothing is stored in the Controller database: the Controller validates the member, holds it only inside the inventory blob it already mirrors from the host report, and recomputes every displayed figure from the newest report. A fresh Controller needs no adoption path for it, because the next host report carries the current numbers.",
+    "verification": "n/a"
+  },
+  "verification": {
+    "method": "go build ./... and go vet on the three changed packages: clean. go test -race ./internal/agent/ ./internal/controller/ ./internal/protocol/: passed. Six new tests in internal/agent/usage_test.go cover the rate arithmetic and the sample parser, and run under the existing `go test -race ./...` step of the `go` job in both .github/workflows/phase1.yml and .gitea/workflows/phase1.yml, so no workflow change was needed. The overflow guard was independently confirmed to be load-bearing by computing the unguarded expression: a delta of 2^62 ns multiplied by 100 wraps uint64 to exactly 0, so without the guard TestUsageRateClampsInsteadOfOverflowing reads 0 percent instead of the 1000 it asserts. python3 -m unittest tests.test_api_contract: 29 tests OK after adding the VMUsage schema and regenerating the reference with scripts/generate_api.py. The openapi.json edit was verified strictly additive against a pre-edit snapshot: one schema added (VMUsage), one property added to each of VM and ManagedAppliance, and the remainder of the document byte-identical, so concurrent work in that file by another lane was preserved. python3 -m unittest discover -s tests -p test_repository_privacy.py: passed. NOT RUN and NOT CLAIMED: no host, no libvirt, no VM and no browser. The probe has never executed against a real libvirt, the domstats key names and units are read from libvirt's reference rather than from a capture, and whether libvirt accepts domstats on Core's read-only connection is unconfirmed; that failure mode is benign by design (every VM reads as having no usage observation and no host check turns red) but the feature would simply not work. These are recorded as open host-verification items.",
+    "evidence": [
+      "internal/agent/usage_test.go",
+      "internal/agent/probes.go",
+      "internal/controller/monitor.go",
+      "docs/api/openapi.json",
+      "tests/test_api_contract.py"
+    ]
+  }
+}

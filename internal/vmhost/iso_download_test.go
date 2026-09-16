@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,6 +31,116 @@ func testISOClient(t *testing.T, handler http.HandlerFunc) *http.Client {
 	}
 	t.Cleanup(client.CloseIdleConnections)
 	return client
+}
+
+// testISOTLSClient is testISOClient over real TLS, so an HTTPS source and the
+// client's own redirect policy run exactly as they do against a public mirror.
+// The standard test certificate covers example.com and its subdomains.
+func testISOTLSClient(t *testing.T, handler http.HandlerFunc) *http.Client {
+	t.Helper()
+	server := httptest.NewTLSServer(handler)
+	t.Cleanup(server.Close)
+	client := publicISOClient()
+	transport := client.Transport.(*http.Transport)
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+	}
+	transport.TLSClientConfig = server.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	t.Cleanup(client.CloseIdleConnections)
+	return client
+}
+
+// A download link can be signed, so its text is a credential: no failure may echo it.
+func assertNoURLText(t *testing.T, err error, source string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("download did not fail")
+	}
+	u, parseErr := url.Parse(source)
+	if parseErr != nil {
+		t.Fatal(parseErr)
+	}
+	for _, secret := range []string{source, u.Host, u.Path, u.RawQuery, "://"} {
+		if secret != "" && strings.Contains(err.Error(), secret) {
+			t.Fatalf("error echoed URL text %q: %v", secret, err)
+		}
+	}
+}
+
+// A refusal Core decided must not be reported as a network fault: the operator can act
+// on "this server redirects HTTPS to plain HTTP" and cannot act on "connection, redirect
+// or timeout". Every branch is still checked for URL text.
+func TestPublicISODownloadReportsPolicyRefusalsDistinctly(t *testing.T) {
+	data, _ := managedTestISO()
+	const source = "https://iso.example.com/secret-path/disc.iso?token=private-token"
+	const plain = "http://iso.example.org/secret-path/disc.iso?token=private-token"
+	generic := "ISO download failed: connection, redirect or timeout"
+	for _, tc := range []struct {
+		name    string
+		source  string
+		want    string
+		client  func(t *testing.T) *http.Client
+		limit   int64
+		partial bool
+	}{
+		// The official virtio-win "stable" link behaves exactly like this.
+		{name: "https-downgrade-redirect", source: source, want: "ISO download refused this server's redirect from HTTPS to plain HTTP; use a direct HTTPS link to the ISO", client: func(t *testing.T) *http.Client {
+			return testISOTLSClient(t, func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "http://iso.example.com/secret-path/disc.iso?token=private-token", 302)
+			})
+		}},
+		{name: "redirect-loop", source: plain, want: "ISO download exceeded five redirects", client: func(t *testing.T) *http.Client {
+			return testISOClient(t, func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, plain, 302) })
+		}},
+		{name: "redirect-to-private-address", source: plain, want: "ISO download refused the redirect target: ISO URL must use a public address", client: func(t *testing.T) *http.Client {
+			return testISOClient(t, func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "http://127.0.0.1/private", 302) })
+		}},
+		{name: "redirect-with-credentials", source: plain, want: "ISO download refused the redirect target: ISO URL must be a public HTTP or HTTPS URL without credentials or a fragment, at most 4096 characters", client: func(t *testing.T) *http.Client {
+			return testISOClient(t, func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "http://user:secret@iso.example.org/private", 302)
+			})
+		}},
+		// The real dialer decides this one, so the wrapped dial error must survive too.
+		{name: "non-public-destination", source: "http://localhost/secret-path/disc.iso?token=private-token", want: "ISO download destination is not public", client: func(t *testing.T) *http.Client { return publicISOClient() }},
+		{name: "rejected-source-url", source: "http://127.0.0.1/secret-path/disc.iso?token=private-token", want: "ISO URL must use a public address", client: func(t *testing.T) *http.Client { return publicISOClient() }},
+		{name: "server-error", source: plain, want: "ISO server returned HTTP 503", client: func(t *testing.T) *http.Client {
+			return testISOClient(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) })
+		}},
+		{name: "declared-oversize", source: plain, want: "ISO exceeds available storage including reserve", client: func(t *testing.T) *http.Client {
+			return testISOClient(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Length", "999999")
+				w.WriteHeader(200)
+			})
+		}, limit: 1000},
+		// A genuine transport fault stays generic: it has no reason to report.
+		{name: "connection-closed", source: plain, want: generic, client: func(t *testing.T) *http.Client {
+			client := testISOClient(t, func(w http.ResponseWriter, r *http.Request) {})
+			client.Transport.(*http.Transport).DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+				return nil, errors.New("dial tcp " + plain + ": connection refused")
+			}
+			return client
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			limit := tc.limit
+			if limit == 0 {
+				limit = int64(len(data))
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			body, err := fetchPublicISO(ctx, tc.client(t), tc.source, limit)
+			if body != nil {
+				body.Close()
+			}
+			assertNoURLText(t, err, tc.source)
+			if err.Error() != tc.want {
+				t.Fatalf("reason %q, want %q", err.Error(), tc.want)
+			}
+			if tc.want != generic && strings.Contains(err.Error(), generic) {
+				t.Fatalf("policy refusal reported as a network fault: %v", err)
+			}
+		})
+	}
 }
 
 func TestURLDownloadPublicationAndRecovery(t *testing.T) {

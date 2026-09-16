@@ -2543,6 +2543,24 @@
             "type": "integer",
             "minimum": 0,
             "description": "0 keeps the CD drive out of the boot order; any other value joins the disks' contiguous 1..N numbering. Every VM has the drive, so the order is kept while it is empty and an ISO can be ejected from a running guest."
+          },
+          "secure_boot": {
+            "type": "string",
+            "enum": [
+              "",
+              "on",
+              "off"
+            ],
+            "description": "UEFI Secure Boot. Omitted means on with the Microsoft keys enrolled, which is exactly what libvirt already selected for every UEFI VM defined before this field existed, so a definition re-sent unchanged keeps the firmware its guest was installed with. off selects the plain OVMF build with no enrolled keys, for unsigned boot media or drivers. Requires uefi; on with bios is rejected. Core refuses the VM when the host's domain capabilities do not offer a matching firmware build, naming the setting rather than passing libvirt's firmware-selection error through. Changing it requires the VM to be shut off."
+          },
+          "tpm": {
+            "type": "string",
+            "enum": [
+              "",
+              "none",
+              "2.0"
+            ],
+            "description": "Emulated TPM. 2.0 adds a tpm-crb device backed by swtpm; omitted and none add no device, so a definition written before this field keeps exactly the devices it had. Windows 11 requires a TPM and refuses to install without one. Core refuses the VM when the host's domain capabilities do not advertise the emulator backend, rather than defining a device that cannot start. Changing it requires the VM to be shut off, and REMOVING a TPM is refused outright at any time: anything the guest sealed to it, including a Windows BitLocker key, would be lost, and libvirt cleans TPM state by iterating the devices the persistent definition still carries, so a redefine without it would orphan that state."
           }
         },
         "required": [
@@ -2551,7 +2569,7 @@
           "media_boot_order"
         ],
         "x-go-type": "protocol.VMBoot",
-        "description": "Firmware, machine type and the install media's place in the boot order. Boot order is per device (libvirt forbids mixing per-device boot with an os/boot device list), so at least one disk or the install media must carry a non-zero order."
+        "description": "Firmware, Secure Boot, TPM, machine type and the install media's place in the boot order. Boot order is per device (libvirt forbids mixing per-device boot with an os/boot device list), so at least one disk or the install media must carry a non-zero order."
       },
       "VMCPU": {
         "type": "object",
@@ -2663,6 +2681,10 @@
           "media_id": {
             "type": "string",
             "description": "Install ISO (Media.id), empty for none. The ISO must be imported and verified on the placement host; it may live on any storage that host can read and does not need to share a repository with the VM's disks. Every VM has the CD drive, so a non-zero boot.media_boot_order does not require media_id: an emptied drive keeps its place in the boot order."
+          },
+          "drivers_media_id": {
+            "type": "string",
+            "description": "ISO in the VM's second CD drive, for a driver disc an installer needs alongside its install media - a Windows guest installing to a VirtIO disk needs the virtio-win ISO here. Empty leaves that drive empty; the drive itself always exists on a host reporting vm-media-drivers-drive-v1. Must differ from media_id."
           },
           "start_after_create": {
             "type": "boolean",

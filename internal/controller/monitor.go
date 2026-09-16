@@ -106,6 +106,18 @@ func validateInventory(v *protocol.Inventory) error {
 				}
 			}
 		}
+		if u := vm.Usage; u != nil {
+			// A rate without a window is nonsense and is refused. A window without a rate is
+			// not: the host measured a gap it declined to turn into a rate. The asymmetry is
+			// deliberate — validateInventory failure discards the entire host report, so this
+			// check must not be reachable from arithmetic. Five minutes outer-bounds any
+			// window a host should call a rate, and cpu_percent shares the host's clamp so
+			// both sides agree on what is arithmetic rather than observation.
+			if u.ObservedAt.IsZero() || u.SampleWindowMS > 300000 ||
+				(u.CPUPercent != nil && (u.SampleWindowMS == 0 || *u.CPUPercent > 1000)) {
+				return errors.New("invalid VM")
+			}
+		}
 	}
 	return nil
 }

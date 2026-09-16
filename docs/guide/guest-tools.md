@@ -12,6 +12,11 @@ The guest tools are standard packages, not Nex-specific software. VMs created be
 feature keep their original definitions: their page shows **Channel missing** for the
 clipboard and no display resize until they are recreated.
 
+Display resize is one of the things the tools enable, not something the VM has on its own.
+Until the tools run, **Display resize** reads **Not available** and the console does not
+offer **Resize guest to window**, because a guest with no agent to act on the request
+ignores it.
+
 On Windows the same virtio-win package carries the memory balloon driver, so a VM created
 with the **Maximum** [memory mode](create-virtual-machine.md#memory-modes) returns no freed
 memory to the host until that package is installed; Linux has the driver in its kernel. See
@@ -52,14 +57,24 @@ The **Guest tools** panel shows:
   Loopback and link-local addresses are left out.
 - **Console clipboard:** Ready (graphical session with spice-vdagent), or **Waiting for
   spice-vdagent in the guest** until then.
-- **Display resize:** Available for VMs with a VirtIO display, so the console option
-  **Resize guest to window** works in guests with a virtio-gpu driver (Linux kernels and
-  the virtio-win display driver).
+- **Display resize:** Available only when the VM has a VirtIO display **and** the guest is
+  running the vdagent that acts on a resize request — that is, when **Console clipboard**
+  reads **Ready**. The console then offers **Resize guest to window**. A VirtIO display on
+  its own means the host would send the request, not that the guest would follow it, so
+  Nex does not offer the option until the guest can use it.
 
 Channel states refresh with every host report, about every ten seconds; the operating
 system, hostname and addresses are asked from the agent about once a minute. While the VM
 is stopped the panel says guest tools are observed only while it runs. A connected agent reports facts and lets
 the host ask the guest for information; it is not proof that the guest's applications work.
+
+### Reported operating system
+
+The operating system is the guest's own answer, not something Nex detects. Nex corrects one
+known misreport: Windows 11 kept the internal product name Windows 10 wrote, so the QEMU
+guest agent calls a Windows 11 guest "Windows 10 …". Nex reads the build number the same
+answer carries and reports **Windows 11** from build 22000 upwards. A guest that reports no
+build number, or one Nex cannot read, is shown exactly as it described itself.
 
 ### Memory reclaim
 
@@ -100,6 +115,15 @@ guest hand back pages it has already freed; it does not make Nex rebalance memor
   started outside a login (no systemd-logind session, for example from a script) is ignored
   by `spice-vdagentd` until it runs without session integration: set
   `SPICE_VDAGENTD_EXTRA_ARGS=-X` in `/etc/default/spice-vdagentd` and restart it.
+- **Display resize: Not available** on a VM that has a VirtIO display: the guest is not
+  running the vdagent, so nothing inside it would change resolution. Check **Console
+  clipboard** on the same panel — it reads **Ready** exactly when resize becomes available.
+  Install the tools as in step 1 and sign in to a graphical session. On a VM whose display
+  is not VirtIO, resize stays unavailable whatever is installed; recreate the VM.
+- **The guest reports a different operating system than you installed:** the panel shows
+  what the guest's agent answers. Nex corrects only the Windows 11 build case described in
+  [Reported operating system](#reported-operating-system); it does not otherwise second-guess
+  the guest. Use the console to inspect the guest itself.
 - **No guest observation yet:** the host runs an older Nex Core build that does not report
   guest tools, or the first report after starting the VM has not arrived. Upgrade Nex Core
   or wait for the next report.
@@ -120,4 +144,11 @@ guest hand back pages it has already freed; it does not make Nex rebalance memor
 Linux guest tools, the **Guest tools** panel and clipboard were walked through in a disposable
 nested-KVM lab; Windows guests and physical hardware were not. See the
 [console features QA report](../qa/console-features/checks.md).
+
+The display-resize condition and the Windows 11 name correction described above were
+observed in the [Windows 11 UEFI lab](../qa/2026-09-16-windows-11-uefi-lab.md) (issues W6 and
+W16) and are covered by host-side checks over recorded libvirt definitions and guest agent
+answers (`go test ./internal/vmhost/`). They have **not** been re-walked on a lab host since
+the change: no Windows or Linux guest was started to confirm the panel and console option now
+appear only after the guest tools are installed.
 

@@ -130,6 +130,8 @@ func probeReason(name string, err error) string {
 		return "KVM is unavailable"
 	case "guest":
 		return "guest agent observation failed"
+	case "usage":
+		return "VM usage observation failed"
 	case "libvirt":
 		return "local libvirt is unavailable"
 	default:
@@ -235,6 +237,7 @@ func NativeProbes(version string) map[string]Probe {
 			return nil, f.Close()
 		},
 		"guest": guestProbe(),
+		"usage": usageProbe(),
 		"libvirt": func(ctx context.Context) (any, error) {
 			ids, err := virsh(ctx, "list", "--all", "--uuid")
 			if err != nil {
@@ -346,6 +349,234 @@ func guestProbe() Probe {
 		}
 		return out, nil
 	}
+}
+
+// Usage is sampled per active VM with `domstats --raw --nowait`. --nowait is the whole reason
+// this probe is safe. Without it libvirt waits for the domain's job before reading anything
+// that needs the QEMU monitor, and that job is held for the entire length of the operation in
+// progress: a Windows guest held one shutdown for over three minutes while Nex's own polls
+// logged "cannot acquire state change lock" (BUG-0213). With it, libvirt returns the counters
+// it can read without the job — CPU time, balloon allocation, vCPU count — always, and the
+// ones behind the monitor (host RSS, block sizes) only when no other job holds the domain.
+// That is why those members of protocol.VMUsage are pointers: absent means libvirt was busy,
+// which is not zero. dominfo is avoided here for the same reason the libvirt probe avoids it.
+//
+// This is a separate probe so a slow sample never hides VM power states, exactly as the guest
+// probe is. It keeps the previous raw CPU counter per VM because a rate needs two samples, and
+// Core reports the rate rather than the counter: a Controller that divided two counters itself
+// would be deriving pool state the host already knows.
+//
+// A failure to sample one VM is skipped, never reported as a probe failure: the web UI ranks
+// any unhealthy check as a host problem, and a cosmetic counter libvirt declined to answer
+// must not paint the host red. The probe fails only when it cannot list active domains, which
+// is the same condition the libvirt probe already fails on.
+const (
+	// One virsh round trip kept clear of the probe deadline, so the last VM in the list is
+	// either sampled properly or deferred, never half-sampled.
+	usageQueryBudget = 300 * time.Millisecond
+	// A sample this old is dropped rather than re-reported, and is never used as the base of
+	// a rate. It bounds how wrong a wedged probe can make the display.
+	usageMaxAge = 2 * time.Minute
+	// Above this the arithmetic is reporting a broken counter, not a busy VM.
+	usageMaxPercent = 1000
+	// A denominator beyond this is a misparse, not a machine. It also keeps delta*100 inside
+	// uint64 for every value that survives the clamp below.
+	usageMaxVCPUs = 1024
+)
+
+type usageObservation struct {
+	VMID  string
+	Usage *protocol.VMUsage
+}
+
+// usageSample is the previous raw counter (for the next rate) and the last usage reported for
+// this VM (so a deferred or unreadable VM can re-report it unchanged instead of disappearing).
+type usageSample struct {
+	at    time.Time
+	cpuNS uint64
+	usage protocol.VMUsage
+}
+
+// usageProbe observes CPU, memory and disk consumption of every active VM.
+func usageProbe() Probe {
+	// ponytail: samples are cached per VM in memory; a VM that leaves the active list is
+	// dropped, and an agent restart costs only the first rate.
+	cache := map[string]usageSample{}
+	return func(ctx context.Context) (any, error) {
+		ids, err := virsh(ctx, "list", "--uuid")
+		if err != nil {
+			return nil, err
+		}
+		active := strings.Fields(ids)
+		if len(active) > 256 {
+			return nil, publicProbeError("VM observation limit exceeded (256)")
+		}
+		// Oldest sample first, so a host with more VMs than one deadline allows refreshes
+		// them in turn instead of always starving the tail of the list.
+		sort.SliceStable(active, func(i, j int) bool { return cache[active[i]].at.Before(cache[active[j]].at) })
+		now := time.Now()
+		seen := map[string]bool{}
+		out := make([]usageObservation, 0, len(active))
+		for _, id := range active {
+			seen[id] = true
+			previous, known := cache[id]
+			// reReport re-reports the previous sample unchanged, with its own observed_at, so
+			// a client sees an older number rather than a gap that flickers the panel on and
+			// off. A sample already too old is dropped instead.
+			reReport := func() {
+				if known && now.Sub(previous.at) <= usageMaxAge {
+					u := previous.usage
+					out = append(out, usageObservation{id, &u})
+				}
+			}
+			if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < usageQueryBudget {
+				reReport() // sampled on a later tick
+				continue
+			}
+			text, e := virsh(ctx, "domstats", "--raw", "--nowait", "--cpu-total", "--balloon", "--vcpu", "--block", id)
+			if e != nil {
+				if ctx.Err() != nil {
+					return nil, e
+				}
+				// The VM stopped between list and domstats, or libvirt declined this query.
+				// The libvirt probe owns the power state either way; usage keeps its last
+				// sample and the check stays healthy.
+				reReport()
+				continue
+			}
+			stats, ok := parseDomainStats(id, text)
+			if !ok {
+				reReport() // an unreadable domain costs its own fresh sample, not the host's report
+				continue
+			}
+			at := time.Now()
+			usage := protocol.VMUsage{
+				ObservedAt:          at.UTC(),
+				MemoryAssignedBytes: stats.balloonCurrentKiB * 1024,
+				MemoryMaximumBytes:  stats.balloonMaximumKiB * 1024,
+				MemoryHostBytes:     kiBToBytes(stats.balloonRSSKiB),
+				DiskUsedBytes:       stats.diskUsedBytes,
+				DiskCapacityBytes:   stats.diskCapacityBytes,
+			}
+			if known {
+				if percent, window, ok := usageRate(previous, at, stats.cpuNS, stats.vcpus); ok {
+					usage.CPUPercent, usage.SampleWindowMS = &percent, window
+				}
+			}
+			cache[id] = usageSample{at: at, cpuNS: stats.cpuNS, usage: usage}
+			reported := usage
+			out = append(out, usageObservation{id, &reported})
+		}
+		for id := range cache {
+			if !seen[id] {
+				delete(cache, id)
+			}
+		}
+		return out, nil
+	}
+}
+
+// usageRate turns two cumulative libvirt CPU counters into a whole-percent rate of this VM's
+// own vCPUs. It refuses rather than guesses: a counter that went backwards is a domain that
+// restarted between samples, and a window that is not positive, or older than usageMaxAge, is
+// not a rate anyone should read. Refusing costs one probe of "measuring"; guessing publishes a
+// number an operator would act on. The window is floored at 1ms so a rate is never reported
+// with a window truncated to zero — the Controller rejects that pairing, and rejecting it
+// would discard the whole host report.
+func usageRate(previous usageSample, at time.Time, cpuNS, vcpus uint64) (uint16, uint32, bool) {
+	window := at.Sub(previous.at)
+	if window <= 0 || window > usageMaxAge || vcpus == 0 || vcpus > usageMaxVCPUs || cpuNS < previous.cpuNS {
+		return 0, 0, false
+	}
+	ms := window.Milliseconds()
+	if ms < 1 {
+		ms = 1
+	}
+	delta := cpuNS - previous.cpuNS
+	denominator := uint64(window.Nanoseconds()) * vcpus
+	// ponytail: compare before multiplying. delta*100 wraps uint64 once delta passes ~1.8e17ns,
+	// and a wrapped product can land on a plausible small number instead of an obvious one.
+	if delta/100 > denominator/10 {
+		return usageMaxPercent, uint32(ms), true
+	}
+	percent := (delta*100 + denominator/2) / denominator
+	if percent > usageMaxPercent {
+		percent = usageMaxPercent
+	}
+	return uint16(percent), uint32(ms), true
+}
+
+type domainStats struct {
+	cpuNS             uint64
+	vcpus             uint64
+	balloonCurrentKiB uint64
+	balloonMaximumKiB uint64
+	balloonRSSKiB     *uint64
+	diskUsedBytes     *uint64
+	diskCapacityBytes *uint64
+}
+
+// parseDomainStats reads `virsh domstats` key=value output for one VM, reporting false when the
+// sample is worthless. Only this VM's own disk images are counted: Nex writes every VM disk
+// into a directory named after the VM — its nex-vms/<id>/ directory, or the appliance's
+// <storage>/<id>/ — while ISOs live in the pool's nex-media directory, so the parent directory
+// name separates a VM's disks from a mounted installer without a second libvirt call. An image
+// outside that layout is left uncounted rather than guessed at. A missing value is left
+// unknown; only a missing CPU counter makes the whole sample worthless, because without it
+// there is no rate on the next tick either.
+func parseDomainStats(vmID, out string) (domainStats, bool) {
+	fields := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		if key, value, ok := strings.Cut(strings.TrimSpace(line), "="); ok {
+			fields[key] = value
+		}
+	}
+	number := func(key string) (uint64, bool) {
+		v, err := strconv.ParseUint(fields[key], 10, 64)
+		return v, err == nil
+	}
+	var s domainStats
+	var ok bool
+	if s.cpuNS, ok = number("cpu.time"); !ok {
+		return s, false
+	}
+	s.vcpus, _ = number("vcpu.current")
+	s.balloonCurrentKiB, _ = number("balloon.current")
+	s.balloonMaximumKiB, _ = number("balloon.maximum")
+	if rss, present := number("balloon.rss"); present {
+		s.balloonRSSKiB = &rss
+	}
+	count, _ := number("block.count")
+	if count > 64 {
+		count = 64
+	}
+	var used, capacity uint64
+	counted := false
+	for i := uint64(0); i < count; i++ {
+		prefix := "block." + strconv.FormatUint(i, 10) + "."
+		path := fields[prefix+"path"]
+		if path == "" || !strings.EqualFold(filepath.Base(filepath.Dir(path)), vmID) {
+			continue // a CD drive, or an image outside the layout Nex owns
+		}
+		physical, havePhysical := number(prefix + "physical")
+		size, haveCapacity := number(prefix + "capacity")
+		if !havePhysical || !haveCapacity {
+			continue // libvirt answered this domain without the monitor
+		}
+		used, capacity, counted = used+physical, capacity+size, true
+	}
+	if counted {
+		s.diskUsedBytes, s.diskCapacityBytes = &used, &capacity
+	}
+	return s, true
+}
+
+func kiBToBytes(v *uint64) *uint64 {
+	if v == nil {
+		return nil
+	}
+	bytes := *v * 1024
+	return &bytes
 }
 
 func readInventory(version string) (NativeInventory, error) {
@@ -497,6 +728,7 @@ func virsh(ctx context.Context, args ...string) (string, error) {
 func (m *Monitor) Snapshot() *protocol.Inventory {
 	out := &protocol.Inventory{}
 	var guests []guestObservation
+	var usage []usageObservation
 	for _, r := range m.Results() {
 		check := protocol.Check{Name: r.Name, Status: r.Status, ObservedAt: r.ObservedAt, Error: r.Message}
 		if !r.LastSuccess.IsZero() {
@@ -539,13 +771,25 @@ func (m *Monitor) Snapshot() *protocol.Inventory {
 			if r.Status == "healthy" {
 				guests = data
 			}
+		case []usageObservation:
+			// Retained data from a failed or overdue usage probe is not attached: a rate
+			// must describe the window it claims.
+			if r.Status == "healthy" {
+				usage = data
+			}
 		}
 	}
-	// Guest facts describe running VMs only; a VM the libvirt probe no longer sees running keeps none.
+	// Guest facts and usage describe running VMs only; a VM the libvirt probe no longer sees
+	// running keeps neither.
 	for i := range out.VMs {
 		for _, g := range guests {
 			if strings.EqualFold(g.VMID, out.VMs[i].ID) && out.VMs[i].State == "running" {
 				out.VMs[i].Guest = g.Guest
+			}
+		}
+		for _, u := range usage {
+			if strings.EqualFold(u.VMID, out.VMs[i].ID) && out.VMs[i].State == "running" {
+				out.VMs[i].Usage = u.Usage
 			}
 		}
 	}

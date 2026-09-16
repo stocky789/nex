@@ -25,6 +25,8 @@ build**. Both are for local lab evaluation; the installer does not yet deliver a
 12. [Delete a virtual machine](delete-virtual-machine.md)
    (remove a stopped guest; keep or permanently delete disk files).
 13. [Control VM power](vm-power.md)
+   (start, shut down, reboot, force stop, and the offered eject of install media after an
+   install).
 14. [Open a VM or host console](vm-console.md)
    (toolbar with send keys, display scaling and resize, clipboard, typing, screenshots,
    CD/DVD insert/eject on VMs, and a Console tab on hosts).

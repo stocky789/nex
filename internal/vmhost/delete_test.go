@@ -148,3 +148,105 @@ func TestValidateManagedDelete(t *testing.T) {
 		t.Fatal("two payloads accepted")
 	}
 }
+
+// Per-VM host state outlives the revision that created it. A VM created with a TPM, then edited
+// to drop it, still has swtpm state under /var/lib/libvirt/swtpm/<uuid> holding its endorsement
+// key and whatever the guest sealed to it; the same applies to the NVRAM file of a VM that was
+// created UEFI and edited to BIOS. Asking only the current definition left both behind, so the
+// undefine flags come from every revision the journal holds.
+func TestManagedDeleteRemovesStateAnEditDroppedLater(t *testing.T) {
+	for _, c := range []struct {
+		name        string
+		first, next func(*protocol.VMCreateSpec)
+		want        []string
+		absent      []string
+	}{
+		{
+			name:  "TPM removed by a later edit",
+			first: func(v *protocol.VMCreateSpec) { v.Boot.TPM = protocol.TPM20 },
+			next:  func(v *protocol.VMCreateSpec) { v.Boot.TPM = protocol.TPMNone },
+			want:  []string{"--tpm", "--nvram"},
+		},
+		{
+			name:   "UEFI changed to BIOS by a later edit",
+			first:  func(v *protocol.VMCreateSpec) { v.Boot.Firmware = "uefi" },
+			next:   func(v *protocol.VMCreateSpec) { v.Boot.Firmware = "bios"; v.Boot.SecureBoot = "" },
+			want:   []string{"--nvram"},
+			absent: []string{"--tpm"},
+		},
+		{
+			name:   "never had either",
+			first:  func(v *protocol.VMCreateSpec) { v.Boot.Firmware = "bios" },
+			next:   func(v *protocol.VMCreateSpec) { v.Description = "edited" },
+			absent: []string{"--tpm", "--nvram"},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			created := managedTestVM()
+			created.MediaID = ""
+			c.first(&created)
+			edited := created
+			edited.Revision = 1
+			c.next(&edited)
+
+			dir := filepath.Join(t.TempDir(), "state")
+			log := filepath.Join(t.TempDir(), "virsh.log")
+			fakeCommand(t, "virsh", `echo "$*" >> "$VMHOST_LOG"; case "$3" in
+domstate) echo 'shut off';;
+list) ;;
+undefine) exit 0;;
+*) exit 2;; esac`)
+			t.Setenv("VMHOST_LOG", log)
+			e := NewManaged(dir)
+			if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			disk := filepath.Join(t.TempDir(), "disk-0.qcow2")
+			if err := os.WriteFile(disk, []byte("guest-data"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			for i, v := range []protocol.VMCreateSpec{created, edited} {
+				kind, op := "vm-create", "create-1"
+				if i == 1 {
+					kind, op = "vm-update", "update-1"
+				}
+				spec := v
+				cmd := protocol.Command{OperationID: op, Kind: kind, VM: &spec}
+				if err := e.save(managedJournal{
+					Command: cmd,
+					Result:  protocol.Result{OperationID: op, Status: "succeeded"},
+					Stage:   "defined",
+					Disks:   []string{disk}, Targets: []string{"vda"}, MediaTarget: "sda",
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			del := protocol.Command{OperationID: "del-1", Kind: "vm-delete",
+				Delete: &protocol.VMDeleteRequest{VMID: created.ID, PoolID: created.PoolID, HostID: created.HostID}}
+			r, err := e.Execute(context.Background(), del, nil)
+			if err != nil || r.Status != "succeeded" {
+				t.Fatalf("delete: %+v %v", r, err)
+			}
+			calls, _ := os.ReadFile(log)
+			var undefine string
+			for _, line := range strings.Split(string(calls), "\n") {
+				if strings.Contains(line, "undefine") {
+					undefine = line
+				}
+			}
+			if undefine == "" {
+				t.Fatalf("no undefine call: %q", calls)
+			}
+			for _, flag := range c.want {
+				if !strings.Contains(undefine, flag) {
+					t.Errorf("undefine %q must carry %s: state the edit dropped would survive deletion", undefine, flag)
+				}
+			}
+			for _, flag := range c.absent {
+				if strings.Contains(undefine, flag) {
+					t.Errorf("undefine %q must not carry %s: the VM never had it", undefine, flag)
+				}
+			}
+		})
+	}
+}

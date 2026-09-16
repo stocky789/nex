@@ -1,0 +1,57 @@
+{
+  "summary": "Report ISO download policy refusals distinctly (W5), let an operator clear a failed or interrupted ISO import (W8), and name the host's own local repository accurately for newly registered hosts (W10), from the Windows 11 UEFI lab report. In internal/vmhost/managed.go this record covers the DefaultStorageName default only, not the second CD drive work in the same file. API impact: new contract DELETE /api/v1/media/{id}; existing contract POST /api/v1/media/download is unchanged and already covers retrying a cleared import under a new request_id. W9 needs no API change: the response already carries the live operation status, and the stale banner is web/src/managed.tsx text.",
+  "paths": [
+    "internal/vmhost/iso_download.go",
+    "internal/vmhost/iso_download_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/pool_storage_test.go",
+    "internal/controller/media.go",
+    "internal/controller/media_download_test.go",
+    "internal/controller/controller.go",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/storage-repositories.md",
+    "docs/changes/2026-09-16-media-library-fixes.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operator behaviour changed: a failed or interrupted ISO import can be removed from the library and retried, an ISO the host holds is refused there, a refused URL download now states its reason instead of a generic network fault, and a newly registered host names its own local repository Local storage while an existing registration keeps its recorded name.",
+    "pages": [
+      "docs/guide/storage-repositories.md"
+    ]
+  },
+  "api": {
+    "impact": "updated",
+    "reason": "API impact: new contract. DELETE /api/v1/media/{id} removes a failed or needs_attention iso-import record (admin session, same Origin, X-CSRF-Token; 409 for queued/dispatched and for an ISO the host holds; 404 otherwise). No Core command or capability is added: Core has no media-removal call, so a stored ISO is refused rather than faked. POST /api/v1/media/download is unchanged; a retry is that call under a new request_id. Core's iso-download error text changed within the existing iso-import result contract.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ],
+    "contracts": [
+      "DELETE /api/v1/media/{id}",
+      "POST /api/v1/media/download",
+      "iso-import"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Two lab-report defect fixes; no milestone's status or built/outstanding items changed.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "No Controller-owned state is added. An imported ISO stays Core's: its file and journal entry live on the host, so removal is refused for a stored ISO and only the Controller's disposable mirror of an import that published nothing is dropped. If the host does report that ISO as applied after all, adoption recreates the entry with Core's identity, name and metadata, and the failed task and audit history stay in the Controller-scoped audit record.",
+    "record": "Core managed journal iso-import entry plus the published ISO under the repository's nex-media directory; a fresh Controller recovers every ISO from Inventory.managed.media on the host's next report (internal/controller/managed.go media adoption), and unfinished imports exist only as journal outcomes. The local repository's name is the host's storage-register journal entry written once by RegisterDefaults, which matches an existing registration on DefaultStoragePath and never on its name, so the changed default names only a first registration; a fresh Controller recovers every repository, with its recorded name, from Inventory.managed.storage."
+  },
+  "verification": {
+    "method": "go build ./... and go test -race ./internal/vmhost/ ./internal/controller/ ./internal/protocol/ all passed, including new checks: Core reports each download refusal reason with no URL text in any branch (TestPublicISODownloadReportsPolicyRefusalsDistinctly, covering a real https-to-http redirect over TLS; five of its nine branches failed against the unfixed code); Controller clears a failed or interrupted import, keeps its task history, refuses queued/dispatched and host-stored ISOs, ignores the host's repeated failed outcome and accepts a retry (TestFailedMediaImportIsRemovableAndRetryable, TestClearingAFailedUploadReleasesStagedBytes, both 404 against the unrouted Controller); and a fresh host takes the accurate default name while an existing registration is never renamed, duplicated or re-registered and is re-adopted under its stored name (TestDefaultLocalStorageNameIsAccurateAndNeverRenamesAnExistingRegistration, which fails against the old default). python3 -m unittest discover -s tests -p 'test_repository_privacy.py' passed. No disposable-lab or browser walkthrough of these fixes ran; the defects themselves are recorded in the Windows 11 UEFI lab report.",
+    "evidence": [
+      "internal/vmhost/iso_download_test.go",
+      "internal/controller/media_download_test.go",
+      "internal/vmhost/pool_storage_test.go",
+      "docs/qa/2026-09-16-windows-11-uefi-lab.md"
+    ]
+  }
+}

@@ -148,11 +148,36 @@ export function taskTimestamp(operation: Pick<Operation, "id" | "host_id" | "req
 }
 const size = (value: number) =>
   `${(value / 1024 ** 3).toLocaleString(undefined, { maximumFractionDigits: 1 })} GiB`;
+// A VM has two CD drives: the install drive and the driver disc drive beside it. Media requests
+// name the drive; "install" is also what every request sent before the second drive existed, so
+// it is left out of the body and stays byte-identical to those requests.
+type Drive = "install" | "drivers";
+const driveLabels: Record<Drive, string> = { install: "Install media", drivers: "Driver disc" };
+// GuestInfo reports each drive's live tray. Read it through this shape so the file compiles
+// against a console Guest type from either build.
+type GuestDrives = { media?: string; drivers_media?: string };
+const recordedMedia = (vm: VM | undefined, drive: Drive) => (drive === "drivers" ? vm?.spec?.drivers_media_id : vm?.spec?.media_id) || "";
+const observedMedia = (vm: VM | undefined, drive: Drive) => (vm?.guest as GuestDrives | null | undefined)?.[drive === "drivers" ? "drivers_media" : "media"];
 // The recorded ISO alone does not prove a media change reached the VM: a guest that ejected
 // its own tray keeps the recorded media_id, so re-inserting it is applied only once the host
 // observes the disc back in the drive.
-const vmMediaApplied = (vm: VM | undefined, mediaID: string) =>
-  Boolean(vm?.spec) && (vm?.spec?.media_id || "") === mediaID && !(mediaID && vm?.guest?.media === "empty");
+const vmMediaApplied = (vm: VM | undefined, drive: Drive, mediaID: string) =>
+  Boolean(vm?.spec) && recordedMedia(vm, drive) === mediaID && !(mediaID && observedMedia(vm, drive) === "empty");
+// A browser that has never signed in to this Controller holds no session cookie, so probing
+// GET /api/v1/session on the login page can only be answered 401 — which the browser itself
+// logs as a failed request on every load (BUG-0208). This marker records that a session was
+// established in this browser, so the probe runs when it can succeed and the login form is
+// shown straight away when it cannot. It is a hint about this browser and never an
+// authorization: the Controller authenticates every request, and a marker left behind by an
+// expired session only costs the one 401 that ends it.
+const signedInKey = "nex-signed-in";
+function signedInBefore() {
+  // Without storage, keep probing: that is the previous behaviour and it restores a session.
+  try { return localStorage.getItem(signedInKey) !== null; } catch { return true; }
+}
+function rememberSignedIn(yes: boolean) {
+  try { if (yes) localStorage.setItem(signedInKey, "1"); else localStorage.removeItem(signedInKey); } catch {}
+}
 function Brand() {
   return <span className="brand" role="img" aria-label="Nex Controller" />;
 }
@@ -324,7 +349,7 @@ function App() {
   const [upload, setUpload] = useState<Upload | null>(null);
   const [createVM, setCreateVM] = useState(false);
   const [mediaNote, setMediaNote] = useState("");
-  const [mediaChange, setMediaChange] = useState<{ vmID: string; action: "insert" | "eject"; mediaID: string; operation: Operation } | null>(null);
+  const [mediaChange, setMediaChange] = useState<{ vmID: string; action: "insert" | "eject"; drive: Drive; mediaID: string; operation: Operation } | null>(null);
   const [mediaBusy, setMediaBusy] = useState(false);
   const uploadRequest = useRef<XMLHttpRequest | null>(null);
   const uploadCancelled = useRef(false);
@@ -400,6 +425,7 @@ function App() {
     });
     if (response.status === 401 && requestGeneration === generation.current) {
       generation.current++;
+      rememberSignedIn(false);
       setSession(null);
       setData(empty);
       setToken(null);
@@ -474,24 +500,27 @@ function App() {
     const target = data.vms.find(v => v.id === mediaChange.vmID);
     if (task.status === "failed" || task.status === "needs_attention") {
       if (task !== mediaChange.operation) setMediaChange({ ...mediaChange, operation: task });
-    } else if (task.status === "succeeded" || vmMediaApplied(target, mediaChange.mediaID)) {
+    } else if (task.status === "succeeded" || vmMediaApplied(target, mediaChange.drive, mediaChange.mediaID)) {
       setMediaChange(null);
     }
   }, [mediaChange, data.operations, data.vms]);
-  async function changeVMMedia(vmID: string, action: "insert" | "eject", mediaID?: string) {
+  async function changeVMMedia(vmID: string, action: "insert" | "eject", drive: Drive, mediaID?: string) {
     setMediaBusy(true);
     setMediaNote("");
     setMediaChange(null);
-    const key = `${vmID}/${action}`;
+    const key = `${vmID}/${drive}/${action}`;
     mediaRequest.current[key] ??= crypto.randomUUID();
     try {
       const { operation } = await api<{ operation: Operation }>(`vms/${encodeURIComponent(vmID)}/media`, "POST", {
         request_id: mediaRequest.current[key],
         action,
+        // The install drive is the default and is left out, so its request is exactly the one
+        // every earlier build sent; only the second drive has to name itself.
+        ...(drive === "drivers" ? { drive } : {}),
         ...(action === "insert" ? { media_id: mediaID } : {}),
       });
       delete mediaRequest.current[key];
-      setMediaChange({ vmID, action, mediaID: mediaID || "", operation });
+      setMediaChange({ vmID, action, drive, mediaID: mediaID || "", operation });
       await reload();
     } catch (e) {
       setMediaNote((e as Error).message);
@@ -499,35 +528,75 @@ function App() {
       setMediaBusy(false);
     }
   }
+  // Start from the console issues the same durable power request as the toolbar. Opening the
+  // console first and starting from there is how an operator catches a firmware boot prompt that
+  // times out in a few seconds; the request, its task and its outcome are unchanged.
+  const powerRequest = useRef<Record<string, string>>({});
+  const [starting, setStarting] = useState("");
+  const [startError, setStartError] = useState("");
+  async function startVM(target: VM) {
+    setStarting(target.id);
+    setStartError("");
+    powerRequest.current[target.id] ??= crypto.randomUUID();
+    try {
+      await api(`vms/${encodeURIComponent(target.id)}/power`, "POST", { request_id: powerRequest.current[target.id], action: "start" });
+      delete powerRequest.current[target.id];
+      setNotice(`Start queued for ${target.name}. Follow its progress in Recent tasks.`);
+      await reload();
+    } catch (e) {
+      setStartError((e as Error).message);
+    } finally {
+      setStarting("");
+    }
+  }
+  const vmPowerControls = (target: VM) => ({ state: target.state, busy: busy || starting === target.id, onStart: () => void startVM(target) });
+  // vmMediaNote is what the operator is told about this VM's media right now: a request error,
+  // or the outcome of the change they asked for, from the durable task and the host's own
+  // observation rather than from the response that queued it.
+  function vmMediaNote(target: VM) {
+    if (mediaNote) return mediaNote;
+    if (mediaChange?.vmID !== target.id) return "";
+    const task = data.operations.find(o => o.id === mediaChange.operation.id) || mediaChange.operation;
+    const what = driveLabels[mediaChange.drive].toLowerCase();
+    if (task.status === "failed" || task.status === "needs_attention") {
+      return task.error || `The ${what} change did not complete. Check Recent tasks.`;
+    }
+    if (task.status !== "succeeded" && !vmMediaApplied(target, mediaChange.drive, mediaChange.mediaID)) {
+      return mediaChange.action === "insert" ? `Inserting the ${what}…` : `Ejecting the ${what}…`;
+    }
+    return "";
+  }
+  // vmMediaControls builds the console's CD/DVD controls: one entry per drive, sharing the host's
+  // ISO list. The second drive is only offered on a host whose Core defines it.
   function vmMediaControls(target: VM) {
     const host = data.hosts.find(h => h.id === target.host_id);
-    let note = mediaNote;
-    if (!note && mediaChange?.vmID === target.id) {
-      const task = data.operations.find(o => o.id === mediaChange.operation.id) || mediaChange.operation;
-      if (task.status === "failed" || task.status === "needs_attention") {
-        note = task.error || "ISO change did not complete. Check Recent tasks.";
-      } else if (task.status !== "succeeded" && !vmMediaApplied(target, mediaChange.mediaID)) {
-        note = mediaChange.action === "insert" ? "Inserting ISO…" : "Ejecting ISO…";
-      }
-    }
+    const options = data.media.filter(m => m.host_id === target.host_id && m.pool_id === target.pool_id && m.status === "succeeded").map(m => ({ id: m.id, name: m.name }));
+    const drives: Drive[] = host?.capabilities?.includes("vm-media-drivers-drive-v1") ? ["install", "drivers"] : ["install"];
+    const entries = drives.map(drive => {
+      const recorded = recordedMedia(target, drive);
+      const recordedName = data.media.find(m => m.id === recorded)?.name;
+      // A guest can open its own tray: Debian's installer ejects the disc it booted. The host
+      // reports the live drive, Nex keeps the ISO it recorded, and the operator gets it back by
+      // inserting it again, so it stays in the list while the tray is empty.
+      const ejectedInGuest = Boolean(recorded) && observedMedia(target, drive) === "empty";
+      return {
+        drive,
+        label: driveLabels[drive],
+        currentID: recorded || undefined,
+        currentName: ejectedInGuest ? `${recordedName || "ISO"} (ejected in the VM)` : recordedName,
+        onInsert: (id: string) => void changeVMMedia(target.id, "insert", drive, id),
+        onEject: () => void changeVMMedia(target.id, "eject", drive),
+      };
+    });
     if (!host?.capabilities?.includes("vm-media-v1")) {
-      return { currentID: target.spec?.media_id, currentName: data.media.find(m => m.id === target.spec?.media_id)?.name, options: [] as { id: string; name: string }[], busy: true, note: mediaNote || "This host cannot change media yet. Upgrade Nex Core.", onInsert: () => {}, onEject: () => {} };
+      return { drives: entries.map(entry => ({ ...entry, onInsert: () => {}, onEject: () => {} })), options: [] as { id: string; name: string }[], busy: true, note: mediaNote || "This host cannot change media yet. Upgrade Nex Core." };
     }
-    const recorded = target.spec?.media_id || "";
-    const recordedName = data.media.find(m => m.id === recorded)?.name;
-    // A guest can open its own tray: Debian's installer ejects the disc it booted. The host
-    // reports the live drive, Nex keeps the ISO it recorded, and the operator gets it back by
-    // inserting it again, so it stays in the list while the tray is empty.
-    const ejectedInGuest = Boolean(recorded) && target.guest?.media === "empty";
-    const options = data.media.filter(m => m.host_id === target.host_id && m.pool_id === target.pool_id && m.status === "succeeded" && (ejectedInGuest || m.id !== recorded)).map(m => ({ id: m.id, name: m.name }));
+    const ejectedInGuest = entries.some(entry => entry.currentName?.endsWith("(ejected in the VM)"));
     return {
-      currentID: recorded || undefined,
-      currentName: ejectedInGuest ? `${recordedName || "ISO"} (ejected in the VM)` : recordedName,
+      drives: entries,
       options,
       busy: mediaBusy,
-      note: note || (ejectedInGuest ? "The VM ejected the disc. Insert it again to reconnect it." : ""),
-      onInsert: (id: string) => void changeVMMedia(target.id, "insert", id),
-      onEject: () => void changeVMMedia(target.id, "eject"),
+      note: vmMediaNote(target) || (ejectedInGuest ? "The VM ejected the disc. Insert it again to reconnect it." : ""),
     };
   }
   async function reload() {
@@ -566,10 +635,16 @@ function App() {
     }
   }
   useEffect(() => {
+    if (!signedInBefore()) {
+      setSession(null);
+      setLoading(false);
+      return;
+    }
     api<Session>("session")
       .then(setSession)
       .catch((e) => {
         setSession(null);
+        rememberSignedIn(false);
         if ((e as Error & { status?: number }).status !== 401)
           setError((e as Error).message);
       })
@@ -702,6 +777,7 @@ function App() {
                   username: values.get("username"),
                   password: values.get("password"),
                 });
+                rememberSignedIn(true);
                 setSession(next);
               });
             }}
@@ -747,8 +823,8 @@ function App() {
           {host ? <Console key={host.id} name={host.hostname || host.id} disabled={hostConsoleBlocker(host)} open={() => openHostConsole(host.id)} />
             : <p className="empty">{loading ? "Loading…" : error || "This host is not known to Nex Controller. Choose it from the Resources tree."}</p>}
         </> : <>
-          <div className="console-page-bar"><a href={`#/vms/${id}`}>Nex Controller</a><strong>{vm ? vm.name : "VM console"}</strong>{vm && <span className="muted">{vm.state || "unknown"}</span>}</div>
-          {vm ? <Console key={vm.id} name={vm.name} guest={vm.guest} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={() => openConsole(vm.id)} media={vmMediaControls(vm)} />
+          <div className="console-page-bar"><a href={`#/vms/${id}`}>Nex Controller</a><strong>{vm ? vm.name : "VM console"}</strong>{vm && <span className="muted">{vm.state || "unknown"}</span>}{startError && <span className="task-error" role="alert">{startError}</span>}</div>
+          {vm ? <Console key={vm.id} name={vm.name} guest={vm.guest} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={() => openConsole(vm.id)} media={vmMediaControls(vm)} power={vmPowerControls(vm)} />
             : <p className="empty">{loading ? "Loading…" : error || "This VM is not known to Nex Controller. Choose it from the Resources tree."}</p>}
         </>}
       </div>
@@ -789,6 +865,7 @@ function App() {
               void action(async () => {
                 await api("session", "DELETE");
                 generation.current++;
+                rememberSignedIn(false);
                 setSession(null);
                 setData(empty);
                 setToken(null);
@@ -1253,8 +1330,8 @@ function App() {
           ) : (
             <>
               {pool && !host && !vm && <ManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} poolName={pool.name} masterHostID={pool.master_host_id} tab={tab} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={setTab} unavailable={Boolean(error)} uploading={upload?.state === "uploading"} startIsoUpload={startIsoUpload} createVM={createVM} onCreateVMShown={() => setCreateVM(false)} />}
-              {vm && tab === "General" && <VMDetails vm={vm} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} api={api} reload={reload} busy={busy} unavailable={Boolean(error)} onNotice={setNotice} />}
-              {vm && tab === "Console" && <Console key={vm.id} name={vm.name} guest={vm.guest} popout={`#/console/${vm.id}`} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={() => openConsole(vm.id)} media={vmMediaControls(vm)} />}
+              {vm && tab === "General" && <VMDetails vm={vm} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} api={api} reload={reload} busy={busy} unavailable={Boolean(error)} onNotice={setNotice} installMedia={{ busy: mediaBusy, note: vmMediaNote(vm), onEject: () => void changeVMMedia(vm.id, "eject", "install") }} />}
+              {vm && tab === "Console" && <>{startError && <p className="alert" role="alert">{startError}</p>}<Console key={vm.id} name={vm.name} guest={vm.guest} popout={`#/console/${vm.id}`} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={() => openConsole(vm.id)} media={vmMediaControls(vm)} power={vmPowerControls(vm)} /></>}
               {host && !vm && tab === "Console" && <Console key={host.id} name={host.hostname || host.id} popout={`#/host-console/${host.id}`} disabled={hostConsoleBlocker(host)} open={() => openHostConsole(host.id)} />}
               <div hidden={Boolean(vm) || tab === "Activity" || tab === "Console" || Boolean(pool && !host && tab !== "General")}>
               {!host && (

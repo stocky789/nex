@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useRef, useState, type FormEvent } from "react";
 import type { Host, Media, Network, Storage, VM, VMSpec } from "./managed";
-import { adapterNames, adapterNotes, applyTopology, autoDiskName, busNames, cpuName, describeNetwork, readyHost, topologyIssue, vmNameIssue, type DiskRow, type NICRow } from "./vm-create";
+import { adapterNames, adapterNotes, applyTopology, autoDiskName, busNames, cpuName, describeNetwork, driversDriveReady, effectiveBoot, readyHost, topologyIssue, vmNameIssue, type DiskRow, type NICRow } from "./vm-create";
 import { storageUsable } from "./storage";
 
 type API = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
-type Draft = { name: string; description: string; guest_os: string; cpu: VMSpec["cpu"]; memory: VMSpec["memory"]; disks: DiskRow[]; nics: NICRow[]; boot: VMSpec["boot"]; media_id: string; autostart: boolean };
+// The draft always carries an explicit Secure Boot and TPM choice, even for a definition
+// written before those fields existed: an unset secure_boot on a UEFI VM is the enrolled-keys
+// firmware libvirt already gave it, which is "on", and an unset tpm is no TPM device. Saving
+// records that choice without changing what the VM boots with, so no stop is demanded for it.
+type Draft = { name: string; description: string; guest_os: string; cpu: VMSpec["cpu"]; memory: VMSpec["memory"]; disks: DiskRow[]; nics: NICRow[]; boot: VMSpec["boot"] & { secure_boot: string; tpm: string }; media_id: string; drivers_media_id: string; autostart: boolean };
 type Props = { vm: VM; host?: Host; poolName: string; storage: Storage[]; networks: Network[]; media: Media[]; api: API; reload: () => Promise<void>; unavailable: boolean; onNotice: (text: string) => void; onClose: () => void };
 
 const macPattern = "[0-9a-f][02468ace](:[0-9a-f]{2}){5}";
@@ -41,7 +45,8 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
     name: vm.name, description: spec.description, guest_os: spec.guest_os || "other",
     cpu: { ...spec.cpu }, memory: { ...spec.memory },
     disks: (spec.disks || []).map(d => ({ ...d })), nics: (spec.nics || []).map(n => ({ ...n, mtu: n.mtu || 0 })),
-    boot: { ...spec.boot }, media_id: spec.media_id, autostart: spec.autostart,
+    boot: { ...spec.boot, secure_boot: spec.boot.secure_boot || (spec.boot.firmware === "uefi" ? "on" : ""), tpm: spec.boot.tpm || "none" },
+    media_id: spec.media_id, drivers_media_id: spec.drivers_media_id || "", autostart: spec.autostart,
   }));
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
@@ -54,6 +59,8 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
   const hostStorage = storage.filter(s => storageUsable(s, vm.host_id));
   const hostNetworks = networks.filter(n => n.host_id === vm.host_id && n.status === "succeeded").sort((a, b) => (a.vlan || 0) - (b.vlan || 0) || a.name.localeCompare(b.name));
   const availableMedia = media.filter(m => m.host_id === vm.host_id && m.status === "succeeded");
+  const driversReady = driversDriveReady(host);
+  const uefi = draft.boot.firmware === "uefi";
   const maxCPUs = Math.min(host?.inventory?.cpu_count || 64, 64);
   const maxMiB = Math.min(host?.inventory ? Math.floor(host.inventory.memory_bytes / 1024 ** 2) : 262144, 262144);
   const topoIssue = topologyIssue(draft.cpu);
@@ -84,7 +91,7 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (issue) { setError(issue); return; }
-    const payload = { pool_id: vm.pool_id, host_id: vm.host_id, ...draft, start_after_create: false };
+    const payload = { pool_id: vm.pool_id, host_id: vm.host_id, ...draft, boot: effectiveBoot(draft.boot), start_after_create: false };
     const encoded = JSON.stringify(payload);
     ids.current[encoded] ??= crypto.randomUUID();
     setWorking(true); setError("");
@@ -123,7 +130,7 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
         <label>Memory mode<select value={draft.memory.mode} {...lock()} onChange={e => edit({ memory: { ...draft.memory, mode: e.target.value } })}><option value="dedicated">Dedicated · lock RAM while running</option><option value="maximum">Maximum · a ceiling only</option></select></label>
         <label>Memory (MiB)<input type="number" required min={512} max={maxMiB} step={1} value={num(draft.memory.size_mib)} {...lock()} onChange={e => edit({ memory: { ...draft.memory, size_mib: e.target.valueAsNumber } })} /></label>
       </div>
-      {draft.memory.mode === "dedicated" && <p className="help">Requires updated Nex Core. Dedicated mode allocates and locks the full amount in host RAM while running, preventing swap and sharing. Stopping releases RAM but keeps its Nex capacity commitment. For an existing VM, upgrade Core, stop the VM, then save changes to apply locking.</p>}
+      {draft.memory.mode === "dedicated" && <p className="help">Dedicated mode allocates and locks the full amount in host RAM while running, preventing swap and sharing. Stopping releases RAM but keeps its Nex capacity commitment. A VM defined by an older Nex Core keeps the memory backing it was defined with until it is stopped and saved again; the host refuses a live edit of such a VM and says so.</p>}
       {topoIssue && <p className="task-error">{topoIssue}</p>}
     </fieldset>
     <fieldset>
@@ -173,14 +180,30 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
       <div className="vm-fields">
         <label>Firmware<select value={draft.boot.firmware} {...lock()} onChange={e => edit({ boot: { ...draft.boot, firmware: e.target.value } })}><option value="uefi">UEFI</option><option value="bios">BIOS</option></select></label>
         <label>Machine type<input maxLength={32} placeholder="q35" pattern="[a-z0-9][a-z0-9._-]{0,31}" value={draft.boot.machine} {...lock()} onChange={e => edit({ boot: { ...draft.boot, machine: e.target.value } })} /></label>
-        <label>Install ISO<select value={draft.media_id} onChange={e => edit({ media_id: e.target.value })}>
+        <label>Secure Boot<select value={uefi ? (draft.boot.secure_boot === "off" ? "off" : "on") : "unavailable"} {...(uefi ? lock() : { disabled: true, title: "Secure Boot needs UEFI firmware." })} onChange={e => edit({ boot: { ...draft.boot, secure_boot: e.target.value } })}>
+          {!uefi && <option value="unavailable">Not available with BIOS</option>}
+          <option value="on">On · only signed boot software runs</option>
+          <option value="off">Off · unsigned boot media and drivers allowed</option>
+        </select></label>
+        <label>TPM<select value={uefi ? (draft.boot.tpm === "2.0" ? "2.0" : "none") : "unavailable"} {...(uefi ? lock() : { disabled: true, title: "An emulated TPM is offered with UEFI firmware." })} onChange={e => edit({ boot: { ...draft.boot, tpm: e.target.value } })}>
+          {!uefi && <option value="unavailable">Not available with BIOS</option>}
+          <option value="2.0">TPM 2.0 · emulated device</option>
+          <option value="none">None</option>
+        </select></label>
+        <label>Install ISO<select value={draft.media_id} onChange={e => edit({ media_id: e.target.value, ...(e.target.value && e.target.value === draft.drivers_media_id ? { drivers_media_id: "" } : {}) })}>
           <option value="">No install media</option>
           {availableMedia.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
           {draft.media_id && !availableMedia.some(m => m.id === draft.media_id) && <option value={draft.media_id} disabled>{media.find(m => m.id === draft.media_id)?.name || draft.media_id} · not available</option>}
         </select></label>
+        <label>Driver disc<select value={draft.drivers_media_id} disabled={!driversReady} title={driversReady ? undefined : "This host's Nex Core does not provide a second CD drive yet."} onChange={e => edit({ drivers_media_id: e.target.value })}>
+          <option value="">No driver disc</option>
+          {availableMedia.filter(m => m.id !== draft.media_id).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          {draft.drivers_media_id && !availableMedia.some(m => m.id === draft.drivers_media_id) && <option value={draft.drivers_media_id} disabled>{media.find(m => m.id === draft.drivers_media_id)?.name || draft.drivers_media_id} · not available</option>}
+        </select></label>
         <label>CD drive boot order<input type="number" min={0} max={9} step={1} value={num(draft.boot.media_boot_order)} {...lock()} onChange={e => edit({ boot: { ...draft.boot, media_boot_order: e.target.valueAsNumber || 0 } })} /></label>
       </div>
-      <p className="help">Lower numbers boot first; 0 leaves a device out. The CD drive keeps its place while empty, so an ISO can be ejected from a running VM.</p>
+      <p className="help">Lower numbers boot first; 0 leaves a device out. The CD drive keeps its place while empty, so an ISO can be ejected from a running VM. The driver disc sits in a second CD drive, for the virtio-win ISO a Windows installer needs beside its install media; it is not in the boot order.{driversReady ? "" : " This host's Nex Core does not provide a second CD drive yet; upgrade it to attach a driver disc."}</p>
+      <p className="help">Secure Boot and the TPM are part of the firmware a guest is installed against: changing either needs the VM stopped, and an installed guest that stores BitLocker keys in its TPM cannot unlock without it.</p>
       {orderIssue && <p className="task-error">{orderIssue}</p>}
     </fieldset>
     <fieldset>

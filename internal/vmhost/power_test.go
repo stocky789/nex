@@ -235,14 +235,21 @@ esac`)
 	}
 }
 
+// A power command whose virsh call fails after the guest already acted is settled by observing
+// the domain, not by the exit status. Whether that observation can prove anything depends on the
+// action: reaching "shut off" proves a shutdown or force-stop took effect, while a guest still
+// running proves nothing about a reboot, because observation cannot distinguish "the reset
+// happened" from "the reset never arrived". So a stop settles on the spot and a reboot stays
+// uncertain for an explicit reconcile. Reporting a completed shutdown as needing attention sent
+// an operator to inspect a VM that had done exactly what was asked (BUG-0213).
 func TestManagedPowerPostEffectFailureIsUncertain(t *testing.T) {
 	for _, tc := range []struct {
-		action, before, after, wantReplay string
+		action, before, after, wantFirst, wantReplay string
 	}{
-		{"shutdown", "running", "shut off", "succeeded"},
-		{"reboot", "running", "running", "needs_attention"},
-		{"force-reboot", "running", "running", "needs_attention"},
-		{"force-stop", "running", "shut off", "succeeded"},
+		{"shutdown", "running", "shut off", "succeeded", "succeeded"},
+		{"reboot", "running", "running", "needs_attention", "needs_attention"},
+		{"force-reboot", "running", "running", "needs_attention", "needs_attention"},
+		{"force-stop", "running", "shut off", "succeeded", "succeeded"},
 	} {
 		t.Run(tc.action, func(t *testing.T) {
 			state := filepath.Join(t.TempDir(), "state")
@@ -257,7 +264,7 @@ func TestManagedPowerPostEffectFailureIsUncertain(t *testing.T) {
 			c := protocol.Command{OperationID: "uncertain-" + tc.action, Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: "11111111-2222-4333-a444-555555555555", PoolID: "pool1", HostID: "host1", Action: tc.action}}
 			e := NewManaged(filepath.Join(t.TempDir(), "managed"))
 			r, err := e.Execute(context.Background(), c, nil)
-			if err != nil || r.Status != "needs_attention" {
+			if err != nil || r.Status != tc.wantFirst {
 				t.Fatalf("post-effect %s = %+v, %v", tc.action, r, err)
 			}
 			replayed, err := e.Execute(context.Background(), c, nil)

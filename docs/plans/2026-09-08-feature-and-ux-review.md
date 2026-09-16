@@ -202,11 +202,28 @@ operated for this planning decision. **API impact: none for this documentation;
 new local API and reused/extended Controller/Core contracts are planned in Phase 3.**
 **Guide impact: none now**; instructions and verified captures ship with implementation.
 
+### Pool-first interface direction
+
+**Decision (project owner, 2026-09-16):** follow the
+[Core-first product direction](2026-09-08-nex-platform.md#core-first-product-direction).
+Controller presents Core-reported placement eligibility, blockers and recovery limits; it does
+not compute policy or run host workflows. Keep current host assignment and constraints visible
+when automatic placement arrives. Distinguish requirements from preferences, and deployment
+placement from recovery or ongoing balancing. Maintenance previews follow Core evacuation
+capabilities and must not imply an unimplemented failure simulator.
+
+The future application catalogue can include VM appliances and Docker applications with shared
+discovery and progress views, while retaining their distinct lifecycle and protection controls.
+Introduce it only after the corresponding Core capabilities and acceptance gates work; do not
+add placeholder controls or change the current implementation queue. The platform plan owns
+this direction and its dependencies. API impact: **none** and guide impact: **none** for this
+planning clarification; future contracts and verified operator instructions ship with each slice.
+
 ### Managed container services: seamless and colorful
 
 project owner's agreed extension is Docker Swarm inside Nex-managed worker VMs, with the complete operator workflow in Nex Controller. Do not use LXC or install application Docker workloads directly on Nex Core. This is a later milestone after the VM foundation; Ceph is not a prerequisite. The [container implementation phase](2026-09-08-nex-platform.md#10-managed-container-services-docker-swarm) owns architecture, dependencies, and safety gates; these are Nex design requirements, not claims about functionality that already exists.
 
-- **Enable:** pool → Container Services → participating physical hosts, worker capacity, and supported pool storage → placement/prerequisite checks → review → tracked provisioning. Nex provisions and maintains worker VMs, configures Swarm, and distributes managers across physical failure domains; show roles and placement without requiring routine SSH or Docker commands.
+- **Enable:** pool → Container Services → participating physical hosts, worker capacity, and supported pool storage → placement/prerequisite checks → review → tracked provisioning. Core provisions and maintains worker VMs, configures Swarm, and distributes managers across physical failure domains; Controller requests these operations through Core APIs and presents durable progress; show roles and placement without requiring routine SSH or Docker commands.
 - **Deploy:** pool Applications → image/application name → ports, networks, replicas, resources, secrets, and persistent volumes → validation → review → tracked deployment. Pool Applications exposes services, their container instances, volumes, networks, and secrets with clear relationships and permissions. Never reveal secret values in routine details, logs, or task output.
 - **Operate and protect:** provide logs, health, scaling, rolling updates, backup schedules/history, and guided restoration from the same application context. Show the actual supported consistency, downtime, last backup, and last verified restore. A worker-VM snapshot alone must not imply protection of externally mounted application data.
 - **Storage and recovery:** offer dedicated application volumes on supported pool NFS storage only where worker access is verified; do not expose hypervisor disk directories or backup repositories to applications. Ordinary local Docker volumes are not portable shared storage. Explain that failover starts replacement containers and interrupts connections; it does not live-migrate container memory. Initially admit writable persistent applications only when validated for concurrent access or protected by enforced writer exclusion covering actual Swarm rescheduling and updates. Reject other writable stateful deployments until that safety is validated: disabling a Nex HA control does not stop Swarm from replacing tasks. Show blockers rather than promising safety from a single replica or shared mount alone.

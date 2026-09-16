@@ -8,19 +8,19 @@ import "testing"
 // describe the values the domain still holds, so only media_id changes.
 func TestApplyVMMediaKeepsBootOrder(t *testing.T) {
 	v := validSpec() // disk boot order 2, media boot order 1
-	got := ApplyVMMedia(v, "eject", "")
+	got := ApplyVMMedia(v, "eject", InstallDrive, "")
 	if got.MediaID != "" || got.Boot.MediaBootOrder != 1 || got.Disks[0].BootOrder != 2 {
 		t.Fatalf("eject: %+v %+v", got.Boot, got.Disks)
 	}
 	if err := ValidateVMSpec(got); err != nil {
 		t.Fatalf("ejected spec must stay adoptable: %v", err)
 	}
-	back := ApplyVMMedia(got, "insert", "m2")
+	back := ApplyVMMedia(got, "insert", InstallDrive, "m2")
 	if back.MediaID != "m2" || back.Boot.MediaBootOrder != 1 || back.Disks[0].BootOrder != 2 {
 		t.Fatalf("insert: %+v %+v", back.Boot, back.Disks)
 	}
 	v.MediaID, v.Boot.MediaBootOrder, v.Disks[0].BootOrder = "", 0, 1
-	if ins := ApplyVMMedia(v, "insert", "m"); ins.Boot.MediaBootOrder != 0 || ins.Disks[0].BootOrder != 1 {
+	if ins := ApplyVMMedia(v, "insert", InstallDrive, "m"); ins.Boot.MediaBootOrder != 0 || ins.Disks[0].BootOrder != 1 {
 		t.Fatalf("insert into a VM created without media must not invent a boot device: %+v", ins.Boot)
 	}
 }
@@ -35,7 +35,7 @@ func TestApplyVMMediaNeedsNoStop(t *testing.T) {
 		name, action, media string
 	}{{"eject", "eject", ""}, {"swap", "insert", "m2"}} {
 		t.Run(c.name, func(t *testing.T) {
-			stops, err := NeedsStop(v, ApplyVMMedia(v, c.action, c.media))
+			stops, err := NeedsStop(v, ApplyVMMedia(v, c.action, InstallDrive, c.media))
 			if err != nil || len(stops) != 0 {
 				t.Fatalf("media change classified stop-first: %v %v", stops, err)
 			}

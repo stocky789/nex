@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"net/netip"
+	"strconv"
 	"strings"
 
 	"nex.local/nex/internal/protocol"
@@ -41,6 +42,9 @@ type guestDomainXML struct {
 			Target struct {
 				Tray string `xml:"tray,attr"`
 			} `xml:"target"`
+			Alias struct {
+				Name string `xml:"name,attr"`
+			} `xml:"alias"`
 		} `xml:"disk"`
 	} `xml:"devices"`
 }
@@ -92,27 +96,91 @@ func observeGuest(ctx context.Context, virsh func(context.Context, ...string) ([
 			}
 		}
 	}
+	virtioDisplay := false
 	for _, v := range d.Devices.Video {
 		if v.Model.Type == "virtio" {
-			g.Resize = true
+			virtioDisplay = true
 		}
 	}
+	// A VirtIO display is necessary but not sufficient: it only means QEMU would accept a
+	// resize request, and a guest with no driver for it silently ignores one. Reporting the
+	// device model as the answer offered "Resize guest to window" on a Windows guest that
+	// never changed resolution until its VirtIO guest tools were installed (BUG-0201).
+	//
+	// The one guest-side signal this host has is the qemu-vdagent channel, already observed
+	// above: the guest opens it only when it is running the vdagent that applies a console's
+	// display request. That is the component that performs the resolution change, and it
+	// arrives with the same guest tools as the VirtIO display driver (virtio-win on Windows,
+	// spice-vdagent beside the virtio-gpu driver on Linux), so an open channel is evidence
+	// that the display side is installed too.
+	//
+	// The test is deliberately conservative. A guest that could resize without an open
+	// vdagent channel is reported as unable, which costs an option the operator can still
+	// live without; the reverse offered a control that did nothing, which is the bug.
+	g.Resize = virtioDisplay && g.Clipboard == "ready"
 	// The live tray, not the persistent definition: a guest that ejects its own disc
 	// disconnects the source here while Nex's durable media_id stays as it was. Reporting
 	// the difference is what lets the console offer the recorded ISO again; nothing about
 	// this observation changes the VM definition.
-	g.Media = protocol.MediaNoDrive
+	var install, drivers, unnamed string
 	for _, disk := range d.Devices.Disks {
 		if disk.Device != "cdrom" {
 			continue
 		}
-		g.Media = protocol.MediaEmpty
+		state := protocol.MediaEmpty
 		if disk.Target.Tray != "open" && disk.Source != nil && (disk.Source.File != "" || disk.Source.Dev != "") {
-			g.Media = protocol.MediaLoaded
+			state = protocol.MediaLoaded
 		}
-		break
+		switch disk.Alias.Name {
+		case cdromInstallAlias:
+			if install == "" {
+				install = state
+			}
+		case cdromDriversAlias:
+			if drivers == "" {
+				drivers = state
+			}
+		default:
+			// libvirt names every device it generates itself, so a cdrom carrying neither
+			// Nex alias belongs to a domain an older Core defined. Those have exactly one,
+			// and it is always the install drive.
+			if unnamed == "" {
+				unnamed = state
+			}
+		}
+	}
+	if install == "" {
+		install = unnamed
+	}
+	g.Media, g.DriversMedia = protocol.MediaNoDrive, drivers
+	if install != "" {
+		g.Media = install
 	}
 	return g, nil
+}
+
+// windowsBuild11 is the first Windows 11 build. Windows 11 kept the registry product name
+// Windows 10 wrote, and that name is what the QEMU guest agent reports, so an honest Windows
+// 11 guest calls itself "Windows 10 ..." and only its build number tells the two apart.
+const windowsBuild11 = 22000
+
+// correctWindowsName repairs that one name. Reporting it verbatim showed a Windows 11 guest
+// as "Windows 10 IoT Enterprise LTSC 2024" (BUG-0211).
+//
+// Everything here is guest-reported and untrusted, so the correction cannot become an
+// injection point: the only edit is swapping the literal "Windows 10" for "Windows 11" in a
+// string the caller already bounded, which is the same length, and nothing the guest sent is
+// copied in. A build number that is absent, not a number, or out of range leaves the guest's
+// own words alone: reporting what the guest said beats guessing what it meant.
+func correctWindowsName(name, family, build string) string {
+	if family != "mswindows" || !strings.Contains(name, "Windows 10") {
+		return name
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(build))
+	if err != nil || n < windowsBuild11 {
+		return name
+	}
+	return strings.Replace(name, "Windows 10", "Windows 11", 1)
 }
 
 // guestFacts asks an attached guest agent for OS, hostname and addresses, filling g.
@@ -130,6 +198,10 @@ func guestFacts(ctx context.Context, virsh func(context.Context, ...string) ([]b
 			PrettyName string `json:"pretty-name"`
 			ID         string `json:"name"`
 			Ver        string `json:"version"`
+			// Family is the agent's own OS family ("mswindows"), and Build is the guest
+			// kernel/build number: on Windows, the build that tells 11 apart from 10.
+			Family string `json:"id"`
+			Build  string `json:"kernel-release"`
 		} `json:"return"`
 	}
 	if !agent("guest-get-osinfo", &osinfo) {
@@ -140,6 +212,7 @@ func guestFacts(ctx context.Context, virsh func(context.Context, ...string) ([]b
 	if g.OS == "" {
 		g.OS = bounded(osinfo.Return.ID+" "+osinfo.Return.Ver, guestOSLimit)
 	}
+	g.OS = correctWindowsName(g.OS, osinfo.Return.Family, osinfo.Return.Build)
 	var host struct {
 		Return struct {
 			Name string `json:"host-name"`

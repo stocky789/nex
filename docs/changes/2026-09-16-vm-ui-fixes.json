@@ -1,0 +1,47 @@
+{
+  "summary": "Controller UI for the Windows 11 lab defects: Secure Boot and TPM 2.0 controls in the Create VM wizard and the edit form (TPM on by default for a Windows guest), a driver-disc ISO for the VM's second CD drive, Secure Boot/TPM/driver-disc rows on the VM details page, an offered post-install eject of the install ISO, an ISO banner that follows the host transfer record, honest dedicated-memory wording, a display-resize reason that names the missing half (guest tools or VirtIO display) instead of always blaming the display, and no session probe before sign-in. API impact: changed contract — this slice is the Controller/UI half of the VM spec's boot.secure_boot, boot.tpm and drivers_media_id fields and the media request's drive field, which internal/protocol already defines; it adds no endpoint or field of its own.",
+  "paths": [
+    "web/src/vm-create.tsx",
+    "web/src/vm-edit.tsx",
+    "web/src/managed.tsx",
+    "web/src/main.tsx",
+    "web/src/style.css",
+    "web/src/vm-create.test.mjs",
+    "web/src/managed.test.mjs",
+    "docs/guide/vm-power.md",
+    "docs/guide/README.md",
+    "docs/changes/2026-09-16-vm-ui-fixes.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Control VM power gains the offered post-install eject of install media: when it is offered, what it does to the boot order, what a failed task means, and the limits of what was actually exercised. The navigation index names it. Creating and editing a VM change in the same change set and are documented in the create/edit pages by the lane that owns them.",
+    "pages": [
+      "docs/guide/vm-power.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No contract is defined or changed here: the UI sends the fields internal/protocol already carries (boot.secure_boot, boot.tpm, drivers_media_id, and drive on a media request, omitted for the install drive so those requests stay byte-identical). The reference entries for the changed contract are maintained centrally for the whole change set per docs/plans/2026-09-16-windows-11-lab-fixes.md, not in this record's diff. The UI offers the second CD drive and the drivers drive only on a host reporting vm-media-drivers-drive-v1.",
+    "pages": [],
+    "contracts": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Defect work against the existing VM foundation from the Windows 11 UEFI lab report; no milestone status or item changed.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "The Secure Boot choice, the TPM choice and the driver disc are fields of the VM definition in the pool master's Nex Core managed journal (protocol.VMCreateSpec in ManagedState.VMs, one entry per revision). A fresh Controller recovers them with the VM's own identity and name through the existing host inventory and adoption path; the Controller keeps only its mirror. The eject offer and the ISO banner read host-reported records and add nothing durable. The browser's localStorage sign-in marker is a per-browser hint that holds no session, credential or pool data, is never used to authorize anything, and costs at most one extra sign-in when a browser is cleared.",
+    "reason": "Every setting this UI writes belongs to the VM definition on the pool master; the Controller stores no new record."
+  },
+  "verification": {
+    "method": "npm --prefix web run typecheck, npm --prefix web run test (console/managed/storage/vm-create checks, all ok) and npm --prefix web run build, all passing. The new checks were confirmed to fail against the pre-fix sources: with HEAD's managed.tsx the run stops at isoTransferNotice is not a function; with the pre-fix rendering restored it fails on the missing Eject install media offer, then on the missing Secure Boot row, then on the pre-fix dedicated-memory sentence; with HEAD's vm-create.tsx it stops at defaultTPM is not a function; with HEAD's main.tsx it stops at the missing session-probe helpers. Browser review used Chromium through Playwright, not a running Controller: the VM details panel, the Create VM wizard (Windows guest defaulting to TPM 2.0 and Secure Boot on, the driver-disc picker excluding the install ISO, both controls disabled and reported as unavailable under BIOS, and the review page), the edit form (Secure Boot and TPM locked while the VM runs, media not locked), the guest tools panel for a VM whose tools are not installed (the resize reason points at the tools, with the install advice directly below it) and the ISO upload banner (queued then succeeded, then dismissed) were rendered from the repository sources with fixed sample data; the sign-in probe was exercised against the real web/dist build with the API stubbed, where a first load makes no session request and logs no console error, a reload after signing in restores the session, and a reload after signing out shows the form again, while the pre-fix build logs the 401. No Nex Core host, no real VM and no real media change were involved; a lab walkthrough of creating a Windows VM with a TPM and a driver disc, and of the post-install eject, remains outstanding.",
+    "evidence": [
+      "web/src/managed.test.mjs",
+      "web/src/vm-create.test.mjs",
+      "docs/guide/vm-power.md"
+    ]
+  }
+}

@@ -55,8 +55,11 @@ for production workloads. Use an explicitly selected disposable lab host.
 ## Steps
 
 1. In **Resources**, select the pool for the selected Core host, then open **Storage**.
-   The default **ISO** storage at `/var/lib/libvirt/images` may already be listed. It is a local
-   directory registration and can hold both ISOs and VM disks.
+   The host's own **Local storage** registration at `/var/lib/libvirt/images` may already be
+   listed. It is a local directory registration and can hold both ISOs and VM disks. A host
+   that first connected to an earlier Core keeps the name it recorded then, usually **ISO**;
+   that record belongs to the host and is never renamed by an upgrade, so rename it yourself
+   with **Update** if you want to.
 2. Select **Register storage**. In **Register VM storage**, enter a **Name** and choose
    **Repository type**. For local directory, ZFS and exclusive iSCSI storage, then select the
    **Host** that owns it. Shared NFS, SMB and clustered iSCSI storage has no host choice: the form
@@ -280,6 +283,23 @@ A terminal `failed` task is not retried; fix the cause and submit a new request.
 - **A VM cannot select or start on storage:** wait for a fresh `healthy`, readable, writable result
   on the placement host, check capacity including headroom, and place the ISO on one of the VM's
   disk repositories.
+- **A URL ISO download was refused:** read the reason in the **ISO library** row and **Task
+  history**. Core reports why it refused, and never repeats the URL, because a download link can
+  carry a credential. `ISO download refused this server's redirect from HTTPS to plain HTTP; use a
+  direct HTTPS link to the ISO` means the mirror answers its HTTPS link with a redirect to plain
+  HTTP; Core never follows that downgrade, so use the mirror's direct HTTPS file URL instead of a
+  "latest" or "stable" alias. The other refusals name themselves too: more than five redirects, a
+  redirect target that is not a public HTTP or HTTPS URL without credentials, a destination that is
+  not a public address, or a DNS or connection failure. Only `ISO download failed: connection,
+  redirect or timeout` means an unexplained network fault; check the host's own connectivity.
+- **A failed ISO import stays in the library:** an import that failed or was interrupted can be
+  removed from **ISO library**; the task and audit history of what happened are kept. Then submit
+  the transfer or download again, which starts a new import. An ISO a host actually holds cannot be
+  removed this way: it is Core's record and file, so Controller refuses with `this ISO is stored on
+  its host; Nex Core cannot remove imported media yet`, and a removal attempted directly in the
+  Controller database reappears at the host's next report. Deleting the file on the host by hand is
+  not supported. An import that is still `queued` or `dispatched` belongs to its host task; wait for
+  the task to end before removing the entry.
 - **Detach is refused:** remove or complete the listed VM/media dependency, or wait for Core to
   reconcile an uncertain operation. Do not register the same source under another name.
 - **A master NFS/SMB update, rotation or detach is refused for a member workload:** a member still
@@ -302,6 +322,11 @@ and the SMB domain/existing-folder picker in
 the two-Core NFS/SMB member workflow in
 [bug-ledger lab evidence](../qa/2026-09-12-bug-ledger.md#bug-0094-primary-native-pool-walkthrough),
 and clustered GFS2 in [concurrent storage verification](../qa/2026-09-12-concurrent-pool-storage.md).
+The distinct ISO download refusals, removing a failed import (`DELETE /api/v1/media/{id}`) and the
+accurate default name for a newly registered local repository (with an existing registration left
+unrenamed) have Core and Controller test coverage only; they were found in the
+[Windows 11 UEFI lab](../qa/2026-09-16-windows-11-uefi-lab.md) and no lab walkthrough of the fixes
+is claimed.
 Untested: failed-fence admission, broader outages/adoption, HA/failover, migration, physical hardware
 and the unavailable-Core browser presentation.
 

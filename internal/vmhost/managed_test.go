@@ -1437,8 +1437,8 @@ func TestManagedDomainXMLDevicesAndBootOrder(t *testing.T) {
 	if err = xml.Unmarshal(b, &d); err != nil {
 		t.Fatal(err)
 	}
-	if len(d.Devices.Disks) != 4 {
-		t.Fatalf("expected three disks and the install ISO: %s", b)
+	if len(d.Devices.Disks) != 5 {
+		t.Fatalf("expected three disks, the install ISO and the driver disc drive: %s", b)
 	}
 	for i, want := range []struct {
 		dev, bus, file string
@@ -1471,15 +1471,20 @@ func TestManagedDomainXMLDevicesAndBootOrder(t *testing.T) {
 	if d.Devices.Interfaces[2].MAC.Address != protocol.DerivedMAC(v.ID, 2) || d.Devices.Interfaces[2].MAC.Address == d.Devices.Interfaces[0].MAC.Address {
 		t.Fatalf("second derived NIC: %+v", d.Devices.Interfaces[2])
 	}
-	// A VM without install media still has its CD drive, empty, so an ISO can be inserted later
-	// without hot-plugging a SATA device.
+	// A VM without install media still has both CD drives, empty, so an ISO can be inserted
+	// later without hot-plugging a SATA device.
 	v.Boot.MediaBootOrder, v.MediaID = 0, ""
 	if b, err = testDomainXML(v, nets, paths, ""); err != nil {
 		t.Fatalf("media-free VM: %v", err)
 	}
 	var empty managedDomain
-	if err = xml.Unmarshal(b, &empty); err != nil || len(empty.Devices.Disks) != 4 || empty.Devices.Disks[3].Device != "cdrom" || empty.Devices.Disks[3].Source != nil || empty.Devices.Disks[3].Boot != nil {
-		t.Fatalf("media-free VM must carry an empty CD drive: %v\n%s", err, b)
+	if err = xml.Unmarshal(b, &empty); err != nil || len(empty.Devices.Disks) != 5 {
+		t.Fatalf("media-free VM must carry both CD drives: %v\n%s", err, b)
+	}
+	for _, cd := range empty.Devices.Disks[3:] {
+		if cd.Device != "cdrom" || cd.Source != nil || cd.Boot != nil {
+			t.Fatalf("media-free VM must carry an empty CD drive: %+v\n%s", cd, b)
+		}
 	}
 	// q35 definitions carry spare PCIe root ports so VirtIO devices can be hot-plugged later.
 	if strings.Count(string(b), `model="pcie-root-port"`) != 12 {
@@ -1958,8 +1963,11 @@ func TestManagedStartFailureKeepsCreationSucceeded(t *testing.T) {
 	if err != nil || r.Status != "succeeded" || r.Error != "" {
 		t.Fatalf("creation with a failed start: %+v %v", r, err)
 	}
-	reason := "libvirt refused the start request; inspect the VM on its host"
-	if got := calls(); got != "domstate "+v.ID+"\nstart "+v.ID+"\n" {
+	// The trailing domstate is powerVM observing the domain after the failed start: a failed
+	// call says nothing about what the guest did, so the outcome is settled by observation
+	// (BUG-0213). Here the domain is still shut off, so the start stays a recorded failure.
+	reason := "libvirt did not confirm the start request; inspect the VM on its host"
+	if got := calls(); got != "domstate "+v.ID+"\nstart "+v.ID+"\ndomstate "+v.ID+"\n" {
 		t.Fatalf("start calls %q", got)
 	}
 	saved, err := e.readJournal("create.json")
@@ -2167,10 +2175,14 @@ func TestDeploymentsListsApplianceOwnership(t *testing.T) {
 	}
 }
 
-// testDomainXML builds a definition with creation-time target names.
+// testDomainXML builds a definition with creation-time target names and an empty driver disc.
 func testDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistration, disks []string, iso string) ([]byte, error) {
-	targets, media := managedTargets(v)
-	return managedDomainXML(v, nets, disks, targets, media, iso)
+	return testDomainXMLWithDrivers(v, nets, disks, iso, "")
+}
+
+func testDomainXMLWithDrivers(v protocol.VMCreateSpec, nets []protocol.NetworkRegistration, disks []string, iso, drivers string) ([]byte, error) {
+	targets, media, driversDev := managedTargets(v)
+	return managedDomainXML(v, nets, disks, targets, media, iso, driversDev, drivers)
 }
 
 func TestLibvirtCPUCheckNoneAccepted(t *testing.T) {

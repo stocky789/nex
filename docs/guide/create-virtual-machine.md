@@ -6,8 +6,9 @@ This development workflow registers existing storage repositories and guest netw
 installation media, and creates a VM through Nex Controller with a six-page wizard:
 **Identity**, **CPU and memory**, **Disks**, **Networks**, **Boot and media** and **Review**.
 One VM can have up to eight disks and up to eight network interfaces, either
-[memory mode](#memory-modes), UEFI or BIOS firmware, an explicit boot order and optional
-autostart. The VM belongs to a pool with a separate assignment to one host. Storage and
+[memory mode](#memory-modes), UEFI or BIOS firmware with a **Secure Boot** and **TPM** choice,
+an install ISO and an optional **driver disc** in a second CD drive, an explicit boot order and
+optional autostart. The VM belongs to a pool with a separate assignment to one host. Storage and
 network access are checked on that host; a pool registration does not make a local disk shared.
 
 The VM is created stopped. **Start after creation** makes the host start it once, as the last
@@ -27,9 +28,12 @@ Use an explicitly selected disposable lab host.
   an older agent cannot execute these operations.
 - A freshly connected, active host with working KVM/QEMU and system libvirt, enough CPU
   and memory for the guest, and local recovery access.
-- One or more repositories registered and healthy on the placement host. The default **ISO**
-  registration at `/var/lib/libvirt/images` is a local directory created on install and can hold
-  both uploaded ISOs and guest disks. For local-directory ownership, remote storage preparation,
+- One or more repositories registered and healthy on the placement host. The default
+  **Local storage** registration at `/var/lib/libvirt/images` is a local directory created on
+  install and can hold both uploaded ISOs and guest disks. A host that first connected to an
+  earlier Nex Core keeps the name recorded then, usually **ISO**: the registration is the host's
+  own record and an upgrade never renames it. For local-directory ownership, remote storage
+  preparation,
   supported filesystem types, credentials and single-host limits, see
   [Register VM storage repositories](storage-repositories.md).
 - Free space on each storage target for the **full size of every disk placed on it plus about
@@ -53,14 +57,20 @@ Use an explicitly selected disposable lab host.
   available plus 2 GiB for itself; creating a stopped VM does not need that memory free.
   Upgrade Controller before Core; an older Controller rejects the new Core report fields.
 - For a Windows guest on a **VirtIO** or **SCSI** disk bus or a **VirtIO** network adapter:
-  the virtio-win driver media, because Windows setup cannot see those devices without it.
-  Choosing **SATA** and **Intel e1000e** avoids that at some cost in performance.
+  the virtio-win driver ISO imported on the same host, attached as the VM's **Driver disc**,
+  because Windows Setup cannot see those devices without it. Choosing **SATA** and
+  **Intel e1000e** avoids that at some cost in performance.
+- For **Windows 11**: UEFI firmware, **Secure Boot** on and a **TPM 2.0**. Setup refuses every
+  non-IoT edition without them, with only *This PC doesn't currently meet Windows 11 system
+  requirements* to say why. The emulated TPM needs `swtpm` and `swtpm-tools` on the host; Nex
+  Core installs both, and a host that lacks them refuses the VM rather than defining a TPM that
+  cannot start.
 
 ## Steps
 
 1. Sign in to Controller and, in **Resources**, select the pool that was created for the
    host (it is named after the host, which its **General** panel shows as **Pool master**).
-2. Open **Storage**. The host registers its default **ISO** storage (`/var/lib/libvirt/images`)
+2. Open **Storage**. The host registers its own **Local storage** (`/var/lib/libvirt/images`)
    itself and reports it once connected; wait for it to show `succeeded` and use it for ISO
    upload and VM disks. If that self-registration fails (the directory is missing or not
    writable, for example), no **Storage** row appears: the failure is a failed task in
@@ -83,7 +93,7 @@ Use an explicitly selected disposable lab host.
    libvirt network the host has already registered under another name is reported by the host
    as a failed task naming that registration; reuse it instead.
 4. Open **ISO library**, then **Upload ISO**. Choose the validated **Destination storage**
-   (the default **ISO** registration is fine), then choose **ISO source**:
+   (the host's own **Local storage** registration is fine), then choose **ISO source**:
    - **Upload from computer**: select or drop one **ISO file**, then select
      **Upload and transfer ISO**. Progress, rate and **Cancel** for the upload to Controller
      appear under **Recent tasks**. You can close the form and keep working while the
@@ -121,10 +131,14 @@ Use an explicitly selected disposable lab host.
         while the VM is stopped. Upgrade Controller and Core together for these naming rules.
       - **Description** — optional, at most 4096 characters, stored with the VM definition
         on the pool master.
-      - **Guest operating system** — **Linux**, **Windows** or **Other**. A record and a
-        hint only: it is shown on the VM's page and drives advice such as the virtio-win
-        reminder. It does not change the VM's devices, and Nex never installs or configures
-        a guest.
+      - **Guest operating system** — **Linux**, **Windows** or **Other**. Shown on the VM's
+        page, and used for two things. It sets the **TPM** default on **Boot and media**
+        (**Windows** starts with TPM 2.0, which Windows 11 requires; changing the TPM yourself
+        stops it following the guest OS). It also gives a **Windows** VM the two device
+        settings Windows expects: the emulated clock keeps **local time** in the RTC rather
+        than UTC, and the guest is offered the Hyper-V enlightenments (relaxed timing, virtual
+        APIC and spinlock hints) that let Windows run efficiently under KVM. Nex never installs
+        or configures a guest.
       - **Placement host** — the host this VM is assigned to. Hosts that are not freshly
         connected or lack managed-VM support are listed but cannot be chosen; the entry says
         `agent upgrade required` when the agent is too old. Selecting a host resets the
@@ -201,16 +215,41 @@ Use an explicitly selected disposable lab host.
         page says so.
    5. **Boot and media**
       - **Firmware** — **UEFI** (the default) or **BIOS**. UEFI must be advertised by the
-        host's libvirt capabilities. Firmware cannot be changed after creation, and an
-        installed guest generally cannot be moved between the two.
+        host's libvirt capabilities. Firmware can be changed later while the VM is stopped
+        (see [Edit a virtual machine](edit-virtual-machine.md)), but an installed guest
+        generally cannot be moved between the two: an operating system installed under one
+        firmware will usually not boot under the other. Choose it before installing.
+      - **Secure Boot** — **On · only signed boot software runs** (the default) or
+        **Off · unsigned boot media and drivers allowed**. On, the VM boots the firmware
+        build with the Microsoft keys enrolled, which is what a stock Windows or a signed
+        Linux shim expects. Off, the keys are not enrolled, so unsigned boot media and
+        unsigned kernel drivers load. The field is disabled with **Not available with BIOS**
+        when firmware is **BIOS**; BIOS has no Secure Boot. Secure Boot is part of the
+        firmware a guest is installed against and can only be changed while the VM is stopped.
+      - **TPM** — **TPM 2.0 · emulated device** or **None**. The default follows **Guest
+        operating system**: Windows starts with TPM 2.0 because Windows 11 refuses to install
+        without one, everything else starts with None. The device is emulated per VM, and its
+        state is kept on the host with that VM and removed when the VM is deleted. Disabled
+        with **Not available with BIOS** under BIOS firmware. Like Secure Boot, the TPM can
+        only be changed later while the VM is stopped.
       - **Install ISO** — an optional transferred ISO, or **No install media**. Any ISO
         already imported on this placement host can be attached, including one stored on a
         different repository from the VM's disks. The ISO is attached read-only as a SATA
         CD-ROM, so any guest installer can read it. Use **Open ISO library** if none is available.
+      - **Driver disc** — an optional second ISO, or **No driver disc**, in the VM's second CD
+        drive. Use it for the virtio-win ISO when a Windows guest installs onto a **VirtIO** or
+        **SCSI** disk: Setup lists no disk at all until the driver is loaded from this drive
+        (**Load driver**, then the `amd64` folder for the guest's Windows version). The list
+        excludes whatever is selected as **Install ISO**, so one image cannot fill both drives.
+        The field is disabled, with *This host's Nex Core does not provide a second CD drive
+        yet*, when the placement host runs an older Nex Core; upgrade it to attach a driver
+        disc. Both drives exist on every VM whether or not a disc is in them, so a disc can be
+        inserted later from **Edit** or the [console](vm-console.md) CD/DVD control.
       - **Boot order** — the list shows every disk and, when one is selected, the install
         media. Install media is first by default. **Up** and **Down** reorder it, and Nex
         renumbers the devices from 1. The host tries them in this order. Removing the ISO
-        removes it from the order.
+        removes it from the order. The driver disc is never in the boot order: it holds
+        drivers the installer loads from inside Setup, not something to boot.
    6. **Review** — every selection is listed for a last check, including the derived or
       manual MAC of each interface and the resolved boot order. Under **Lifecycle**:
       - **Start after creation** — the host starts the VM once, as the last step of the
@@ -266,7 +305,8 @@ The storage, network and ISO rows show successful host operations. The new VM ap
 its pool and assigned host. Its page lists the VM identity, assigned host, observed state,
 guest OS, vCPUs with the resolved topology and CPU model, memory with its mode, every disk
 with its size, bus, provisioning, boot position and storage, every interface with its adapter
-model and MAC, the install ISO with its boot position, the firmware and machine type, and
+model and MAC, the install ISO with its boot position, the driver disc, the firmware with its
+Secure Boot and TPM state, the machine type, and
 whether the VM starts when the host boots. A successful creation task means provisioning
 completed; fresh libvirt observations establish its current state separately.
 
@@ -356,6 +396,12 @@ failed and uncertain transfers show their own status.
   storage target cannot hold every disk placed on it plus its headroom. *UEFI firmware is not
   available on this host* means that host's libvirt does not advertise EFI for this machine
   type; choose BIOS or fix the host's firmware packages.
+- **"this host cannot provide a virtual TPM" or "this host has no emulated TPM backend":**
+  that host's libvirt does not offer an emulated TPM, which means `swtpm` and `swtpm-tools`
+  are not installed on it. Nex Core installs both; a host installed from an older ISO, or one
+  they were removed from, must have them installed and `libvirtd` restarted before it can run
+  a VM with a TPM. Nothing was created. Until then, choose **TPM → None** — but a non-IoT
+  Windows 11 edition will refuse to install.
 - **The VM was created but did not start:** the creation task shows `succeeded` and a
   separate failed power task, *VM created but not started* with the host's reason, appears in
   **Task history**. The VM exists with its disks, stopped, and is a normal managed VM; the
@@ -373,8 +419,17 @@ failed and uncertain transfers show their own status.
   order on the VM's page and that the firmware matches the installer. UEFI and BIOS installs
   are not interchangeable; a VM created with the wrong firmware must be recreated.
 - **The guest installer cannot see the disk or the network:** VirtIO and SCSI disks and
-  VirtIO adapters need drivers. On Windows, load them from the virtio-win media during setup,
-  or recreate the VM with a SATA disk and an Intel e1000e adapter.
+  VirtIO adapters need drivers. On Windows, attach the virtio-win ISO as the **Driver disc**
+  and, at *Where do you want to install Windows?*, select **Load driver**, browse the driver
+  drive and choose the `amd64` folder for the guest's Windows version. Both discs stay
+  inserted, so Setup continues from the install media afterwards. If the VM was created
+  before the driver disc existed, add it from **Edit** while the VM is stopped, or recreate
+  the VM with a SATA disk and an Intel e1000e adapter.
+- **Windows 11 Setup says the PC does not meet system requirements:** Setup does not say which
+  requirement. Check on the VM's page that firmware is **UEFI**, **Secure Boot** is **On** and
+  **TPM** is **TPM 2.0**, and that the VM has at least 2 vCPUs, 4096 MiB of memory and a 64 GiB
+  system disk. Secure Boot and the TPM can be corrected from **Edit** while the VM is stopped;
+  Setup must then be restarted, because it checks them once at the start.
 - **A Maximum VM never gives memory back:** on Windows the balloon driver is missing; install
   the virtio-win [guest tools](guest-tools.md). On Linux the driver is in the kernel, and only
   memory the guest counts as free comes back, so a guest holding a large file cache can sit
@@ -416,6 +471,17 @@ Recorded checks and their limits:
   [dedicated memory](../qa/dedicated-memory/checks.md).
 - [ISO library independent of VM disks](../qa/2026-09-14-iso-separate-from-vm-disks.md) —
   Controller and Core unit tests; no browser walkthrough of the wizard.
+- [Windows 11 UEFI lab](../qa/2026-09-16-windows-11-uefi-lab.md) — the run that found the
+  missing TPM, the hidden Secure Boot state, the single CD drive and the unchanged Windows
+  defaults. It describes Nex Core 0.2.7, before those were fixed.
+
+**Secure Boot, TPM and driver disc are not lab-verified.** They are covered by Nex Core unit
+tests over the generated libvirt definition, the CD-drive resolution and the delete path
+(`internal/vmhost/firmware_test.go`), and by Controller UI tests. No VM was created, started or
+installed with them: a Windows 11 install onto a TPM-equipped VM, a Secure Boot **Off** boot of
+unsigned media, the virtio-win **Load driver** step from the second drive, and an existing
+UEFI VM continuing to boot unchanged after a Core upgrade are all still to be walked through
+on a disposable host.
 
 Guest installation, physical hardware and arbitrary storage-failure recovery remain unverified;
 see the [platform plan](../plans/2026-09-08-nex-platform.md).

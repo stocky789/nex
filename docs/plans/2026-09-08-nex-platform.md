@@ -96,6 +96,52 @@ guide impact: **updated** with implemented workflows and actual evidence before
 acceptance. This authorization is not evidence of working clustered storage; current status
 and open gates: [production-readiness handoff](2026-09-14-production-readiness-handoff.md).
 
+## Core-first product direction
+
+**Decision (project owner, 2026-09-16):** prioritize Nex Core as the product: the Debian host
+platform implements pool capabilities and exposes them through its API. Controller is the
+replaceable management UI/API that authenticates operators, submits requests and displays
+host results. Apply the [Core-first acceptance order](../../AGENTS.md#core-first-delivery-and-acceptance)
+to every slice, retaining the existing closed Controller-scoped responsibilities and explicit
+backup/restore orchestration exception. Existing storage safety, pool authority and recovery
+gates remain the priority; migration, HA and managed applications keep their dependencies.
+This decision changes no milestone status or implementation queue.
+
+Preserve these directions as the relevant phases are designed; do not add speculative fields,
+endpoints, schedulers or UI controls now:
+
+- **Pool-first workloads:** workloads belong to pools, with visible host assignments. Keep
+  explicit placement until Core can safely select a host. Mandatory requirements (storage,
+  networking, devices and compatibility) never silently relax; preferences may fall back.
+  Pinning restricts placement and must expose its recovery limits. Initial placement, failure
+  recovery and ongoing balancing are separate actions, not one implicit automation permission.
+- **Explain before automating:** Core reports eligible hosts, blockers and observation freshness
+  through its API; Controller renders those results instead of calculating eligibility itself.
+  Extend existing compatibility checks in their owning slices. Add maintenance previews with
+  migration/evacuation, not as an independent simulation project; revalidate before execution.
+- **Policies remain host-owned:** future VM placement/protection policies and workload relationships
+  must have a durable record on the pool master, recovered through inventory/adoption by a fresh
+  Controller. Each implementation slice must name its concrete record and API contract before
+  adding settings. Swarm retains container task scheduling; Core manages the supporting VM
+  lifecycle and supported constraints. Preserve the Controller backup/restore exception.
+- **Unified application catalogue, follow-on:** allow both VM appliances and Docker applications
+  behind one discovery/deployment experience, using their existing lifecycle engines. Start with
+  a small supported set whose deployment, updates and recovery are verified. VM image/bootstrap
+  and Phase 10 prerequisites still apply; this adds neither LXC nor Docker workloads on Core.
+  Deployed application identity/configuration must be recoverable from the pool, including its
+  managed Swarm, without a sole Controller-held recipe or mapping.
+- **Honest recovery:** describe validated restart/replacement behavior and its limits per workload;
+  do not promise uninterrupted applications from a generic HA switch. Reserve controls and
+  recovery priorities follow proven HA. Automatic balancing, power/temperature optimisation,
+  broad failure simulation and automatic dependency discovery remain deferred possibilities.
+
+**API impact: none for this planning change** — no client-facing endpoint, Controller operation,
+Core command or observed-result contract changes. Future placement explanations, policies,
+maintenance previews and catalogue deployment require scoped API assessments and both-side
+implementation in their owning slices. **Guide impact: none** — no implemented operator workflow
+changes. **State owner: none for this documentation** — future durable pool records belong to
+Core as described above; concrete records and adoption checks remain implementation prerequisites.
+
 ## Build order: basics first
 
 Each milestone must work end to end before the next one expands the scope. The feature review is a source of follow-on features, not a requirement to build an enterprise feature set before Nex can run a VM.
@@ -423,6 +469,7 @@ browsable reference and agent protocol documentation; later phases extend them. 
 6. Validate host capacity and storage/network compatibility before accepting placement. Expose progress and useful failure reasons.
 7. Use VirtIO defaults for supported Linux guests; record CPU, machine, and firmware choices. Distinguish current hardware configuration from edits awaiting shutdown/restart. Show guest-agent availability rather than assuming it exists. **Guest tools observation and console features, 2026-09-09:** per-VM guest agent, OS, hostname, addresses and console channel readiness are reported and shown; see [the plan](2026-09-09-console-features.md).
 8. Provide a scoped inventory table, VM summary, visible task history, fresh/stale status, and basic CPU/RAM/disk usage. Add deletion protection and keep force-stop visually separate from graceful shutdown. The detailed UI sequence is in the companion review.
+   **Usage observation, 2026-09-16:** the Core half is implemented — each active VM is sampled with `virsh domstats --raw --nowait` and CPU, memory and disk are reported on the host inventory, with Controller validating and passing them through on `GET /api/v1/vms`. `--nowait` is required, not an optimisation: a probe that takes the domain's job stalls behind a long shutdown on the very VM being watched. **This item stays open**: no UI surfaces the numbers, and the observation has never run against real libvirt. See the [VM foundation debts](2026-09-14-production-readiness-handoff.md#vm-foundation-added-2026-09-16).
 
 **UX acceptance for Phases 1–2:** follow the [phase-fit criteria](2026-09-08-feature-and-ux-review.md#ux-opportunity-and-phase-fit) for enrollment, useful pool health, staged VM creation, safe homelab defaults, ISO drag/drop with a file-picker alternative, and read-only observed network relationships. Review real desktop/narrow-screen and keyboard operation, including empty, unauthorized, stale, failed, and interrupted states. Prepare semantic theme tokens while retaining the approved light default; a dark theme remains a follow-on candidate.
 
@@ -1080,13 +1127,13 @@ operator controls and verified guides remain future implementation work.
 
 ### 10. Managed Container Services (Docker Swarm)
 
-**Agreed architecture:** Nex Controller provisions Docker node VMs and manages applications through an authenticated Swarm integration. Users work with pool-level applications; node VMs remain visible in an Infrastructure view for diagnostics and controlled maintenance. No routine SSH, manual Swarm setup, or manual Docker commands are required.
+**Agreed architecture:** Nex Controller requests Container Services through authenticated Core APIs. Core runs durable provisioning and lifecycle operations for Docker node VMs and integrates with Swarm inside those VMs; Swarm schedules application tasks. Controller displays progress and results. Users work with pool-level applications; node VMs remain visible in an Infrastructure view for diagnostics and controlled maintenance. No routine SSH, manual Swarm setup, or manual Docker commands are required.
 
 This follows Phases 0–8 and the minimal VM image/bootstrap capability it needs. Stateless Swarm recovery does not require completion of VM HA in Phase 9. Stateful failover needs its own proven ownership/recovery gate and any fencing integration it depends on. Ceph is not a prerequisite; use supported NFS volumes initially.
 
 #### Ownership, storage, and failure behavior
 
-- Begin with one managed swarm per enabled pool. Nex Controller owns user intent, authorization and provisioning, and mirrors host-reported operation history; Swarm owns service scheduling, replicas, rolling updates, and replacement tasks. Avoid a competing Nex container scheduler.
+- Begin with one managed swarm per enabled pool. Controller authorizes operator requests and displays host-reported operation history. Core validates and persists desired application configuration, identities, node-VM relationships and durable provisioning progress on the pool master; define the concrete records and inventory/adoption contracts in each slice. Recover Swarm-owned runtime state through the managed swarm. Provisioning and reconciliation must survive Controller disconnection, and a replacement Controller must rediscover applications through Core APIs. Swarm owns service scheduling, replicas, rolling updates, and replacement tasks. Avoid a competing Nex container scheduler; retain the explicit Controller backup/restore orchestration exception.
 - Provision manager/worker roles automatically. For an HA-enabled swarm use three managers on separate physical Nex Core hosts, enforce that separation during VM placement/migration/maintenance, and reserve sufficient resources. Managers may also run workloads in a small validated deployment; dedicated manager VMs can follow workload requirements.
 - Swarm manager quorum is independent of hypervisor/pool HA quorum. Keep manager addresses stable and each manager's Raft state on its own node disk; do not share one Docker data directory between nodes. Loss of Nex Controller must not stop Swarm scheduling; loss of Swarm manager quorum prevents orchestration while existing tasks may continue. [Docker nodes](https://docs.docker.com/engine/swarm/how-swarm-mode-works/nodes/), [Swarm administration](https://docs.docker.com/engine/swarm/admin_guide/)
 - Failover creates replacement containers on eligible nodes; it does not live-migrate their memory, retain process identity, or guarantee uninterrupted connections. Service identity is stable while task/container IDs change. Expose recovery progress and measured downtime honestly.
@@ -1105,7 +1152,7 @@ This follows Phases 0–8 and the minimal VM image/bootstrap capability it needs
 5. **Validated stateful recovery:** select an explicit supported application/storage combination, implement required ownership enforcement, then test crash, partition, reschedule, update, and restore before offering automatic failover. Explain unsupported workloads in the UI.
 6. **Operations and lifecycle:** drain/rebuild/replace nodes, preserve quorum and physical-host separation, rotate credentials, coordinate updates, and inspect infrastructure VMs through Nex Controller. Guard direct deletion of managed node VMs and provide intentional decommission/removal with clear effects and data-retention choices.
 
-**Acceptance gates:** each slice is usable entirely from Nex Controller. Deploy a stateless service, kill a worker and then its physical host, and verify replacement plus endpoint reachability with a surviving manager quorum. Stop Nex Controller and confirm Swarm continues independently; lose manager quorum and report degraded orchestration honestly. Restore application data/configuration onto a new worker after making the original volume unavailable. For supported stateful HA, deliberately partition a writer and prove no unsafe concurrent access. Verify failure/retry/cleanup and manager replacement without duplicate node identities. Capture and review the colorful Applications UI, icon fallbacks, status clarity, keyboard access, and narrow-screen behavior.
+**Acceptance gates:** each slice is usable entirely from Nex Controller. Deploy a stateless service, kill a worker and then its physical host, and verify replacement plus endpoint reachability with a surviving manager quorum. Disconnect Controller during Core provisioning, reconnect and retry without duplicate node VMs or applications; replace Controller and rediscover application identities, configuration, node relationships and operation results through Core inventory/adoption. Stop Nex Controller and confirm Swarm continues independently; lose manager quorum and report degraded orchestration honestly. Restore application data/configuration onto a new worker after making the original volume unavailable. For supported stateful HA, deliberately partition a writer and prove no unsafe concurrent access. Verify failure/retry/cleanup and manager replacement without duplicate node identities. Capture and review the colorful Applications UI, icon fallbacks, status clarity, keyboard access, and narrow-screen behavior.
 
 ## Guided hardware passthrough
 
@@ -1161,8 +1208,8 @@ README.md
 go.mod
 cmd/nex-controller/main.go
 cmd/nex-core-agent/main.go
-internal/controller/             # API, persistence, operations, scheduling
-internal/agent/                  # libvirt and host operations
+internal/controller/             # UI-facing API/auth, host requests, Controller-scoped data and backup jobs
+internal/agent/                  # Core APIs, durable pool state/policies, libvirt and host operations
 internal/protocol/               # shared request/response definitions only
 web/                            # React/TypeScript UI
 packaging/                      # Debian control files, services, defaults

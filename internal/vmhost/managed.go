@@ -82,8 +82,13 @@ type powerRequestError struct {
 	cause  error
 }
 
+// "did not confirm" rather than "refused": powerVM only builds this after observing the domain
+// and finding the request unproven, so the cause may be a genuine libvirt refusal or a call that
+// was killed while libvirt still held the domain job. Claiming a refusal for the second sent an
+// operator to inspect a VM that had done exactly what was asked (BUG-0213). The cause carries
+// libvirt's own last stderr line, which distinguishes them when it knows.
 func (e powerRequestError) Error() string {
-	return "libvirt refused the " + e.action + " request; inspect the VM on its host: " + e.cause.Error()
+	return "libvirt did not confirm the " + e.action + " request; inspect the VM on its host: " + e.cause.Error()
 }
 
 func (e powerRequestError) Unwrap() []error { return []error{errPowerRequestUncertain, e.cause} }
@@ -103,10 +108,15 @@ type managedJournal struct {
 	// It is recorded in the same entry so a retried or reconciled creation never starts twice.
 	Start string `json:"start,omitempty"`
 	// Targets are the disks' libvirt target names, positional with Disks; they are assigned
-	// once and kept across edits so a guest never sees its disks renamed. MediaTarget is the
-	// CD drive every VM carries.
-	Targets     []string `json:"targets,omitempty"`
-	MediaTarget string   `json:"media_target,omitempty"`
+	// once and kept across edits so a guest never sees its disks renamed. MediaTarget and
+	// DriversTarget are the install and driver-disc CD drives every VM carries. An entry
+	// written before the second drive existed has no DriversTarget; managedCurrent places it
+	// beside the targets that entry already holds, so adding it renames nothing.
+	Targets       []string `json:"targets,omitempty"`
+	MediaTarget   string   `json:"media_target,omitempty"`
+	DriversTarget string   `json:"drivers_target,omitempty"`
+	// DriversPath is the resolved host path of the driver disc, recorded with MediaPath.
+	DriversPath string `json:"drivers_path,omitempty"`
 	// Retained lists disk files an edit detached from the VM; edits never delete data.
 	Retained []string `json:"retained,omitempty"`
 	// UnappliedObserved marks a failed vm-update recorded after allocation or define only
@@ -768,6 +778,9 @@ func validateManaged(c protocol.Command) error {
 		if v.MediaID != "" && !identifier.MatchString(v.MediaID) {
 			return errors.New("invalid install media reference")
 		}
+		if v.DriversMediaID != "" && !identifier.MatchString(v.DriversMediaID) {
+			return errors.New("invalid driver disc reference")
+		}
 	case "vm-power":
 		if c.Power == nil {
 			return errors.New("power payload required")
@@ -797,6 +810,9 @@ func validateManaged(c protocol.Command) error {
 		id, pool, host = m.VMID, m.PoolID, m.HostID
 		if !uuidPattern.MatchString(m.VMID) || !protocol.ValidMediaAction(m.Action) {
 			return errors.New("invalid VM identity or media action")
+		}
+		if !protocol.ValidMediaDrive(m.Drive) {
+			return errors.New("invalid CD drive")
 		}
 		if m.Action == "insert" && !identifier.MatchString(m.MediaID) {
 			return errors.New("insert requires a media identity")
@@ -2367,9 +2383,12 @@ func verifyISO(path string, m protocol.Media) error {
 }
 
 type managedOS struct {
-	Firmware string        `xml:"firmware,attr,omitempty"`
-	Type     osTypeXML     `xml:"type"`
-	Boot     []managedBoot `xml:"boot"`
+	Firmware string    `xml:"firmware,attr,omitempty"`
+	Type     osTypeXML `xml:"type"`
+	// FirmwareFeatures states Secure Boot and the enrolled keys instead of leaving libvirt to
+	// pick a firmware build from the rest of the domain (see applyFirmware).
+	FirmwareFeatures *firmwareXML  `xml:"firmware,omitempty"`
+	Boot             []managedBoot `xml:"boot"`
 }
 type managedBoot struct {
 	Dev string `xml:"dev,attr"`
@@ -2390,6 +2409,8 @@ type managedDisk struct {
 	Readonly  *struct{}         `xml:"readonly,omitempty"`
 	Shareable *struct{}         `xml:"shareable,omitempty"`
 	Boot      *managedBootOrder `xml:"boot,omitempty"`
+	// Alias names a CD drive across definitions; only the two drive aliases are written.
+	Alias *aliasXML `xml:"alias,omitempty"`
 }
 type managedController struct {
 	Type  string `xml:"type,attr"`
@@ -2463,8 +2484,9 @@ type managedDomain struct {
 	MemoryBacking *managedMemoryBacking `xml:"memoryBacking,omitempty"`
 	VCPU          int                   `xml:"vcpu"`
 	OS            managedOS             `xml:"os"`
-	Features      featuresXML           `xml:"features"`
+	Features      managedFeatures       `xml:"features"`
 	CPU           managedCPU            `xml:"cpu"`
+	Clock         *clockXML             `xml:"clock,omitempty"`
 	Devices       struct {
 		Disks       []managedDisk       `xml:"disk"`
 		Controllers []managedController `xml:"controller"`
@@ -2473,6 +2495,7 @@ type managedDomain struct {
 		Inputs      []inputXML          `xml:"input"`
 		Graphics    []graphicsXML       `xml:"graphics"`
 		Video       []videoXML          `xml:"video"`
+		TPM         *managedTPM         `xml:"tpm,omitempty"`
 		Memballoon  managedBalloon      `xml:"memballoon"`
 	} `xml:"devices"`
 }
@@ -2516,15 +2539,27 @@ func nextTarget(bus string, used map[string]bool) (string, error) {
 	return "", errors.New("no free disk target names remain on this bus")
 }
 
-// managedTargets assigns creation-time target names positionally, plus the CD drive's.
-func managedTargets(v protocol.VMCreateSpec) ([]string, string) {
+// managedTargets assigns creation-time target names positionally, plus both CD drives'.
+func managedTargets(v protocol.VMCreateSpec) (targets []string, media, drivers string) {
 	used := map[string]bool{}
-	targets := make([]string, len(v.Disks))
+	targets = make([]string, len(v.Disks))
 	for i, d := range v.Disks {
 		targets[i], _ = nextTarget(d.Bus, used)
 	}
-	media, _ := nextTarget("sata", used)
-	return targets, media
+	media, _ = nextTarget("sata", used)
+	drivers, _ = nextTarget("sata", used)
+	return targets, media, drivers
+}
+
+// driversTarget places the drivers CD drive on a VM whose disk and install-media targets were
+// assigned before that drive existed, so adding it never renames a device the guest already has.
+func driversTarget(targets []string, media string) string {
+	used := map[string]bool{media: true}
+	for _, t := range targets {
+		used[t] = true
+	}
+	dev, _ := nextTarget("sata", used)
+	return dev
 }
 
 // q35Machine reports whether a machine type is the PCIe q35 family, which takes root ports.
@@ -2534,15 +2569,19 @@ func q35Machine(machine string) bool {
 
 // managedDomainXML builds the persistent definition. nets, disks and targets are positional:
 // nets[i] carries NICs[i]'s registration, disks[i] the path allocated for Disks[i] and
-// targets[i] its libvirt target. Every VM carries one SATA CD drive at mediaTarget so an ISO
-// can be inserted or ejected later without hot-plugging a SATA device; it is empty when iso is.
-func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistration, disks, targets []string, mediaTarget, iso string) ([]byte, error) {
-	if len(nets) != len(v.NICs) || len(disks) != len(v.Disks) || len(targets) != len(v.Disks) || mediaTarget == "" {
+// targets[i] its libvirt target. Every VM carries two SATA CD drives, so an ISO can be inserted
+// or ejected later without hot-plugging a SATA device: the install drive at mediaTarget holding
+// iso, and the driver-disc drive at driversTarget holding driversISO. Either is empty when its
+// path is. Each carries the user alias that names it in a media request.
+func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistration, disks, targets []string, mediaTarget, iso, driversTarget, driversISO string) ([]byte, error) {
+	if len(nets) != len(v.NICs) || len(disks) != len(v.Disks) || len(targets) != len(v.Disks) || mediaTarget == "" || driversTarget == "" || mediaTarget == driversTarget {
 		return nil, errors.New("domain devices do not match the requested VM")
 	}
 	d := managedDomain{Type: "kvm", Name: v.Name, UUID: v.ID, Memory: memoryXML{"MiB", v.Memory.SizeMiB}, VCPU: v.CPU.Count, OS: managedOS{Type: osTypeXML{"x86_64", managedMachine(v), "hvm"}}}
-	if v.Boot.Firmware == "uefi" {
-		d.OS.Firmware = "efi"
+	applyFirmware(&d, v.Boot)
+	applyGuestOSDefaults(&d, v.GuestOS)
+	if v.Boot.TPMEnabled() {
+		d.Devices.TPM = emulatedTPM()
 	}
 	// Dedicated claims physical RAM before guest execution, prevents swapping/KSM and removes
 	// the balloon. A stopped domain retains only its admission commitment. Do not guess a QEMU
@@ -2597,7 +2636,7 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 			d.Devices.Controllers = append(d.Devices.Controllers, managedController{Type: "pci", Model: "pcie-root-port"})
 		}
 	}
-	cdrom := managedDisk{Type: "file", Device: "cdrom", Driver: driverXML{"qemu", "raw"}, Target: targetXML{Dev: mediaTarget, Bus: "sata"}, Readonly: &struct{}{}}
+	cdrom := managedDisk{Type: "file", Device: "cdrom", Driver: driverXML{"qemu", "raw"}, Target: targetXML{Dev: mediaTarget, Bus: "sata"}, Readonly: &struct{}{}, Alias: &aliasXML{Name: cdromInstallAlias}}
 	if iso != "" {
 		cdrom.Source = &sourceXML{File: iso}
 	}
@@ -2605,6 +2644,13 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 		cdrom.Boot = &managedBootOrder{v.Boot.MediaBootOrder}
 	}
 	d.Devices.Disks = append(d.Devices.Disks, cdrom)
+	// The driver disc never takes a boot order: it holds storage and network drivers an
+	// installer loads from inside Setup, and giving it one would let the VM boot from it.
+	drivers := managedDisk{Type: "file", Device: "cdrom", Driver: driverXML{"qemu", "raw"}, Target: targetXML{Dev: driversTarget, Bus: "sata"}, Readonly: &struct{}{}, Alias: &aliasXML{Name: cdromDriversAlias}}
+	if driversISO != "" {
+		drivers.Source = &sourceXML{File: driversISO}
+	}
+	d.Devices.Disks = append(d.Devices.Disks, drivers)
 	for i, requested := range v.NICs {
 		nic := managedNIC{Type: "bridge"}
 		if nets[i].Kind == "network" {
@@ -2736,17 +2782,7 @@ func managedCapacity(ctx context.Context, v protocol.VMCreateSpec, js []managedJ
 			return fmt.Errorf("CPU model %s is not available on this host", v.CPU.Model)
 		}
 	}
-	var caps struct {
-		Domain string `xml:"domain"`
-		Arch   string `xml:"arch"`
-		OS     struct {
-			Supported string `xml:"supported,attr"`
-			Enums     []struct {
-				Name   string   `xml:"name,attr"`
-				Values []string `xml:"value"`
-			} `xml:"enum"`
-		} `xml:"os"`
-	}
+	var caps domainCapabilities
 	if xml.Unmarshal(b, &caps) != nil || caps.Domain != "kvm" || caps.Arch != "x86_64" || caps.OS.Supported != "yes" {
 		return errors.New("unsupported KVM capabilities for this machine type")
 	}
@@ -2762,6 +2798,20 @@ func managedCapacity(ctx context.Context, v protocol.VMCreateSpec, js []managedJ
 		if !found {
 			return errors.New("UEFI firmware is not available on this host")
 		}
+	}
+	// A TPM the host cannot actually run is worse than no TPM: libvirt accepts the definition
+	// and every start then fails, after the operator was told the VM has one. Refuse here,
+	// naming the host support that is missing, rather than defining it and hoping.
+	if v.Boot.TPMEnabled() {
+		if err = hostTPMSupport(caps); err != nil {
+			return err
+		}
+	}
+	// Same reasoning for the firmware: since Secure Boot is stated explicitly rather than left
+	// to libvirt, a host without a matching OVMF build fails the define with an error that
+	// never mentions Secure Boot. Refuse here in terms of the setting instead (BUG-0215).
+	if err = hostSecureBootSupport(caps, v.Boot); err != nil {
+		return err
 	}
 	return nil
 }
@@ -2803,9 +2853,15 @@ func (e *ManagedEngine) create(ctx context.Context, j *managedJournal, js []mana
 			return err
 		}
 	}
-	mediaPath := ""
-	if v.MediaID != "" {
-		m, path, err := publishedMediaPath(js, v.MediaID)
+	mediaPath, driversPath := "", ""
+	for _, resolve := range []struct {
+		id   string
+		into *string
+	}{{v.MediaID, &mediaPath}, {v.DriversMediaID, &driversPath}} {
+		if resolve.id == "" {
+			continue
+		}
+		m, path, err := publishedMediaPath(js, resolve.id)
 		if err != nil {
 			return err
 		}
@@ -2817,7 +2873,7 @@ func (e *ManagedEngine) create(ctx context.Context, j *managedJournal, js []mana
 		if err = verifyISO(path, m); err != nil {
 			return err
 		}
-		mediaPath = path
+		*resolve.into = path
 	}
 	if err = managedCapacity(ctx, v, js); err != nil {
 		return err
@@ -2866,9 +2922,9 @@ func (e *ManagedEngine) create(ctx context.Context, j *managedJournal, js []mana
 		}
 	}
 	j.Disks = disks
-	j.Targets, j.MediaTarget = managedTargets(v)
-	j.MediaPath = mediaPath
-	j.Domain, err = managedDomainXML(v, nets, disks, j.Targets, j.MediaTarget, mediaPath)
+	j.Targets, j.MediaTarget, j.DriversTarget = managedTargets(v)
+	j.MediaPath, j.DriversPath = mediaPath, driversPath
+	j.Domain, err = managedDomainXML(v, nets, disks, j.Targets, j.MediaTarget, mediaPath, j.DriversTarget, driversPath)
 	if err != nil {
 		return err
 	}
@@ -2964,7 +3020,7 @@ func (e *ManagedEngine) startCreated(ctx context.Context, j *managedJournal) err
 		// direct vm-power results retain the bounded native diagnostic for recovery.
 		var powerErr powerRequestError
 		if errors.As(err, &powerErr) {
-			j.Start = "libvirt refused the start request; inspect the VM on its host"
+			j.Start = "libvirt did not confirm the start request; inspect the VM on its host"
 		} else {
 			j.Start = err.Error()
 		}
@@ -3238,6 +3294,9 @@ func validateManagedDefinition(b, expected []byte) error {
 	if (want.OS.Firmware == "efi" && got.OS.Firmware != "efi") || (want.OS.Firmware == "" && got.OS.Firmware != "" && got.OS.Firmware != "bios") {
 		return errors.New("VM firmware changed")
 	}
+	if err := checkFirmwareAndTPM(got, want); err != nil {
+		return err
+	}
 	// Per-device boot order and an <os> boot list cannot coexist; only the former is requested.
 	if len(got.OS.Boot) != 0 {
 		return errors.New("VM boot order changed")
@@ -3434,6 +3493,21 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protoc
 	return j.Result, e.save(j)
 }
 
+// vmEverHad reports whether any journaled definition of this VM, at any revision and whatever
+// its result, satisfied want. Deletion of per-VM host state uses it rather than the current
+// definition, because an edit that drops a device does not remove the state that device left.
+func vmEverHad(js []managedJournal, vmID string, want func(protocol.VMCreateSpec) bool) bool {
+	for _, j := range js {
+		if j.Command.Kind != "vm-create" && j.Command.Kind != "vm-update" {
+			continue
+		}
+		if j.Command.VM != nil && j.Command.VM.ID == vmID && want(*j.Command.VM) {
+			return true
+		}
+	}
+	return false
+}
+
 // deleteVM removes a stopped managed VM from libvirt. Disk files are retained unless
 // DeleteDisks is set; retained paths stay in the journal so storage detach still sees them.
 func (e *ManagedEngine) deleteVM(ctx context.Context, j *managedJournal, js []managedJournal) error {
@@ -3470,9 +3544,20 @@ func (e *ManagedEngine) deleteVM(ctx context.Context, j *managedJournal, js []ma
 	if err = e.save(*j); err != nil {
 		return err
 	}
+	// Per-VM host state outlives the revision that asked for it. Firmware and the TPM are both
+	// editable (NeedsStop lists them), and neither a redefine that drops the device nor anything
+	// else in Core removes what the earlier revision left on the host, so asking only the current
+	// definition would strand it: create with UEFI or a TPM, edit it away, delete, and the NVRAM
+	// file or the swtpm directory survives. swtpm's state under /var/lib/libvirt/swtpm/<uuid>
+	// holds the endorsement key and whatever the guest sealed to it, and a later VM given the
+	// same UUID fails to start against state it does not own. Ask every revision this VM ever
+	// had, failed ones included: a revision that was journaled may have started before it failed.
 	args := []string{req.VMID}
-	if cur.Command.VM.Boot.Firmware == "uefi" {
+	if vmEverHad(js, req.VMID, func(v protocol.VMCreateSpec) bool { return v.Boot.Firmware == "uefi" }) {
 		args = append(args, "--nvram")
+	}
+	if vmEverHad(js, req.VMID, func(v protocol.VMCreateSpec) bool { return v.Boot.TPMEnabled() }) {
+		args = append(args, "--tpm")
 	}
 	if _, err = managedVirsh(ctx, append([]string{"undefine"}, args...)...); err != nil {
 		return err
@@ -3621,6 +3706,16 @@ func powerVM(ctx context.Context, p protocol.VMPowerRequest, memory *protocol.VM
 		}
 	}
 	if _, err = managedVirsh(ctx, command, p.VMID); err != nil {
+		// The request crossed into libvirt before this failed, so the error says nothing about
+		// what the guest did. Ask the domain. A shutdown whose client was killed while libvirt
+		// held the domain job had already stopped the guest, and reporting that as a refusal
+		// sent the operator to inspect a VM that had done exactly what was asked (BUG-0213).
+		// powerObserved holds the rules for what an observation can prove: only shut off settles
+		// a shutdown or force-stop, and a reboot still running stays uncertain, so this can
+		// promote a request to succeeded but never invents one.
+		if powerObserved(ctx, p) == nil {
+			return nil
+		}
 		return powerRequestError{action: p.Action, cause: err}
 	}
 	return nil
@@ -3679,7 +3774,7 @@ func (e *ManagedEngine) changeMedia(ctx context.Context, j *managedJournal, js [
 	dev := ""
 	live := running
 	if req.Action == "eject" {
-		source, tray, err := cdromSource(ctx, req.VMID, running)
+		source, tray, err := cdromSource(ctx, req.VMID, req.Drive, running)
 		if err != nil {
 			return err
 		}
@@ -3688,7 +3783,7 @@ func (e *ManagedEngine) changeMedia(ctx context.Context, j *managedJournal, js [
 			// persistent definition still names the ISO and would re-attach it at the next
 			// start. Clear that one, and only that one: virsh refuses an eject on a tray
 			// that already holds no media.
-			if source, tray, err = cdromSource(ctx, req.VMID, false); err != nil {
+			if source, tray, err = cdromSource(ctx, req.VMID, req.Drive, false); err != nil {
 				return err
 			}
 			live = false
@@ -3698,7 +3793,7 @@ func (e *ManagedEngine) changeMedia(ctx context.Context, j *managedJournal, js [
 			return e.recordVMMedia(req)
 		}
 		dev = tray
-	} else if dev, err = ensureCDROM(ctx, e.stateDir, req.VMID, running); err != nil {
+	} else if dev, err = ensureCDROM(ctx, e.stateDir, req.VMID, req.Drive, running); err != nil {
 		return err
 	}
 	// Persisted immediately before the virsh call, with the resolved media path, so an
@@ -3752,47 +3847,95 @@ func dumpManagedDomain(ctx context.Context, id string, running bool) (managedDom
 	return d, nil
 }
 
-// cdromSource reports the domain's CD drive target, empty when it has none, and the media the
-// tray holds. It is a read-only check so an eject on a VM with no drive, or an already-empty
-// one, is recognized as already satisfied instead of failing a virsh call with nothing to
-// eject. A running domain is read live: its tray may have been changed outside Nex, and only
-// the live definition proves what the guest currently sees. Media attached as a host device
-// (<source dev>) counts as present, the same as a file.
-func cdromSource(ctx context.Context, id string, running bool) (source, dev string, err error) {
+// cdromMedia is what a tray holds: a file, or a host device (<source dev>) attached outside
+// Nex, which counts as present the same as a file.
+func cdromMedia(disk managedDisk) string {
+	if src := diskFile(disk); src != "" {
+		return src
+	}
+	if disk.Source != nil {
+		return disk.Source.Dev
+	}
+	return ""
+}
+
+// cdromDrives resolves a domain's CD drives by drive name. The user aliases Nex writes are
+// authoritative. A domain defined before the driver-disc drive existed carries neither alias,
+// so the first cdrom it holds is the install drive; the drivers drive of such a domain is
+// reported absent rather than guessed, because inserting a disc into the wrong tray of a
+// running guest is not a recoverable mistake.
+func cdromDrives(d managedDomain) map[string]*managedDisk {
+	out := map[string]*managedDisk{}
+	var unaliased *managedDisk
+	for i := range d.Devices.Disks {
+		disk := &d.Devices.Disks[i]
+		if disk.Device != "cdrom" {
+			continue
+		}
+		switch {
+		case disk.Alias != nil && disk.Alias.Name == cdromInstallAlias:
+			out[protocol.InstallDrive] = disk
+		case disk.Alias != nil && disk.Alias.Name == cdromDriversAlias:
+			out[protocol.DriversDrive] = disk
+		case unaliased == nil && (disk.Alias == nil || !strings.HasPrefix(disk.Alias.Name, "ua-nex-")):
+			unaliased = disk
+		}
+	}
+	if out[protocol.InstallDrive] == nil && unaliased != nil {
+		out[protocol.InstallDrive] = unaliased
+	}
+	return out
+}
+
+// cdromSource reports the named CD drive's target, empty when the domain has no such drive, and
+// the media its tray holds. It is a read-only check so an eject on a VM with no drive, or an
+// already-empty one, is recognized as already satisfied instead of failing a virsh call with
+// nothing to eject. A running domain is read live: its tray may have been changed outside Nex,
+// and only the live definition proves what the guest currently sees.
+func cdromSource(ctx context.Context, id, drive string, running bool) (source, dev string, err error) {
 	d, err := dumpManagedDomain(ctx, id, running)
 	if err != nil {
 		return "", "", err
 	}
-	for _, disk := range d.Devices.Disks {
-		if disk.Device == "cdrom" {
-			src := diskFile(disk)
-			if src == "" {
-				if disk.Source != nil {
-					src = disk.Source.Dev
-				}
-			}
-			return src, disk.Target.Dev, nil
-		}
+	tray := cdromDrives(d)[driveName(drive)]
+	if tray == nil {
+		return "", "", nil
 	}
-	return "", "", nil
+	return cdromMedia(*tray), tray.Target.Dev, nil
 }
 
-// ensureCDROM returns the SATA cdrom target, attaching an empty tray when missing.
-// ponytail: SATA cannot hot-plug; a running domain without a tray must be stopped first.
-func ensureCDROM(ctx context.Context, stateDir, id string, running bool) (string, error) {
+// driveName resolves the drive a request names; "" is the install drive, which is what every
+// Controller sent before the second drive existed.
+func driveName(drive string) string {
+	if drive == "" {
+		return protocol.InstallDrive
+	}
+	return drive
+}
+
+// ensureCDROM returns the named SATA cdrom target, attaching an empty tray when the domain has
+// none. SATA cannot hot-plug, so a running domain missing that drive must be stopped first.
+func ensureCDROM(ctx context.Context, stateDir, id, drive string, running bool) (string, error) {
 	d, err := dumpManagedDomain(ctx, id, running)
 	if err != nil {
 		return "", err
 	}
+	alias, err := driveAlias(drive)
+	if err != nil {
+		return "", err
+	}
+	if tray := cdromDrives(d)[driveName(drive)]; tray != nil {
+		return tray.Target.Dev, nil
+	}
+	if running {
+		if driveName(drive) == protocol.DriversDrive {
+			return "", errors.New("the VM has no driver disc drive while running; shut it down, then insert the driver disc to add one")
+		}
+		return "", errors.New("the VM has no CD drive while running; shut it down, then insert or eject media to add one")
+	}
 	used := map[string]bool{}
 	for _, disk := range d.Devices.Disks {
 		used[disk.Target.Dev] = true
-		if disk.Device == "cdrom" {
-			return disk.Target.Dev, nil
-		}
-	}
-	if running {
-		return "", errors.New("the VM has no CD drive while running; shut it down, then insert or eject media to add one")
 	}
 	dev := "sda"
 	for i := 0; used[dev]; i++ {
@@ -3801,7 +3944,7 @@ func ensureCDROM(ctx context.Context, stateDir, id string, running bool) (string
 			return "", errors.New("no free SATA target for a CD drive")
 		}
 	}
-	tray := managedDisk{Type: "file", Device: "cdrom", Driver: driverXML{"qemu", "raw"}, Target: targetXML{Dev: dev, Bus: "sata"}, Readonly: &struct{}{}}
+	tray := managedDisk{Type: "file", Device: "cdrom", Driver: driverXML{"qemu", "raw"}, Target: targetXML{Dev: dev, Bus: "sata"}, Readonly: &struct{}{}, Alias: &aliasXML{Name: alias}}
 	xmlBytes, err := xml.Marshal(tray)
 	if err != nil {
 		return "", err
@@ -3842,7 +3985,10 @@ func managedCurrent(js []managedJournal, id string) (managedJournal, error) {
 		return cur, errors.New("VM is not defined on this host")
 	}
 	if len(cur.Targets) != len(cur.Command.VM.Disks) || cur.MediaTarget == "" {
-		cur.Targets, cur.MediaTarget = managedTargets(*cur.Command.VM)
+		cur.Targets, cur.MediaTarget, cur.DriversTarget = managedTargets(*cur.Command.VM)
+	}
+	if cur.DriversTarget == "" {
+		cur.DriversTarget = driversTarget(cur.Targets, cur.MediaTarget)
 	}
 	return cur, nil
 }
@@ -3857,7 +4003,7 @@ func (e *ManagedEngine) recordVMMedia(req protocol.VMMediaRequest) error {
 	if err != nil {
 		return err
 	}
-	v := protocol.ApplyVMMedia(*cur.Command.VM, req.Action, req.MediaID)
+	v := protocol.ApplyVMMedia(*cur.Command.VM, req.Action, req.Drive, req.MediaID)
 	cur.Command.VM = &v
 	return e.save(cur)
 }
@@ -3870,7 +4016,7 @@ func mediaObserved(ctx context.Context, req protocol.VMMediaRequest, path string
 	if err != nil {
 		return errors.New("VM definition cannot be established after an interrupted media change")
 	}
-	got, _, err := cdromSource(ctx, req.VMID, running)
+	got, _, err := cdromSource(ctx, req.VMID, req.Drive, running)
 	if err != nil {
 		return errors.New("VM definition cannot be established after an interrupted media change")
 	}
@@ -3883,7 +4029,7 @@ func mediaObserved(ctx context.Context, req protocol.VMMediaRequest, path string
 			// A guest can empty its own tray, so a live-empty drive alone does not prove
 			// the eject reached the persistent definition, which would otherwise re-attach
 			// the ISO at the next start.
-			persistent, _, err := cdromSource(ctx, req.VMID, false)
+			persistent, _, err := cdromSource(ctx, req.VMID, req.Drive, false)
 			if err != nil || persistent != "" {
 				return errors.New("media change was interrupted; observe the CD drive and submit a new request")
 			}
@@ -3894,10 +4040,15 @@ func mediaObserved(ctx context.Context, req protocol.VMMediaRequest, path string
 }
 
 // Default resources every host owns without operator action: its local libvirt image
-// directory as storage named ISO, and one untagged network per host bridge that sits on a
-// physical NIC or bond, named "<port> untagged" with the port recorded as the uplink.
+// directory as storage named "Local storage", and one untagged network per host bridge that
+// sits on a physical NIC or bond, named "<port> untagged" with the port recorded as the uplink.
+//
+// The name is only the default applied the first time this path is registered; RegisterDefaults
+// matches an existing registration on DefaultStoragePath, never on its name, so a host that
+// registered this directory under an earlier default keeps the name its pool master recorded
+// and is not renamed, duplicated or re-registered by an upgrade (BUG-0205).
 const (
-	DefaultStorageName = "ISO"
+	DefaultStorageName = "Local storage"
 	DefaultStoragePath = "/var/lib/libvirt/images"
 )
 
@@ -3968,11 +4119,11 @@ func (e *ManagedEngine) RegisterDefaults(ctx context.Context, pool, host string,
 // new definition (existing disks keep theirs, matched by name), the disks to allocate, the
 // files of removed disks to retain, and the space each storage target must provide.
 type managedLayout struct {
-	Disks, Targets []string
-	MediaTarget    string
-	New            []int
-	Retained       []string
-	Targets_       []managedTarget
+	Disks, Targets             []string
+	MediaTarget, DriversTarget string
+	New                        []int
+	Retained                   []string
+	Targets_                   []managedTarget
 }
 
 // managedUpdateLayout keeps every existing disk where it is and places each new disk in the
@@ -3980,9 +4131,9 @@ type managedLayout struct {
 // half-allocated file is never reused. Target names come from the journal; new disks take the
 // next free letter on their bus.
 func managedUpdateLayout(js []managedJournal, cur managedJournal, v protocol.VMCreateSpec) (managedLayout, error) {
-	l := managedLayout{Disks: make([]string, len(v.Disks)), Targets: make([]string, len(v.Disks)), MediaTarget: cur.MediaTarget}
+	l := managedLayout{Disks: make([]string, len(v.Disks)), Targets: make([]string, len(v.Disks)), MediaTarget: cur.MediaTarget, DriversTarget: cur.DriversTarget}
 	known := map[string]int{}
-	used := map[string]bool{cur.MediaTarget: true}
+	used := map[string]bool{cur.MediaTarget: true, cur.DriversTarget: true}
 	for i, d := range cur.Command.VM.Disks {
 		known[d.Name] = i
 		used[cur.Targets[i]] = true
@@ -4115,9 +4266,15 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 			return err
 		}
 	}
-	mediaPath := ""
-	if v.MediaID != "" {
-		m, path, err := publishedMediaPath(js, v.MediaID)
+	mediaPath, driversPath := "", ""
+	for _, resolve := range []struct {
+		id   string
+		into *string
+	}{{v.MediaID, &mediaPath}, {v.DriversMediaID, &driversPath}} {
+		if resolve.id == "" {
+			continue
+		}
+		m, path, err := publishedMediaPath(js, resolve.id)
 		if err != nil {
 			return err
 		}
@@ -4127,15 +4284,16 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 		if err = verifyISO(path, m); err != nil {
 			return err
 		}
-		mediaPath = path
+		*resolve.into = path
 	}
 	if !running {
 		if err = managedCapacity(ctx, v, js); err != nil {
 			return err
 		}
 	}
-	j.Disks, j.Targets, j.MediaTarget, j.MediaPath, j.Retained = layout.Disks, layout.Targets, layout.MediaTarget, mediaPath, layout.Retained
-	if j.Domain, err = managedDomainXML(v, nets, j.Disks, j.Targets, j.MediaTarget, mediaPath); err != nil {
+	j.Disks, j.Targets, j.MediaTarget, j.DriversTarget = layout.Disks, layout.Targets, layout.MediaTarget, layout.DriversTarget
+	j.MediaPath, j.DriversPath, j.Retained = mediaPath, driversPath, layout.Retained
+	if j.Domain, err = managedDomainXML(v, nets, j.Disks, j.Targets, j.MediaTarget, mediaPath, j.DriversTarget, driversPath); err != nil {
 		return err
 	}
 	j.Stage = "allocating"
@@ -4165,7 +4323,7 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 		if err = e.save(*j); err != nil {
 			return err
 		}
-		if err = e.applyLive(ctx, v.ID, j.Domain, mediaPath); err != nil {
+		if err = e.applyLive(ctx, v.ID, j.Domain, mediaPath, driversPath); err != nil {
 			return err
 		}
 	} else {
@@ -4230,9 +4388,9 @@ func setAutostart(ctx context.Context, v protocol.VMCreateSpec, js []managedJour
 
 // applyLive reconciles a running guest's persistent definition towards the expected one with
 // device operations only: attach the disks and interfaces it lacks, detach the ones it should
-// not have, and change the CD drive's media. Comparing against what libvirt actually holds,
+// not have, and change each CD drive's media. Comparing against what libvirt actually holds,
 // rather than the journal, makes a re-submitted edit after an interruption converge.
-func (e *ManagedEngine) applyLive(ctx context.Context, id string, expected []byte, mediaPath string) error {
+func (e *ManagedEngine) applyLive(ctx context.Context, id string, expected []byte, mediaPath, driversPath string) error {
 	b, err := managedVirsh(ctx, "dumpxml", id, "--inactive")
 	if err != nil {
 		return errors.New("cannot read the VM's persistent definition")
@@ -4311,25 +4469,58 @@ func (e *ManagedEngine) applyLive(ctx context.Context, id string, expected []byt
 	if cdrom == nil {
 		return errors.New("the VM has no CD drive; stop it and edit again to add one")
 	}
-	// The guest owns its tray while it runs: it can eject the disc the persistent definition
+	// A VM defined before the driver-disc drive existed has only the install drive. SATA cannot
+	// hot-plug, so the second drive is added to the persistent definition alone and appears at
+	// the next start; without it the definition would never match the expected one and every
+	// live edit of such a VM would fail its observation.
+	if cdromDrives(got)[protocol.DriversDrive] == nil {
+		if extra := cdromDrives(want)[protocol.DriversDrive]; extra != nil {
+			path, err := device(*extra)
+			if err != nil {
+				return err
+			}
+			defer os.Remove(path)
+			if _, err = managedVirsh(ctx, "attach-device", id, path, "--config"); err != nil {
+				return fmt.Errorf("libvirt refused to add the driver disc drive (%v); stop the VM and save its settings", err)
+			}
+			if got, err = dumpManagedDomain(ctx, id, false); err != nil {
+				return err
+			}
+		}
+	}
+	// The guest owns its trays while it runs: it can eject the disc the persistent definition
 	// still names, and it keeps one this definition no longer does. Each side is changed only
 	// where it differs, because virsh refuses an eject on a tray that is already empty.
-	liveMedia, _, err := cdromSource(ctx, id, true)
+	liveDomain, err := dumpManagedDomain(ctx, id, true)
 	if err != nil {
 		return errors.New("cannot read the running VM's CD drive")
 	}
-	if diskFile(*cdrom) != mediaPath || liveMedia != mediaPath {
-		args := []string{"change-media", id, cdrom.Target.Dev, "--force"}
-		if liveMedia != mediaPath {
+	persistent, live := cdromDrives(got), cdromDrives(liveDomain)
+	for _, drive := range []struct {
+		name, path string
+	}{{protocol.InstallDrive, mediaPath}, {protocol.DriversDrive, driversPath}} {
+		tray := persistent[drive.name]
+		if tray == nil {
+			continue
+		}
+		liveMedia := ""
+		if held := live[drive.name]; held != nil {
+			liveMedia = cdromMedia(*held)
+		}
+		if diskFile(*tray) == drive.path && liveMedia == drive.path {
+			continue
+		}
+		args := []string{"change-media", id, tray.Target.Dev, "--force"}
+		if liveMedia != drive.path {
 			args = append(args, "--live")
 		}
-		if diskFile(*cdrom) != mediaPath {
+		if diskFile(*tray) != drive.path {
 			args = append(args, "--config")
 		}
-		if mediaPath == "" {
+		if drive.path == "" {
 			args = append(args, "--eject")
 		} else {
-			args = append(args, mediaPath, "--update")
+			args = append(args, drive.path, "--update")
 		}
 		if _, err = managedVirsh(ctx, args...); err != nil {
 			return fmt.Errorf("libvirt refused the media change on the running VM (%v); inspect the VM on its host", err)

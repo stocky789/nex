@@ -45,7 +45,7 @@ func TestDedicatedMemoryLibvirt(t *testing.T) {
 			id := fmt.Sprintf("%x-%x-%x-%x-%x", idBytes[:4], idBytes[4:6], idBytes[6:8], idBytes[8:10], idBytes[10:])
 			name := "nex-memory-test-" + id
 			spec := protocol.VMCreateSpec{ID: id, Name: name, CPU: protocol.VMCPU{Count: 1, Model: "host-passthrough"}, Memory: protocol.VMMemory{Mode: mode, SizeMiB: 512}, Boot: protocol.VMBoot{MediaBootOrder: 1}}
-			body, err := managedDomainXML(spec, nil, nil, nil, "sda", "")
+			body, err := managedDomainXML(spec, nil, nil, nil, "sda", "", "sdb", "")
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -1,0 +1,44 @@
+{
+  "summary": "Report display resize from the guest instead of the display device (BUG-0201), observe the install and driver CD drives separately by their libvirt user aliases, correct the Windows 10 product name a Windows 11 guest reports using its build number (BUG-0211), and continue the wizard's step list onto the installer's progress and completion screens with no Go Back once the disk is written (BUG-0209). API impact: existing contract — the host's guest observation reports corrected values for guest.resize and guest.os and populates the already-defined guest.drivers_media; no endpoint, payload shape, authorization or error behaviour changes.",
+  "paths": [
+    "internal/vmhost/guest.go",
+    "internal/vmhost/guest_test.go",
+    "installer/gui/nex-shell.c",
+    "installer/build-gui.sh",
+    "docs/guide/guest-tools.md",
+    "docs/guide/install-nex-core.md",
+    "docs/changes/2026-09-16-guest-facts-and-installer.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operator-visible behaviour changed on three screens. guest-tools.md now states that display resize needs the guest's vdagent and not merely a VirtIO display, explains the corrected Windows 11 name, and adds troubleshooting for both; install-nex-core.md describes the continued step list and the completion screen's single Restart now button. Both pages record that these specific changes were not re-walked on a lab host or in an installer run.",
+    "pages": [
+      "docs/guide/guest-tools.md",
+      "docs/guide/install-nex-core.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: existing contract; no reference page is changed by this record because the reference updates this change requires were made by the primary in the same batch (see below). The guest observation the agent's guest probe reports inside protocol.Inventory.VMs[].Guest, surfaced as guest on GET /api/v1/vms, keeps its fields, JSON names, types, authorization, validation, error and retry behaviour. guest.resize now answers the question its contract already asks (can the guest follow a resize request) instead of the question the display device answers; guest.os corrects one known guest misreport; guest.drivers_media, defined in internal/protocol/guest.go in the same batch, is populated from the second CD drive. Compatibility is one-directional and already stated in protocol.GuestInfo: an older Core reports resize from the display device and never sets drivers_media, and a Controller must read an absent drivers_media as a VM with one drive. Drive identification uses the ua-nex-cdrom-install and ua-nex-cdrom-drivers libvirt user aliases written by the VM definition change in the same batch; a domain defined by an older Core carries neither and its one cdrom is the install drive. Reference updates, raised by this change and applied by the primary who owns those files: docs/API.md's guest-observation paragraph no longer says \"resize is true for a VirtIO display\" but states that the VM must have a VirtIO display and the guest must have opened the qemu-vdagent channel, and now documents drivers_media alongside media and in the list of values Controller refuses when unknown; docs/api/openapi.json carries the same corrected resize description and a drivers_media property beside media with the loaded/empty/no-drive enum. Neither file is in this record's paths and neither was edited by this change.",
+    "pages": [],
+    "contracts": [
+      "protocol.GuestInfo (Resize, Media, DriversMedia, OS)"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Defect fixes against findings W6, W14 and W16 of the Windows 11 UEFI lab report. No milestone, acceptance gate or delivery order changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state is introduced or moved. Resize, Media, DriversMedia and OS are live observations of a running domain and its guest agent, recomputed on every host report and absent for stopped VMs; nothing here is written, cached or remembered by the Controller. The durable record for what is in each drive stays on the pool master as media_id and drivers_media_id on the VM definition, owned by the VM definition change in the same batch. The installer change is presentation only."
+  },
+  "verification": {
+    "method": "Ran and inspected: go build ./... (PASS); go test -race -count=1 ./internal/vmhost/ ./internal/agent/ ./internal/protocol/ (all three ok; an earlier run failed only in TestApplyLiveAddsDriversDriveToOlderDomain from concurrent VM-definition work, which its owner then fixed); go test -race -run 'TestObserveGuest|TestGuestOSNameCorrectsWindows11' -v ./internal/vmhost/ (both PASS); gofmt -l on both Go files (clean). Regression value was demonstrated, not assumed: with the pre-fix logic restored in a scratch copy of the package, TestObserveGuest fails on the two resize cases and the four two-drive cases, and TestGuestOSNameCorrectsWindows11 fails on the three Windows 11 cases and the bounding check. Installer: bash installer/check.sh (both PASS lines); bash -n installer/build-gui.sh (clean); the build-gui.sh patch script was run against pristine cdebconf 0.280 source extracted from the cached .tar.xz and every assert passed, including the two pre-existing go.c anchors, which were separately shown to still match exactly once after the two new replacements; the resulting ui.c (which includes nex-shell.c), go.c, progress.c and handlers.c were compiled to object code with cc -c -O2 -Wall -Wextra -DDI_UDEB against real gtk+-2.0 headers, all four exiting 0 with no errors and no diagnostic naming nex-shell.c; nm then confirmed ui.c.o defines cdebconf_gtk_nex_is_completion and go.c.o references it as undefined, so the new predicate and both of its new call sites resolve across the two translation units. The button-count reasoning was verified by reading the pristine sources rather than inferred: cdebconf_gtk_create_screenshot_button (screenshot.c:182) packs exactly one secondary button unconditionally, destroy_buttons (go.c:300, called at go.c:599) empties the action box after every question, is_action_box_filled and create_goback_button each have exactly one call site inside cdebconf_gtk_go, and --enable-d-i defines DI_UDEB (configure.ac:114), so on the completion question the gated count takes the else branch with one child and still creates the Restart now button. REGRESSION COVERAGE OUTSTANDING for the installer half (BUG-0209): nex-shell.c has no standalone compilation unit and the frontend is built and linked inside the ISO builder, so no runnable check in this repository can detect a reintroduction, and a patch that applies cleanly and compiles but is wrong at runtime cannot be caught here. The gtk.so link, the ISO build and the boot were not run. A lab run must confirm three things: the completion page shows Restart now, the completion page shows no Go Back, and Back still works on every earlier d-i screen. NOT DONE, and not claimed: no ISO was built or booted, no installer screen was captured, and no VM or guest was started, so the resize, drive and OS-name behaviour was checked against recorded libvirt definitions and recorded guest agent answers rather than a live guest. scripts/check_docs.py was deliberately not run here; concurrent unfinished work in the tree makes its worktree result unreadable, and the primary runs it for the batch.",
+    "evidence": [
+      "internal/vmhost/guest_test.go",
+      "installer/check.sh",
+      "docs/qa/2026-09-16-windows-11-uefi-lab.md"
+    ]
+  }
+}

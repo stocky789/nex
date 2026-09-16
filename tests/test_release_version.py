@@ -2,6 +2,7 @@
 """The release version must agree across the tag, CHANGELOG and Debian package."""
 import importlib.machinery
 import importlib.util
+import re
 import shutil
 import subprocess
 import unittest
@@ -85,10 +86,19 @@ class ResolveTests(unittest.TestCase):
         self.assertEqual(tag, "0.1.6-alpha1")
 
     def test_real_changelog_parses_and_is_ordered_newest_first(self):
-        versions = release.changelog_versions((ROOT / "CHANGELOG.md").read_text())
+        text = (ROOT / "CHANGELOG.md").read_text()
+        versions = release.changelog_versions(text)
         self.assertIn("0.1.5-alpha1", versions)
-        self.assertEqual(versions[0], "0.2.7")
         self.assertNotIn("Unreleased", versions)
+        # The newest heading is whatever a build would use. Pinning the literal here only
+        # made every release fail this test for the one reason that is not a defect, so
+        # assert the property the test is named for instead: the file is ordered, and the
+        # head of it is what release-version reports.
+        self.assertEqual(versions[0], release.current(text)[0])
+        ordered = sorted(versions, key=lambda v: tuple(
+            int(part) if part.isdigit() else -1
+            for part in re.split(r"[.-]", v)), reverse=True)
+        self.assertEqual(versions, ordered)
 
 
 class CliTests(unittest.TestCase):

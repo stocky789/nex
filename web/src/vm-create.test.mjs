@@ -19,7 +19,42 @@ const stubbed = code
   .replace('from "./managed"', 'from "data:text/javascript,"')
   .replace('from "./storage"', 'from "data:text/javascript,export const storageUsable=()=>true;"');
 writeFileSync(file, stubbed);
-const { restoredNICs, autoDiskName, topologyIssue, vmNameIssue, bootKeys, renumber } = await import(`file://${file}`);
+const { restoredNICs, autoDiskName, topologyIssue, vmNameIssue, bootKeys, renumber, defaultTPM, effectiveBoot, secureBootText, tpmText, driversDriveReady } = await import(`file://${file}`);
+
+// BUG-0196: Windows 11 refuses to install without a TPM 2.0, so a Windows guest is drafted with
+// one and every other guest is not. The wizard applies this to a new draft and whenever the
+// guest OS changes, until the operator chooses a TPM themselves.
+assert.equal(defaultTPM("windows"), "2.0");
+assert.equal(defaultTPM("linux"), "none");
+assert.equal(defaultTPM("other"), "none");
+assert.equal(defaultTPM(""), "none");
+assert.match(src, /if \(!r\.boot\?\.tpm\) d\.boot = \{ \.\.\.d\.boot, tpm: defaultTPM\(d\.guest_os\) \};/);
+assert.match(src, /tpmChosen \? \{\} : \{ boot: \{ \.\.\.draft\.boot, tpm: defaultTPM\(e\.target\.value\) \} \}/);
+
+// Secure Boot and an emulated TPM are UEFI features; a BIOS VM is created without either,
+// whatever the disabled controls last held. The protocol also refuses secure_boot "on" on BIOS.
+assert.deepEqual(effectiveBoot({ firmware: "uefi", secure_boot: "off", tpm: "2.0" }), { firmware: "uefi", secure_boot: "off", tpm: "2.0" });
+assert.deepEqual(effectiveBoot({ firmware: "bios", secure_boot: "on", tpm: "2.0" }), { firmware: "bios", secure_boot: "", tpm: "none" });
+
+// BUG-0199: an unset secure_boot on a UEFI definition is Secure Boot on — the firmware libvirt
+// already selected for it — not "unknown" and not off.
+assert.match(secureBootText({ firmware: "uefi" }), /^On · /);
+assert.match(secureBootText({ firmware: "uefi", secure_boot: "" }), /^On · /);
+assert.match(secureBootText({ firmware: "uefi", secure_boot: "on" }), /^On · /);
+assert.match(secureBootText({ firmware: "uefi", secure_boot: "off" }), /^Off · /);
+assert.match(secureBootText({ firmware: "bios", secure_boot: "" }), /^Not available · /);
+assert.match(tpmText({ tpm: "2.0" }), /^TPM 2\.0 · /);
+assert.equal(tpmText({}), "None");
+assert.equal(tpmText({ tpm: "none" }), "None");
+
+// The second CD drive exists only on a host whose Core defines it; an older Core would ignore
+// the driver ISO and leave the operator believing a disc is attached.
+const driversHost = { id: "host-1", connection: "fresh", revoked: false, capabilities: ["managed-vm-v1", "vm-media-v1", "vm-media-drivers-drive-v1"] };
+assert.equal(driversDriveReady(driversHost), true);
+assert.equal(driversDriveReady({ ...driversHost, capabilities: ["managed-vm-v1", "vm-media-v1"] }), false);
+assert.equal(driversDriveReady({ ...driversHost, connection: "stale" }), false);
+assert.equal(driversDriveReady({ ...driversHost, revoked: true }), false);
+assert.equal(driversDriveReady(undefined), false);
 
 // BUG-0062: a restored draft with nics: [] (every interface explicitly removed) must stay [],
 // not be replaced by the one-NIC blank template.

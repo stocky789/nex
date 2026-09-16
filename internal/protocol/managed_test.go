@@ -4,6 +4,7 @@ package protocol
 import (
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -242,5 +243,34 @@ func TestDerivedMAC(t *testing.T) {
 	}
 	if DerivedMAC(id, 0) == DerivedMAC("87654321-1234-4234-8234-123456789012", 0) {
 		t.Fatal("different VMs derive the same MAC")
+	}
+}
+
+// A TPM may be added to a stopped VM but never removed. libvirt cleans a domain's TPM state by
+// iterating the devices its persistent definition still carries, so a redefine without <tpm>
+// orphans /var/lib/libvirt/swtpm/<uuid> — the endorsement key and everything the guest sealed —
+// with nothing left for undefine --tpm to clean (BUG-0214). Refusing the edit keeps the
+// definition and the host state in step, and also stops a guest losing its BitLocker key.
+func TestNeedsStopRefusesRemovingATPM(t *testing.T) {
+	with := func(tpm string) VMCreateSpec {
+		v := validSpec()
+		v.Boot.TPM = tpm
+		return v
+	}
+	if _, err := NeedsStop(with(TPM20), with(TPMNone)); err == nil {
+		t.Fatal("removing a TPM must be refused: its swtpm state would be orphaned and sealed secrets lost")
+	}
+	if _, err := NeedsStop(with(TPM20), with("")); err == nil {
+		t.Fatal("clearing the TPM field must be refused for the same reason as an explicit none")
+	}
+	stops, err := NeedsStop(with(TPMNone), with(TPM20))
+	if err != nil {
+		t.Fatalf("adding a TPM is an ordinary stopped-VM edit: %v", err)
+	}
+	if !slices.Contains(stops, VMChange("the TPM")) {
+		t.Fatalf("adding a TPM must require a stop: %v", stops)
+	}
+	if stops, err := NeedsStop(with(TPM20), with(TPM20)); err != nil || slices.Contains(stops, VMChange("the TPM")) {
+		t.Fatalf("an unchanged TPM is not a change: %v %v", stops, err)
 	}
 }

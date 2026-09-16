@@ -48,6 +48,25 @@ an exception, and do not leave the loophole for a later phase to clean up. Every
 where its durable state lives in its `docs/changes/*.json` record (`state.owner`), and both the API
 impact check and phase acceptance gates verify it.
 
+## Core-first delivery and acceptance
+
+Design and review each pool capability in this order: **Core behavior → durable host-side
+state → host API → outage/recovery checks → Controller UI**. Nex Core, the Debian host
+platform, owns validation, placement decisions, policy enforcement and durable operations;
+Controller authenticates operators, submits requests and presents host-reported results.
+The closed Controller-scoped responsibilities and backup/restore exception above still apply.
+
+Prove the capability through the host API, including interrupted requests, safe retries and
+Controller disconnection/replacement, before counting the slice as complete. Deliver the UI
+and guide in the same slice, but never treat a working screen as evidence that Core behavior
+or recovery works. Core operations must not depend on an open browser or Controller connection.
+Reuse native platform engines; Swarm schedules container tasks, without a second Nex task scheduler.
+
+Future product direction does not authorize implementation scaffolding or reorder delivery.
+Keep the current Core safety, authority and recovery gates ahead of dependent features; use the
+[platform direction](docs/plans/2026-09-08-nex-platform.md#core-first-product-direction) when
+assessing placement policies and application-catalogue proposals.
+
 ## Read before working
 
 - Read `docs/plans/2026-09-08-nex-platform.md` for the product model, build order, and acceptance gates.
@@ -69,6 +88,19 @@ Keep replies concise by default, using at most these three short fields:
 Requested reports, plans, and explanations may be detailed. Intermediate updates are one sentence
 when work starts, materially changes, blocks, or needs a progress update. Ask one direct question
 when blocked; do not repeatedly ask permission for already authorized work.
+
+Whenever asking the user a question, use the session's native interactive question tool
+when available and permitted in the current mode, rather than burying it in prose. This
+applies to clarifications, preferences, decisions, and necessary confirmations; respect
+tool restrictions and use dedicated approval controls where required. Prefer two or three
+clear choices with a recommended option and brief tradeoffs when useful; allow a custom
+answer where supported, and use free text when choices would be artificial.
+
+If no suitable interactive tool is available, put the question in a separate, clearly
+labeled **Need from you:** message with numbered choices when appropriate. Never hide a
+question in a progress update or outcome paragraph. Ask only when the answer matters;
+continue independent work while awaiting a reply, and never treat silence or a preselected
+option as approval. These instructions cannot enable a question UI the client lacks.
 
 ## Agent workflow
 
