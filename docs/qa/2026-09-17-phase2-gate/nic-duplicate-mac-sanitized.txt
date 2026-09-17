@@ -1,0 +1,35 @@
+SANITIZED EXCERPT, not an untouched capture. Host libvirt view of vm-e from the Phase 2
+gate5 lab (row 11, probes c and c2, 2026-09-17 UTC, build 0.2.10~gate5), showing the open
+MAJOR defect: a hot-plugged interface reused the MAC of an interface the guest had not
+released. vm-e has no guest OS and sits at firmware, so it never releases a removed
+device. The first three MAC octets are kept (the libvirt/QEMU prefix); the VM-derived
+middle octets are replaced with xx:yy. PCI addresses and alias names are elided.
+
+Before probe c (stopped, revision 1): interfaces virtio xx:yy:01, e1000e xx:yy:02.
+VM started.
+
+Probe c, 02:08:12Z: editor save removes virtio xx:yy:01 and adds a virtio interface.
+PUT 202, vm-update succeeded. Controller revision 2: [e1000e xx:yy:02, virtio xx:yy:00]
+(xx:yy:00 was removed in an earlier save and is handed out again).
+
+02:08:30Z  virsh domstate: running
+ Interface   Type     Source   Model    MAC
+ vnet4       bridge   br0      virtio   52:54:00:xx:yy:01   <- removed, still attached (guest has not released it)
+ vnet5       bridge   br0      e1000e   52:54:00:xx:yy:02
+ vnet6       bridge   br0      virtio   52:54:00:xx:yy:00
+inactive XML: e1000e xx:yy:02, virtio xx:yy:00
+
+Probe c2, 02:09:07Z: editor save with Add network interface only (automatic MAC).
+PUT 202, vm-update succeeded. Controller revision 3:
+[e1000e xx:yy:02, virtio xx:yy:00, virtio xx:yy:01]
+
+02:09:19Z  virsh domstate: running
+ Interface   Type     Source   Model    MAC
+ vnet4       bridge   br0      virtio   52:54:00:xx:yy:01   <- pending unplug
+ vnet5       bridge   br0      e1000e   52:54:00:xx:yy:02
+ vnet6       bridge   br0      virtio   52:54:00:xx:yy:00
+ vnet7       bridge   br0      virtio   52:54:00:xx:yy:01   <- new, DUPLICATE MAC on the same bridge
+inactive XML: e1000e xx:yy:02, virtio xx:yy:00, virtio xx:yy:01
+
+The task reported succeeded. The Controller and the VM details page listed 3 interfaces;
+nothing showed the 4th live interface or the duplicate address.

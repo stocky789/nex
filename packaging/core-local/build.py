@@ -28,7 +28,7 @@ def main():
         parser.error('invalid Debian package version')
     if len(args.trusted_key.read_bytes()) != 32:
         parser.error('trusted key must contain exactly 32 raw bytes')
-    for name in ['controller.qcow2', 'manifest.json', 'manifest.sig', 'nex-source.tar.gz', 'components.tsv', 'LICENSE', 'NOTICE', 'build-inputs.json']:
+    for name in ['controller.qcow2', 'manifest.json', 'manifest.sig', 'nex-source.tar.gz', 'components.tsv', 'LICENSE', 'NOTICE', 'ARTWORK-LICENSE.md', 'build-inputs.json']:
         if not (args.bundle / name).is_file():
             parser.error('missing appliance artifact: ' + name)
     args.output.mkdir(parents=True, exist_ok=True)

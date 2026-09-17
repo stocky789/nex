@@ -209,8 +209,9 @@ type DiskCapacity struct {
 }
 
 // NativeProbes only observes the local machine; it never changes VM or host state.
-func NativeProbes(version string) map[string]Probe {
-	return map[string]Probe{
+// usage may be nil, which omits the usage probe.
+func NativeProbes(version string, usage *usageSampler) map[string]Probe {
+	probes := map[string]Probe{
 		"inventory": func(ctx context.Context) (any, error) { return readInventory(version) },
 		"cpu-models": func(ctx context.Context) (any, error) {
 			// Domain capabilities mark which named models can actually run here;
@@ -237,7 +238,6 @@ func NativeProbes(version string) map[string]Probe {
 			return nil, f.Close()
 		},
 		"guest": guestProbe(),
-		"usage": usageProbe(),
 		"libvirt": func(ctx context.Context) (any, error) {
 			ids, err := virsh(ctx, "list", "--all", "--uuid")
 			if err != nil {
@@ -268,6 +268,10 @@ func NativeProbes(version string) map[string]Probe {
 			return vms, nil
 		},
 	}
+	if usage != nil {
+		probes["usage"] = usageProbe(usage)
+	}
+	return probes
 }
 
 // Guest facts are refreshed per running VM once a minute while the agent answers, and
@@ -351,31 +355,30 @@ func guestProbe() Probe {
 	}
 }
 
-// Usage is sampled per active VM with `domstats --raw --nowait`. --nowait is the whole reason
-// this probe is safe. Without it libvirt waits for the domain's job before reading anything
-// that needs the QEMU monitor, and that job is held for the entire length of the operation in
-// progress: a Windows guest held one shutdown for over three minutes while Nex's own polls
-// logged "cannot acquire state change lock" (BUG-0213). With it, libvirt returns the counters
-// it can read without the job — CPU time, balloon allocation, vCPU count — always, and the
-// ones behind the monitor (host RSS, block sizes) only when no other job holds the domain.
-// That is why those members of protocol.VMUsage are pointers: absent means libvirt was busy,
-// which is not zero. dominfo is avoided here for the same reason the libvirt probe avoids it.
+// Usage is sampled for every running VM with `domstats --raw --nowait` by the usage history
+// sampler (usage_history_sample.go). --nowait is the whole reason that sampling is safe.
+// Without it libvirt waits for the domain's job before reading anything that needs the QEMU
+// monitor, and that job is held for the entire length of the operation in progress: a Windows
+// guest held one shutdown for over three minutes while Nex's own polls logged "cannot acquire
+// state change lock" (BUG-0213). With it, libvirt returns the counters it can read without the
+// job — CPU time, balloon allocation, vCPU count — always, and the ones behind the monitor
+// (host RSS, block sizes) only when no other job holds the domain. That is why those members
+// of protocol.VMUsage are pointers: absent means libvirt was busy, which is not zero. dominfo
+// is avoided here for the same reason the libvirt probe avoids it.
 //
-// This is a separate probe so a slow sample never hides VM power states, exactly as the guest
-// probe is. It keeps the previous raw CPU counter per VM because a rate needs two samples, and
-// Core reports the rate rather than the counter: a Controller that divided two counters itself
-// would be deriving pool state the host already knows.
+// The usage probe only reports the sampler's latest values, so a slow sample never hides VM
+// power states, exactly as the guest probe is separate. The sampler keeps the previous raw CPU
+// counter per VM because a rate needs two samples, and Core reports the rate rather than the
+// counter: a Controller that divided two counters itself would be deriving pool state the host
+// already knows.
 //
 // A failure to sample one VM is skipped, never reported as a probe failure: the web UI ranks
 // any unhealthy check as a host problem, and a cosmetic counter libvirt declined to answer
-// must not paint the host red. The probe fails only when it cannot list active domains, which
-// is the same condition the libvirt probe already fails on.
+// must not paint the host red. The probe fails only when the sampler cannot list active
+// domains, which is the same condition the libvirt probe already fails on.
 const (
-	// One virsh round trip kept clear of the probe deadline, so the last VM in the list is
-	// either sampled properly or deferred, never half-sampled.
-	usageQueryBudget = 300 * time.Millisecond
 	// A sample this old is dropped rather than re-reported, and is never used as the base of
-	// a rate. It bounds how wrong a wedged probe can make the display.
+	// a rate. It bounds how wrong a wedged sampler can make the display.
 	usageMaxAge = 2 * time.Minute
 	// Above this the arithmetic is reporting a broken counter, not a busy VM.
 	usageMaxPercent = 1000
@@ -390,90 +393,16 @@ type usageObservation struct {
 }
 
 // usageSample is the previous raw counter (for the next rate) and the last usage reported for
-// this VM (so a deferred or unreadable VM can re-report it unchanged instead of disappearing).
+// this VM (so a VM libvirt could not answer for re-reports it unchanged instead of disappearing).
 type usageSample struct {
 	at    time.Time
 	cpuNS uint64
 	usage protocol.VMUsage
 }
 
-// usageProbe observes CPU, memory and disk consumption of every active VM.
-func usageProbe() Probe {
-	// ponytail: samples are cached per VM in memory; a VM that leaves the active list is
-	// dropped, and an agent restart costs only the first rate.
-	cache := map[string]usageSample{}
-	return func(ctx context.Context) (any, error) {
-		ids, err := virsh(ctx, "list", "--uuid")
-		if err != nil {
-			return nil, err
-		}
-		active := strings.Fields(ids)
-		if len(active) > 256 {
-			return nil, publicProbeError("VM observation limit exceeded (256)")
-		}
-		// Oldest sample first, so a host with more VMs than one deadline allows refreshes
-		// them in turn instead of always starving the tail of the list.
-		sort.SliceStable(active, func(i, j int) bool { return cache[active[i]].at.Before(cache[active[j]].at) })
-		now := time.Now()
-		seen := map[string]bool{}
-		out := make([]usageObservation, 0, len(active))
-		for _, id := range active {
-			seen[id] = true
-			previous, known := cache[id]
-			// reReport re-reports the previous sample unchanged, with its own observed_at, so
-			// a client sees an older number rather than a gap that flickers the panel on and
-			// off. A sample already too old is dropped instead.
-			reReport := func() {
-				if known && now.Sub(previous.at) <= usageMaxAge {
-					u := previous.usage
-					out = append(out, usageObservation{id, &u})
-				}
-			}
-			if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < usageQueryBudget {
-				reReport() // sampled on a later tick
-				continue
-			}
-			text, e := virsh(ctx, "domstats", "--raw", "--nowait", "--cpu-total", "--balloon", "--vcpu", "--block", id)
-			if e != nil {
-				if ctx.Err() != nil {
-					return nil, e
-				}
-				// The VM stopped between list and domstats, or libvirt declined this query.
-				// The libvirt probe owns the power state either way; usage keeps its last
-				// sample and the check stays healthy.
-				reReport()
-				continue
-			}
-			stats, ok := parseDomainStats(id, text)
-			if !ok {
-				reReport() // an unreadable domain costs its own fresh sample, not the host's report
-				continue
-			}
-			at := time.Now()
-			usage := protocol.VMUsage{
-				ObservedAt:          at.UTC(),
-				MemoryAssignedBytes: stats.balloonCurrentKiB * 1024,
-				MemoryMaximumBytes:  stats.balloonMaximumKiB * 1024,
-				MemoryHostBytes:     kiBToBytes(stats.balloonRSSKiB),
-				DiskUsedBytes:       stats.diskUsedBytes,
-				DiskCapacityBytes:   stats.diskCapacityBytes,
-			}
-			if known {
-				if percent, window, ok := usageRate(previous, at, stats.cpuNS, stats.vcpus); ok {
-					usage.CPUPercent, usage.SampleWindowMS = &percent, window
-				}
-			}
-			cache[id] = usageSample{at: at, cpuNS: stats.cpuNS, usage: usage}
-			reported := usage
-			out = append(out, usageObservation{id, &reported})
-		}
-		for id := range cache {
-			if !seen[id] {
-				delete(cache, id)
-			}
-		}
-		return out, nil
-	}
+// usageProbe reports the sampler's latest CPU, memory and disk consumption of every active VM.
+func usageProbe(sampler *usageSampler) Probe {
+	return func(ctx context.Context) (any, error) { return sampler.observations() }
 }
 
 // usageRate turns two cumulative libvirt CPU counters into a whole-percent rate of this VM's

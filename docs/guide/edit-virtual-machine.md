@@ -30,6 +30,12 @@ disk to other storage and moving a VM to another host are not available in this 
    - **Name**, **Virtual CPUs**, **Sockets / Cores / Threads**, **CPU model**, **Memory mode**,
      **Memory (MiB)**, **Firmware**, **Machine type**, **Secure Boot**, **TPM** and every
      **Boot order** field are only editable while the VM is stopped.
+     A name change and a **Secure Boot** change can be saved together in one edit.
+   - **Firmware** from **UEFI** to **BIOS** permanently deletes the VM's UEFI variable store:
+     its boot entries and Secure Boot variables. Switching back to UEFI later starts from a fresh
+     store, and an installed guest may not boot without repair. The form shows a warning, and
+     **Save changes** stays disabled until you tick **I understand the UEFI variable store will
+     be deleted**.
      The CPU selector contains the named models this host can run, plus Host passthrough and
      Host model; choose a baseline reported by every intended destination before migration.
      Nex Core checks that named model again before applying the edit.
@@ -46,8 +52,12 @@ disk to other storage and moving a VM to another host are not available in this 
      does), and it is gone after the VM's next stop and start either way.
    - **Network interfaces**: **Add network interface** adds one, with an automatic or manual
      MAC; **Remove** detaches one. Both work on a running VM. An existing interface's network,
-     adapter model, MAC and MTU change only while stopped. Existing interfaces show their
-     actual MAC, which stays fixed across later edits.
+     adapter model, MTU and MAC change only while stopped. Changing an existing interface's MAC
+     replaces that interface (it is then labelled **new**), so the guest sees a new network
+     adapter. Existing interfaces show their actual MAC, including on a VM that has never been
+     edited, and it otherwise stays fixed across edits. A new interface with an automatic MAC
+     never reuses the address of an interface removed in the same save, and takes the next
+     address above the VM's highest one rather than refilling a gap left by an earlier removal.
    - **Secure Boot** and **TPM**: **Secure Boot** is **On · only signed boot software runs** or
      **Off · unsigned boot media and drivers allowed**; **TPM** is **TPM 2.0 · emulated device**
      or **None**. Both are disabled with **Not available with BIOS** on a BIOS VM. A UEFI VM
@@ -64,13 +74,15 @@ disk to other storage and moving a VM to another host are not available in this 
      to eject the current one. The ISO library does not have to be the repository that holds
      the VM's disks. Both work while the VM runs; the CD drive keeps its place in the boot order.
    - **Driver disc**: the second CD drive, for the virtio-win ISO a Windows installer needs
-     beside its install media. Choose another ISO on this host or **No driver disc**; the list
-     excludes whatever **Install ISO** holds. It changes while the VM runs and is never in the
-     boot order. The field is disabled, with *This host's Nex Core does not provide a second CD
-     drive yet*, on a host running an older Nex Core. A VM defined before the second drive
-     existed gains it the first time it is saved: with the VM stopped the drive is there at the
-     next start, and a running VM gets the drive added to its definition (SATA cannot be
-     hot-plugged, so the guest sees it after its next stop and start).
+     beside its install media. The public 0.2.9 ISO does not include it, so import matching media
+     into this host's ISO library before choosing it here. Choose another ISO on this host or
+     **No driver disc**; the list excludes whatever
+     **Install ISO** holds. It changes while the VM runs and is never in the boot order. The
+     field is disabled, with *This host's Nex Core does not provide a second CD drive yet*, on
+     a host running an older Nex Core. A VM defined before the second drive existed gains it
+     the first time it is saved: with the VM stopped the drive is there at the next start, and
+     a running VM gets the drive added to its definition (SATA cannot be hot-plugged, so the
+     guest sees it after its next stop and start).
 3. Select **Save changes**. Controller checks the definition against the host and pool the
    same way creation does and queues a `vm-update` task for the host. Select **Cancel** to
    discard the form.
@@ -91,8 +103,8 @@ The **VM usage** panel under the VM details shows the latest host sample for a r
 the amount assigned and its configured maximum, not memory used inside the guest; and **Host
 memory cost** is the VM process's resident host memory. Disk used and capacity describe only
 the VM's disk images. Every value can be **Not reported**: that is unknown, not zero, when the
-host could not read it without waiting for another VM operation. Check **Sample age** and the
-fresh/stale badge before relying on the numbers; a stale status does not prove the VM stopped.
+host could not read it without waiting for another VM operation. Check the fresh/stale badge
+before relying on the numbers; a stale status does not prove the VM stopped.
 
 ## Troubleshooting
 
@@ -134,23 +146,83 @@ fresh/stale badge before relying on the numbers; a stale status does not prove t
   instead, or plan a replacement VM; disk resize is not yet available.
 - **"a change or power request for this VM is still pending":** one request per VM is in
   flight at a time. Wait for its task, then submit again.
-- **Task reports `failed`:** read its error. Common causes are a running guest that has not
-  released a device the edit removes, a storage target without free space for a new disk, or
-  libvirt refusing the change on the host. Correct the cause and submit the edit again.
+- **Task reports `failed`:** read its error. Common causes are a storage target without free
+  space for a new disk, or libvirt refusing the change on the host. Correct the cause and submit
+  the edit again. A running guest that has not released a removed device does **not** make the
+  task fail: the task reports `succeeded` while the device stays attached to the running VM until
+  the guest releases it or the VM stops. Adding an interface with that device's MAC fails until
+  then (see below).
 - **Task reports `needs_attention`:** the host was interrupted or a device operation failed
   part-way, and the persistent definition does not match the request. Inspect the VM on its
   host; stopping it and submitting the same edit again converges it, because a stopped edit
-  redefines the whole VM.
+  redefines the whole VM. A **UEFI** to **BIOS** change interrupted after the variable store was
+  removed is the exception, because the VM may no longer be defined on the host and a new edit is
+  refused. Nex Core finishes that change when the host reconnects and receives the original edit
+  again, or, for a VM on shared storage, at its periodic recovery about a minute later, so wait for
+  the task rather than submitting the edit again. A VM on local storage whose task already reports
+  `needs_attention` is not finished automatically: inspect the VM on its host.
+- **"VM definition changed during firmware cleanup; inspect the VM on its host":** while Nex Core
+  was finishing an interrupted UEFI to BIOS change, a UEFI definition of the VM appeared on the
+  host. Nex does not remove it; inspect the VM on its host.
+- **"VM name already exists" when repeating a failed rename:** the host may already carry the new
+  name from the failed attempt. Inspect the VM on its host before editing again.
 - **A change to a VM on shared storage (including a console CD/DVD insert or eject) shows
   `needs_attention`:** wait. About a minute after its storage is healthy, the host checks the
   VM and settles the change by itself: to `succeeded` if the change is in place, or to `failed`
   if the stopped VM still has its previous settings, after which you can submit it again.
   Until then only that VM refuses changes and power actions other than **Force stop**; other VMs
   in the pool are not affected. If it stays `needs_attention`, inspect the VM on its host.
+- **"the VM's host agent does not support a driver disc drive; upgrade Nex Core":** the host runs
+  an older Nex Core that cannot add a second CD drive. Update Nex Core on that host from
+  [Software updates](software-updates.md), or clear the **Driver disc** selection.
+- **"the driver disc ISO is not registered and verified on the VM's host and pool":** the ISO
+  chosen as the driver disc is still importing, failed to import, or is stored on another host.
+  Wait for the import to succeed in **Task history**, or import the ISO to the VM's host. You can
+  also insert or eject the driver disc from the [VM console](vm-console.md).
+- **"when removing, reordering or changing a network interface, give every existing interface
+  its MAC address" after replacing a VM's only interface:** removing the only interface and adding
+  one with a different adapter model in the same save is refused, because the request no longer
+  names any existing interface. Nothing changes. A likely workaround, not yet walked on a host:
+  add the new interface first and save, then remove the old interface and save again. On a
+  running VM, stop it first.
+- **Task reports `failed` with "network interface MAC … is still attached to the running VM; wait
+  for the guest to release it or stop the VM, then save again":** an interface you removed from the
+  running VM in an earlier save still has that MAC, because the guest has not released the device
+  (a guest at its firmware or installer menu never does). The host refused to add a second
+  interface with the same MAC before doing anything: no disk was created, nothing was attached,
+  and the VM keeps its previous settings. Wait for the guest to release the device and save again,
+  or stop the VM and save again, or give the new interface a different manual MAC.
 - **The details still show the old values after `succeeded`:** wait for the host's next
   report; the mirror follows what the host reports as current.
 
 ## Verification
+
+The [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md) (`0.2.10~gate5`, 2026-09-17,
+disposable nested-KVM lab, headless Chromium) walked the edit steps in the browser on a real host:
+a rename collision refused by the host with nothing changed, a stopped CPU, memory and added
+interface change, and on the running guest an ISO insert the guest could read, an interface
+removal the guest released, and an eject, each listed in the VM **Activity** tab. After a
+Controller replacement a stopped memory edit and a live interface add also succeeded. A **needs
+attention** result was not induced.
+
+**BUG-0254 walked on a real host.** The fix for a save that removes one interface and adds another
+(previously refused with "when removing, reordering or changing a network interface, give every
+existing interface its MAC address", or given the removed interface's MAC) was checked in the same
+run: removing the first interface of a never-edited, stopped VM kept the other interface's MAC; a
+removal plus an e1000e addition in one save on a never-edited, stopped VM gave the new interface a
+MAC distinct from both originals; and the same on a running VM was accepted with the Controller
+and host definitions in agreement. Two of these checks used a VM created through the API with no
+guest OS. The gate4 review's report that removing or changing an interface on a never-edited VM
+is refused was not reproduced.
+
+**Open defects found in that run.** On a running VM whose guest has not released a removed
+interface, a later **Add network interface** can reuse that interface's MAC, so the running VM has
+two interfaces with the same MAC while the task reports succeeded (major; code reading indicates
+0.2.9 is also affected). The BUG-0254 fix held within one save only. The development tree now
+refuses that add (see Troubleshooting) and no longer refills a removed address; this was checked
+with unit tests against a simulated libvirt only and has not yet been walked on a host.
+Replacing a VM's only interface with one of a different adapter model in one save returns 400
+(see Troubleshooting).
 
 See the [edit QA report](../qa/vm-edit/checks.md) and the
 [physical reservation QA report](../qa/dedicated-memory/checks.md) for executed checks and
@@ -160,6 +232,12 @@ The final disposable-package run verified Secure Boot on → rename → off → 
 entries and NVRAM identity, and a signed guest's EFI state. The independent Windows TPM/Secure
 Boot matrix remains open. See [final ISO and Controller acceptance](../qa/2026-09-16-final-iso-controller-acceptance.md).
 
+The UEFI to BIOS warning and its acknowledgement were exercised in a simulated browser run whose
+captures were inspected but are not stored under `docs/qa`. Saving a rename and a Secure Boot
+change together, and recovery of an interrupted UEFI to BIOS change, are covered only by Go unit
+tests against a simulated `virsh`; neither has been walked through on a real host.
+
 **VM usage verification, 2026-09-16.** A disposable Nex Core/libvirt host and the deployed
-Controller UI reported a running VM's CPU, allocation, resident memory, disk use/capacity and
-sample age. A shut-off VM reported no sample and the UI showed it as unknown rather than zero.
+Controller UI reported a running VM's CPU, allocation, resident memory and disk use/capacity.
+A shut-off VM reported no sample and the UI showed it as unknown rather than zero. The Sample age
+row was removed the same day; freshness stays on the panel heading.

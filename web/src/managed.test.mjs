@@ -26,7 +26,7 @@ buildSync({
 // reload path that first showed the stale panel.
 let pending = {};
 globalThis.sessionStorage = { getItem: () => JSON.stringify(pending), setItem() {} };
-const { ManagedVMs, VMDetails, formTab, isoNameFromURL, isoTransferNotice, mediaDiscardable, ejectInstallOffer, guestResizeText, usageAge } = await import(`file://${outfile}`);
+const { ManagedVMs, VMDetails, VMDelete, deleteBlocker, formTab, isoNameFromURL, isoTransferNotice, mediaDiscardable, ejectInstallOffer, guestResizeText, sentence, GuestTools, powerActions, powerConfirmText } = await import(`file://${outfile}`);
 
 const props = {
   account: "operator", poolID: "pool-1", poolName: "pool", hosts: [], storage: [], networks: [],
@@ -99,6 +99,11 @@ assert.match(failedLibrary, /Discard failed import/);
 const storedLibrary = renderToStaticMarkup(createElement(ManagedVMs, { ...props, tab: "ISO library", media: [{ id: "stored", pool_id: "pool-1", host_id: "host-1", storage_id: "storage-1", name: "stored.iso", operation_id: "op-2", status: "succeeded", size_bytes: 40000, sha256: "a" }] }));
 assert.doesNotMatch(storedLibrary, /Discard failed import/);
 const managedSource = readFileSync(new URL("./managed.tsx", import.meta.url), "utf8");
+// DEL-5: the delete request identity belongs to its payload. Retrying after an uncertain
+// response reuses it, but switching "Permanently delete disks" gets its own identity instead of
+// replaying the old one with another payload and failing with an unrelated 409.
+assert.match(managedSource, /request\.current\[String\(wipe\)\] \|\|= crypto\.randomUUID\(\)/);
+assert.match(managedSource, /request_id: request\.current\[String\(wipe\)\], delete_disks: wipe/);
 assert.match(managedSource, /confirm\(`Discard \$\{media\.name\}\?/);
 assert.match(managedSource, /await api\(`media\/\$\{media\.id\}`, "DELETE"\)/);
 assert.match(managedSource, /current = await api<Media\[\]>\("media"\)/);
@@ -175,16 +180,15 @@ assert.match(details, /Dedicated · the host locks this much RAM while the VM ru
 assert.doesNotMatch(details, /upgrade Core, stop/);
 
 // Roadmap item 8: Core reports nullable observations. The UI must distinguish an unavailable
-// metric from zero, state CPU's vCPU-relative meaning, and retain the sample age.
+// metric from zero and state CPU's vCPU-relative meaning without a sample-age row.
 const usageDetails = renderToStaticMarkup(createElement(VMDetails, { ...detailProps, vm: { ...installed, usage: { observed_at: new Date(Date.now() - 65_000).toISOString(), sample_window_ms: 30_000, cpu_percent: 125, memory_assigned_bytes: 4 * 1024 ** 3, memory_maximum_bytes: 8 * 1024 ** 3, memory_host_bytes: null, disk_used_bytes: 3 * 1024 ** 3, disk_capacity_bytes: null } } }));
 assert.match(usageDetails, /VM usage/);
 assert.match(usageDetails, /125% of allocated vCPUs/);
 assert.match(usageDetails, /Allocation, not memory used inside the guest/);
 assert.match(usageDetails, /Host memory cost<\/dt><dd>Not reported/);
 assert.match(usageDetails, /Disk capacity<\/dt><dd>Not reported/);
-assert.match(usageDetails, /Sampled 1 minute ago/);
+assert.doesNotMatch(usageDetails, /Sample age|Sampled /);
 assert.match(renderToStaticMarkup(createElement(VMDetails, { ...detailProps, vm: { ...installed, usage: null } })), /This is not zero usage/);
-assert.equal(usageAge(), "Sample time not reported");
 assert.doesNotMatch(details, /Existing VMs/);
 
 // BUG-0201 (UI half): resize is now reported from what the guest can do, not from the device
@@ -197,14 +201,17 @@ assert.match(guestResizeText(resizing), /^Available · /);
 assert.match(guestResizeText({ ...resizing, resize: false }), /this VM's display is not VirtIO/);
 for (const clipboard of ["waiting", "disconnected", ""]) {
   const text = guestResizeText({ ...resizing, clipboard, resize: false });
-  assert.match(text, /not running the vdagent/, clipboard);
+  assert.match(text, /not running both qemu-guest-agent and the vdagent/, clipboard);
   assert.match(text, /Install the guest tools/, clipboard);
   assert.doesNotMatch(text, /^Not available · no VirtIO display/, clipboard);
 }
 assert.match(guestResizeText({ ...resizing, clipboard: "no-channel", resize: false }), /created before the console agent channel existed/);
 // The panel renders that reason rather than the old device-model claim.
 const noTools = renderToStaticMarkup(createElement(VMDetails, { ...detailProps, vm: { ...installed, guest: { ...installed.guest, clipboard: "waiting", resize: false } } }));
-assert.match(noTools, /not running the vdagent that changes its resolution/);
+assert.match(noTools, /not running both qemu-guest-agent and the vdagent that changes its resolution/);
+// BUG-0243: Core reports "waiting" until qemu-guest-agent's channel is also open, so the waiting
+// label must name both agents, not send the operator to fix a spice-vdagent that already runs.
+assert.match(noTools, /Waiting for guest tools \(qemu-guest-agent and spice-vdagent\) in the guest/);
 assert.doesNotMatch(noTools, /no VirtIO display in this VM's definition/);
 
 // BUG-0208: the login page probed GET /api/v1/session before any session could exist, so every
@@ -234,5 +241,83 @@ assert.equal(signedInBefore(), true, "without storage, keep the previous behavio
 // The probe is skipped, not merely silenced, and a 401 anywhere clears the marker.
 assert.match(mainSource, /if \(!signedInBefore\(\)\) \{\s*\n\s*setSession\(null\);/);
 assert.match(mainSource, /response\.status === 401 && requestGeneration === generation\.current\) \{\s*\n\s*generation\.current\+\+;\s*\n\s*rememberSignedIn\(false\);/);
+
+// BUG-0218: right-click Delete mounted VMDelete closed, so onOpenChange(false) cleared the host
+// and the confirm dialog never appeared. Seed open from openSignal and only notify after the
+// first open/close transition.
+const deleteHost = { id: "host-1", pool_id: "pool-1", hostname: "core-a", connection: "fresh", revoked: false, capabilities: ["vm-delete-v1"], inventory: null };
+const deleteVM = { id: "vm-del", pool_id: "pool-1", host_id: "host-1", name: "guest", state: "shut off", freshness: "fresh", protected: false, role: "guest", status: "succeeded", operation_id: "op-del" };
+assert.equal(deleteBlocker(deleteVM, deleteHost), "");
+assert.equal(deleteBlocker({ ...deleteVM, state: "running" }, deleteHost), "Stop the VM before deleting it.");
+const deleteProps = {
+  vm: deleteVM, host: deleteHost, api: async () => ({}), reload: async () => {}, busy: false, unavailable: false, onNotice: () => {}, showButton: false,
+};
+const menuDelete = renderToStaticMarkup(createElement(VMDelete, { ...deleteProps, openSignal: 1 }));
+assert.match(menuDelete, /Delete guest\?/, "context-menu openSignal must seed the confirm dialog open");
+assert.match(menuDelete, /Permanently delete disks from storage/);
+assert.doesNotMatch(renderToStaticMarkup(createElement(VMDelete, deleteProps)), /Delete guest\?/, "without openSignal the dialog stays closed");
+assert.match(managedSource, /useState\(\(\) => \(openSignal \?\? 0\) > 0\)/);
+assert.match(managedSource, /prevOpen\.current === null/);
+assert.doesNotMatch(managedSource, /else if \(!open && element\.open\) element\.close\(\);\s*\n\s*onOpenChange\?\.\(open\);/);
+assert.match(mainSource, /Icon kind="delete"/);
+assert.match(mainSource, /Icon kind="console"/);
+
+// Gate round 2, UI-6: the VM listing reports "unknown" for a VM on a stale host, so the stale
+// warning must read the last state from the host's stored inventory instead of the listing.
+const staleHost = { ...mediaHost, connection: "stale", inventory: { cpu_count: 2, memory_bytes: 1, observed_at: "2026-09-16T10:00:00Z", vms: [{ id: "vm-1", name: "win11", state: "running" }] } };
+const staleDetails = renderToStaticMarkup(createElement(VMDetails, { ...detailProps, hosts: [staleHost], vm: { ...installed, state: "unknown", freshness: "stale" } }));
+assert.match(staleDetails, /Last reported state: running/);
+assert.match(staleDetails, /An unreachable host does not prove that this VM stopped/);
+assert.match(renderToStaticMarkup(createElement(VMDetails, { ...detailProps, hosts: [{ ...staleHost, inventory: null }], vm: { ...installed, state: "unknown", freshness: "stale" } })), /Last reported state: unknown/);
+
+// UI-8/GM-05: creation can start the VM, so the General tab must not claim it is always stopped;
+// installing a guest starts from the Console tab so the boot prompt is not missed.
+assert.doesNotMatch(details, /Creation provisions a stopped VM/);
+assert.match(details, /open the Console tab and use Start VM on its toolbar/);
+assert.match(details, /Select Edit to change the VM/);
+
+// UI-9: the install-media banner describes every guest, not only a Windows BIOS prompt.
+assert.match(details, /Every start boots the ISO first/);
+
+// UI-10: an error message without a full stop still reads as a sentence before the retry advice.
+assert.match(`${sentence("name is required")} Your entries are retained`, /required\. Your entries are retained/);
+assert.equal(sentence("Already queued."), "Already queued.");
+
+// UI-1: pending registrations have no identity yet (id ""), so rows fall back to the operation.
+assert.match(managedSource, /key=\{n\.id \|\| `op:\$\{n\.operation_id\}`\}/);
+assert.match(managedSource, /key=\{m\.id \|\| `op:\$\{m\.operation_id\}`\}/);
+
+// UI-2 (managed half): a created VM page carries its creation operation, so a create that later
+// fails still has a route that names the task instead of an unknown VM.
+assert.match(managedSource, /location\.hash = `\/vms\/\$\{result\.vm_id\}\/\$\{result\.operation\.id\}`/);
+
+// GM-10: the delete notice is set after the navigation's hashchange handler (which clears notices)
+// has run, so the host page keeps "Delete queued for …".
+assert.match(managedSource, /await reload\(\);\s*\n\s*onNotice\(`Delete queued for/);
+
+// Gate3 2c: the Guest tools badge names the agent's own state. "stale" means report age only,
+// so a fresh VM whose agent is disconnected must not read "stale".
+const guestBadge = renderToStaticMarkup(createElement(GuestTools, { vm: { id: "vm-g", name: "g", state: "running", freshness: "fresh", guest: { agent: "disconnected", clipboard: "waiting", resize: false } } }));
+assert.doesNotMatch(guestBadge, />stale</, "guest agent badge must not say stale");
+assert.match(guestBadge, /<span class="badge stale">disconnected<\/span>/);
+
+// Gate3 2d: Start on a protected Controller appliance always confirms, warning about two Controllers;
+// Start on an ordinary VM is still sent straight away.
+const startItem = powerActions.find(a => a.action === "start");
+assert.match(powerConfirmText(startItem, { protected: true }), /two Controllers/);
+assert.equal(powerConfirmText(startItem, { protected: false }), "");
+assert.match(powerConfirmText(powerActions.find(a => a.action === "force-stop"), { protected: true }), /Cuts power.*Controller appliance/);
+assert.match(managedSource, /if \(vm && powerConfirmText\(item, vm\)\) setPending\(item\)/);
+
+// Gate3 2b (managed half): a power notice carries its task so the page can clear it when the task settles.
+assert.match(managedSource, /Follow its progress in Recent tasks\.`, res\?\.operation\?\.id\)/);
+
+// Gate3 2f/2g: checkboxes are not stretched by the global input width, and a VM of a host that
+// is not fresh has a gray tree icon.
+const styleSource = readFileSync(new URL("./style.css", import.meta.url), "utf8");
+const inputRule = styleSource.indexOf("\ninput, textarea {");
+const checkboxRule = styleSource.indexOf('input:where([type="checkbox"], [type="radio"]) { width: auto; }');
+assert.ok(inputRule >= 0 && checkboxRule > inputRule, "checkbox width rule must follow the input width rule");
+assert.match(styleSource, /\.tree \.host-link\.vm-unknown \.resource-icon \{ filter: grayscale\(1\)/);
 
 console.log("managed.test.mjs: ok");

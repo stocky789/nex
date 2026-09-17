@@ -221,6 +221,97 @@ esac`)
 	}
 }
 
+// Phase 2 gate open defect 1: detach-device --persistent drops an interface from the persistent
+// definition at once, but the live device stays until the guest acknowledges the unplug. An edit
+// that hot-plugs an interface with that address fails at validation, before any disk is allocated
+// or device attached, so it is a plain failure rather than needs_attention; once the guest
+// releases the interface the same edit succeeds.
+func TestManagedUpdateRefusesMACStillLive(t *testing.T) {
+	dir := t.TempDir()
+	kept, pending := "52:54:00:aa:bb:02", "52:54:00:aa:bb:01"
+	cur := managedTestVM()
+	cur.MediaID, cur.Boot = "", protocol.VMBoot{Firmware: "bios"}
+	cur.Disks[0].BootOrder = 1
+	cur.Memory.Mode = "maximum"
+	cur.NICs = []protocol.VMNIC{{NetworkID: "n", Model: "virtio", MAC: kept}}
+	net := protocol.NetworkRegistration{ID: "n", PoolID: "p", HostID: "h", Kind: "network", Source: "default"}
+	next := cur
+	next.Revision = 1
+	next.NICs = []protocol.VMNIC{{NetworkID: "n", Model: "virtio", MAC: kept}, {NetworkID: "n", Model: "virtio", MAC: pending}}
+	nets := []protocol.NetworkRegistration{net, net}
+	persistent, err := managedDomainXML(cur, nets[:1], []string{"/vm/disk-0.qcow2"}, []string{"vda"}, "sda", "", "sdb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := managedDomainXML(next, nets, []string{"/vm/disk-0.qcow2"}, []string{"vda"}, "sda", "", "sdb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := map[string][]byte{"persistent.xml": persistent, "after.xml": after}
+	for name, b := range paths {
+		if err = os.WriteFile(filepath.Join(dir, name), b, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := filepath.Join(dir, "calls")
+	t.Setenv("MANAGED_CALLS", calls)
+	t.Setenv("MANAGED_DIR", dir)
+	// The live domain still holds the pending interface until the test releases it.
+	t.Setenv("MANAGED_LIVE", filepath.Join(dir, "after.xml"))
+	fakeCommand(t, "virsh", `echo "$@" >> "$MANAGED_CALLS"
+case "$*" in
+*domstate*) echo running;;
+*net-list*) echo default;;
+*dominfo*) echo "Autostart:      disable";;
+*attach-device*) touch "$MANAGED_DIR/attached";;
+*dumpxml*--inactive*) if [ -e "$MANAGED_DIR/attached" ]; then cat "$MANAGED_DIR/after.xml"; else cat "$MANAGED_DIR/persistent.xml"; fi;;
+*dumpxml*) if [ -e "$MANAGED_DIR/attached" ]; then cat "$MANAGED_DIR/after.xml"; else cat "$MANAGED_LIVE"; fi;;
+esac`)
+	e := NewManaged(filepath.Join(dir, "state"))
+	os.MkdirAll(e.stateDir, 0700)
+	for _, entry := range []managedJournal{
+		{Command: protocol.Command{OperationID: "op-net", Kind: "network-register", Network: &net}, Result: protocol.Result{OperationID: "op-net", Status: "succeeded"}},
+		{Command: protocol.Command{OperationID: "op-create", Kind: "vm-create", VM: &cur}, Result: protocol.Result{OperationID: "op-create", Status: "succeeded"}, Domain: persistent, Disks: []string{"/vm/disk-0.qcow2"}, Targets: []string{"vda"}, MediaTarget: "sda", DriversTarget: "sdb"},
+	} {
+		if err = e.save(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := e.Execute(context.Background(), protocol.Command{OperationID: "op-add", Kind: "vm-update", VM: &next}, nil)
+	want := "network interface MAC " + pending + " is still attached to the running VM; wait for the guest to release it or stop the VM, then save again"
+	if err != nil || r.Status != "failed" || r.Error != want {
+		t.Fatalf("add of a MAC the guest has not released: %+v %v", r, err)
+	}
+	b, _ := os.ReadFile(calls)
+	for _, effect := range []string{"attach-device", "detach-device", "change-media", "autostart"} {
+		if strings.Contains(string(b), effect) {
+			t.Fatalf("a refused edit must not touch the VM: %s", b)
+		}
+	}
+	js, err := e.journals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, j := range js {
+		if j.Command.OperationID == "op-add" && (j.Stage == "allocating" || j.Stage == "attaching" || len(j.Domain) != 0) {
+			t.Fatalf("a refused edit must stop at validation: stage %q", j.Stage)
+		}
+	}
+	// The guest released the interface: the next edit at the same revision passes validation and
+	// attaches the interface once. This unit harness has no registered storage repository (that
+	// needs root-owned mounts and the libvirt-qemu user), so the edit's final disk observation
+	// cannot succeed here; the storage error it stops at proves the MAC check let it through.
+	t.Setenv("MANAGED_LIVE", filepath.Join(dir, "persistent.xml"))
+	os.Remove(calls)
+	if r, err = e.Execute(context.Background(), protocol.Command{OperationID: "op-retry", Kind: "vm-update", VM: &next}, nil); err != nil || r.Error != "storage is not registered on this host" {
+		t.Fatalf("retry after release: %+v %v", r, err)
+	}
+	b, _ = os.ReadFile(calls)
+	if strings.Count(string(b), "attach-device") != 1 {
+		t.Fatalf("retry after release must attach once: %s", b)
+	}
+}
+
 // A vm-update that failed or needs_attention reserved nothing: Applied does not treat either
 // as the current definition, the revision they named is still the next one the Controller
 // sends, and the retry must reach the edit instead of the reservation.

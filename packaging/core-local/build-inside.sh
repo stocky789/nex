@@ -36,11 +36,11 @@ cp -a web/dist/. "$pkg/usr/share/nex/core-local/web/"
 cp web/dist/local.html "$pkg/usr/share/nex/core-local/web/index.html"
 cp /input/nex-source.tar.gz "$pkg/usr/share/nex/core-local/"
 cp -a docs/api "$pkg/usr/share/nex/core-local/"
-cp LICENSE NOTICE docs/LICENSING.md "$pkg/usr/share/doc/nex-core-local/"
+cp LICENSE NOTICE ARTWORK-LICENSE.md docs/LICENSING.md "$pkg/usr/share/doc/nex-core-local/"
 install -m644 /usr/local/go/LICENSE "$pkg/usr/share/doc/nex-core-local/go-LICENSE"
 install -m644 /usr/share/doc/libpam0g/copyright "$pkg/usr/share/doc/nex-core-local/pam-copyright"
 go version /build/nex-core-local > "$pkg/usr/share/doc/nex-core-local/go-version.txt"
-for artifact in controller.qcow2 manifest.json manifest.sig nex-source.tar.gz components.tsv LICENSE NOTICE build-inputs.json; do
+for artifact in controller.qcow2 manifest.json manifest.sig nex-source.tar.gz components.tsv LICENSE NOTICE ARTWORK-LICENSE.md build-inputs.json; do
     cp "/input/bundle/$artifact" "$pkg/usr/share/nex/appliance/"
 done
 install -d "$pkg/usr/share/nex/appliance/update"

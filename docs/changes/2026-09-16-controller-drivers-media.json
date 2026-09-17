@@ -1,0 +1,57 @@
+{
+  "summary": "Controller driver disc validation and media drive (BUG-0228 Controller half, BUG-0235): createVM and updateVM refuse a drivers_media_id the host cannot attach or has not imported, and POST /api/v1/vms/{id}/media accepts the drive field the 0.2.9 web console already sends, so driver disc insert and eject no longer fail with 400. Core also refuses a media insert of the ISO its journaled definition holds in the other drive. API impact: changed contract.",
+  "paths": [
+    "internal/controller/managed.go",
+    "internal/controller/vmmedia.go",
+    "internal/controller/vmmedia_test.go",
+    "internal/vmhost/firmware_test.go",
+    "internal/vmhost/managed.go",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/vm-console.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-16-controller-drivers-media.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators can now hit and must recognise the new driver disc refusals on create and edit, and console driver disc insert/eject works again after a Controller update.",
+    "pages": [
+      "docs/guide/vm-console.md",
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/edit-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "mediaVM gains optional request field drive (install|drivers) with 400 for an invalid drive or an insert of the ISO the other drive holds (\"the driver disc must differ from the install media\"), a drive-specific 404 for an unverified ISO, and 409 when the host lacks vm-media-drivers-drive-v1; a non-empty drive is part of the replay payload. createVM/updateVM keep their fields but now refuse drivers_media_id with 409 (no capability) or 404 (not a succeeded import on the host and pool). Controller-to-Core vm-media and vm-create/vm-update commands are unchanged: Core already accepted VMMediaRequest.drive and advertised the capability. An older Controller rejects drive as an unknown field; an older Core gets the 409. Core's vm-media command now fails an insert of the ISO its journaled VM definition holds in the other drive, before any libvirt change; the command shape is unchanged.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json"
+    ],
+    "contracts": [
+      "mediaVM",
+      "createVM",
+      "updateVM"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fixes within the existing driver disc slice; no milestone status changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Controller validates against host-reported media records and capabilities only and stores no new state; Core applies the drive change and journals drivers_media_id on the pool master as before."
+  },
+  "verification": {
+    "method": "go test ./internal/controller/ -run 'TestVMMediaDriversDrive|TestVMDriversMediaIsValidatedLikeInstallMedia' -count=1 -v (both failed before their fixes, both pass); go test -race ./internal/controller/... ok; python3 scripts/generate_api.py --check; python3 -m unittest tests.test_api_contract; python3 scripts/check_docs.py --worktree. Guide troubleshooting entries were checked against the handler error texts; no browser or disposable-lab walkthrough of console driver disc insert/eject against a real host was run, so that workflow remains unverified end to end. Core: go test ./internal/vmhost/ -run TestManagedMediaDriversDrive failed before the changeMedia guard and passes; go test -race ./internal/vmhost/... ./internal/agent/... ok.",
+    "evidence": [
+      "internal/controller/vmmedia_test.go",
+      "docs/BUG_LEDGER.md",
+      "internal/vmhost/firmware_test.go"
+    ]
+  }
+}

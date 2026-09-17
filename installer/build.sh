@@ -164,6 +164,12 @@ assert_iso_artifacts_current() {
 
 if [[ ${1:-} != --inside ]]; then
     mkdir -p .cache/nex-iso dist
+    source_snapshot=${NEX_DEBIAN_SOURCE_SNAPSHOT:-https://snapshot.debian.org/archive/debian/20260916T235959Z/}
+    security_snapshot=${NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT:-https://snapshot.debian.org/archive/debian-security/20260916T235959Z/}
+    [[ $source_snapshot == https://snapshot.debian.org/archive/* && $security_snapshot == https://snapshot.debian.org/archive/* ]] || {
+        echo 'NEX_DEBIAN_SOURCE_SNAPSHOT and NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT must be immutable snapshot.debian.org archive URLs.' >&2
+        exit 1
+    }
     # One version identifies a release. Default to the newest CHANGELOG heading so an
     # local build is not stamped with a stale constant; the release workflow passes
     # the same value explicitly.
@@ -184,12 +190,16 @@ if [[ ${1:-} != --inside ]]; then
         -v "$PWD:/work" -e BUILD_UID="$(id -u)" -e BUILD_GID="$(id -g)" \
         -e "CORE_LOCAL_DEB=/work/${iso_core_local#"$PWD"/}" \
         -e "MATCHED_DLM_DEB=/work/${matched_dlm_deb#"$PWD"/}" \
+        -e "NEX_DEBIAN_SOURCE_SNAPSHOT=$source_snapshot" \
+        -e "NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT=$security_snapshot" \
         -e "NEX_ISO_VERSION=$version" \
         nex-iso-builder
 fi
 [[ $(dpkg --print-architecture) == amd64 ]]
 cache=/work/.cache/nex-iso
 stage=$cache/stage
+source_snapshot=${NEX_DEBIAN_SOURCE_SNAPSHOT:?NEX_DEBIAN_SOURCE_SNAPSHOT required}
+security_snapshot=${NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT:?NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT required}
 # The ISO carries exactly one Nex Core version: the nex-core-local package it installs.
 core_local_deb=${CORE_LOCAL_DEB:?nex-core-local package path required}
 [[ -f $core_local_deb ]] || { echo "missing nex-core-local package: $core_local_deb" >&2; exit 1; }
@@ -233,6 +243,11 @@ rm -rf "$stage"
 mkdir -p "$stage/nex/repo"
 xorriso -osirrox on -indev "$cache/$iso" -extract / "$stage"
 chmod -R u+w "$stage"
+# These optional firmware packages are outside the reviewed server-hardware
+# scope. Remove their pool copies and repository metadata together.
+python3 scripts/prune-iso-packages.py --tree "$stage" \
+    dahdi-firmware-nonfree atmel-firmware bluez-firmware firmware-sof-signed \
+    firmware-b43-installer firmware-b43legacy-installer
 # Both frontends must exist on the pinned media before advertising the choice.
 for image in install.amd/vmlinuz install.amd/initrd.gz install.amd/gtk/initrd.gz; do
     test -s "$stage/$image"
@@ -304,14 +319,15 @@ Nex package version: ${NEX_ISO_VERSION:-unknown}
 Nex source: AGPL-3.0-only; upstream packages retain their own licenses.
 Core and Controller on this media were rebuilt from the same corresponding-source
 snapshot for this ISO build (see nex-source.product.sha256).
-Not approved for public redistribution: source-compliance/release review pending.
+Public redistribution requires the matching source bundle and compliance manifest.
 Build recipe: installer/build.sh; installed packages: nex/package-manifest.tsv
 Packages authenticated by Debian APT signed repository metadata during build.
 Package versions reflect build-time trixie repositories; not bit-reproducible yet.
 BUILD
 ./installer/build-gui.sh
 mkdir -p "$stage/nex/docs"
-cp LICENSE NOTICE docs/LICENSING.md "$stage/nex/docs/"
+[[ -f ARTWORK-LICENSE.md ]] || { echo 'ARTWORK-LICENSE.md is required for branded media.' >&2; exit 1; }
+cp LICENSE NOTICE ARTWORK-LICENSE.md docs/LICENSING.md "$stage/nex/docs/"
 # Full corresponding source from this build (host always regenerates dist/nex-source.tar.gz),
 # plus the installer recipe used to produce this ISO.
 [[ -f /work/dist/nex-source.tar.gz ]] || { echo 'dist/nex-source.tar.gz required; host build must run scripts/build-source.py' >&2; exit 1; }
@@ -320,12 +336,27 @@ tar -xzf /work/dist/nex-source.tar.gz -C "$source_stage"
 [[ -d $source_stage/nex-source ]] || { echo 'dist/nex-source.tar.gz missing nex-source/ prefix' >&2; exit 1; }
 rm -rf "$source_stage/nex-source/installer"
 cp -a installer "$source_stage/nex-source/"
-cp -f LICENSE NOTICE docs/LICENSING.md "$source_stage/nex-source/"
+cp -f LICENSE NOTICE ARTWORK-LICENSE.md docs/LICENSING.md "$source_stage/nex-source/"
 tar --sort=name --owner=0 --group=0 --numeric-owner -C "$source_stage" -czf "$stage/nex/nex-source.tar.gz" nex-source
 rm -rf "$source_stage"
 (cd "$stage/nex" && sha256sum nex-source.tar.gz > nex-source.tar.gz.sha256)
 # Record that media source matches the regenerated archive inputs.
 cp /work/dist/nex-source.tar.gz.sha256 "$stage/nex/nex-source.product.sha256"
+# A public ISO must have one retained bundle covering the base installer, all
+# added packages, rebuilt packages, appliance closure, notices, and exact hashes.
+cat > "$cache/source-sources.list" <<SOURCES
+deb-src $source_snapshot trixie main contrib non-free non-free-firmware
+deb-src $source_snapshot trixie-updates main contrib non-free non-free-firmware
+deb-src $security_snapshot trixie-security main contrib non-free non-free-firmware
+deb-src https://snapshot.debian.org/archive/debian/20260711T235959Z/ trixie main contrib non-free non-free-firmware
+deb-src https://snapshot.debian.org/archive/debian/20260711T235959Z/ trixie-updates main contrib non-free non-free-firmware
+deb-src https://snapshot.debian.org/archive/debian-security/20260711T235959Z/ trixie-security main contrib non-free non-free-firmware
+SOURCES
+python3 /work/scripts/build-source-bundle.py \
+    --version "$version" --iso "$cache/$iso" --tree "$stage" --repository "$stage/nex/repo" \
+    --apt-sources "$cache/source-sources.list" \
+    --source-input "$stage/nex/third-party" --source-input "$stage/nex/nex-source.tar.gz" \
+    --output "/work/dist/nex-core-${version}-source.tar.gz"
 cp installer/assets/boot-splash.png "$stage/isolinux/splash.png"
 cat > "$stage/isolinux/isolinux.cfg" <<'BIOS'
 path
@@ -411,10 +442,19 @@ GRUB
 # Recompute media checksums without the boot catalog (regenerated by xorriso).
 (cd "$stage" && find . -type f ! -name md5sum.txt ! -path './isolinux/boot.cat' ! -path './isolinux/isolinux.bin' -print0 | sort -z | xargs -0 md5sum > md5sum.txt)
 rm -f "$output"
+if [[ -e $stage/nex/media/virtio-win.iso ]]; then
+    echo 'refusing to publish virtio-win.iso without complete corresponding-source and legal accounting' >&2
+    exit 1
+fi
 # Replay original hybrid BIOS/UEFI boot structure and signed EFI binaries.
 xorriso -indev "$cache/$iso" -outdev "$output" \
     -boot_image any replay -update_r "$stage" / -volid NEX_CORE -commit -end
 cp "$stage/nex/package-manifest.tsv" /work/dist/package-manifest.tsv
+python3 /work/scripts/build-source-bundle.py \
+    --version "$version" --iso "$output" --tree "$stage" --repository "$stage/nex/repo" \
+    --source-bundle "/work/dist/nex-core-${version}-source.tar.gz" \
+    --compliance-manifest "/work/dist/nex-core-${version}-compliance-manifest.json"
+(cd /work/dist && sha256sum "nex-core-${version}-compliance-manifest.json" > "nex-core-${version}-compliance-manifest.json.sha256")
 cp "$stage/nex/BUILD.txt" /work/dist/BUILD.txt
 (cd /work/dist && sha256sum "$(basename "$output")" > "$(basename "$output").sha256")
 printf '\nBuilt %s\n' "$output"

@@ -1520,6 +1520,10 @@ func TestManagedDomainXMLMemoryModesAndTopology(t *testing.T) {
 			if d.Devices.Memballoon.Model != tc.model || d.Devices.Memballoon.FreePageReporting != tc.reporting {
 				t.Fatalf("balloon %+v, want model %q reporting %q", d.Devices.Memballoon, tc.model, tc.reporting)
 			}
+			// A virtio balloon reports guest memory statistics for usage history; no balloon has none.
+			if stats := d.Devices.Memballoon.Stats; (tc.model == "virtio") != (stats != nil && stats.Period == 5) || !strings.Contains(string(b), "<stats period=\"5\">") == (tc.model == "virtio") {
+				t.Fatalf("balloon stats period: %s", b)
+			}
 		})
 	}
 	v := managedTestVM()
@@ -1803,7 +1807,7 @@ func TestAppliedSurvivesCorruptJournalEntry(t *testing.T) {
 			journal = &checks[i]
 		}
 	}
-	if journal == nil || journal.Status != "failed" || !strings.Contains(journal.Error, "bad.json") {
+	if journal == nil || journal.Status != "failed" || !strings.Contains(journal.Error, "bad.json") || journal.LastSuccess != nil {
 		t.Fatalf("corrupt file not surfaced as a failed managed-journal check: %+v", checks)
 	}
 	// An intact journal reports the check healthy and Execute still fails closed on corruption.
@@ -1811,7 +1815,7 @@ func TestAppliedSurvivesCorruptJournalEntry(t *testing.T) {
 		t.Fatal("corrupt journal accepted by Execute")
 	}
 	os.Remove(filepath.Join(e.stateDir, "bad.json"))
-	if _, checks = e.Applied(context.Background()); checks[0].Name != "managed-journal" || checks[0].Status != "healthy" {
+	if _, checks = e.Applied(context.Background()); checks[0].Name != "managed-journal" || checks[0].Status != "healthy" || checks[0].LastSuccess == nil || !checks[0].LastSuccess.Equal(checks[0].ObservedAt) {
 		t.Fatalf("intact journal not healthy: %+v", checks)
 	}
 	// A journal directory that does not exist yet is an empty state, not a failure.
@@ -2145,11 +2149,11 @@ func TestAppliedFlagsVMsMissingFromLibvirt(t *testing.T) {
 	if len(got.VMs) != 1 || len(got.MissingVMs) != 1 || got.MissingVMs[0] != v.ID {
 		t.Fatalf("undefined VM not flagged: %+v", got)
 	}
-	if c := check("managed-vms", checks); c.Status != "failed" || !strings.Contains(c.Error, v.ID) {
+	if c := check("managed-vms", checks); c.Status != "failed" || !strings.Contains(c.Error, v.ID) || c.LastSuccess != nil {
 		t.Fatalf("missing VM check %+v", c)
 	}
 	fakeCommand(t, "virsh", "printf '%s\\n' "+strings.ToUpper(v.ID))
-	if got, checks = e.Applied(context.Background()); len(got.MissingVMs) != 0 || check("managed-vms", checks).Status != "healthy" {
+	if got, checks = e.Applied(context.Background()); len(got.MissingVMs) != 0 || check("managed-vms", checks).Status != "healthy" || check("managed-vms", checks).LastSuccess == nil {
 		t.Fatalf("defined VM flagged: %+v %+v", got, checks)
 	}
 }

@@ -1,0 +1,35 @@
+{
+  "summary": "Start the 0.3.0 changelog section and move every change made after the published 0.2.9 release into it. Entries absent from the 0.2.9 release commit changelog move to 0.3.0; the source-bundle/firmware-exclusion and no-bundled-virtio-win notes stay under 0.2.9 because the 0.2.9 release QA record verifies them in the published artifacts, and the shipped VM usage entry regains its released wording. Adds entries for user-visible fixes without one (BUG-0219 to BUG-0222, BUG-0225 to BUG-0228, BUG-0235) and corrects the BUG-0235 ledger and Windows 11 lab-fixes plan, which said the fix shipped in 0.2.9. Builds now resolve version 0.3.0 from the newest changelog heading; no other file declares the product version. API impact: none.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "docs/plans/2026-09-16-windows-11-lab-fixes.md",
+    "docs/changes/2026-09-17-changelog-0-3-0.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Release notes and status text only; no operator workflow, setting, error or recovery step changes."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Changelog, ledger and plan text only; no Controller/Core, agent or client-facing operation, schema, authorization or result changes.",
+    "pages": [],
+    "contracts": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Release-note grouping does not change public milestone scope or feature status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation only; no setting, record or table is added."
+  },
+  "verification": {
+    "method": "Compared CHANGELOG.md at release commit 76a28b6 and HEAD with the working tree, checked BUG-0218 to BUG-0257 against the 0.2.9 release QA record and git history (commit 4fb8570 lacks the Controller media drive field), and ran scripts/release-version.py --current --format both, which printed 0.3.0 0.3.0.",
+    "evidence": [
+      "docs/qa/2026-09-16-nex-core-0.2.9-release.md",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "summary": "Ship ARTWORK-LICENSE.md with every distributed Nex artifact that carries the artwork: the Controller appliance image and bundle, the nex-controller and nex-core-local packages, and the source archive. API impact: none — build and packaging inputs only.",
+  "paths": [
+    "ARTWORK-LICENSE.md",
+    "appliance/README.md",
+    "appliance/build-inside.sh",
+    "packaging/controller/build-inside.sh",
+    "packaging/core-local/build-inside.sh",
+    "packaging/core-local/build.py",
+    "scripts/build-source.py",
+    "tests/test_appliance_build.py",
+    "tests/test_build_source.py",
+    "tests/test_core_local_package.py",
+    "tests/test_distribution_packaging.py",
+    "docs/changes/2026-09-16-artwork-license-packaging.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No operator workflow changes; the file appears beside the existing LICENSE and NOTICE in packages and the appliance bundle.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Packaging and source-archive contents only; no Controller/Core operation, command or client endpoint is involved.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone status changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Build outputs and license text persist no pool or Controller state."
+  },
+  "verification": {
+    "method": "python3 -m unittest discover -s tests (documentation lane run: 285 tests, only failure the repository privacy test on usage-history QA JSON being rewritten by a concurrent lab run, unrelated to these paths). No appliance image, package or source archive was built.",
+    "evidence": [
+      "tests/test_appliance_build.py",
+      "tests/test_build_source.py",
+      "tests/test_core_local_package.py",
+      "tests/test_distribution_packaging.py"
+    ]
+  }
+}

@@ -11,10 +11,13 @@ Layout, all under one root owned by the publishing user (no root privilege neede
 
     <root>/0.1.6~alpha1/nex-core-0.1.6~alpha1-amd64.iso
     <root>/0.1.6~alpha1/nex-core-0.1.6~alpha1-amd64.iso.sha256
+    <root>/0.1.6~alpha1/nex-core-0.1.6~alpha1-source.tar.gz
+    <root>/0.1.6~alpha1/nex-core-0.1.6~alpha1-compliance-manifest.json
     <root>/latest -> 0.1.6~alpha1
 """
 import argparse
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -24,6 +27,8 @@ from pathlib import Path
 
 VERSION_DIR = re.compile(r"^[0-9][A-Za-z0-9.+~]*$")
 ISO_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~]*)-amd64\.iso$")
+SOURCE_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~]*)-source\.tar\.gz$")
+MANIFEST_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~]*)-compliance-manifest\.json$")
 
 
 class ReleasePublishError(RuntimeError):
@@ -49,6 +54,29 @@ def iso_version(iso):
             f"unexpected ISO filename {Path(iso).name!r}; "
             "expected nex-core-<version>-amd64.iso")
     return match.group("version")
+
+
+def release_asset(path, pattern, label, version):
+    path = Path(path)
+    if path.is_symlink() or not path.is_file():
+        raise ReleasePublishError(f"{label} must be a regular file: {path}")
+    match = pattern.match(path.name)
+    if not match or match.group("version") != version:
+        raise ReleasePublishError(
+            f"{label} must be named for ISO version {version}: {path.name}")
+    return path
+
+
+def compliance_manifest(path, version):
+    path = release_asset(path, MANIFEST_NAME, "compliance manifest", version)
+    try:
+        manifest = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise ReleasePublishError(f"invalid compliance manifest: {path}") from error
+    if not isinstance(manifest, dict) or manifest.get("version") != version:
+        raise ReleasePublishError(
+            f"compliance manifest version must be {version}: {path}")
+    return path, manifest
 
 
 def sha256(path, chunk=1 << 20):
@@ -94,23 +122,34 @@ def prune(root, keep):
     return removed
 
 
-def publish(root, iso, keep):
+def publish(root, iso, source, manifest, keep):
     root = _real_dir(root, create=True)
     iso = Path(iso)
     if iso.is_symlink() or not iso.is_file():
         raise ReleasePublishError(f"ISO must be a regular file: {iso}")
     version = iso_version(iso)
-    digest = sha256(iso)
+    source = release_asset(source, SOURCE_NAME, "source bundle", version)
+    manifest, manifest_data = compliance_manifest(manifest, version)
+    assets = (iso, source, manifest)
+    digests = {asset.name: sha256(asset) for asset in assets}
+    for key, asset in (("iso", iso), ("source_bundle", source)):
+        binding = manifest_data.get(key)
+        if not isinstance(binding, dict) or binding.get("file") != asset.name or binding.get("sha256") != digests[asset.name]:
+            raise ReleasePublishError(
+                f"compliance manifest {key} binding does not match {asset.name}")
 
     # Stage beside the target so the move is atomic on the same filesystem, and a
     # failed upload never leaves a half-written ISO that looks installable.
     target = root / version
     staging = Path(tempfile.mkdtemp(prefix=f".{version}.", dir=root))
     try:
-        shutil.copy2(iso, staging / iso.name)
-        if sha256(staging / iso.name) != digest:
-            raise ReleasePublishError("ISO changed while being copied")
-        (staging / (iso.name + ".sha256")).write_text(f"{digest}  {iso.name}\n")
+        for asset in assets:
+            installed = staging / asset.name
+            shutil.copy2(asset, installed)
+            if sha256(installed) != digests[asset.name]:
+                raise ReleasePublishError(f"{asset.name} changed while being copied")
+            (staging / (asset.name + ".sha256")).write_text(
+                f"{digests[asset.name]}  {asset.name}\n")
         for entry in staging.iterdir():
             os.chmod(entry, 0o644)
         os.chmod(staging, 0o755)
@@ -133,18 +172,23 @@ def publish(root, iso, keep):
         temporary.unlink()
     temporary.symlink_to(newest)
     os.replace(temporary, link)
-    return version, digest, newest, prune(root, keep)
+    return version, digests[iso.name], newest, prune(root, keep)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default="/srv/nex-downloads")
     parser.add_argument("--iso", required=True)
+    parser.add_argument("--source", required=True,
+                        help="matching whole-release source bundle")
+    parser.add_argument("--compliance-manifest", required=True,
+                        help="matching release compliance manifest")
     parser.add_argument("--keep", type=int, default=3,
                         help="number of releases to retain (default 3)")
     args = parser.parse_args(argv)
     try:
-        version, digest, newest, removed = publish(args.root, args.iso, args.keep)
+        version, digest, newest, removed = publish(
+            args.root, args.iso, args.source, args.compliance_manifest, args.keep)
     except (ReleasePublishError, OSError) as error:
         print(f"release-publish: {error}", file=sys.stderr)
         return 1

@@ -1,0 +1,46 @@
+{
+  "summary": "Reconcile living plans, operator guides and the public roadmap with VM usage reporting, the second driver-disc workflow, and the 0.2.9 exclusion of unaccounted virtio-win media. API impact: none.",
+  "paths": [
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "docs/plans/2026-09-16-windows-11-lab-fixes.md",
+    "docs/plans/2026-09-16-windows-11-batch-handover.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/edit-virtual-machine.md",
+    "website/src/routes/roadmap/+page.svelte",
+    "docs/changes/2026-09-16-docs-reconcile-virtio-usage.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Create and edit VM pages document the second driver disc and manual driver-ISO import because Nex Core 0.2.9 does not bundle virtio-win.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/edit-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Documentation-only reconcile of already-implemented behaviour; no endpoint or field change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "The public roadmap lists Windows firmware and second-driver-disc support as built and corresponding-source-complete virtio-win bundling as open.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation reconcile only; operator-imported media remains Core-owned through the existing iso-import record."
+  },
+  "verification": {
+    "method": "Inspected living plans, guide pages and website roadmap against the implementation and final 0.2.9 artifact; the final ISO contains no virtio-win media. Documentation structure and privacy checks pass.",
+    "evidence": [
+      "docs/plans/2026-09-08-nex-platform.md",
+      "docs/plans/2026-09-14-production-readiness-handoff.md",
+      "docs/guide/create-virtual-machine.md",
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  }
+}

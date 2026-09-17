@@ -179,7 +179,7 @@ esac
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("NEX_VIRSH_CALLS", calls)
 
-	probes := NativeProbes("test")
+	probes := NativeProbes("test", nil)
 	data, err := probes["cpu-models"](context.Background())
 	if err != nil {
 		t.Fatalf("CPU model probe failed: %v", err)
@@ -215,7 +215,7 @@ esac
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	if _, err := NativeProbes("test")["cpu-models"](context.Background()); err == nil {
+	if _, err := NativeProbes("test", nil)["cpu-models"](context.Background()); err == nil {
 		t.Fatal("invalid domain capabilities were accepted")
 	}
 }

@@ -227,3 +227,115 @@ func TestVMCreateReplayStaysIdempotentAfterMediaChange(t *testing.T) {
 		t.Fatalf("original create request_id must stay idempotent after a media change: got %+v, want %+v", replay, created)
 	}
 }
+
+// drivers_media_id is a second ISO reference and must pass the same checks as the install ISO:
+// a succeeded import on the VM's own host, on a host that defines the driver disc drive
+// (BUG-0228). Without them the Controller queues a create or edit Core can only fail.
+func TestVMDriversMediaIsValidatedLikeInstallMedia(t *testing.T) {
+	l := newManagedLab(t, protocol.ManagedVMCapability, protocol.MediaCapability, protocol.UpdateCapability)
+	upload := func(request string, mark byte) protocol.Media {
+		iso := make([]byte, 65536)
+		copy(iso[32769:], "CD001")
+		iso[1] = mark
+		var media protocol.Media
+		read(t, l.a.call("POST", "/api/v1/media?storage_id="+l.storage+"&name="+request+".iso&request_id="+request, string(iso), nil, 201), &media)
+		l.report()
+		l.report(protocol.Result{OperationID: media.OperationID, Status: "succeeded"})
+		return media
+	}
+	install, drivers, foreign := upload("install", 0), upload("drivers", 1), upload("foreign", 2)
+	other := l.a.enroll(l.a.token(l.a.site(), ""), csr(t))
+	if _, err := l.a.c.db.Exec("UPDATE managed_resources SET host_id=? WHERE id=?", other.HostID, foreign.ID); err != nil {
+		t.Fatal(err)
+	}
+	spec := func(name, driversID string) protocol.VMCreateSpec {
+		s := vmSpec(l.pool, l.host.HostID, name, l.storage, l.network, install.ID)
+		s.DriversMediaID = driversID
+		return s
+	}
+	expect := func(w string, want string) {
+		t.Helper()
+		if !strings.Contains(w, want) {
+			t.Fatalf("want %q in %s", want, w)
+		}
+	}
+	// Legacy host: the drivers drive is refused before anything is queued, blank stays allowed.
+	expect(l.create("no-cap", spec("guest-nocap", drivers.ID), 409).Body.String(), "driver disc")
+	var created createdVM
+	read(t, l.create("create-plain", spec("guest-plain", ""), 202), &created)
+	commands := l.report().Commands
+	l.reportState("shut off", &protocol.ManagedState{VMs: []protocol.VMCreateSpec{*commands[0].VM}}, protocol.Result{OperationID: commands[0].OperationID, Status: "succeeded"})
+	expect(l.update("edit-nocap", created.VMID, spec("guest-plain", drivers.ID), 409)["error"].(string), "driver disc")
+
+	l.caps = append(l.caps, protocol.DriversDriveCapability)
+	l.report()
+	expect(l.create("create-unknown", spec("guest-unknown", "iso-missing"), 404).Body.String(), "driver disc ISO")
+	expect(l.create("create-foreign", spec("guest-foreign", foreign.ID), 404).Body.String(), "driver disc ISO")
+	expect(l.update("edit-unknown", created.VMID, spec("guest-plain", "iso-missing"), 404)["error"].(string), "driver disc ISO")
+	expect(l.update("edit-foreign", created.VMID, spec("guest-plain", foreign.ID), 404)["error"].(string), "driver disc ISO")
+
+	read(t, l.create("create-valid", spec("guest-valid", drivers.ID), 202), &created)
+	if cmds := l.report().Commands; len(cmds) != 1 || cmds[0].VM.DriversMediaID != drivers.ID {
+		t.Fatalf("drivers media not dispatched: %+v", cmds)
+	}
+	l.create("create-valid", spec("guest-valid", drivers.ID), 200)
+}
+
+// BUG-0228: the web UI names drive "drivers" for driver disc insert and eject. The Controller
+// must accept it, refuse it for a host without the drivers drive, carry it to Core, and key
+// idempotent replay on it; an omitted drive stays the install drive.
+func TestVMMediaDriversDrive(t *testing.T) {
+	l, media := mediaLabFixture(t)
+	var created createdVM
+	read(t, l.create("create-drive", vmSpec(l.pool, l.host.HostID, "guest-drive", l.storage, l.network, media.ID), 202), &created)
+	cmds := l.report().Commands
+	l.report(protocol.Result{OperationID: cmds[0].OperationID, Status: "succeeded"})
+	path := "/api/v1/vms/" + created.VMID + "/media"
+	send := func(body map[string]string, status int) string {
+		t.Helper()
+		return l.a.call("POST", path, body, nil, status).Body.String()
+	}
+	dispatched := func(action, drive string) {
+		t.Helper()
+		c := l.report().Commands
+		if len(c) != 1 || c[0].VMMedia == nil || c[0].VMMedia.Action != action || c[0].VMMedia.Drive != drive {
+			t.Fatalf("want %s on drive %q dispatched: %+v", action, drive, c)
+		}
+		l.report(protocol.Result{OperationID: c[0].OperationID, Status: "succeeded"})
+	}
+	insert := map[string]string{"request_id": "drivers-insert", "action": "insert", "media_id": media.ID, "drive": "drivers"}
+	if w := send(map[string]string{"request_id": "bad-drive", "action": "eject", "drive": "floppy"}, 400); !strings.Contains(w, "drive must be install or drivers") {
+		t.Fatalf("invalid drive: %s", w)
+	}
+	if w := send(insert, 409); !strings.Contains(w, "does not support a driver disc drive") {
+		t.Fatalf("legacy host: %s", w)
+	}
+	l.caps = append(l.caps, protocol.DriversDriveCapability)
+	l.report()
+	if w := send(insert, 400); !strings.Contains(w, "the driver disc must differ from the install media") {
+		t.Fatalf("install ISO into the driver drive: %s", w)
+	}
+	if w := send(map[string]string{"request_id": "drivers-unknown", "action": "insert", "media_id": "missing-iso", "drive": "drivers"}, 404); !strings.Contains(w, "the driver disc ISO is not registered and verified on the VM's host and pool") {
+		t.Fatalf("unknown driver disc: %s", w)
+	}
+	send(map[string]string{"request_id": "install-eject", "action": "eject"}, 202)
+	dispatched("eject", "")
+	var first, replay map[string]any
+	read(t, l.a.call("POST", path, insert, nil, 202), &first)
+	read(t, l.a.call("POST", path, insert, nil, 200), &replay)
+	if first["operation"].(map[string]any)["id"] != replay["operation"].(map[string]any)["id"] {
+		t.Fatalf("replay must return the original operation: %v %v", first, replay)
+	}
+	dispatched("insert", "drivers")
+	changed := map[string]string{"request_id": "drivers-insert", "action": "insert", "media_id": media.ID}
+	if w := send(changed, 409); !strings.Contains(w, "another payload") {
+		t.Fatalf("replay with changed drive: %s", w)
+	}
+	if w := send(map[string]string{"request_id": "install-same", "action": "insert", "media_id": media.ID, "drive": "install"}, 400); !strings.Contains(w, "the driver disc must differ from the install media") {
+		t.Fatalf("driver disc into the install drive: %s", w)
+	}
+	send(map[string]string{"request_id": "drivers-eject", "action": "eject", "drive": "drivers"}, 202)
+	dispatched("eject", "drivers")
+	send(map[string]string{"request_id": "install-insert", "action": "insert", "media_id": media.ID}, 202)
+	dispatched("insert", "")
+}

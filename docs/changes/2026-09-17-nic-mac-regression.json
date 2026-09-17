@@ -1,0 +1,50 @@
+{
+  "summary": "Controller: fix the VM edit NIC MAC regression found by the gate4 final code review (BUG-0254). updateVM now treats every empty-MAC interface as new when the request names any current interface by its effective MAC, keeps the positional 400 guard only for requests that name none, freezes automatic MACs before its stop-first check and never gives a new interface an address a current interface holds. The review's reported symptom (removing or changing an existing interface on a never-edited VM) did not reproduce because GET /api/v1/vms already reports effective MACs; the reproduced failure was removing one interface and adding another in the same save. API impact: changed contract (PUT /api/v1/vms/{id} interface-matching behavior; request and response shapes unchanged).",
+  "paths": [
+    "internal/controller/managed.go",
+    "internal/controller/update_test.go",
+    "web/src/vm-edit.test.mjs",
+    "tests/integration/vm_edit_browser.py",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-16-phase2-gate.json",
+    "docs/changes/2026-09-17-nic-mac-regression.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Step 2 of the edit guide now states that existing interfaces show their actual MAC on never-edited VMs too and that a new interface never reuses the address of one removed in the same save. The Verification open-defect note, which described a symptom that does not occur, is replaced by the fixed defect and its simulated-host verification limit.",
+    "pages": [
+      "docs/guide/edit-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "updateVM (PUT /api/v1/vms/{id}): interfaces are matched by effective MAC once the request names any current one, so empty-MAC interfaces are new and a client that sends any existing MAC must send all; requests that name none keep the positional match and the 400 for removal, reorder or change; automatic MACs are frozen before the Controller's stop-first 409 check and skip every current MAC. Request, response and error shapes are unchanged; Core's vm-update command and NeedsStop are unchanged, and an older Controller talking to this Core behaves as before. Documented in docs/API.md VM editing, the updateVM description, its 400 response and the VMNIC mac schema in docs/api/openapi.json, regenerated with scripts/generate_api.py.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Fixes an existing edit feature; the Phase 2 gate still needs a new gate build and rerun, recorded in the gate report and plans, which this record does not change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable state. The frozen MACs are part of the VM definition that the pool master's Nex Core already journals as the current definition and reports in inventory, from which a fresh Controller re-adopts it."
+  },
+  "verification": {
+    "method": "go test -race -run TestUpdateVM ./internal/controller/ passes; TestUpdateVMRemovePlusAddGetsFreshMAC failed on a scratch copy with the pre-fix guard reconstructed (409 while running, reused removed MAC while stopped). npm --prefix web run test passes. tests/integration/vm_edit_browser.py against a simulated host passes all four steps, including removing interface 1 and adding an rtl8139 interface in one save on a never-edited VM. Not walked on a real host or libvirt; not yet in a gate build.",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "internal/controller/update_test.go",
+      "tests/integration/vm_edit_browser.py"
+    ]
+  }
+}

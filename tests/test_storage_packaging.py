@@ -114,7 +114,11 @@ class StoragePackagingTests(unittest.TestCase):
         # Pacemaker pulls pacemaker-resource-agents then resource-agents, which
         # supplies ocf:heartbeat:Filesystem. Do not add a redundant direct package.
         iso_builder = (ROOT / "installer/build.sh").read_text()
-        self.assertIn('install "${packages[@]}"', iso_builder)
+        self.assertIn('mapfile -t packages < installer/packages.txt', iso_builder)
+        # Only the separately staged ovmf-generic is excluded from the APT closure.
+        self.assertIn('[[ $package == ovmf-generic ]] || apt_packages+=("$package")', iso_builder)
+        self.assertIn('--no-install-recommends', iso_builder)
+        self.assertIn('install "${apt_packages[@]}"', iso_builder)
         self.assertIn("pacemaker", installer)
         self.assertIn("fence-agents-virsh", installer)
         self.assertTrue(all(client in package for client in CLUSTERED_GFS2))

@@ -11,11 +11,23 @@ separate from Nex Controller and Nex Core. Unrestricted public
 publication, SSH hardening, host-firewall rules and access-allowlist testing are outside
 this procedure.
 
+Pushes to `main` that change `website/` run the Website workflow. When the same
+`NEX_DEPLOY_*` secrets used for ISO/APT publication are set, that workflow builds the
+static site and publishes it through `nex-website-publish` on this host. ISO and package
+publication stays on the Release workflow; this page covers the static pages and manual
+publish or rollback.
+
 ## Prerequisites
 
 - Root access to the selected website server and the approved generated website artifact.
 - The [website hosting package](../../packaging/website/README.md) installed for the
   selected private listener.
+- For CI or passwordless publish, the publish account bootstrap once:
+
+  ```sh
+  sudo NEX_PUBLISH_USER=<publishing-user> packaging/website/bootstrap-publish.sh
+  ```
+
 - An existing Pangolin HTTPS route and the maintainer-approved private access policy.
 - A prior verified release retained under `/srv/nex-website/releases` before replacing
   `current`. Use the installed release tool, not a source checkout on the server.
@@ -24,11 +36,19 @@ this procedure.
 
 ## Steps
 
-1. Publish the approved generated artifact. The tool rejects links, executable files,
-   unsupported extensions and selected credential patterns; it checks required notices,
-   creates a root-owned release, switches `current` atomically and restores the previous
-   target if its local health request fails. Replace the placeholders with the selected
-   private backend address and release identifier:
+1. Publish the approved generated artifact. Prefer the publish wrapper, which reads the
+   health URL from `/etc/nex-website/health.env`, rejects an artifact containing executable
+   files without changing it, switches `current` atomically and prunes older releases beyond
+   the newest ten:
+
+   ```sh
+   sudo /usr/local/sbin/nex-website-publish publish /path/to/approved-build RELEASE_ID
+   ```
+
+   The lower-level tool remains available when you must pass the health URL yourself.
+   It rejects links, executable files, unsupported extensions and selected credential
+   patterns; it checks required notices and restores the previous `current` target if
+   its local health request fails:
 
    ```sh
    sudo /usr/local/lib/nex-website/website-release.py --health-url http://PRIVATE_BACKEND:PORT/ publish /path/to/approved-build RELEASE_ID
@@ -58,11 +78,10 @@ this procedure.
    sudo tail -n 100 /var/log/nex-website/error.log
    ```
 
-5. If the new release is faulty, select the exact retained release and roll back. The
-   release tool does not prune retained releases:
+5. If the new release is faulty, select the exact retained release and roll back:
 
    ```sh
-   sudo /usr/local/lib/nex-website/website-release.py --health-url http://PRIVATE_BACKEND:PORT/ rollback RETAINED_RELEASE_ID
+   sudo /usr/local/sbin/nex-website-publish rollback RETAINED_RELEASE_ID
    ```
 
    Re-run the checks in steps 2 and 3 before removing any release.
@@ -72,7 +91,8 @@ this procedure.
 The browser reaches the selected generated release over HTTPS through Pangolin. nginx
 accepts only GET and HEAD, does not list directories or serve dotfiles, and the website
 service has no write access to root-owned releases. The prior release remains available
-for a fast rollback. The health timer checks the private backend every five minutes and
+for a fast rollback until pruned by a later publish (the wrapper keeps the newest ten
+including `current`). The health timer checks the private backend every five minutes and
 writes its result to the journal; it does not notify an external monitoring system.
 Logrotate runs daily, retains seven rotations with older rotations compressed, and
 checks the 10 MiB `maxsize` threshold when it runs; that threshold is not a disk-usage
@@ -83,6 +103,9 @@ limit.
 - **Publish or local health check fails:** the tool restores the previous `current`
   target. Inspect the error and retain both releases while correcting the artifact or
   local serving configuration.
+- **The artifact contains an executable file:** correct the generated artifact so its regular
+  files are not executable, then publish that newly approved artifact. The root wrapper never
+  changes modes in a caller-supplied directory.
 - **The route is unavailable:** verify the private Pangolin route and access policy, then
   inspect `nex-website` status and journal entries. Do not weaken the private access
   policy merely to test availability.
@@ -96,4 +119,3 @@ limit.
 Publish, rollback, headers and listing checks passed on a private HTTPS deployment; router/NAT
 exposure, firewall, allowlists, SSH and reboot recovery were not verified. See the
 [website hardening evidence](../qa/website-security/hardening.md).
-

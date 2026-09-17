@@ -50,3 +50,16 @@ checks for a successful response containing the expected text. The health timer 
 every five minutes and records only to the journal. Logrotate runs daily, retains seven
 rotations with older rotations compressed, and checks its 10 MiB `maxsize` threshold
 when it runs; that threshold is not a disk quota.
+
+## CI publish account
+
+For the Release and Website workflows to publish without an interactive password, install
+the publish wrapper and passwordless sudo for the same publishing account used by APT
+bootstrap:
+
+```sh
+sudo NEX_PUBLISH_USER=<publishing-user> packaging/website/bootstrap-publish.sh
+```
+
+That installs `website-release.py`, `nex-website-publish`, and a sudoers rule so the
+account may run only `sudo -n /usr/local/sbin/nex-website-publish`. Re-running is safe.

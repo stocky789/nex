@@ -73,7 +73,11 @@ host-local console and full-screen or separate-window views.
    **(ejected in the VM)** and says *The VM ejected the disc. Insert it again to reconnect
    it.* Select the same ISO in the list to put it back in the drive, then continue in the
    guest. Nex does not change what it recorded because a guest opened the tray, and does
-   not need the VM stopped.
+   not need the VM stopped. A guest's own eject does not survive a restart: the reset closes
+   the tray with the recorded ISO still inserted, and because the CD drive keeps its boot
+   position the VM boots the installer again. When the installer has finished and asks you to
+   remove the disc before it restarts, select **Eject** on **Install media** first and wait for
+   **Empty**, then continue in the guest.
 5. Click inside the screen or select **Focus console** to give the VM keyboard focus.
    Keys and mouse input go to the guest; the pointer is absolute in VMs created with the
    USB tablet device, so it does not drift. Use **Send Ctrl+Alt+Del** for that sequence
@@ -131,7 +135,8 @@ host-local console and full-screen or separate-window views.
 ### From the host-local page
 
 1. Sign in to the host's local page as `root`. In **Virtual machines**, each running VM
-   shows **Open console** in the **Console** column; stopped VMs show **Start the VM first**.
+   shows **Open console** under **Local control**; stopped VMs show
+   **Console: start the VM first**.
 2. Select **Open console**. The console connects immediately and behaves as described
    above. Select **Back to overview** to end it and return.
 
@@ -145,7 +150,7 @@ Leaving the console leaves the VM running. While a reconnect is pending the badg
 
 ## Troubleshooting
 
-- **"The VM is observed shut off"** or **Start the VM first:** the VM is not running.
+- **"The VM is observed shut off"** or **Console: start the VM first:** the VM is not running.
   Use **Start VM** on the console toolbar, **Start** in the page toolbar, or start it on its
   host; the Console tab connects on its own once a fresh report shows the VM running.
   Controller never starts a VM as a side effect of opening its console.
@@ -179,6 +184,10 @@ Leaving the console leaves the VM running. While a reconnect is pending the badg
   back, then continue in the guest. **Eject** is still available and makes Nex's record match
   the empty drive. If the list shows **Empty** instead, the host has not reported since the
   guest ejected the disc; wait for the next report and try again.
+- **The VM boots the installer again after installation:** the ISO is still recorded in
+  **Install media**, and the guest's restart reinserted it. Select **Eject** on
+  **Install media**, wait for **Empty**, then restart the guest (for example with
+  **Force reboot**). The VM then boots from its disk.
 - **Eject fails with "stop the VM first to change the boot order":** the VM's host runs a
   Nex Core older than 0.2.4, which recorded an eject as taking the CD drive out of the boot
   order and so refused it on a running VM whose disc boots first. Ejecting never changes the
@@ -187,7 +196,9 @@ Leaving the console leaves the VM running. While a reconnect is pending the badg
   stopped VM on the older version does work, but it takes that VM's CD drive out of the boot
   order; set **CD drive boot order** again in [Edit VM](edit-virtual-machine.md) if you want
   the drive to boot first.
-- **Paste into VM does nothing in the guest:** the guest has no running spice-vdagent, or
+- **Paste into VM does nothing in the guest:** the guest is not running both spice-vdagent
+  and qemu-guest-agent (**Waiting for guest tools (qemu-guest-agent and spice-vdagent) in the
+  guest**), or
   the VM was created before clipboard support (**Channel missing** in its Guest tools
   panel). Install the [guest tools](guest-tools.md) or use **Type into VM**.
 - **Resize guest to window cannot be chosen:** the guest has not reported that it can act on
@@ -207,6 +218,19 @@ Leaving the console leaves the VM running. While a reconnect is pending the badg
   drive and load the driver from it in Setup, leaving the Windows ISO in **Install media**. On
   a host that reports only one **CD/DVD** drive, update Nex Core on that host from
   [Software updates](software-updates.md) to gain the second drive.
+- **Inserting or ejecting the driver disc fails with "invalid JSON request":** the Controller
+  predates driver disc support in its media request (the 0.2.9 release and earlier). Update Nex
+  Controller; after that, insert and eject the driver disc from the console's **Driver disc**
+  control, while the install drive keeps working throughout.
+- **"the VM's host agent does not support a driver disc drive; upgrade Nex Core":** the VM's host
+  runs a Nex Core without the second CD drive. Update Nex Core on that host from
+  [Software updates](software-updates.md), or use the **Install media** drive.
+- **"the driver disc must differ from the install media":** the ISO you chose is already in the
+  VM's other drive. Pick a different ISO, or eject that drive first and then insert the ISO where
+  you want it.
+- **"the driver disc ISO is not registered and verified on the VM's host and pool"** (or "the
+  install ISO …"): the ISO is still importing, failed, or lives on another host. Wait for its
+  import to finish in the ISO library, or import it to this VM's host.
 - **Reading your clipboard is refused:** the browser denied clipboard access or the page is
   not on HTTPS. Paste into the text box manually.
 - **The display is not visible after a hardware passthrough change:** the browser console
@@ -231,8 +255,19 @@ in a harness with no VM attached, at 1440×1000 and 900×700: typing
 `Nex-Test_Upper D:\Path\virtio-win-guest-tools.exe 123` produced key presses that a US-layout
 guest reads back unchanged, **Start VM** appeared only while the VM was not running, one-drive
 and two-drive toolbars behaved as described above, and the toolbar, an open clipboard and the
-display stayed visible together. None of it has been re-run against a Windows or Linux guest
-on a host, and the boot-prompt timing in particular cannot be proven without one. The findings
+display stayed visible together. The [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md) (`0.2.10~gate5`, 2026-09-17,
+disposable nested-KVM lab, headless Chromium) re-ran the Linux side on a host in the browser:
+**Start VM** from the Console toolbar attached in time for the Debian 13.6 UEFI installer menu, a
+full install was driven with canvas keys and **Clipboard** > **Type into VM**, the guest's own
+eject showed "(ejected in the VM)", and step 4 (**Eject** on **Install media** before rebooting)
+booted straight into the installed system. Step 2 did not fully match: the console connected
+about 10 s after the host reported the VM running, on the page's next refresh, not at once; this is
+an open defect, and a short BIOS "Press any key" prompt could be missed (not testable on that UEFI
+guest). Ticket refusals (no session, wrong Origin, reused, unknown, expired and other-VM tickets,
+stopped VM) returned their documented errors when checked at the API over HTTP and WebSocket; the
+expired-ticket message was not captured in the UI. Windows guests, the BIOS prompt timing,
+real-keyboard canvas typing beyond GRUB keys and a second administrator's ticket remain unverified
+on a host. The findings
 these changes answer are recorded in the
 [Windows 11 UEFI lab report](../qa/2026-09-16-windows-11-uefi-lab.md).
 

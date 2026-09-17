@@ -587,7 +587,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 				fail(w, 400, "too many distinct health checks")
 				return
 			}
-			if hasManagedCapability(v.Capabilities) {
+			if slices.Contains(v.Capabilities, protocol.ManagedVMCapability) {
 				err = c.adoptManaged(tx, host, merged)
 				if err == nil {
 					err = c.cleanupJoinedAutoPool(tx, host, formerPool, merged)
@@ -616,6 +616,9 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		}
 	}
 	out.Consoles = c.consoles.pending(host)
+	if slices.Contains(v.Capabilities, protocol.UsageHistoryCapability) {
+		out.StatsChannels = c.stats.pending(host)
+	}
 	rows, err := tx.Query("SELECT o.id,o.kind FROM operations o WHERE o.host_id=? AND o.status IN ('queued','dispatched') AND NOT (o.request_id='adopt-outcome:'||o.host_id||':'||o.id AND NOT EXISTS (SELECT 1 FROM managed_resources r WHERE r.operation_id=o.id)) ORDER BY o.rowid", host)
 	if err != nil {
 		fail(w, 500, "command lookup failed")
@@ -639,7 +642,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	filtered := out.Commands[:0]
 	for _, cmd := range out.Commands {
 		if cmd.Kind != "refresh-inventory" {
-			if !hasManagedCapability(v.Capabilities) {
+			if !slices.Contains(v.Capabilities, protocol.ManagedVMCapability) {
 				continue
 			}
 			var raw string

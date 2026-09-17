@@ -1,0 +1,49 @@
+{
+  "summary": "Fix review findings: reject executable website artifacts without root-side mode changes; render existing Stats 409 capability and stale-host failures as distinct safe states; and identify a future bundled ISO only by its pinned digest. No screenshot work is included.",
+  "paths": [
+    "scripts/nex-website-publish.py",
+    "tests/test_nex_website_publish.py",
+    "web/src/stats.tsx",
+    "web/src/stats.css",
+    "web/src/stats.test.mjs",
+    "internal/vmhost/bundled_media.go",
+    "internal/vmhost/bundled_media_test.go",
+    "docs/guide/operate-website.md",
+    "docs/guide/usage-history.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-17-review-fix-findings.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Website publishing now rejects executable files rather than changing their modes, and Stats presents distinct upgrade and stale-host states.",
+    "pages": [
+      "docs/guide/operate-website.md",
+      "docs/guide/usage-history.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No endpoint, schema, authorization, retry, or Controller/Core contract changes. Stats presents the existing 409 messages; bundled-media uses the existing iso-import journal internally.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Fixes existing behavior; public 0.2.9 bundled-media policy remains unchanged.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable record. The bundled-media check continues to use the existing Core-owned iso-import journal, media file and inventory adoption path."
+  },
+  "verification": {
+    "method": "Publisher: the executable-artifact regression failed before the fix and the focused website-publisher (5) and release-tool (7) suites pass. Bundle: the same-name regression failed before the fix and focused and full vmhost race tests pass. Stats: helper assertions distinguish capability, stale and ordinary failures; npm test, typecheck and build pass. The proposed Stats module was not in HEAD or the index, so no repository baseline failure is claimed. Browser and component coverage of retained stale charts and recovery is not available or claimed. No screenshots were reviewed or changed.",
+    "evidence": [
+      "tests/test_nex_website_publish.py",
+      "web/src/stats.test.mjs",
+      "internal/vmhost/bundled_media_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

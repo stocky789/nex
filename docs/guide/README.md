@@ -32,9 +32,11 @@ build**. Both are for local lab evaluation; the installer does not yet deliver a
    CD/DVD insert/eject on VMs, and a Console tab on hosts).
 15. [Install guest tools and read guest information](guest-tools.md)
    (QEMU guest agent and spice-vdagent; OS, hostname, addresses and clipboard readiness).
-16. [Check and apply software updates](software-updates.md)
+16. [Read VM and host usage history](usage-history.md)
+   (Stats tab charts up to a year back, with Stacked, zoom and legend toggles).
+17. [Check and apply software updates](software-updates.md)
    (Controller and host-local package updates from a configured repo).
-17. [Publish a Nex Core release](publish-a-release.md)
+18. [Publish a Nex Core release](publish-a-release.md)
    (authorized maintainers; tag-driven ISO and package build, and website publication).
 
 Each procedure states its prerequisites, expected outcome, troubleshooting, and verification
@@ -42,7 +44,7 @@ limits. A documented procedure is not automatically a tested procedure: check it
 section for the exact evidence and outstanding checks.
 
 Pools are created automatically: each enrolled host becomes the pool master of its own pool.
-Deleting a VM, managed snapshots/backups/restores, migrations, HA, and Docker Container Services
+Managed snapshots/backups/restores, migrations, HA, and Docker Container Services
 remain **planned and unavailable**; see the [roadmap](../plans/2026-09-08-nex-platform.md).
 
 The [API reference](../API.md) tracks implemented Nex interfaces separately. Build developers

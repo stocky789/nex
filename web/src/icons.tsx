@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { ReactNode } from "react";
 
-export type IconKind = "site" | "pool" | "host" | "home" | "refresh" | "tasks" | "vm" | "new-vm" | "back" | "forward" | "start" | "shutdown" | "reboot" | "stop";
+export type IconKind = "site" | "pool" | "host" | "home" | "refresh" | "tasks" | "vm" | "new-vm" | "back" | "forward" | "start" | "shutdown" | "reboot" | "stop" | "console" | "delete";
 const stroke = { strokeWidth: 1.25, strokeLinecap: "round", strokeLinejoin: "round" } as const;
 const vm = <><rect x="2" y="3" width="16" height="11" rx="1.5" fill="#93c5fd" stroke="#1d4ed8" /><path d="M7 17h6M10 14v3" stroke="#1d4ed8" /><path d="m8 6 5 3-5 3z" fill="#fff" /></>;
 export function Icon({ kind }: { kind: IconKind }) {
@@ -20,6 +20,8 @@ export function Icon({ kind }: { kind: IconKind }) {
     shutdown: <><circle cx="10" cy="10" r="8.5" fill="#ef4444" stroke="#991b1b" /><path d="M10 5v5" stroke="#fff" strokeWidth="2" /><path d="M7.2 7.3a4 4 0 1 0 5.6 0" stroke="#fff" strokeWidth="2" /></>,
     reboot: <><circle cx="10" cy="10" r="8.5" fill="#22c55e" stroke="#15803d" /><path d="M13.6 8.5A4 4 0 1 0 14 11.3" stroke="#fff" strokeWidth="2" /><path d="M14.2 5.5v3.2H11" stroke="#fff" strokeWidth="2" /></>,
     stop: <><circle cx="10" cy="10" r="8.5" fill="#b91c1c" stroke="#7f1d1d" /><rect x="6.8" y="6.8" width="6.4" height="6.4" rx="1" fill="#fff" /></>,
+    console: <><rect x="2" y="3" width="16" height="12" rx="1.5" fill="#64748b" stroke="#334155" /><rect x="3.5" y="4.5" width="13" height="8" rx=".6" fill="#0f172a" /><path d="M6 8.5h2.5M6 11h5" stroke="#94a3b8" strokeWidth="1.4" /><path d="M7 17h6M10 15v2" stroke="#334155" /></>,
+    delete: <><circle cx="10" cy="10" r="8.5" fill="#b91c1c" stroke="#7f1d1d" /><path d="M7.2 7.2l5.6 5.6M12.8 7.2l-5.6 5.6" stroke="#fff" strokeWidth="2" /></>,
   };
   return <svg className={`resource-icon icon-${kind}`} viewBox="0 0 20 20" fill="none" {...stroke} aria-hidden="true">{paths[kind]}</svg>;
 }

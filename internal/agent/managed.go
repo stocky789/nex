@@ -14,6 +14,7 @@ import (
 	"nex.local/nex/internal/vmhost"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -68,6 +69,17 @@ func (b *mediaBody) Close() error {
 	return err
 }
 
+// startBundledSeed runs seed in the background unless a previous seed is still running.
+func startBundledSeed(running *atomic.Bool, seed func()) {
+	if !running.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer running.Store(false)
+		seed()
+	}()
+}
+
 type managedCompletion struct {
 	result protocol.Result
 	err    error
@@ -76,14 +88,19 @@ type managedCompletion struct {
 // defaultsInterval is how often the worker looks for a new physical uplink to register.
 const defaultsInterval = time.Minute
 
-// Only this goroutine executes mutations. It owns no Store data: the heartbeat
+// This goroutine executes commands; the bundled media seed below is the one other mutator and
+// journals only under the managed engine's operations lock. It owns no Store data: the heartbeat
 // loop persists dispatch and completion, so long disk/download work cannot race
 // identity persistence or prevent reports. It also owns the host's default storage and
 // untagged networks: they are self-registered at start and whenever the host's bridges and
 // their physical ports change, and the Controller only mirrors what the journal reports.
+// Bundled installer media such as virtio-win is seeded on every tick until published, in its
+// own goroutine so the first copy and hash never delay commands; its journal decision is
+// retaken under the operations lock that command execution holds.
 func managedWorker(ctx context.Context, dir string, identity State, commands <-chan protocol.Command, completed chan<- managedCompletion) {
 	engine := vmhost.NewManaged(filepath.Join(dir, "managed-vms"))
 	seen := ""
+	var seeding atomic.Bool
 	defaults := func() {
 		nics, err := HostNICs()
 		if err != nil {
@@ -91,14 +108,18 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 			return
 		}
 		key := fmt.Sprint(vmhost.DefaultNetworks(nics))
-		if key == seen {
-			return
+		if key != seen {
+			if err := engine.RegisterDefaults(ctx, cmp.Or(identity.PoolID, identity.HostID), identity.HostID, nics); err != nil {
+				log.Printf("default resources: %v", err)
+				return
+			}
+			seen = key
 		}
-		if err := engine.RegisterDefaults(ctx, cmp.Or(identity.PoolID, identity.HostID), identity.HostID, nics); err != nil {
-			log.Printf("default resources: %v", err)
-			return
-		}
-		seen = key
+		startBundledSeed(&seeding, func() {
+			if err := engine.SeedBundledMedia(ctx, cmp.Or(identity.PoolID, identity.HostID), identity.HostID); err != nil && ctx.Err() == nil {
+				log.Printf("bundled media: %v", err)
+			}
+		})
 	}
 	defaults()
 	ticker := time.NewTicker(defaultsInterval)

@@ -1,0 +1,80 @@
+{
+  "summary": "Fix Phase 2 pre-gate review findings in VM edit, delete, bundled media and the create wizard. Core: a UEFI-to-BIOS edit interrupted at its define step now finishes at the next recovery pass (VMEDIT-1); a stopped edit that renames and changes Secure Boot validates first, renames, then edits the variable store and defines (F1, R-2); an interrupted vm-delete resumes on redelivery, a new delete with the same disk choice settles it and a different disk choice is refused (DEL-1, R-1); wiped disks no longer block storage detach (DEL-3); the virtio-win seed targets the live default storage, runs off the worker and re-checks under the operations lock (F5, F6, F8, R-3). Controller: PUT /api/v1/vms/{id} answers 400 when an interface at an existing index has no MAC and interfaces are removed or changed (VMEDIT-3). UI: UEFI-to-BIOS acknowledgement (VMEDIT-2), per-payload delete request_id (DEL-5), driver disc only on capable hosts and cleared when leaving Windows (F2 UI half, F3). API impact: changed contract — updateVM gains a 400 validation refusal and vm-delete gains interrupted-delete recovery and refusal results; no field or operation was added.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/firmware_gate_test.go",
+    "internal/vmhost/delete_resume_test.go",
+    "internal/vmhost/bundled_media.go",
+    "internal/vmhost/bundled_media_test.go",
+    "internal/agent/managed.go",
+    "internal/agent/managed_test.go",
+    "internal/controller/managed.go",
+    "internal/controller/update_test.go",
+    "web/src/vm-edit.tsx",
+    "web/src/vm-edit.test.mjs",
+    "web/src/vm-create.tsx",
+    "web/src/vm-create.test.mjs",
+    "web/src/managed.tsx",
+    "web/src/managed.test.mjs",
+    "tests/integration/vm_edit_browser.py",
+    "tests/integration/managed_vm_browser.py",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/guide/delete-virtual-machine.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/plans/2026-09-10-vm-edit.md",
+    "docs/plans/2026-09-16-windows-11-lab-fixes.md",
+    "docs/plans/2026-09-16-windows-11-batch-handover.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-16-phase2-review-vm-fixes.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Edit guide documents the UEFI-to-BIOS acknowledgement, combined rename and Secure Boot saves, automatic recovery of an interrupted firmware removal and the MAC field; delete guide replaces troubleshooting that described a recovery Core refused with the recovery that now works and the disk-choice refusal; create guide states when the driver disc is pre-selected and that the rebuilt-ISO seed is unverified.",
+    "pages": [
+      "docs/guide/edit-virtual-machine.md",
+      "docs/guide/delete-virtual-machine.md",
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "updateVM: new 400 'when removing, reordering or changing a network interface, give every existing interface its MAC address', after the replay check with nothing saved, so a corrected retry under a new request_id is safe; an existing interface's MAC change is documented as remove-and-add (VMEDIT-4). vm-delete: redelivery of an interrupted delete resumes undefine and wipe over journaled paths; a new delete settles or refuses it by delete_disks. vm-update: UEFI-to-BIOS recovery from stage defining. No Controller/Core version skew: older Core keeps its previous results. Controller does not yet validate drivers_media_id (F2 Controller half, open).",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ],
+    "contracts": [
+      "updateVM",
+      "deleteVM",
+      "vm-update",
+      "vm-delete"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fixes inside the existing VM foundation; no milestone status changes until the Phase 2 gate runs.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Recovery reads and settles the existing managed journal entries on the host; the Controller keeps no new record.",
+    "record": "Existing vm-update, vm-delete and iso-import entries in the managed journal under the agent state directory on the pool master; a fresh Controller adopts VMs, tombstones and media from Inventory.managed through the existing adoption path."
+  },
+  "verification": {
+    "method": "Code lanes wrote failing regression tests first and ran them before and after each fix: go test -race ./internal/vmhost/ ./internal/agent/ ./internal/controller/, npm --prefix web run typecheck/test/build, and simulated-browser runs of tests/integration/vm_edit_browser.py and managed_vm_browser.py --simulated (captures in a session scratchpad, not docs/qa). The documentation lane reran go test ./internal/vmhost/ ./internal/agent/ ./internal/controller/ ./internal/protocol/ (ok), npm --prefix web run test (ok), python3 scripts/generate_api.py --check and python3 -m unittest tests.test_api_contract (ok). Not run: any real libvirt or disposable-host walkthrough of interrupted deletes, firmware removal recovery, combined rename and Secure Boot, or the bundled seed on a rebuilt ISO; F2's Controller validation of drivers_media_id is not implemented.",
+    "evidence": [
+      "internal/vmhost/firmware_gate_test.go",
+      "internal/vmhost/delete_resume_test.go",
+      "internal/vmhost/bundled_media_test.go",
+      "internal/agent/managed_test.go",
+      "internal/controller/update_test.go",
+      "web/src/vm-edit.test.mjs",
+      "web/src/vm-create.test.mjs",
+      "web/src/managed.test.mjs"
+    ]
+  }
+}

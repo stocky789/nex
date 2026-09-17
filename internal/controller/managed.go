@@ -23,14 +23,6 @@ func (c *Controller) initManaged() error {
 	}
 	return c.initMedia()
 }
-func hasManagedCapability(caps []string) bool {
-	for _, v := range caps {
-		if v == protocol.ManagedVMCapability {
-			return true
-		}
-	}
-	return false
-}
 func (c *Controller) managedHost(tx *sql.Tx, pool, host string) error {
 	var actual string
 	var revoked bool
@@ -43,7 +35,7 @@ func (c *Controller) managedHost(tx *sql.Tx, pool, host string) error {
 	c.mu.Lock()
 	seen := c.seen[host]
 	c.mu.Unlock()
-	if actual != pool || revoked || time.Since(seen) > c.cfg.StaleAfter || !hasManagedCapability(capabilities) {
+	if actual != pool || revoked || time.Since(seen) > c.cfg.StaleAfter || !slices.Contains(capabilities, protocol.ManagedVMCapability) {
 		return fmt.Errorf("host must be fresh, active, in the selected pool, and support managed-vm-v1")
 	}
 	return nil
@@ -67,7 +59,13 @@ func (c *Controller) saveResourceStatus(tx *sql.Tx, user, requestID, pool, host,
 		_, err = tx.Exec("INSERT INTO managed_resources VALUES(?,?,?,?,?,?,?,?,?)", id, cmd.Kind, pool, host, name, requestID, string(b), string(command), op.ID)
 	}
 	if err == nil {
-		err = c.audit(tx, user, cmd.Kind, id)
+		// Requests on an existing VM (vm-power, vm-media, vm-update, vm-delete) pass the VM ID
+		// as name and a per-request row id; audit the VM so its activity can be found by VM ID.
+		target := id
+		if strings.HasPrefix(cmd.Kind, "vm-") && cmd.Kind != "vm-create" {
+			target = name
+		}
+		err = c.audit(tx, user, cmd.Kind, target)
 	}
 	return op, err
 }
@@ -559,9 +557,9 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 				reason = "network " + clip(n.NetworkID, 64) + " is not adopted on this host"
 			}
 		}
-		if s.MediaID != "" {
-			if _, e := readyResource(tx, s.MediaID, "iso-import", pool, host); e != nil && reason == "" {
-				reason = "ISO " + clip(s.MediaID, 64) + " is not adopted on this host"
+		for _, id := range []string{s.MediaID, s.DriversMediaID} {
+			if _, e := readyResource(tx, id, "iso-import", pool, host); id != "" && e != nil && reason == "" {
+				reason = "ISO " + clip(id, 64) + " is not adopted on this host"
 			}
 		}
 		if reason == "" {
@@ -902,6 +900,19 @@ func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf
 			return
 		}
 	}
+	if v.DriversMediaID != "" {
+		var raw string
+		var caps []string
+		tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", v.HostID).Scan(&raw)
+		json.Unmarshal([]byte(raw), &caps)
+		if !slices.Contains(caps, protocol.DriversDriveCapability) {
+			fail(w, 409, "the selected host agent does not support a driver disc drive; upgrade Nex Core")
+			return
+		}
+		if _, ok := resolve(v.DriversMediaID, "iso-import", "the driver disc ISO"); !ok {
+			return
+		}
+	}
 	inv, err := hostInventory(tx, v.HostID)
 	if err != nil {
 		fail(w, 500, "inventory unavailable")
@@ -1043,6 +1054,68 @@ func (c *Controller) updateVM(w http.ResponseWriter, r *http.Request, user, csrf
 	// Frozen addresses go into the dispatched definition, never into the replay payload.
 	spec.NICs = append([]protocol.VMNIC{}, spec.NICs...)
 	spec.ID, spec.Revision = id, cur.Revision+1
+	// An unnamed interface is matched to the current one at its position. That is unambiguous only
+	// for an unchanged interface when none is removed, or for one appended past the current count;
+	// otherwise (removal, reorder, remove-plus-add, reconfiguration) the interface must carry its MAC.
+	// A request that names any current interface by its MAC (as the bundled editor does for all
+	// of them) identifies interfaces by address, so an unnamed interface in it is new.
+	taken := map[string]bool{}
+	for _, nic := range spec.NICs {
+		taken[nic.MAC] = true
+	}
+	named := false
+	for i, n := range cur.NICs {
+		named = named || taken[protocol.NICMAC(cur.ID, i, n)]
+	}
+	for i, n := range spec.NICs {
+		if named || n.MAC != "" || i >= len(cur.NICs) {
+			continue
+		}
+		was := cur.NICs[i]
+		was.MAC = ""
+		if len(spec.NICs) < len(cur.NICs) || n != was {
+			fail(w, 400, "when removing, reordering or changing a network interface, give every existing interface its MAC address")
+			return
+		}
+		// The unchanged interface at this position keeps its address.
+		spec.NICs[i].MAC = protocol.NICMAC(cur.ID, i, cur.NICs[i])
+		taken[spec.NICs[i].MAC] = true
+	}
+	// Interfaces keep their identity by address: every automatic MAC is frozen into the
+	// definition here, drawn from the VM's derived range at the first index above the highest one
+	// the current definition uses, skipping any address the request or current definition holds.
+	// An interface removed from a running VM in an earlier save can stay live until the guest
+	// acknowledges the unplug, which the Controller cannot see, so refilling the lowest free index
+	// would hand that address out again. Once no index above is free (the highest-index interface
+	// was removed, or index 255 is used) the lowest free index is taken; Core refuses an address
+	// that is still live. Freezing precedes the stop check so the Controller judges the definition
+	// it dispatches. Uniqueness against other VMs is the host's check.
+	next := 0
+	for i, nic := range cur.NICs {
+		mac := protocol.NICMAC(cur.ID, i, nic)
+		taken[mac] = true
+		for k := next; k < 256; k++ {
+			if protocol.DerivedMAC(id, k) == mac {
+				next = k + 1
+			}
+		}
+	}
+	for i := range spec.NICs {
+		if spec.NICs[i].MAC != "" {
+			continue
+		}
+		// Indexes next..255 first, then 0..next-1: the lowest free index once none above is free.
+		for n := 0; n < 256; n++ {
+			if mac := protocol.DerivedMAC(id, (next+n)%256); !taken[mac] {
+				spec.NICs[i].MAC, taken[mac] = mac, true
+				break
+			}
+		}
+		if spec.NICs[i].MAC == "" {
+			fail(w, 409, "could not derive a free MAC address for this VM; set it manually")
+			return
+		}
+	}
 	stops, err := protocol.NeedsStop(cur, spec)
 	if err != nil {
 		fail(w, 400, err.Error())
@@ -1114,6 +1187,15 @@ func (c *Controller) updateVM(w http.ResponseWriter, r *http.Request, user, csrf
 			return
 		}
 	}
+	if spec.DriversMediaID != "" {
+		if !slices.Contains(caps, protocol.DriversDriveCapability) {
+			fail(w, 409, "the VM's host agent does not support a driver disc drive; upgrade Nex Core")
+			return
+		}
+		if _, ok := resolve(spec.DriversMediaID, "iso-import", "the driver disc ISO"); !ok {
+			return
+		}
+	}
 	inv, err := hostInventory(tx, cur.HostID)
 	if err != nil {
 		fail(w, 500, "inventory unavailable")
@@ -1126,28 +1208,6 @@ func (c *Controller) updateVM(w http.ResponseWriter, r *http.Request, user, csrf
 	if !availableCPUModel(&inv, spec.CPU.Model) {
 		fail(w, 409, "selected CPU model is not currently available on the host")
 		return
-	}
-	// Interfaces keep their identity by address: every automatic MAC is frozen into the
-	// definition here, drawn from the VM's derived range at the first index this VM does not
-	// already use. Uniqueness against other VMs is the host's check.
-	taken := map[string]bool{}
-	for _, nic := range spec.NICs {
-		taken[nic.MAC] = true
-	}
-	for i := range spec.NICs {
-		if spec.NICs[i].MAC != "" {
-			continue
-		}
-		for k := 0; k < 8; k++ {
-			if mac := protocol.DerivedMAC(id, k); !taken[mac] {
-				spec.NICs[i].MAC, taken[mac] = mac, true
-				break
-			}
-		}
-		if spec.NICs[i].MAC == "" {
-			fail(w, 409, "could not derive a free MAC address for this VM; set it manually")
-			return
-		}
 	}
 	cmd := protocol.Command{OperationID: random(), Kind: "vm-update", VM: &spec}
 	op, err := c.saveResource(tx, user, v.RequestID, cur.PoolID, cur.HostID, id, random(), cmd, payload)

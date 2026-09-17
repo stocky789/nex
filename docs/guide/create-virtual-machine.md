@@ -16,8 +16,10 @@ step of the same creation task, after it has verified the definition.
 
 After creation the VM can be changed in place; see [Edit a virtual machine](edit-virtual-machine.md).
 An existing disk's storage, size and provisioning cannot be changed. To remove a stopped VM, see
-[Delete a virtual machine](delete-virtual-machine.md). Start the VM with its [Power controls](vm-power.md),
-then install the guest through [Open a VM console](vm-console.md).
+[Delete a virtual machine](delete-virtual-machine.md). To install the guest, open the VM's
+**Console** tab and use **Start VM** on the console toolbar, so the console is attached in time for
+the boot prompt; see [Open a VM console](vm-console.md). [Power controls](vm-power.md) start and
+stop the VM afterwards.
 An adopted Controller appliance remains protected and is not recreated by this workflow.
 Use an explicitly selected disposable lab host.
 
@@ -57,9 +59,11 @@ Use an explicitly selected disposable lab host.
   available plus 2 GiB for itself; creating a stopped VM does not need that memory free.
   Upgrade Controller before Core; an older Controller rejects the new Core report fields.
 - For a Windows guest on a **VirtIO** or **SCSI** disk bus or a **VirtIO** network adapter:
-  the virtio-win driver ISO imported on the same host, attached as the VM's **Driver disc**,
-  because Windows Setup cannot see those devices without it. Choosing **SATA** and
-  **Intel e1000e** avoids that at some cost in performance.
+  the virtio-win driver ISO on the same host, attached as the VM's **Driver disc**, because
+  Windows Setup cannot see those devices without it. The public 0.2.9 ISO does not include that
+  media: import a matching virtio-win ISO into the placement host's ISO library before creating
+  the VM, then select it as **Driver disc**. Choosing **SATA** and **Intel e1000e** avoids that
+  at some cost in performance.
 - For **Windows 11**: UEFI firmware, **Secure Boot** on and a **TPM 2.0**. Setup refuses every
   non-IoT edition without them, with only *This PC doesn't currently meet Windows 11 system
   requirements* to say why. The emulated TPM needs `swtpm` and `swtpm-tools` on the host; Nex
@@ -71,8 +75,8 @@ Use an explicitly selected disposable lab host.
 1. Sign in to Controller and, in **Resources**, select the pool that was created for the
    host (it is named after the host, which its **General** panel shows as **Pool master**).
 2. Open **Storage**. The host registers its own **Local storage** (`/var/lib/libvirt/images`)
-   itself and reports it once connected; wait for it to show `succeeded` and use it for ISO
-   upload and VM disks. If that self-registration fails (the directory is missing or not
+   itself and reports it once connected; wait for its **Core access** to show `healthy`,
+   readable and writable, then use it for ISO upload and VM disks. If that self-registration fails (the directory is missing or not
    writable, for example), no **Storage** row appears: the failure is a failed task in
    **Task history** naming the host's reason, and the host does not retry it. Correct the
    directory on the host, then register it yourself with **Register storage** below;
@@ -86,9 +90,12 @@ Use an explicitly selected disposable lab host.
    bridge it later gains on a physical NIC or bond; use it for VMs on the management LAN. For a tagged VLAN, select **Register network**. Enter a name and select the same
    host. Under **Connection**, choose the host NIC that carries the network and enter its
    **VLAN ID** (1–4094 tagged; 0 uses the NIC untagged, which is only accepted on a NIC
-   without host addresses). The bridge name is shown as `<NIC>v<VLAN>`. To use an existing
-   bridge untagged, choose it from the same list; choose **Other** to enter an existing
-   bridge or libvirt network by name. Select **Register and check access**, then wait for
+   without host addresses). The bridge name is shown as `<NIC>v<VLAN>`. To use another existing
+   bridge untagged, choose **Existing bridge <name> · untagged** from the same list. The list
+   leaves out bridges this host has already registered, such as `br0` behind **nex0 untagged**:
+   use that registered network for VMs instead of registering the bridge again. Choose
+   **Other: existing bridge or libvirt network by name** to enter an unlisted bridge or libvirt
+   network. Select **Register and check access**, then wait for
    `succeeded`. The table shows each network's connection, bridge and VM count. A bridge or
    libvirt network the host has already registered under another name is reported by the host
    as a failed task naming that registration; reuse it instead.
@@ -237,9 +244,10 @@ Use an explicitly selected disposable lab host.
         different repository from the VM's disks. The ISO is attached read-only as a SATA
         CD-ROM, so any guest installer can read it. Use **Open ISO library** if none is available.
       - **Driver disc** — an optional second ISO, or **No driver disc**, in the VM's second CD
-        drive. Use it for the virtio-win ISO when a Windows guest installs onto a **VirtIO** or
-        **SCSI** disk: Setup lists no disk at all until the driver is loaded from this drive
-        (**Load driver**, then the `amd64` folder for the guest's Windows version). The list
+        drive. For Windows on **VirtIO** or **SCSI**, use virtio-win here so Setup can load the
+        disk driver (**Load driver**, then the `amd64` folder for the guest's Windows version).
+        Import matching driver media into the selected host's ISO library first; the public 0.2.9
+        ISO does not include or pre-select it. The list
         excludes whatever is selected as **Install ISO**, so one image cannot fill both drives.
         The field is disabled, with *This host's Nex Core does not provide a second CD drive
         yet*, when the placement host runs an older Nex Core; upgrade it to attach a driver
@@ -259,8 +267,11 @@ Use an explicitly selected disposable lab host.
       - **Start automatically when the host boots** — sets the VM's autostart property on the
         host. It does not start the VM now.
 6. Select **Create stopped VM** (or **Create and start VM**, when start after creation is
-   selected) once. Controller opens the new VM's page. Follow **Creation task** to its
-   result and inspect **Observed state** and its freshness independently.
+   selected) once. Controller opens the new VM's page for this creation task. Until the host
+   reports the VM, the page shows **Creation** followed by the task status, with *This VM appears
+   here after its host reports it.* and a **Task history** link. If the task fails, the page
+   shows **Creation failed** with the host's reason instead. Once the VM is reported, follow
+   **Creation task** to its result and inspect **Observed state** and its freshness independently.
 
 ### Memory modes
 
@@ -311,8 +322,9 @@ whether the VM starts when the host boots. A successful creation task means prov
 completed; fresh libvirt observations establish its current state separately.
 
 With **Start after creation** the creation task itself ends by starting the VM, so the VM's
-page can briefly show a stopped VM while the task finishes. No guest operating system is installed by this workflow — start the VM,
-open its [console](vm-console.md) and install the guest from the attached ISO.
+page can briefly show a stopped VM while the task finishes. No guest operating system is installed
+by this workflow: open the VM's **Console** tab, use **Start VM** on its toolbar, and install the
+guest from the attached ISO; see [Open a VM console](vm-console.md).
 
 **Host ISO images** lists Nex's transfer records for the selected host and pool, not a scan of
 every ISO on the host. **Transfer succeeded · not rescanned** means import succeeded, storage was
@@ -420,11 +432,12 @@ failed and uncertain transfers show their own status.
   are not interchangeable; a VM created with the wrong firmware must be recreated.
 - **The guest installer cannot see the disk or the network:** VirtIO and SCSI disks and
   VirtIO adapters need drivers. On Windows, attach the virtio-win ISO as the **Driver disc**
-  and, at *Where do you want to install Windows?*, select **Load driver**, browse the driver
-  drive and choose the `amd64` folder for the guest's Windows version. Both discs stay
-  inserted, so Setup continues from the install media afterwards. If the VM was created
-  before the driver disc existed, add it from **Edit** while the VM is stopped, or recreate
-  the VM with a SATA disk and an Intel e1000e adapter.
+  after importing matching media to the VM host's ISO library and, at *Where do you want to
+  install Windows?*, select **Load driver**, browse the driver drive and choose the
+  `amd64` folder for the guest's Windows version. Both discs stay inserted, so Setup continues
+  from the install media afterwards. If the VM was created before the driver disc existed, add
+  it from **Edit** while the VM is stopped, or recreate the VM with a SATA disk and an Intel
+  e1000e adapter.
 - **Windows 11 Setup says the PC does not meet system requirements:** Setup does not say which
   requirement. Check on the VM's page that firmware is **UEFI**, **Secure Boot** is **On** and
   **TPM** is **TPM 2.0**, and that the VM has at least 2 vCPUs, 4096 MiB of memory and a 64 GiB
@@ -435,6 +448,13 @@ failed and uncertain transfers show their own status.
   the virtio-win [guest tools](guest-tools.md). On Linux the driver is in the kernel, and only
   memory the guest counts as free comes back, so a guest holding a large file cache can sit
   near its ceiling legitimately.
+- **"the selected host agent does not support a driver disc drive; upgrade Nex Core":** the host runs
+  an older Nex Core that cannot add a second CD drive. Update Nex Core on that host from
+  [Software updates](software-updates.md), or clear the **Driver disc** selection.
+- **"the driver disc ISO is not registered and verified on the selected host and pool":** the ISO
+  chosen as the driver disc is still importing, failed to import, or is stored on another host.
+  Wait for the import to succeed in **Task history**, or import the ISO to the VM's host. After
+  creation you can also insert or eject the driver disc from the [VM console](vm-console.md).
 - **The response is lost or Controller disconnects:** inspect **Task history** and the
   existing resource before submitting another request. Preserve the original form while
   reconciling an uncertain response. This browser tab retains submitted request identities
@@ -458,10 +478,24 @@ failed and uncertain transfers show their own status.
 
 Recorded checks and their limits:
 
+- [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md) — Nex Core and Controller
+  `0.2.10~gate5`, 2026-09-17, disposable nested-KVM lab with headless Chromium. Steps 1–6 were
+  walked in the browser: host-owned Local storage and `nex0 untagged` adoption, two failed missing
+  paths, the duplicate-bridge refusal, ISO upload by file picker and by (synthetic) drag and drop
+  with non-ISO, over-size and cancelled refusals, and the six-step wizard at desktop and at 360 px
+  driven by keyboard. Traversal, slash and non-`.iso` file names were refused through the API, not
+  the browser. It created a UEFI Secure Boot VM with dedicated memory, thin and thick disks, two
+  interfaces, ISO-first boot order and autostart, a VM with **Start after creation**, and UEFI VMs
+  with TPM 2.0 and with an ISO attached, then installed Debian through the console. One test VM was
+  created through the API only. In step 6 a host over-capacity create showed **Creation queued**,
+  then **Creation dispatched**, then **Creation failed**, with no VM details, **Edit** or
+  **Delete** at any point and never "Object not found". Open cosmetic defects: the VM name, an
+  "Observed unknown" state line and the tabs still appear above the **Creation** panel, a "Your
+  workspace" heading appears above **Creation failed**, and the failure shows only on the page's
+  next 10 s refresh. Not walked: the maximum memory mode, a background upload after leaving the
+  page, the host-side ISO free-space refusal and the failed-create **Edit** refusal wording.
 - [Managed VM creation](../qa/managed-vm/checks.md) — records the earlier four-page, single-disk,
-  single-interface form. The six-page wizard, multiple disks and interfaces, memory modes, boot
-  order, autostart, start after creation, host-owned default registrations and background ISO
-  upload have no browser or lab walkthrough yet; treat step 5 as untested.
+  single-interface form.
 - [URL ISO downloads](../qa/iso-url/checks.md), [host ISO visibility](../qa/host-isos/checks.md)
   and [storage repositories](../qa/storage-repositories/checks.md).
 - [Pool VLAN networks](../qa/pool-vlan-networks/checks.md) — simulated browser and namespace
@@ -485,7 +519,13 @@ the non-IoT requirements decision because optical-prompt timing and the manual S
 the harness.
 See [final ISO and Controller acceptance](../qa/2026-09-16-final-iso-controller-acceptance.md).
 
-Guest installation, physical hardware and arbitrary storage-failure recovery remain unverified;
+The second driver-disc workflow was exercised with manually imported virtio-win media. The public
+0.2.9 ISO excludes bundled virtio-win while its GPL/LGPL corresponding-source and delivery-path
+closure is unresolved; import matching media before using VirtIO with Windows. A simulated browser
+run checked that **Driver disc** stays empty and disabled on a host without the second CD drive.
+
+A Debian guest installation on UEFI was verified in the Phase 2 gate run on `0.2.10~gate5`; Windows installation
+through the Controller, physical hardware and arbitrary storage-failure recovery remain unverified;
 see the [platform plan](../plans/2026-09-08-nex-platform.md).
 
 [Back to the user guide](README.md)

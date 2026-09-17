@@ -461,6 +461,17 @@ connection; other inventory queries retain read-only connections. The command on
 observes capabilities. Failures remain failed checks with unavailable model inventory;
 Core does not substitute guessed models.
 
+### Audit resource IDs for VM requests (`GET /api/v1/audit`)
+
+API impact: **changed contract** — the meaning of `resource_id` in `GET /api/v1/audit` for the
+`vm-power`, `vm-media`, `vm-update` and `vm-delete` actions. These rows now carry the VM ID,
+as `vm-create` and `console.open` already did, so a client can list one VM's activity by
+matching `resource_id` to the VM ID. The response shape, authorization (administrator session)
+and ordering are unchanged. Rows written by earlier Controller versions keep their previous
+value (the operation ID for power, media and delete requests, an internal row ID for updates);
+the request itself remains in `GET /api/v1/operations`. Audit history is Controller-scoped and
+is not recovered from hosts by a replacement Controller.
+
 ## Managed VM creation
 
 API impact: **new contract** for client storage/network registration, raw ISO upload,
@@ -1219,7 +1230,8 @@ MAC uniqueness and host capacity stay with their owners.
   refuse a value). A set `mtu` is between 1280 and 9216. An
   empty `mac` means the derived address (`protocol.DerivedMAC`: the `52:54:00` locally
   administered unicast prefix, two octets of `sha256(vm id)` and the interface index), which is
-  stable per VM and interface and cannot collide within a VM. A manual `mac` must be six octets
+  stable per VM and interface and cannot collide within a VM (on an edit, see
+  [VM editing](#vm-editing) for how empty MACs are matched). A manual `mac` must be six octets
   in canonical lower-case colon form, unicast and not all zero; that canonical form is what lets
   the host check uniqueness against its journal and domain definitions by plain string comparison.
 - **Boot order.** `0` means "not a boot device". Non-zero values are unique across every disk and
@@ -1431,23 +1443,55 @@ Flow: an administrator puts the complete desired definition with a stable `reque
 Controller validates it exactly like creation against the pool and host minus the VM itself
 (shape, references and observed capacity; name and MAC uniqueness against other VMs and dedicated-memory admission stay the host's, as for creation), refuses what no
 edit may change (an existing disk's storage, size or provisioning; moving the VM) and, when
-the VM is observed running, what needs it stopped; then freezes every automatic MAC into the
-definition and queues `vm-update` at revision current + 1. One edit, power or media request per VM
+the VM is observed running, what needs it stopped. Interfaces are matched by effective MAC:
+- when the request names **any** current interface by its effective MAC (the address the VM list
+  reports; the bundled editor sends it for every existing interface), every interface with an
+  empty `mac` is **new**. A client that sends one existing interface's MAC must send all of them,
+  or an omitted interface is removed and replaced by a new one with a fresh address;
+- when it names **none**, an empty `mac` is matched by position: an unchanged interface keeps the
+  current address at its index and one appended past the current count is new, but removing an
+  interface, or changing the network, model or MTU at an existing index, answers `400` "when
+  removing, reordering or changing a network interface, give every existing interface its MAC
+  address".
+
+Controller then freezes every automatic MAC into the definition, drawing each new one from the
+VM's derived range at the first index above the highest one the current definition uses that no
+requested or current interface holds, or, when none above is free, the lowest free index (so a new
+interface never inherits the address of one removed in the same edit, nor, unless the
+highest-index interface was removed or index 255 is in use, one removed in an earlier edit), runs its stop-first check
+on that frozen definition, the same one Core checks, and queues `vm-update` at revision current + 1. One edit, power or media request per VM
 is in flight at a time; a `vm-media` change updates the same current journal entry. Core classifies the difference from its journal with the shared
 `NeedsStop` rule: name, CPU, memory, firmware, machine type, any boot order, an existing
-disk's bus, an existing interface's network, model, MAC or MTU, and adding a SATA disk need a
+disk's bus, an existing interface's network, model or MTU, and adding a SATA disk need a
 shut-off guest, which is then redefined from the regenerated XML after new disks are allocated
 and a `domrename`; a running guest takes disk and interface additions and removals
 (`attach-device`/`detach-device --persistent`; a live detach completes only when the guest
 releases the device, so a removal succeeds once persisted and the guest may keep the device
-until its next restart), ISO insert, swap or eject
+until its next restart; while validating a running guest's edit, before allocating any disk or
+changing any device, Core compares the live and persistent domains and reports the `vm-update`
+`failed` with "network interface MAC <mac> is still attached to the running VM; wait for the guest
+to release it or stop the VM, then save again" when an interface in the request has a MAC that is
+still on a live interface the persistent definition no longer has; nothing changes, no disk is
+allocated and the current revision stays current), ISO insert, swap or eject
 (`change-media --live --config`), description, guest OS hint and autostart. Disks are matched
-by name and keep the target names journaled at creation; interfaces by MAC. Every VM now
+by name and keep the target names journaled at creation; interfaces by MAC, so a request that
+changes an existing interface's MAC removes that interface and adds a new one, which a running
+guest accepts rather than refusing. Every VM now
 carries one SATA CD drive, empty without an ISO, and q35 definitions carry spare PCIe root
 ports for hot-plug. Removed disk files are detached and retained, never deleted. The
 persistent definition and per-disk ownership are observed against the expected XML by device
-identity; an interrupted edit is reconciled by observation only and otherwise reported as
-`needs_attention`. The host's journal keeps every revision and reports the highest succeeded
+identity; an interrupted edit is reconciled by observation and otherwise reported as
+`needs_attention`. The exception is a UEFI-to-BIOS change interrupted after its `undefine --nvram`
+(journal stage `cleaning-nvram` or `defining`): Core confirms the domain is absent and defines the
+journaled BIOS XML when the same `vm-update` operation is delivered again (Controller redelivers
+only `queued` or `dispatched` operations) or, for a VM on shared storage, at the periodic remote
+update reconcile. A local-storage edit already reported `needs_attention` with the domain absent
+is only observed by background recovery, not finished, and needs inspection on its host. Core refuses with `VM definition changed during
+firmware cleanup; inspect the VM on its host` rather than undefining a UEFI domain found there. A
+stopped edit that renames the VM and changes Secure Boot runs the read-only Secure Boot checks
+before `domrename`, so a refusal leaves the name unchanged, then edits the variable store and
+defines under the new name; a failed read after the rename reports `cannot read VM firmware
+variable store after rename`. The host's journal keeps every revision and reports the highest succeeded
 one as the current definition; Controller refreshes its mirror from each report, so the
 result is the host's word and a replaced Controller adopts the current definition and
 revision. Older Core without `vm-update-v1` is refused with 409 at request time.
@@ -1471,6 +1515,27 @@ or unlinks those files (`delete_disks=true`). Succeeded deletes drop the VM from
 `Inventory.managed.vms` and emit a tombstone in `deleted_vms`; Controller deletes its
 `vm-create` mirror. HTTP `202` queues work; poll operations and the VM list for completion.
 Older Core without `vm-delete-v1` is refused with 409 at request time.
+
+Interrupted deletes (changed behavior, same contract). When the same `vm-delete` operation is
+delivered again after an interruption at stage `undefining` or `wiping`, Core resumes it: a domain
+that is still defined must be shut off (otherwise `needs_attention` with `stop the VM so its
+interrupted delete can finish; observed state is <state>`), `undefine` repeats with the same flags,
+and a requested wipe repeats over the journaled paths, ignoring files already gone. A **new**
+`vm-delete` for that VM with the same `delete_disks` choice first finishes the earlier delete, whose
+outcome becomes `succeeded` with its tombstone, and then fails with `VM is already deleted on this
+host: an earlier interrupted delete has now finished` (or `an earlier interrupted delete for this VM
+is still unresolved: <reason>`). A new request with a **different** `delete_disks` choice fails
+without finishing the earlier delete, naming the earlier choice, so disks a later request asked to
+keep are never wiped; re-send with the earlier choice or resolve the delete on the host. Core does
+not resume an interrupted delete in the background without a request. Limit: a new `deleteVM`
+reaches Core only while the VM is still defined and observed `shut off`. After `undefine` (every
+interruption at stage `wiping`) the VM is no longer observed, so Controller refuses with 409
+`stop the VM before deleting it`; such a delete finishes only by redelivery of the original,
+still `dispatched` operation when the host reconnects, and one already reported `needs_attention`
+needs inspection on the host. Disk files of a VM deleted
+with `delete_disks=true` no longer count as `retained disk for VM <id>` dependencies of
+`storage-detach`; a retaining delete still does. Verification: Go unit tests against a fake
+`virsh` only; no real-libvirt walkthrough.
 
 ## Browser VM console
 
@@ -1551,7 +1616,14 @@ for re-adoption.
 `vm-media-drivers-drive-v1` carries two SATA CD drives: the install drive, and a **driver disc**
 drive for the disc an installer needs alongside its install media. A Windows guest installing to
 a VirtIO disk needs the virtio-win ISO in that second drive; with one drive the operator had to
-swap discs mid-Setup, which is the workaround W3 recorded. `drive` names which drive a request
+  swap discs mid-Setup, which is the workaround W3 recorded. Public 0.2.9 media does **not**
+  bundle or seed virtio-win: the operator imports matching driver media as a normal `iso-import`
+  on the placement host, then selects it as the driver disc. The existing wizard may only show or
+  retain media that the host reports as a succeeded import; it does not pre-select a driver disc
+  without such an operator import. The bundled-media rollout is blocked until complete corresponding
+  source and a tested delivery path are retained for its GPL/LGPL contents. This changes no API
+  schema or capability. Controller validates a non-empty `drivers_media_id` on `createVM` and
+  `updateVM` (BUG-0228, below). `drive` names which drive a request
 applies to: `install` (or omitted, which is what every Controller sent before this existed) or
 `drivers`. `VMCreateSpec.drivers_media_id` is the durable record of the driver disc, journaled on
 the pool master beside `media_id` and re-adopted the same way; it must differ from `media_id`.
@@ -1560,6 +1632,45 @@ Core resolves a drive to its libvirt target through the user aliases `ua-nex-cdr
 an older Core carries neither alias and exactly one cdrom, which is always the install drive, so
 a host that predates this keeps working and simply has no drivers drive. A Controller must not
 send `drive: "drivers"` to a host that does not report the capability.
+
+**Driver disc on `createVM` and `updateVM` (existing contract, BUG-0228).** When
+`drivers_media_id` equals `media_id`, `protocol.ValidateVMSpec` refuses the request with **400**
+"the driver disc must differ from the install media" before the `request_id` replay check. Otherwise,
+when `drivers_media_id` is set, Controller checks it after the replay check, so an identical replay
+still returns the original operation (**200**) without re-checking: **409** "the selected host agent does not support a driver disc drive;
+upgrade Nex Core" (on `PUT`: "the VM's host agent does not support a driver disc drive; upgrade
+Nex Core") when the host does not report `vm-media-drivers-drive-v1`; **404** "the driver disc ISO
+is not registered and verified on the selected host and pool" (on `PUT`: "… on the VM's host and
+pool") for an unknown ID, an import that has not succeeded, or media on another host. An empty
+`drivers_media_id` is still accepted on older hosts. When a Controller adopts a host-reported VM
+whose `drivers_media_id` is not a succeeded import on that host, the VM is marked needs attention
+with "ISO <id> is not adopted on this host", as for `media_id`.
+
+**`drive` on `mediaVM` (changed contract, BUG-0235).** `POST /api/v1/vms/{id}/media` accepts an
+optional `drive`: omitted, `""` or `install` addresses the install drive; `drivers` addresses the
+driver disc drive. Controller checks it before the VM lookup (**400** "drive must be install or
+drivers"), and for `drivers` requires the VM's host to report `vm-media-drivers-drive-v1` after the
+`vm-media-v1` check (**409** "the VM's host agent does not support a driver disc drive; upgrade Nex
+Core"). Insert still requires a succeeded `iso-import` on the VM's pool and host for either drive
+(**404** "the install ISO is not registered and verified on the VM's host and pool", or "the driver
+disc ISO …" for `drivers`), and is refused with **400** "the driver disc must differ from the
+install media" when the ISO is the one the VM's other drive currently holds in the Controller's
+VM record, since that spec would fail the shared VM validation and adoption. Core refuses the
+same insert itself, from its own journaled VM definition and before any libvirt change, so an older,
+third-party or stale Controller cannot make it record such a definition: the operation fails with
+"that ISO is already in the install drive; the driver disc must differ from the install media" (or
+"that ISO is already in the driver disc drive; the install media must differ from the driver disc").
+Re-inserting the ISO a drive already holds into that same drive is allowed.
+The drive is passed to Core as `VMMediaRequest.drive`; Controller records the result only from
+Core's success report. Replay: a non-empty `drive` joins the stored request payload, so an
+identical replay returns the original operation (**200**) and the same `request_id` with a
+different drive is **409** "request_id already used with another payload". An omitted drive is not
+stored, so requests stored before this change replay unchanged; `""` and `install` therefore count
+as different payloads on replay. Compatibility: a Controller older than this fix rejects any body
+with `drive` as **400** "invalid JSON request" (unknown field) — the web UI in 0.2.9 sends it for
+every driver disc insert and eject, so those always failed there; a Core without the capability gets
+the 409 and keeps its single install drive. Requests without `drive` behave as before on every
+version.
 
 **Changed contract, 0.2.8 — firmware, Secure Boot and TPM.** `VMBoot` gains `secure_boot`
 (`on`, `off`, or omitted) and `tpm` (`2.0`, `none`, or omitted). Both are durable fields of the
@@ -1657,9 +1768,14 @@ are dropped, at most 32 addresses are reported, `os` is bounded to 4096 bytes an
 and interface names to 200; Controller refuses a report beyond those limits or with an
 unknown `agent`, `clipboard`, `media` or `drivers_media` value (an absent `media` is an older
 Core). `agent` is `connected`, `unresponsive`, `disconnected` or
-`no-channel`; `clipboard` is `ready`, `waiting` or `no-channel`; `resize` is true only when the
-guest can actually follow a console resize request — the VM has a VirtIO display **and** the
-guest has opened the qemu-vdagent channel, which is the agent that applies the new resolution.
+`no-channel`; `clipboard` is `ready`, `waiting` or `no-channel`. `clipboard` is `ready` only
+when the qemu-vdagent channel is connected **and** the guest agent channel is not
+`disconnected`: libvirt reads the vdagent port as connected even in firmware, in GRUB or with
+no OS, while the guest agent channel on the same virtio-serial bus stays disconnected
+(BUG-0243). The tradeoff is that a guest running spice-vdagent without qemu-guest-agent reads
+`waiting`. `resize` is true only when the guest can actually follow a console resize request —
+the VM has a VirtIO display **and** `clipboard` is `ready` by that rule, since the vdagent is
+the agent that applies the new resolution.
 A VirtIO display alone only means the host would send the request; a guest without the driver
 ignores it, and Nex advertising the control then does nothing (BUG-0201). The same live
 definition reports `media`, and `drivers_media` for the second (driver disc) CD drive: `loaded`
@@ -1729,12 +1845,94 @@ usage. Controller must be upgraded before Core, because report JSON is decoded w
 durable record, recomputed from the host on every report.
 
 The VM details panel renders this observation read-only: CPU is labelled as a percentage of
-allocated vCPUs; memory allocation is distinguished from guest-used memory; host memory and disk
-metrics show `Not reported` when absent; and the panel shows the sample age. A stale VM status
-still means the current execution state is unknown. Verified 2026-09-16 against a disposable
-Nex Core/libvirt host and the deployed Controller UI: a running VM reported CPU, allocation,
-resident memory, disk use/capacity and sample age, while a shut-off VM reported no usage rather
-than zero.
+allocated vCPUs; memory allocation is distinguished from guest-used memory; and host memory and
+disk metrics show `Not reported` when absent. A stale VM status still means the current execution
+state is unknown. Verified 2026-09-16 against a disposable Nex Core/libvirt host and the deployed
+Controller UI: a running VM reported CPU, allocation, resident memory and disk use/capacity, while
+a shut-off VM reported no usage rather than zero.
+
+## Usage history
+
+API impact: **new contract** — Controller `GET /api/v1/vms/{id}/stats` and
+`GET /api/v1/hosts/{id}/stats`, agent `POST /api/v1/agent/stats/{token}`, report response member
+`stats_channels` (`StatsChannelRequest`), schemas `StatsHistory`/`StatsSeries`, and the
+`usage-history-v1` capability. The `vms[].usage` observation above keeps its shape; Core now fills
+it from the history sampler instead of per-VM probe calls.
+
+**State owner: Core.** Each host samples its running VMs and itself every 5 seconds and keeps the
+history in fixed-size round-robin files under the agent state directory (`usage/host.rrd`,
+`usage/vm-<uuid>.rrd`): 5 s × 10 minutes (memory only), 1 minute × 24 hours, 1 hour × 30 days and
+1 day × 1 year, each an average of the finer tier that ignores unknown samples. Completed coarse slots
+are written in place; the file is rewritten atomically only on creation or when its series change. The Controller keeps no copy, so a replacement Controller shows
+the same history as soon as the host is connected. Deleting a VM through Nex deletes its history;
+other files untouched for a year hold no data and are removed. A VM's history stays on the host that
+recorded it; live migration, when it exists, must carry the file.
+
+VMs are sampled with one `virsh domstats --raw --nowait --list-running` call per tick, so the
+BUG-0213 rule above still holds: no sample waits for a domain job. Counters become rates on the
+host. A counter reset, a missing previous sample or a member libvirt did not return is recorded as
+unknown (`null`), never zero, and a stopped VM records nothing. Guest-used memory needs the virtio
+balloon statistics period, which VM definitions now set (`<stats period='5'/>` on the virtio
+balloon); an existing VM gets it the next time its definition is saved, and the series stays
+unknown until the guest's balloon driver reports.
+
+**Query path.** A host cannot be dialled by the Controller, so a query uses an outbound channel:
+when no channel to the host is open, the Controller returns `stats_channels: [{token}]` in the next
+report response (only to a host that offered `usage-history-v1`), the agent dials
+`POST /api/v1/agent/stats/{token}` over its mTLS identity with `Upgrade: nex-stats`, and after
+`101` the Controller writes HTTP/1.1 `GET /stats?object=vm&id=<uuid>&range=<range>` (or
+`object=host`) requests that Core answers in order. The token is bound to the host that was asked;
+another host's token gets 404. Queries on a channel are serialised, each with a 10 s deadline and a
+4 MiB body limit. The channel closes after 5 minutes idle, on either restart, or on any error, and
+the next query opens a new one; a query that finds a reused channel already closed retries once on
+a new channel. The first query to a host can therefore wait up to one heartbeat
+(10 s by default) plus the host's dial; it gives up after 20 s. Later queries are immediate.
+
+Controller validates each reply before relaying it: object, id and range match the query, at most
+128 series, and every series exactly the range's point count (`live` and `10m` 120, `24h` 1440,
+`30d` 720, `1y` 365); anything else is `502`. Statuses:
+`400` invalid range (`range must be live, 10m, 24h, 30d or 1y`); `404` unknown VM/host or no
+history on the host; `409` host revoked, stale or without the capability. A stale host returns
+`the host is not freshly connected; its usage history cannot be read now`; an older Core returns
+`the host agent does not keep usage history; upgrade Nex Core`. `429` (realtime) the host already
+samples 8 live objects; `503` host did not dial within 20 s; `504` query timed out. Queries are
+read-only, so every retry is safe.
+
+**Realtime (`range=live`).** A live query starts, or renews for two minutes, one-second sampling
+of that one VM or host on its host, into a 120-slot memory-only buffer; the reply has
+`step_seconds: 1`, ends at the current second, and has `null` for seconds not yet sampled. Live
+sampling never writes to disk or to stored history. The lease is owned by the host: when queries
+stop — a closed browser, a lost Controller — sampling ends within the lease plus one second, with
+no clean-up request. VM samples use single-domain `virsh domstats --nowait --state` with a deadline
+under one second, so a slow answer skips that second rather than overlapping. Only a domain whose
+`state.state` is `1` (running) is sampled: libvirt still returns stale CPU and balloon counters for a
+shut-off domain (BUG-0255). A stopped VM returns
+`null`s; a VM the host does not know returns `404`. More than 8 distinct live objects on one host
+return `429` with the host's message, which the Controller relays.
+
+Compatibility: shared upgrade rule — Controller before Core, because report JSON is decoded
+strictly; an older Core never offers the capability and the Stats tab asks for a Core upgrade.
+A Core with `usage-history-v1` but built before realtime answers `range=live` with `400`.
+No pool-scoped setting is introduced.
+
+The **Stats** tab on VM and host pages charts CPU, memory, network and disk (and load for hosts)
+with a range picker, a **Stacked** toggle, synced crosshair and drag-zoom, a value tooltip, legend
+chips, live refresh at the 10-minute and 24-hour ranges, and a **Realtime** drawer that polls
+`range=live` once a second.
+
+Host fixes from review (no contract change): a stored tier ignores samples behind its current step
+instead of resetting, so a backwards clock step keeps 24h/30d/1y history, but after a clock that ran
+ahead is corrected those ranges store nothing until time reaches the stored step (BUG-0231; the agent
+unit is ordered after `time-sync.target` to make that rare); an idle object stays in memory until its
+open day step is written, so a stopped VM keeps its last day in `1y` (BUG-0230); the 256-VM cap
+counts only VMs sampled in the last hour; and hosts keep at most 64 per-core CPU series.
+
+Verification: Go unit and contract tests for the sampler, ring store, realtime sampling, query
+handler, channel and relay; mocked-browser review of the Stats tab and Realtime drawer; and a final
+[disposable-host run](qa/2026-09-16-usage-history.md) (2026-09-17, simulated nested-KVM host, 1 s
+heartbeat) that passed every exercised check, including Controller replacement, realtime for a
+running and a stopped VM, and lease expiry. Not exercised on a host: the 10 s default heartbeat
+latency, 30d/1y tiers and retention, the 8-object realtime cap, and rates under load.
 
 ## Software updates
 

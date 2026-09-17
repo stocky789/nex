@@ -8,7 +8,7 @@ Debian, Linux, QEMU, libvirt, firmware, fonts, and other third-party components
 remain under their respective licenses and copyrights. Nex does not relicense
 them or claim endorsement by their authors. Preserve their supplied notices.
 
-Nex names, logos, and standalone brand artwork are separate from the code
-license; redistribution and trademark terms remain to be specified. This does
-not restrict rights granted by the AGPL for covered software. See
-docs/LICENSING.md before distributing a branded release.
+Original Nex-branded artwork is licensed under CC BY 4.0; see
+ARTWORK-LICENSE.md. The Nex, Nex Core, and Nex Controller names, logos, and
+related brand identifiers remain reserved by the Nex project. This does not
+restrict rights granted by the AGPL for covered software.

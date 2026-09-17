@@ -46,7 +46,7 @@ memory to the host until that package is installed; Linux has the driver in its 
    shows **Connected · guest agent answering** with the operating system, guest hostname and
    IP addresses.
 3. Open the **Console** tab. **Console clipboard** in the panel shows **Ready** once a
-   graphical session with spice-vdagent is running; the console then exchanges clipboard
+   graphical session with spice-vdagent is running and qemu-guest-agent is running; the console then exchanges clipboard
    text with the guest as described in [Open a VM console](vm-console.md#steps).
 
 ## Expected result
@@ -55,10 +55,11 @@ The **Guest tools** panel shows:
 
 - **Guest agent:** Connected, with the reported operating system, hostname and addresses.
   Loopback and link-local addresses are left out.
-- **Console clipboard:** Ready (graphical session with spice-vdagent), or **Waiting for
-  spice-vdagent in the guest** until then.
+- **Console clipboard:** Ready (graphical session with spice-vdagent, and qemu-guest-agent
+  running), or **Waiting for guest tools (qemu-guest-agent and spice-vdagent) in the guest**
+  until then.
 - **Display resize:** Available only when the VM has a VirtIO display **and** the guest is
-  running the vdagent that acts on a resize request — that is, when **Console clipboard**
+  running the vdagent that acts on a resize request and qemu-guest-agent — that is, when **Console clipboard**
   reads **Ready**. The console then offers **Resize guest to window**. A VirtIO display on
   its own means the host would send the request, not that the guest would follow it, so
   Nex does not offer the option until the guest can use it.
@@ -109,17 +110,20 @@ guest hand back pages it has already freed; it does not make Nex rebalance memor
   every ten seconds. A guest that never answers has a hung agent: restart the service.
 - **Channel missing:** the VM was created before guest tools support. Its console still
   works and **Type into VM** sends text as keystrokes; recreate the VM to gain the channels.
-- **Waiting for spice-vdagent in the guest** on the Console clipboard: install the tools
-  and sign in to a graphical session. On Linux the session agent is started by the desktop;
-  for a bare X session run `spice-vdagent` after `spice-vdagentd` is enabled. A session
+- **Waiting for guest tools (qemu-guest-agent and spice-vdagent) in the guest** on the
+  Console clipboard: both agents must run. Nex reports the clipboard ready only while the
+  QEMU guest agent channel is also open, so a guest running spice-vdagent without
+  qemu-guest-agent still reads waiting; install and start `qemu-guest-agent` as in step 1
+  (the **Guest agent** row shows whether it is running). Then sign in to a graphical
+  session. On Linux the session agent is started by the desktop; for a bare X session run `spice-vdagent` after `spice-vdagentd` is enabled. A session
   started outside a login (no systemd-logind session, for example from a script) is ignored
   by `spice-vdagentd` until it runs without session integration: set
   `SPICE_VDAGENTD_EXTRA_ARGS=-X` in `/etc/default/spice-vdagentd` and restart it.
 - **Display resize: Not available** on a VM that has a VirtIO display: the guest is not
-  running the vdagent, so nothing inside it would change resolution. Check **Console
-  clipboard** on the same panel — it reads **Ready** exactly when resize becomes available.
-  Install the tools as in step 1 and sign in to a graphical session. On a VM whose display
-  is not VirtIO, resize stays unavailable whatever is installed; recreate the VM.
+  running both the vdagent and qemu-guest-agent, so Nex does not treat it as able to change
+  resolution. Check **Console clipboard** on the same panel — it reads **Ready** exactly when
+  resize becomes available. Install both tools as in step 1, make sure `qemu-guest-agent` is
+  running, and sign in to a graphical session. On a VM whose display is not VirtIO, resize stays unavailable whatever is installed; recreate the VM.
 - **The guest reports a different operating system than you installed:** the panel shows
   what the guest's agent answers. Nex corrects only the Windows 11 build case described in
   [Reported operating system](#reported-operating-system); it does not otherwise second-guess
@@ -148,7 +152,14 @@ nested-KVM lab; Windows guests and physical hardware were not. See the
 The display-resize condition and the Windows 11 name correction described above were
 observed in the [Windows 11 UEFI lab](../qa/2026-09-16-windows-11-uefi-lab.md) (issues W6 and
 W16) and are covered by host-side checks over recorded libvirt definitions and guest agent
-answers (`go test ./internal/vmhost/`). They have **not** been re-walked on a lab host since
-the change: no Windows or Linux guest was started to confirm the panel and console option now
-appear only after the guest tools are installed.
+answers (`go test ./internal/vmhost/`). The Linux side was re-walked in the [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md)
+(`0.2.10~gate5`, 2026-09-17, disposable nested-KVM lab, headless Chromium, browser plus host and
+API checks): step 1 in a Debian 13.6 UEFI guest, then a fresh **Guest tools** panel with the agent
+connected, OS, hostname, addresses, clipboard Ready and display resize Available, and steps 2–3 as
+the agents came up. The API read clipboard waiting and resize unavailable in firmware and GRUB,
+during a guest reboot and with qemu-guest-agent stopped, and ready again after it restarted; the
+**Guest tools** badge read disconnected, never stale, including on a fresh VM with no OS. Paste
+delivery and resize in a signed-in desktop session were not exercised end to end (Ready was
+observed at the login greeter), a guest that never had qemu-guest-agent was not observed, and
+Windows guests have **not** been re-walked on a lab host since the change.
 

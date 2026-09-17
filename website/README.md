@@ -23,9 +23,11 @@ npm run preview -- --host 127.0.0.1
 ```
 
 Deploy `build/`, including its license files, to a static web server. No Node
-runtime is required. Source changes do not deploy automatically; publication is a
-separate maintainer-controlled step. The preview uses `noindex, nofollow`, which
-is a crawler hint, not access control.
+runtime is required. Pushes to `main` that touch `website/` run the Website
+workflow: it builds the site and, when the `NEX_DEPLOY_*` secrets are set,
+publishes through `nex-website-publish` on the website host. Manual publish and
+rollback remain available; see [operate the website](../docs/guide/operate-website.md).
+The preview uses `noindex, nofollow`, which is a crawler hint, not access control.
 
 ## Contributing
 

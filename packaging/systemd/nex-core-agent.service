@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 [Unit]
 Description=Nex Core management agent (development)
-After=network-online.target libvirtd.service
+After=network-online.target time-sync.target libvirtd.service
 Wants=network-online.target
 
 [Service]

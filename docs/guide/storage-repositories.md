@@ -326,6 +326,11 @@ and clustered GFS2 in [concurrent storage verification](../qa/2026-09-12-concurr
 The disposable Controller walkthrough confirmed the HTTPS-downgrade refusal, discard of its failed
 import with task history retained, and the upload banner changing to its live host-ready state.
 See [final ISO and Controller acceptance](../qa/2026-09-16-final-iso-controller-acceptance.md).
+The [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md) (`0.2.10~gate5`, 2026-09-17, disposable
+nested-KVM lab, headless Chromium, row 2) walked steps 2–4 in the browser for local directories:
+two missing paths failed with their reason, a new directory went from queued to healthy in 6 s,
+and a 75 s watch of the table saw no duplicate or stale queued row. The registrations survived a
+Controller replacement (failed ones as failed tasks).
 Untested: failed-fence admission, broader outages/adoption, HA/failover, migration, physical hardware
 and the unavailable-Core browser presentation.
 

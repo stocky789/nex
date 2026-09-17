@@ -4,6 +4,11 @@ Date: 2026-09-16
 Release: **0.2.9** (`release-version.py --current` resolves `0.2.9 0.2.9`). The verified source
 tree is recorded in commit `76a28b6`; the local artifacts are built and verified but are not tagged
 or published.
+Update 2026-09-17: the 0.2.9 ISO, source, manifest and both packages were published and
+hash-verified (still untagged; [release QA](../qa/2026-09-16-nex-core-0.2.9-release.md)). Its
+`nex-controller` package cannot start (BUG-0246, built without cgo); the fix and the later Phase 2
+gate fixes are in the uncommitted working tree awaiting the project owner's review and commit
+([gate report](../qa/2026-09-17-phase2-gate/checks.md)).
 
 ## What landed
 
@@ -27,8 +32,16 @@ validates and passes them through on `GET /api/v1/vms`. `--nowait` is load-beari
 takes the domain's job stalls behind exactly the long shutdown BUG-0213 describes. Core computes
 the CPU rate rather than the Controller, because `cpu.time` is cumulative and a Controller
 subtracting two samples would be deriving pool state the host already knows. Absent is not zero —
-fields libvirt declines are nullable. VM details renders the report, and real-browser acceptance
-against deployed current Core/Controller passed for reported and null usage with no page errors.
+fields libvirt declines are nullable. VM details renders the report (fresh/stale on the panel
+heading; the Sample age row was removed later the same day), and real-browser acceptance against
+deployed current Core/Controller passed for reported and null usage with no page errors.
+
+**3. Bundled virtio-win (reopened 2026-09-17).** The historical 2026-09-16 rollout staged Fedora
+virtio-win `0.1.302`, seeded it on enroll and pre-selected it as **Driver disc** for Windows. The
+public 0.2.9 ISO excludes that media because complete corresponding source and a tested delivery
+path for GPL/LGPL contents are not retained. The second driver disc remains complete; operators
+import matching media manually. Automatic staging, seeding and pre-selection remain blocked until
+the source/legal closure described in the [lab fixes plan](2026-09-16-windows-11-lab-fixes.md#follow-up-after-acceptance--bundled-virtio-win-2026-09-16-reopened-2026-09-17).
 
 ## Verification, and what it does not cover
 
@@ -82,6 +95,9 @@ table is the single tracker; it was reconciled with the lab outcome. Summarised:
 2. **BUG-0213 graceful-shutdown timing.** The historical ~215 s task gap has no recoverable
    cause, and the current final-package attempt did not submit shutdown because guest-agent
    readiness did not arrive within bounded attempts.
+3. **Bundled virtio-win rollout.** Blocked on complete corresponding source and a tested delivery
+   path for the GPL/LGPL contents. The public ISO uses the existing manual ISO-import workflow;
+   this does not change the driver-disc API schema.
 
 The firmware probe and lifecycle test now pass, including the UEFI rename and UEFI-to-BIOS cleanup
 path. The Windows system-disk test also passes: Setup showed no disk until the Red Hat VirtIO SCSI

@@ -22,7 +22,7 @@ if ! "${engine[@]}" image inspect "$image" >/dev/null 2>&1; then "${engine[@]}" 
 device=()
 vm=()
 if [[ -c /dev/kvm ]]; then device=(--device /dev/kvm); vm=(--vm); else echo "NOTE: /dev/kvm absent on this machine; VM definitions will not be covered by this run" >&2; fi
-"${engine[@]}" run --detach --name "$name" --label nex.test=controller-replacement --cap-add NET_ADMIN "${device[@]}" \
+"${engine[@]}" run --detach --init --name "$name" --label nex.test=controller-replacement --cap-add NET_ADMIN "${device[@]}" \
   --mount "type=bind,src=$repo,dst=/repo,readonly" --mount "type=bind,src=$work,dst=/artifacts,readonly" \
   --mount "type=volume,src=$name-storage,dst=/var/lib/nexqa-replacement" "$image" sleep infinity >/dev/null
 # The overlay root is not a supported storage filesystem; the named volume lives on the engine's local disk.

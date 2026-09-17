@@ -43,13 +43,16 @@ def main():
             data['media'] = [{**storage, 'id': 'iso-demo', 'storage_id': storage['id'], 'name': 'installer.iso', 'status': 'queued', 'size_bytes': 0, 'sha256': ''}]
             route.fulfill(status=201, json=data['media'][0])
         elif path == 'media' and route.request.method == 'POST':
-            route.fulfill(status=201, json={**storage, 'status': 'queued'})
+            data['media'] = [{**storage, 'id': 'iso-local', 'storage_id': storage['id'], 'name': 'local.iso', 'status': 'queued', 'size_bytes': 0, 'sha256': ''}]
+            route.fulfill(status=201, json=data['media'][0])
         else:
             route.fulfill(json=data.get(path, []))
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page(viewport={'width': 1440, 'height': 1000})
+            # The UI probes the session only for a browser that signed in before (BUG-0208).
+            page.add_init_script("localStorage.setItem('nex-signed-in', '1')")
             page.on('pageerror', lambda error: errors.append(str(error)))
             page.route('**/api/v1/**', route_api)
             url = f'http://127.0.0.1:{server.server_port}/#/pools/pool-demo'
@@ -92,7 +95,7 @@ def main():
             expect(page.get_by_label('ISO name', exact=True)).to_have_value(original['name'])
             mode['failure'] = False
             page.get_by_role('button', name='Download ISO', exact=True).click()
-            expect(page.get_by_text('ISO download queued.', exact=False)).to_be_visible()
+            expect(page.get_by_text('The host download of installer.iso is queued.', exact=False)).to_be_visible()
             assert submissions[-1] == original
             expect(page.get_by_text('Unknown until downloaded')).to_be_visible()
             expect(page.get_by_text('SHA-256: Pending verification')).to_be_visible()
@@ -132,7 +135,7 @@ def main():
             page.get_by_label('Destination storage').select_option(storage['id'])
             page.get_by_label('ISO file', exact=True).set_input_files({'name': 'local.iso', 'mimeType': 'application/x-iso9660-image', 'buffer': bytes(65536)})
             page.get_by_role('button', name='Upload and transfer ISO', exact=True).click()
-            expect(page.get_by_text('ISO received by Controller;', exact=False)).to_be_visible()
+            expect(page.get_by_text('The host transfer of local.iso is queued.', exact=False)).to_be_visible()
             checks.append('Existing local upload still submits through upload endpoint (mock content validation)')
             assert not errors, errors
             browser.close()

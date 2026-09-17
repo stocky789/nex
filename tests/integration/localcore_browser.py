@@ -62,6 +62,7 @@ def main():
     mode.add_argument('--disposable-full', action='store_true', help='explicitly allow KVM open/close preflight for simulated VM commands')
     parser.add_argument('--docker', default='docker')
     parser.add_argument('--binary', default=str(ROOT / 'dist/nex-core-local'))
+    parser.add_argument('--ui-dir', default=str(ROOT / 'web/dist'))
     parser.add_argument('--captures', default=str(ROOT / '.cache/localcore-browser-captures'))
     args = parser.parse_args()
     args.binary = str(Path(args.binary).resolve())
@@ -95,7 +96,7 @@ def main():
         subprocess.run([args.docker,'build','-t','nex-local-browser-pam','-'],input=dockerfile.encode(),check=True,stdout=subprocess.DEVNULL)
         container='nex-browser-'+lab.name
         env=os.environ.copy()
-        command=[args.binary,'--listen',f'127.0.0.1:{port}','--data-dir',str(lab/'state'),'--agent-state-dir',str(lab/'agent'),'--tls-cert',str(lab/'cert'),'--tls-key',str(lab/'key'),'--source-archive',str(lab/'source.tar.gz'),'--ui-dir',str(ROOT/'web/dist'),'--storage-dir',str(storage),'--bridge',bridge,'--image',str(lab/'image'),'--manifest',str(lab/'manifest'),'--signature',str(lab/'signature'),'--trusted-key',str(lab/'pub'),'--libvirt-uri','qemu:///session']
+        command=[args.binary,'--listen',f'127.0.0.1:{port}','--data-dir',str(lab/'state'),'--agent-state-dir',str(lab/'agent'),'--tls-cert',str(lab/'cert'),'--tls-key',str(lab/'key'),'--source-archive',str(lab/'source.tar.gz'),'--ui-dir',str(Path(args.ui_dir).resolve()),'--storage-dir',str(storage),'--bridge',bridge,'--image',str(lab/'image'),'--manifest',str(lab/'manifest'),'--signature',str(lab/'signature'),'--trusted-key',str(lab/'pub'),'--libvirt-uri','qemu:///session']
         startup = 'set -eu; cc -Wall -Wextra -Werror "$1/packaging/core-local/nex-root-auth.c" -lpam -o /tmp/nex-root-auth; mkdir -p /usr/lib/nex; install -m755 /tmp/nex-root-auth /usr/lib/nex/nex-root-auth; install -m644 "$1/packaging/core-local/nex-core-local.pam" /etc/pam.d/nex-core-local; chpasswd; shift; exec "$@"'
         command=[args.docker,'run','--rm','-i','--name',container,'--network','host','--hostname',socket.gethostname(),'-v',f'{ROOT}:{ROOT}:ro','-v',f'{args.binary}:{args.binary}:ro','-v',f'{lab}:{lab}', '-e',f'NEX_BROWSER_FIXTURE={lab}','-e',f'PATH={bins}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', *(['--device','/dev/kvm:/dev/kvm:rw'] if args.disposable_full else []),'nex-local-browser-pam','sh','-c',startup,'sh',str(ROOT),*command]
         def start(log):
@@ -241,6 +242,19 @@ def main():
                         assert 'confirmation' not in power_requests[0]
                         power_requests.clear()
                     page.unroute('**/api/local/v1/vms/fixture-vm/actions')
+                    # Every row's console action stays reachable at 360px without sideways table scrolling.
+                    other_vm={'id':'fixture-other','name':'Other fixture','state':'running','managed':False,'power_allowed':False,'blocked_reason':'Local power control is limited to the Controller appliance deployed on this host'}
+                    page.route('**/api/local/v1/vms',lambda route:route.fulfill(json=[simulated_vm,other_vm]))
+                    page.set_viewport_size({'width':360,'height':800})
+                    page.get_by_role('button',name='Refresh',exact=True).click()
+                    consoles=page.get_by_role('button',name='Open console',exact=True)
+                    expect(consoles).to_have_count(2)
+                    capture('vm-table-360')
+                    scroller=page.locator('.table-scroll').bounding_box()
+                    for index in range(2):
+                        box=consoles.nth(index).bounding_box()
+                        assert box['x']>=scroller['x'] and box['x']+box['width']<=scroller['x']+scroller['width']+0.5, ('console button outside table at 360px',box,scroller)
+                    assert page.locator('.table-scroll').evaluate('el => el.scrollWidth <= el.clientWidth'), 'VM table scrolls sideways at 360px'
                     page.unroute('**/api/local/v1/vms')
                     page.set_viewport_size({'width':1440,'height':1100});page.reload()
                     expect(page.get_by_role('heading',name='No virtual machines observed')).to_be_visible()
@@ -315,7 +329,7 @@ def main():
                     peer_throttle(page,url+'/api/local/v1/session')
                     assert not errors,errors
                     browser.close()
-                (captures/'results.json').write_text(json.dumps({'result':'passed','mode':'blocked-only' if args.blocked_only else 'full-simulated-vm','binary_sha256':artifact_hash,'ui_sha256':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted((ROOT/'web/dist').glob('local.*'))},'vm_commands':'simulated virsh/qemu-img/genisoimage; real HTTPS, Debian13 root PAM in disposable container, storage journals and browser','unix_time':time.time()},indent=2)+'\n')
+                (captures/'results.json').write_text(json.dumps({'result':'passed','mode':'blocked-only' if args.blocked_only else 'full-simulated-vm','binary_sha256':artifact_hash,'ui_sha256':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(Path(args.ui_dir).glob('local.*'))},'vm_commands':'simulated virsh/qemu-img/genisoimage; real HTTPS, Debian13 root PAM in disposable container, storage journals and browser','unix_time':time.time()},indent=2)+'\n')
                 print('PASS: real localcore HTTPS login/CSRF browser flow, empty inventory, durable API state, honest errors/recovery, desktop/360 keyboard; VM commands SIMULATED'+(' (blocked-only)' if args.blocked_only else ' (deployment response loss, start failure, explicit start/force-stop)'))
             finally:
                 stop(process)

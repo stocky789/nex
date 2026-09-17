@@ -1,0 +1,36 @@
+{
+  "summary": "UI-12: the host-local VM table clipped its fourth Console column at 360 px. Open console (or the start-first hint) now sits in the Local control cell below the power actions or blocked reason, leaving a three-column table. API impact: none; the page reads the same GET /api/local/v1/vms fields and opens the same console stream.",
+  "paths": [
+    "web/src/local.tsx",
+    "web/src/local.css",
+    "tests/integration/localcore_browser.py",
+    "docs/changes/2026-09-17-gate2-L4-web-local.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "PENDING on lane L7: this L4 change did not edit the guide. docs/guide/vm-console.md (host-local console step 1 and the 'Start the VM first' troubleshooting entry) still names a Console column that no longer exists; lane L7 owns that page and must change it to say Open console appears under Local control and stopped VMs show 'Console: start the VM first'. The guide impact is real, but it is not satisfied until L7 lands that wording; the gate must not treat this record as evidence the page is updated.",
+    "pages": [
+      "docs/guide/vm-console.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Layout-only change in the host-local UI; no endpoint, field, authorization rule, Core command or console stream changed.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Fixes a gate finding in an existing screen without changing scope or delivery order.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No state is added; the table renders host-reported VM observations only."
+  },
+  "verification": {
+    "method": "localcore_browser.py --blocked-only (the CI mode in both phase1 workflows) with a new 360x800 case: two running VMs (one managed with power actions, one other with a blocked reason) must each show an Open console button inside the .table-scroll rectangle, and the table must not scroll sideways. The case failed against the previous four-column UI (button right edge past the table edge) and passes after the fix; the capture was inspected. Run locally against a disposable Debian PAM container with simulated VM commands; no lab host was used. Also npm --prefix web run typecheck, npm --prefix web run test, python3 scripts/check_docs.py --worktree and the repository privacy test.",
+    "evidence": [
+      "tests/integration/localcore_browser.py"
+    ]
+  }
+}

@@ -1153,6 +1153,38 @@ esac`)
 	if r, _ = e.Execute(context.Background(), bad, nil); r.Status != "failed" || !strings.Contains(r.Error, "CD drive") {
 		t.Fatalf("unknown drive must be refused: %+v", r)
 	}
+
+	// BUG-0235: Core refuses an insert of the ISO its own record holds in the other drive, so no
+	// Controller can make it record a definition ValidateVMSpec rejects. Nothing reaches libvirt.
+	calls()
+	if r, _ = e.Execute(context.Background(), command("d7", "insert", protocol.InstallDrive, "media-2"), nil); r.Status != "failed" || !strings.Contains(r.Error, "already in the driver disc drive") {
+		t.Fatalf("install insert of the driver disc ISO must be refused: %+v", r)
+	}
+	if got := calls(); got != "" {
+		t.Fatalf("a refused insert must not call virsh: %q", got)
+	}
+	// Re-inserting the same ISO into its own drive stays allowed.
+	if r, err := e.Execute(context.Background(), command("d8", "insert", protocol.DriversDrive, "media-2"), nil); err != nil || r.Status != "succeeded" {
+		t.Fatalf("re-insert into the same drive: %v %+v", err, r)
+	}
+	if r, err := e.Execute(context.Background(), command("d9", "insert", protocol.InstallDrive, "media-1"), nil); err != nil || r.Status != "succeeded" {
+		t.Fatalf("install insert of a different ISO: %v %+v", err, r)
+	}
+	calls()
+	if r, _ = e.Execute(context.Background(), command("d10", "insert", "", "media-1"), nil); r.Status != "succeeded" {
+		t.Fatalf("re-insert into the install drive (legacy empty drive name): %+v", r)
+	}
+	calls()
+	if r, _ = e.Execute(context.Background(), command("d11", "insert", protocol.DriversDrive, "media-1"), nil); r.Status != "failed" || !strings.Contains(r.Error, "already in the install drive") {
+		t.Fatalf("drivers insert of the install ISO must be refused: %+v", r)
+	}
+	if got := calls(); got != "" {
+		t.Fatalf("a refused insert must not call virsh: %q", got)
+	}
+	applied, _ = e.Applied(context.Background())
+	if applied.VMs[0].MediaID != "media-1" || applied.VMs[0].DriversMediaID != "media-2" {
+		t.Fatalf("a refused insert must leave the record unchanged: %+v", applied.VMs[0])
+	}
 }
 
 // A VM defined before the driver disc drive existed is edited while running: SATA cannot

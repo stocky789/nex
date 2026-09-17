@@ -1,0 +1,40 @@
+{
+  "summary": "Audit vm-power, vm-media, vm-update and vm-delete requests against the VM ID instead of the per-request managed_resources row ID, so a VM's activity can be matched from GET /api/v1/audit; vm-create and console.open already used the VM ID. Correct the addSiteHost comment: a re-added host keeps its host-owned pool and only a new host becomes master of a new pool. API impact: changed contract; the audit resource_id meaning for those four actions changes, with no shape change.",
+  "paths": [
+    "internal/controller/managed.go",
+    "internal/controller/managed_test.go",
+    "internal/controller/addhost.go",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/changes/2026-09-17-gate2-L2-controller-audit.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No operator workflow changes in this Controller slice. The guide's VM Activity wording depends on the separate web filter change and is updated by the documentation lane."
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "API impact: changed contract. GET /api/v1/audit keeps its shape and authorization, but resource_id for vm-power, vm-media, vm-update and vm-delete is now the VM ID. Rows written by earlier Controller versions keep the operation ID or an internal row ID; the requests stay in GET /api/v1/operations. No Core command or Controller-Core contract changes. docs/API.md and the OpenAPI listAudit and Audit.resource_id descriptions document it, and docs/api was regenerated.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Gate fix inside the existing VM activity scope; delivery order is unchanged."
+  },
+  "state": {
+    "owner": "controller",
+    "reason": "Audit history is on the closed Controller-scoped list. Only the value written to the Controller audit table changes; no pool state moves to or from the Controller, and a fresh Controller starts with its own audit history as before.",
+    "record": "Controller SQLite audit table (/var/lib/nex-controller/controller.db), backed up and restored with the appliance recovery export (docs/guide/deploy-controller-appliance.md); a fresh Controller without that restore starts an empty audit history, and VM requests themselves remain Core-journaled and re-adopted from host reports."
+  },
+  "verification": {
+    "method": "Unit and contract checks only; no lab or browser walkthrough was run. TestVMOperationAuditsNameTheVM in internal/controller/managed_test.go failed before the fix (four actions audited non-VM IDs) and passes after it. Also go test -race ./internal/controller/..., go vet ./internal/controller/..., python3 -m unittest tests.test_api_contract, python3 scripts/generate_api.py --check, python3 scripts/check_docs.py --worktree and the repository privacy test.",
+    "evidence": [
+      "internal/controller/managed_test.go"
+    ]
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "summary": "Release-distribution tooling for Nex Core 0.2.9 now inventories the assembled media's Debian packages, retains matching source material, creates a final ISO/source-bundle SHA-256 binding manifest, removes six unreviewed firmware packages, and publishes the ISO, source bundle, manifest and checksum sidecars as one verified release set. The documentation records the resulting eight forge assets and website/APT behavior with exact local, boot and public website/APT verification; hosted CI remains open. API impact: none.",
+  "paths": [
+    ".github/workflows/release.yml",
+    ".gitea/workflows/release.yml",
+    "ARTWORK-LICENSE.md",
+    "NOTICE",
+    "appliance/README.md",
+    "appliance/build-inside.sh",
+    "packaging/controller/build-inside.sh",
+    "packaging/core-local/build-inside.sh",
+    "packaging/core-local/build.py",
+    "installer/build.sh",
+    "installer/check.sh",
+    "scripts/build-source.py",
+    "scripts/build-source-bundle.py",
+    "scripts/prune-iso-packages.py",
+    "scripts/release-publish.py",
+    "tests/test_appliance_build.py",
+    "tests/test_build_source.py",
+    "tests/test_core_local_package.py",
+    "tests/test_distribution_packaging.py",
+    "tests/test_prune_iso_packages.py",
+    "tests/test_release_publish.py",
+    "tests/test_source_bundle.py",
+    "CHANGELOG.md",
+    "docs/LICENSING.md",
+    "docs/guide/publish-a-release.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "docs/qa/2026-09-16-nex-core-0.2.9-release.md",
+    "docs/changes/2026-09-16-release-distribution-compliance.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The release guide now tells maintainers which eight release assets are expected, how matching source and compliance files are published, and which final-artifact results still must be recorded before distribution.",
+    "pages": [
+      "docs/guide/publish-a-release.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Release tooling, ISO composition, package publication and documentation do not change a Nex Controller/Core operation, agent command, client-facing endpoint, request, response or authorization rule.",
+    "pages": [],
+    "contracts": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The living plans now distinguish implemented release tooling from open acceptance gates, but the published website roadmap and milestone scope did not change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Release artifacts and website files are distribution outputs, not durable Controller or Core pool state. This work adds no Controller-owned or Core-owned resource record."
+  },
+  "verification": {
+    "method": "Built and inspected Nex Core 0.2.9. All sidecars and manifest bindings passed; 1,585 media/appliance records map to all 573 required source package/version pairs with complete .dsc payload hashes; six excluded firmware packages are absent; final-media md5, installer checks, 104 focused tests, privacy, BIOS/UEFI menus, unattended offline installation, first boot and reboot passed. The shared tree passed 286 Python tests, all Go tests, and the web typecheck, tests and production build. On 2026-09-17 the ISO, matching source bundle, manifest and both Debian packages were published. Independent full HTTPS downloads matched their SHA-256 values; versioned/latest sidecars and manifest bindings passed; APT InRelease verified with the public archive key, its index names both 0.2.9 package hashes, both served package payloads matched, and updates.json advertises 0.2.9. Hosted CI remains pending.",
+    "evidence": [
+      "tests/test_prune_iso_packages.py",
+      "tests/test_source_bundle.py",
+      "tests/test_release_publish.py",
+      "docs/qa/2026-09-16-nex-core-0.2.9-release.md",
+      "docs/guide/publish-a-release.md",
+      "docs/LICENSING.md"
+    ]
+  }
+}

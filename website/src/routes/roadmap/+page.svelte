@@ -46,12 +46,16 @@
         "Editing a VM in place, applying the changes a running guest can accept and saying which ones need a stop",
         "Power control: start, graceful shutdown, restart and an explicit force stop kept visually apart from it",
         "A browser console for VMs and for hosts, with key combinations, display scaling, clipboard both ways, typing into installers, screenshots and CD/DVD insert and eject",
-        "Guest tools reporting: agent state, operating system, hostname, addresses and clipboard readiness, with install advice when no agent answers"
+        "Guest tools reporting: agent state, operating system, hostname, addresses and clipboard readiness, with install advice when no agent answers",
+        "Per-VM CPU, memory and disk usage from the host, shown on VM details with honest unknown values rather than zeros",
+        "VM and host usage history kept on each host for up to a year, with charts, stacking, zoom and an on-demand 1-second realtime view",
+        "Windows-ready firmware choices: Secure Boot, an optional TPM 2.0, and a second CD drive for an operator-imported Windows driver ISO",
+        "Deleting a stopped VM after typing its name to confirm, with a separate choice about keeping or removing its disks, and completion if Nex Core is interrupted part-way"
       ],
       open: [
+        "Bundle a Windows VirtIO driver ISO after its complete corresponding source and notices are retained; Nex Core 0.2.9 deliberately excludes it",
         "NFS, local OpenZFS datasets, SMB3 and exclusive-host iSCSI repositories: implemented for one host, with native VM data and failure-recovery testing in progress",
-        "Deleting a VM, with a separate choice about keeping or removing its disks",
-        "The end-to-end check for this milestone: install a real guest operating system from an uploaded ISO through the browser console, reboot it, and confirm the data it wrote is still there"
+        "The end-to-end check for this milestone: install a real guest operating system from an uploaded ISO through the browser console, reboot it, and confirm the data it wrote is still there. It passed on a test build in a virtual lab, but that run found a network interface added to a running VM could reuse an address still in use; the fix is written and waits for review, a new test build and a re-run"
       ]
     },
     {
@@ -70,10 +74,11 @@
         "A documented export of the Controller's database and identity, and a restore onto a replacement appliance"
       ],
       open: [
-        "UEFI installation and Secure Boot — neither has been verified yet",
+        "Secure Boot installation of the host — UEFI installation has so far passed only in an emulated virtual machine",
         "Real Intel and AMD hardware — every installation so far has been a disposable virtual machine",
         "Machines with several disks, and the safety of that choice",
-        "Connecting a host to an existing Controller from the host's own interface; today the Controller reaches out and adds the host"
+        "Connecting a host to an existing Controller from the host's own interface; today the Controller reaches out and adds the host",
+        "Replacing the Controller appliance on the same host that runs it; today a replacement Controller runs on another machine and takes the pool back from its hosts"
       ]
     },
     {

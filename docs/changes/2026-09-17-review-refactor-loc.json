@@ -1,0 +1,47 @@
+{
+  "summary": "Review refactor: reuse existing capability and context helpers, remove redundant test assertions already covered by structural comparison, deduplicate repeated UI lookup code, and validate the website release ID once before its publish/rollback branch. Also let a future bundled-media seed retry after a failed iso-import, and remove two trailing blank lines from captured fixtures. Net code is reduced except for the focused retry regression.",
+  "paths": [
+    "internal/controller/identity.go",
+    "internal/controller/managed.go",
+    "internal/vmhost/bundled_media.go",
+    "internal/vmhost/bundled_media_test.go",
+    "web/src/main.tsx",
+    "web/src/storage.tsx",
+    "web/src/vm-create.tsx",
+    "web/src/vm-edit.tsx",
+    "scripts/nex-website-publish.py",
+    "tests/integration/controller_replacement.py",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/usage-history/virsh-domstats-list-running.txt",
+    "docs/qa/usage-history/virsh-list-uuid-name.txt",
+    "docs/changes/2026-09-17-review-refactor-loc.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Internal refactors plus a future-only bundled-media retry; current operator workflows, labels and recovery behavior are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core, agent, or client-facing operation, schema, authorization, retry, error or observed-result contract changes. The bundled-media retry fixes internal handling of the existing iso-import journal before a bundled ISO exists; public 0.2.9 intentionally seeds no virtio-win ISO.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No feature, milestone, or ordering change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The refactors add or alter no durable state. Existing Core journals, media files and Controller-owned records remain unchanged."
+  },
+  "verification": {
+    "method": "Actual lane checks: go test -race -count=1 ./... passed (controller 137.699 s, vmhost 12.617 s; all packages passed, version has no tests); go test -race -count=1 ./internal/vmhost (including TestSeedBundledMediaRetriesFailedImport, 12.430 s); cd web && npm test, npm run typecheck and npm run build; python3 -m py_compile on the staged integration targets; python3 -m unittest tests.test_fresh_install_gate_guest tests.test_fresh_install_host tests.test_fresh_install_recovery; bash -n tests/integration/controller_replacement_debian.sh; and python3 -m unittest tests.test_nex_website_publish tests.test_prune_iso_packages tests.test_release_publish tests.test_source_bundle tests.test_distribution_packaging tests.test_build_source tests.test_appliance_build tests.test_core_local_package tests.test_host_recovery tests.test_api_contract tests.test_storage_packaging (134 tests). Each reported passing in its lane. The focused failed-import test against the staged baseline, compiled through an isolated temporary Go overlay, failed exit 1 with 'failed import blocked bundled media seeding'; it passes after the fix. Browser verification was unavailable in the web lane, so no browser walkthrough is claimed. The original staged fixture additions still make git diff --cached --check report two trailing blank lines; this working-tree change removes them, but no index operation was performed. This assessment's own documentation and privacy checks are recorded separately in the review handoff.",
+    "evidence": [
+      "internal/vmhost/bundled_media_test.go",
+      "web/src/vm-edit.test.mjs",
+      "tests/test_nex_website_publish.py",
+      "tests/integration/controller_replacement.py"
+    ]
+  }
+}

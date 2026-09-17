@@ -60,6 +60,9 @@ qemu-agent-command) [ "$4" = --timeout ] || exit 3; [ -n "$GUEST_FAIL" ] && exit
 		// BUG-0201: the VirtIO display is there, but nothing in the guest opened the vdagent
 		// channel, so nothing would act on a resize request. Availability must say so.
 		{"channels waiting", strings.ReplaceAll(full, "state='connected'", "state='disconnected'"), "", true, &protocol.GuestInfo{Agent: "disconnected", Clipboard: "waiting", Media: "no-drive"}},
+		// The vdagent port can read connected in firmware, GRUB or with no OS at all, while
+		// the guest-agent channel on the same bus shows nothing in the guest is running.
+		{"vdagent port connected without a guest OS", strings.Replace(full, "state='connected'", "state='disconnected'", 1), "", true, &protocol.GuestInfo{Agent: "disconnected", Clipboard: "waiting", Media: "no-drive"}},
 		{"VirtIO display without a vdagent channel", noVdagent, "", false, &protocol.GuestInfo{Agent: "unresponsive", Clipboard: "no-channel", Media: "no-drive"}},
 		{"vdagent ready without a VirtIO display", qxlDisplay, "", false, &protocol.GuestInfo{Agent: "unresponsive", Clipboard: "ready", Media: "no-drive"}},
 		{"attached without facts", full, "", false, &protocol.GuestInfo{Agent: "unresponsive", Clipboard: "ready", Resize: true, Media: "no-drive"}},

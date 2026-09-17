@@ -1,0 +1,81 @@
+{
+  "summary": "Record the Phase 2 gate runs and prepare their harnesses, with the final lab run on build 0.2.10~gate5 as the result of record. The report docs/qa/2026-09-17-phase2-gate/checks.md gives the gate5 artifact digests, the Controller package binary hash, the full and product-path tree fingerprints (a per-file sha256 list method that differs from gate4's and cannot be compared with it), the tree drift check after the gated build (product paths unchanged; only documentation and the website changed), the nested-KVM environment and method, row-by-row results for checklist rows 1-16 (15 pass; row 11 fails on the running-VM interface probe), COVERAGE-1 and both G7 halves, the gate item table, G6 external Controller replacement, fixes confirmed in lab with ledger IDs (including BUG-0254 checks a-c on a real host, and the gate4 code-review NIC finding recorded as not reproduced), open defects (one major: a NIC hot-plugged into a running VM can reuse the MAC of an interface the guest has not released, code reading indicates 0.2.9 is also affected; handed to the owner with a triage recorded in the report, so the gate stays open), untested limits, owner decisions, remaining requirements and run history (gate1 to gate4 kept), with sanitized gate5 text evidence; the inspected captures are not published (docs/qa images are gitignored) and are transcribed in captures-text-sanitized.txt. Guide Verification sections cite the steps gate5 actually walked, including BUG-0254 on a real host, the gate5 Controller replacement and the real-host retain, wipe and interrupted delete; edit-virtual-machine.md Troubleshooting gains an entry for the single-interface model replacement 400 and a warning about the open duplicate-MAC defect. Harness-only fixes from earlier runs: lab memory/vCPU flags, socket-activated libvirt checks, gate VM presets and names (including vm-d and --site-name for a replacement Controller), registration and ISO reuse, an offline stage and reboot stage that accept an excluded appliance, per-domain autostart assertions, a 300 s create wait while the Creation panel shows, guest marker and heartbeat helper, the replacement re-adoption comparison, and docker run --init in controller_replacement_debian.sh so libvirtd's children are reaped. Focused unit tests cover the reboot stage's excluded-appliance acceptance and verify-reboot's unchanged-autostart assertion. The VM creation plan (status line and acceptance section), docs/qa/vm-creation/checks.md (OUTSTANDING notes), the platform plan (status line, Phase 2 status checklist and Replaceable Controller status note) and the production readiness handoff (Phase 2 gate row) cite gate5 as the result of record, link open defect 1 to its owner triage and keep the Phase 2 gate open on the major defect, independent review, hosted CI, the owner commit and owner decisions; no plan box was ticked, and platform Phase 2 item 3 was unticked because the report marks P2-3 partial. The BUG-0254 ledger entry records the gate5 real-host result (row 11 checks a-c confirmed, d not checked), and the edit guide's \"Task reports failed\" entry no longer claims an unreleased device fails the task. API impact: none - evidence, guide verification and troubleshooting text and test harnesses only; the harnesses call existing Controller, host-local and agent contracts unchanged.",
+  "paths": [
+    "tests/integration/fresh_install_browser.py",
+    "tests/integration/fresh_install_recovery.py",
+    "tests/integration/fresh_install_host.py",
+    "tests/integration/fresh_install_lab.py",
+    "tests/integration/controller_replacement.py",
+    "tests/integration/phase2_gate_guest.py",
+    "tests/test_fresh_install_gate_guest.py",
+    "docs/changes/2026-09-16-phase2-gate.json",
+    "docs/qa/2026-09-17-phase2-gate/checks.md",
+    "docs/qa/2026-09-17-phase2-gate/g6-readoption-sanitized.txt",
+    "docs/qa/2026-09-17-phase2-gate/host-listeners-sanitized.txt",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/vm-console.md",
+    "docs/guide/guest-tools.md",
+    "docs/guide/vm-power.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/guide/delete-virtual-machine.md",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/guide/manage-controller.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/verify-nex-core.md",
+    "tests/integration/controller_replacement_debian.sh",
+    "tests/test_fresh_install_recovery.py",
+    "docs/plans/2026-09-10-vm-creation-system.md",
+    "docs/qa/vm-creation/checks.md",
+    "docs/guide/storage-repositories.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "docs/qa/2026-09-17-phase2-gate/nic-duplicate-mac-sanitized.txt",
+    "docs/qa/2026-09-17-phase2-gate/captures-text-sanitized.txt",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Verification sections of the VM create (including ISO upload), console, guest tools, power, edit, delete, appliance deployment, Controller management, installation, host verification and storage repository pages now cite the final gate5 walkthrough (0.2.10~gate5, 2026-09-17, disposable nested-KVM lab, headless Chromium) for the steps it covered, noting steps driven through the API or harness and the mismatches it found; disclaimers remain for steps it did not cover. edit-virtual-machine.md records BUG-0254 as walked on a real host and the open defects, and its Troubleshooting gains the single-interface model replacement 400 with its workaround and a warning about the open duplicate-MAC defect on running VMs (the replacement workaround is labelled not walked). delete-virtual-machine.md records the real-host retain, wipe and interrupted delete. manage-controller.md records the gate5 replacement.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/vm-console.md",
+      "docs/guide/guest-tools.md",
+      "docs/guide/vm-power.md",
+      "docs/guide/edit-virtual-machine.md",
+      "docs/guide/delete-virtual-machine.md",
+      "docs/guide/deploy-controller-appliance.md",
+      "docs/guide/manage-controller.md",
+      "docs/guide/install-nex-core.md",
+      "docs/guide/verify-nex-core.md",
+      "docs/guide/storage-repositories.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Evidence, guide verification text and test harnesses only; no Controller, host-local or agent contract changed.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone changes status until the Phase 2 gate run and its review complete.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The report, guide text and harnesses persist nothing in the product; harness evidence is written only to an explicitly selected directory."
+  },
+  "verification": {
+    "method": "Final Phase 2 gate checklist run on 0.2.10~gate5 in a new disposable nested-KVM lab with headless Chromium, recorded in docs/qa/2026-09-17-phase2-gate/checks.md: rows 1-15 except 11, row 16, COVERAGE-1 and both G7 halves pass; row 11 fails (open major defect 1) although its BUG-0254 checks a-c pass; G6 partial (external replacement passed with the gate5 nex-controller package binary, CGO_ENABLED=1; same-host redeploy blocked by product; backup restore not exercised); P2-3, P2-4b, P2-6, P2-7, P2-8 and DOC-1 partial. BUG-0254 checks a-c confirmed on the real host within one save (d not checked; reuse of a MAC removed in an earlier save remains part of open defect 1); the gate4 code-review NIC finding was not reproduced. One new major defect is open (a NIC hot-plugged into a running VM can reuse a MAC still attached to the live domain), not fixed in this effort and handed to the owner with a triage in the report (code reading indicates 0.2.9 is also affected), so the Phase 2 gate stays open until it is fixed on a new gated build and rerun; minor defects recorded open. The product-path fingerprint was recomputed after the run with the gate5 build method and matched, with a per-file comparison showing no product file changed, added or removed. Captures were cropped or redacted (workstation local times) and inspected; because docs/qa images are gitignored they are not published, and their visible text is transcribed in the labelled sanitized captures-text-sanitized.txt. The repository controller_replacement_debian.sh passed both phases in the gate5 run (built from the working tree). Guide Verification and Troubleshooting text was updated after the run from its evidence, without a new walkthrough. Ran python3 scripts/check_docs.py --worktree and --all and the repository privacy test. Still outstanding: the major defect fix, a new gated build and rerun of row 11 and the G7 provenance rows, independent review of the gate5 report, the gate plan's slice reviews, hosted CI on both forges and the owner commit.",
+    "evidence": [
+      "docs/qa/2026-09-17-phase2-gate/checks.md",
+      "docs/qa/2026-09-17-phase2-gate/g6-readoption-sanitized.txt",
+      "docs/qa/2026-09-17-phase2-gate/host-listeners-sanitized.txt",
+      "docs/qa/2026-09-17-phase2-gate/nic-duplicate-mac-sanitized.txt",
+      "docs/qa/2026-09-17-phase2-gate/captures-text-sanitized.txt",
+      "tests/test_fresh_install_gate_guest.py",
+      "tests/test_fresh_install_lab.py",
+      "tests/test_fresh_install_host.py",
+      "tests/test_fresh_install_recovery.py"
+    ]
+  }
+}

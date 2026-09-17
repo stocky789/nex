@@ -1,0 +1,64 @@
+SANITIZED TEXT TRANSCRIPTION, not an untouched capture. Visible text of the seven cropped
+browser captures cited by checks.md, from the Phase 2 gate5 lab (build 0.2.10~gate5,
+2026-09-17 UTC, headless Chromium). Each capture was opened and inspected. The PNG files are
+not published: the repository ignores images under docs/qa, so they stayed in the lab cache.
+Layout notes in [brackets] describe what the text alone does not show.
+
+installer-step-list-blank.png (row 1, open defect 2; installer, 800x400)
+  nex Core | Host installation | Nex Core setup
+  Steps: Welcome, Host, Network, Disk, Review, Install
+  [no step is marked current and no step is ticked]
+  Install Nex Core
+  Follow the installation progress and any prompts below.
+  Preparing the next installation step...
+  [empty progress bar]
+  Please keep this machine powered on.
+
+queued-create-header-360.png (row 4, open defect 3; 360 px)
+  Workspace / Fresh install site / nex-fresh-lab / gate-kbd-overcap
+  gate-kbd-overcap
+  Observed unknown · fresh. The VM is unknown; resolve that state on its host before a power
+  request.
+  Tabs: General | Stats | Console | Activity
+  Creation dispatched
+  This VM appears here after its host reports it.
+  Task history
+
+console-guest-ejected.png (row 6; console toolbar, desktop)
+  Focus console | Send Ctrl+Alt+Del | Send key... | Clipboard
+  Install media: debian-13.6.0-amd64-netinst.iso (ejected in the VM) | Eject
+  Driver disc: Empty | Eject [disabled]
+  View: Fit to window | View only [unchecked] | Screenshot | Reconnect | Full screen
+  Open in new window
+  The VM ejected the disc. Insert it again to reconnect it.
+
+nic-single-replace-refusal.png (row 11 check d, open defect 5; VM editor footer)
+  when removing, reordering or changing a network interface, give every existing interface its
+  MAC address   [red inline error]
+  Cancel | Save changes
+
+replacement-protected-appliance.png (row 12, G6 step 5; replacement Controller, desktop)
+  Workspace / Replacement site / nex-fresh-lab / nex-controller
+  nex-controller
+  Observed shut off · fresh. Use the toolbar to start, shut down, reboot, force stop or force
+  reboot this VM.
+  Tabs: General | Stats | Console [selected] | Activity
+  Console [not connected]
+  [modal dialog over the page]
+  Start nex-controller?
+  This is a Controller appliance. If another Controller now manages this host, starting it runs
+  two Controllers; never do that. Recover it from the host-local page instead.
+  Cancel | Confirm start
+
+stale-vm-warning-360.png (row 13; 360 px)
+  gate-vm-a
+  Observed unknown · stale. Power controls need a freshly connected host.
+  Tabs: General | Stats | Console | Activity
+  VM details [stale] | Edit [disabled] | Delete VM [disabled]
+  Current execution state is unknown. Last reported state: running <REDACTED: last-report time,
+  shown in workstation local time>. An unreachable host does not prove that this VM stopped.
+
+force-stop-dialog.png (row 15; dialog)
+  Force stop gate-vm-a?
+  Cuts power immediately, like pulling the plug. Unsaved guest data is lost.
+  Cancel [focused] | Confirm force stop [danger style]

@@ -1,0 +1,37 @@
+{
+  "summary": "UI: a VM route that names its failed vm-create task shows the task status, error and a Task history link instead of Object not found; the VM Activity tab lists rows audited against the VM ID and names the VM; operator request errors (for example Add host 409 already enrolled, with the host ID, and a failed or refused update apply) stay visible across the 10 s inventory poll instead of sharing the reload error and its Retry; neutral Add host success and help wording; terminal punctuation before the inventory warning. The site selector browser check also marks the browser as previously signed in so it reaches the workspace. API impact: existing contract.",
+  "paths": [
+    "web/src/main.tsx",
+    "tests/integration/site_selector_browser.py",
+    "tests/integration/managed_vm_browser.py",
+    "docs/changes/2026-09-17-gate2-L6-main-tsx.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator-visible text changes here, but no guide page is in this lane's write set, so this record alone does not satisfy the guide gate: the batch is incomplete until the docs lane record (docs/changes/2026-09-17-gate2-docs.json) lands with docs/guide/manage-controller.md Add host step 3 quoting the new success message ('Host <id> enrolled in pool <pool>; it appears in the tree after its first report.') and an already-enrolled troubleshooting entry, and docs/guide/create-virtual-machine.md step 6 describing the Creation failed panel with its Task history link. The VM Activity claims in vm-console.md, vm-power.md and edit-virtual-machine.md hold with the controller audit change. The update apply failure now stays as a page alert rather than an inventory error; the guide does not describe that alert.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The UI only reads fields already returned: host_id in the POST /api/v1/sites/{id}/hosts 409 body, kind/status/error in GET /api/v1/operations, and resource_id in GET /api/v1/audit (VM operations are audited against the VM ID by the controller audit lane). No request, response or endpoint changes.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Presentation fixes inside existing VM creation, activity and Add host features; no milestone scope or status change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Browser-only presentation state; the failed create panel is keyed by the operation ID in the URL and read from host-backed operations, and nothing new is persisted."
+  },
+  "verification": {
+    "method": "Browser regression checks against the built UI. site_selector_browser.py with fixture routes (probe 200, add 409 with host_id, 12 s wait with an observed inventory poll) failed on the previous build (no alert in the Add host panel) and passes after the fix. The same script's update apply case (apply reports phase failed, 12 s wait with an observed inventory poll) failed on the build before the onApply fix (alert gone after the poll) and passes after it. managed_vm_browser.py --simulated (real Controller, simulated agent, injected operations/vms/audit at the browser boundary) failed on the previous build at the failed-create panel, failed with only the VM Activity filter reverted (2 rows instead of 3), and passes all 13 checks after the fix. Captures inspected: Add host 409 panel at 360 px, Creation failed panel, VM Activity tab. npm typecheck and unit tests pass. No lab verification was run.",
+    "evidence": [
+      "tests/integration/site_selector_browser.py",
+      "tests/integration/managed_vm_browser.py"
+    ]
+  }
+}

@@ -145,7 +145,7 @@ class CoreLocalPackageTests(unittest.TestCase):
                             '-in', str(stage / 'manifest.json'), '-out', str(stage / 'manifest.sig')], check=True)
             (stage / 'controller.qcow2').write_bytes(b'tampered')
             (stage / 'source.tar.gz').write_bytes(b'not reached')
-            for name in ['nex-source.tar.gz', 'components.tsv', 'LICENSE', 'NOTICE', 'build-inputs.json']:
+            for name in ['nex-source.tar.gz', 'components.tsv', 'LICENSE', 'NOTICE', 'ARTWORK-LICENSE.md', 'build-inputs.json']:
                 (stage / name).write_bytes(b'not reached')
             result = subprocess.run([sys.executable, str(ROOT / 'packaging/core-local/build.py'),
                                      '--source', str(stage / 'source.tar.gz'), '--bundle', str(stage),

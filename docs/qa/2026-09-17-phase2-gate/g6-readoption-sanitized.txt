@@ -1,0 +1,38 @@
+SANITIZED EXCERPT, not an untouched capture. Derived from the Phase 2 gate5 lab snapshot
+diff taken before and after the external Controller replacement (row 12, 2026-09-17 UTC,
+build 0.2.10~gate5). Identifiers are replaced with consistent aliases: host-1, pool-1,
+site-1 (original site), site-2 (replacement site), net-1, iso-1, iso-2, storage-local,
+storage-gate, vm-a, vm-b, vm-e, appliance-1. Addresses use reserved documentation ranges:
+192.0.2.20 original appliance, 192.0.2.2 workstation as seen from the host;
+<replacement-port> is the aliased lab port of the replacement Controller. Certificate
+hashes, spec hashes, operation IDs and request IDs are shown as <old>/<new>. The 30
+per-operation request_id lines are summarised as one line.
+
+Values that changed (everything else in the host and Controller snapshots was identical):
+ADDED   /sites[site-2]                         name "Replacement site"
+REMOVED /sites[site-1]                         name "Fresh install site"   (Controller-scoped)
+CHANGED /pools[pool-1]/site_id                 site-1 -> site-2
+REMOVED /storage["Gate missing path"]          failed row without an id; returned only as a failed task
+REMOVED /storage["Gate missing path 2"]        failed row without an id; returned only as a failed task
+REMOVED /networks["Gate br0 duplicate"]        failed registration; returned only as a failed task
+CHANGED /vms[appliance-1]/state                running -> shut off   (excluded by operator)
+CHANGED /vms[vm-a]/operation_id                <old> -> <new>   (adopt operation)
+CHANGED /vms[vm-b]/operation_id                <old> -> <new>   (adopt operation)
+CHANGED /vms[vm-b]/spec/start_after_create     true -> false    (one-shot create flag)
+CHANGED /vms[vm-b]/spec_sha256                 <old> -> <new>   (follows the flag above)
+CHANGED /vms[vm-e]/operation_id                <old> -> <new>   (adopt operation)
+CHANGED /operations[*]/request_id              <original> -> adopt-outcome:host-1:<operation>   (30 operations re-adopted from Core history, IDs unchanged)
+REPLACED /operations[adopt net-1], [adopt storage-local]   <old adopt op> -> <new adopt op>  (the first Controller's adopt records, superseded)
+ADDED   /operations[adopt storage-gate, iso-1, iso-2, vm-a, vm-b, vm-e]   new adopt operations, status succeeded
+CHANGED /host/cert_sha256                      <old> -> <new>   (new Controller trust)
+CHANGED /host/controller                       https://192.0.2.20:8443 -> https://192.0.2.2:<replacement-port>
+CHANGED /host/domains/appliance-1/autostart    true -> false    (excluded by operator)
+CHANGED /host/domains/appliance-1/state        running -> shut off
+CHANGED /host/domains/appliance-1/ifaces       vnet0 -> -       (not running)
+CHANGED /host/pool_vms_sha256                  <old> -> <new>   (appliance-1 run state)
+
+Unchanged and compared: host ID, pool ID and name, storage/network/ISO/VM IDs and names,
+VM specs and revisions (vm-a revision 5, vm-e revision 4 at the snapshot), inactive
+domain XML hashes of every domain, per-disk paths, NICs and MACs, and the host journal
+set. Non-succeeded operations are exactly the 5 original failures; none reads
+needs_attention.

@@ -34,7 +34,8 @@ never mounted in the container. Output must be empty. Build inside Debian to avo
 incompatible host glibc linkage; no workstation binary is copied into the image.
 
 Outputs: `controller.qcow2`, `manifest.json`, detached `manifest.sig`, `public-key.raw`,
-`nex-source.tar.gz`, `components.tsv`, `LICENSE`, `NOTICE`, and `build-inputs.json`.
+`nex-source.tar.gz`, `components.tsv`, `LICENSE`, `NOTICE`, `ARTWORK-LICENSE.md`, and
+`build-inputs.json`.
 Install the public key through a trusted release channel; the key accompanying an
 untrusted download does not authenticate that download. Signature is Ed25519 over the
 exact manifest bytes, raw 64-byte signature and raw 32-byte public key. Manifest keys

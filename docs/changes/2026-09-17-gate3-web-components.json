@@ -1,0 +1,40 @@
+{
+  "summary": "Gate 3 web component fixes. VM Edit is refused while the creation task has not succeeded. A creation task that ended failed or needs_attention points the operator to Task history instead of asking them to wait. The Guest tools badge shows the guest agent's own state instead of the freshness word stale. Start on a protected Controller appliance always opens the confirmation dialog, warning that starting it can run two Controllers. VMPower passes the power task's operation id with its notice so the page can clear it once the task settles. Checkboxes and radio buttons are no longer stretched by the global input width rule, and a .vm-unknown tree icon is grayscale. The console Start hint and clipboard note are generic and name both guest tools. API impact: none.",
+  "paths": [
+    "web/src/managed.tsx",
+    "web/src/vm-edit.tsx",
+    "web/src/console.tsx",
+    "web/src/style.css",
+    "web/src/managed.test.mjs",
+    "web/src/vm-edit.test.mjs",
+    "web/src/console.test.mjs",
+    "docs/changes/2026-09-17-gate3-web-components.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No guide page quotes the changed strings (checked with grep over docs/guide). The protected-appliance Start warning and the generic boot-prompt wording are documented by the separate gate 3 docs lane in vm-power.md and manage-controller.md, which owns those pages; this record changes UI code only.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. The UI reads operation.id from the existing POST /api/v1/vms/{id}/power 202 response and the existing VM status field; no endpoint, field or Core command changes, and Core enforcement of protected Start is an open owner decision.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fixes to existing screens; no feature is added, dropped or reordered.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Presentation only: the notice operation id lives in browser memory and no setting or record is added."
+  },
+  "verification": {
+    "method": "Added regression assertions in web/src/managed.test.mjs, vm-edit.test.mjs and console.test.mjs, confirmed they failed with the fixes reverted and pass with them, and ran npm --prefix web run typecheck and npm --prefix web run test. No browser, lab or hardware walkthrough was run in this lane.",
+    "evidence": [
+      "web/src/managed.test.mjs",
+      "web/src/vm-edit.test.mjs",
+      "web/src/console.test.mjs"
+    ]
+  }
+}

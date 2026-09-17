@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Build and publish the static website when website sources change on main.
+# Reuses NEX_DEPLOY_* secrets from the release workflow. With none set, the job
+# builds and checks only. With some but not all, the job fails.
+#
+#   NEX_DEPLOY_HOST             website host address
+#   NEX_DEPLOY_USER             publishing account
+#   NEX_DEPLOY_KEY              private SSH key for that account
+#   NEX_DEPLOY_KNOWN_HOSTS      host public key line(s) for StrictHostKeyChecking
+name: Website
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'website/**'
+      - 'scripts/website-release.py'
+      - 'scripts/nex-website-publish.py'
+      - 'scripts/website-ci-deploy.sh'
+      - 'packaging/website/**'
+      - '.gitea/workflows/website.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: website-deploy
+  cancel-in-progress: true
+jobs:
+  website:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: https://github.com/actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Build website
+        run: |
+          npm --prefix website ci
+          npm --prefix website run check
+          npm --prefix website run build
+      - name: Check for deploy credentials
+        id: deploy
+        env:
+          NEX_DEPLOY_HOST: ${{ secrets.NEX_DEPLOY_HOST }}
+          NEX_DEPLOY_KEY: ${{ secrets.NEX_DEPLOY_KEY }}
+          NEX_DEPLOY_USER: ${{ secrets.NEX_DEPLOY_USER }}
+          NEX_DEPLOY_KNOWN_HOSTS: ${{ secrets.NEX_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          missing=
+          for pair in "NEX_DEPLOY_HOST=${NEX_DEPLOY_HOST:-}" \
+                      "NEX_DEPLOY_USER=${NEX_DEPLOY_USER:-}" \
+                      "NEX_DEPLOY_KEY=${NEX_DEPLOY_KEY:-}" \
+                      "NEX_DEPLOY_KNOWN_HOSTS=${NEX_DEPLOY_KNOWN_HOSTS:-}"; do
+            name=${pair%%=*}
+            value=${pair#*=}
+            if [ -z "$value" ]; then
+              missing="${missing:+$missing }$name"
+            fi
+          done
+          if [ -z "$missing" ]; then
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
+          elif [ "$missing" = "NEX_DEPLOY_HOST NEX_DEPLOY_USER NEX_DEPLOY_KEY NEX_DEPLOY_KNOWN_HOSTS" ]; then
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+            echo 'No deploy secrets are set: building the website only, not publishing.'
+          else
+            echo "Partial deploy secrets ($missing). Set every deploy secret or none." >&2
+            exit 1
+          fi
+      - name: Publish website
+        if: steps.deploy.outputs.enabled == 'true'
+        env:
+          NEX_DEPLOY_HOST: ${{ secrets.NEX_DEPLOY_HOST }}
+          NEX_DEPLOY_KEY: ${{ secrets.NEX_DEPLOY_KEY }}
+          NEX_DEPLOY_KNOWN_HOSTS: ${{ secrets.NEX_DEPLOY_KNOWN_HOSTS }}
+          NEX_DEPLOY_USER: ${{ secrets.NEX_DEPLOY_USER }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          chmod +x scripts/website-ci-deploy.sh
+          scripts/website-ci-deploy.sh
+      - name: Confirm the site responds
+        if: steps.deploy.outputs.enabled == 'true'
+        env:
+          NEX_PUBLIC_URL: ${{ secrets.NEX_PUBLIC_URL || 'https://nexvirtualization.com' }}
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /tmp/nex-website-home.html -w '%{http_code}' --max-time 60 "${NEX_PUBLIC_URL}/")
+          [ "$code" = 200 ] || { echo "home returned $code" >&2; exit 1; }
+          grep -F -q 'Nex' /tmp/nex-website-home.html || {
+            echo 'home page missing expected text' >&2
+            exit 1
+          }

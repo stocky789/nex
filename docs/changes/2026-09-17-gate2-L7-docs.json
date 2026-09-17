@@ -1,0 +1,44 @@
+{
+  "summary": "Gate 2 round-2 guide corrections. create-virtual-machine: wait for Local storage Core access healthy, registered bridges are left out of the Connection list, install via the Console tab's Start VM, and the Creation <status> panel after a create. vm-console: a guest reset reinserts the recorded ISO (eject before the installer reboots, plus recovery), and the host-local Open console now sits under Local control. delete-virtual-machine: UEFI variables and TPM state are always removed, and the Delete queued notice. manage-controller: neutral Add host success text, an Already enrolled troubleshooting entry, the loopback address note, and replacement of a failed appliance with a Controller outside its host after excluding the old appliance. deploy-controller-appliance: the prefilled hostname and the same-host redeploy limit. Platform plan: a status note under the Controller replacement gate recording the same-host redeploy gap, gate wording unchanged. API impact: none.",
+  "paths": [
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/vm-console.md",
+    "docs/guide/delete-virtual-machine.md",
+    "docs/guide/manage-controller.md",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/changes/2026-09-17-gate2-L7-docs.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Guide text now matches the implemented UI strings in web/src/main.tsx, managed.tsx, vm-create.tsx and local.tsx and the Core behavior found in the gate run. It completes the guide follow-up named by the L3, L4 and L6 records. The Activity claims in vm-power.md, edit-virtual-machine.md and vm-console.md were checked against the L2 audit target and the L6 VM Activity filter and hold, so those pages are unchanged. The wording was checked against source only; no lab or browser walkthrough of these pages was run in this lane.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/vm-console.md",
+      "docs/guide/delete-virtual-machine.md",
+      "docs/guide/manage-controller.md",
+      "docs/guide/deploy-controller-appliance.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Documentation only; it describes existing behavior of POST /api/v1/vms, POST /api/v1/sites/{id}/hosts (including its 409 host_id body), DELETE /api/v1/vms/{id} and POST /api/local/v1/deployments without changing any endpoint, field or Core command.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The public website roadmap is unchanged: no feature is added, dropped or reordered. The platform plan gets only a dated status note under the Controller replacement gate recording that same-host appliance redeploy is blocked by the product and that a retire contract is an open owner decision; the gate wording is unchanged.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation only; no setting, record or durable state is added."
+  },
+  "verification": {
+    "method": "Each quoted UI string was compared with the web source, and the behavior claims with the Controller and Core source cited in the gate triage. Ran python3 scripts/check_docs.py --worktree, python3 scripts/check_docs.py --all and the repository privacy test. No lab, browser or hardware walkthrough was run for these changes.",
+    "evidence": [
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/manage-controller.md"
+    ]
+  }
+}

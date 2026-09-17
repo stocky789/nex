@@ -13,9 +13,11 @@ type GuestInfo struct {
 	OS        string         `json:"os,omitempty"`
 	Hostname  string         `json:"hostname,omitempty"`
 	Addresses []GuestAddress `json:"addresses,omitempty"`
-	// Clipboard is "ready" when the guest opened the qemu-vdagent channel (a running
-	// spice-vdagent), "waiting" when the channel exists but nothing opened it, or
-	// "no-channel" when the VM was defined without console clipboard support.
+	// Clipboard is "ready" when the qemu-vdagent channel is connected and the guest-agent
+	// channel is not disconnected (evidence of a running guest vdagent; the vdagent port
+	// alone can read connected in firmware or with no OS), "waiting" when the channel exists
+	// but that evidence is missing, or "no-channel" when the VM was defined without console
+	// clipboard support.
 	Clipboard string `json:"clipboard"`
 	// Resize is true when the guest itself can follow a console resize request: the VM has a
 	// VirtIO display *and* the guest is running the agent that acts on it. A VirtIO display

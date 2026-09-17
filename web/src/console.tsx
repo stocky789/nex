@@ -200,7 +200,7 @@ export function Console({ name, open, disabled, guest, popout, media, power }: P
   function pasteToVM() {
     if (!rfb.current || !text) return;
     rfb.current.clipboardPasteFrom(text);
-    setClipNote(guest?.clipboard === "ready" ? "Sent to the VM clipboard." : "Sent to the VM clipboard; it only arrives when spice-vdagent runs in the guest.");
+    setClipNote(guest?.clipboard === "ready" ? "Sent to the VM clipboard." : "Sent to the VM clipboard; it only arrives when the guest tools (qemu-guest-agent and spice-vdagent) run in the guest.");
     rfb.current.focus({ preventScroll: true });
   }
   // typeToVM sends text as keystrokes, which works in any guest, including installers and
@@ -237,7 +237,7 @@ export function Console({ name, open, disabled, guest, popout, media, power }: P
   const connectionBadge = <span className={`badge ${live ? "fresh" : phase === "connecting" ? "queued" : "stale"}`}>{live ? "connected" : phase === "connecting" ? "connecting" : phase === "closed" ? "disconnected" : "not connected"}</span>;
   const clipboardHint = !guest ? "Clipboard readiness is unknown for this VM; sending works when spice-vdagent runs in the guest."
     : guest.clipboard === "ready" ? "Guest clipboard is ready: text you send appears in the VM and VM copies appear here."
-    : guest.clipboard === "waiting" ? "The VM has a clipboard channel but no spice-vdagent is running in the guest. Install the guest tools, or use Type into VM."
+    : guest.clipboard === "waiting" ? "The VM has a clipboard channel but the guest is not running both qemu-guest-agent and spice-vdagent. Install the guest tools, or use Type into VM."
     : "This VM was created before console clipboard support. Recreate it to gain a clipboard channel, or use Type into VM.";
   // One control group per CD drive; with a single drive there is no drive to choose, so the
   // controls are the ones this toolbar has always shown.
@@ -251,7 +251,7 @@ export function Console({ name, open, disabled, guest, popout, media, power }: P
     <div className="console-toolbar" role="toolbar" aria-label="Console controls">
       {power && power.state !== "running" && <>
         <button type="button" className="primary" disabled={power.busy} aria-describedby={startHintID} onClick={() => power.onStart()}>{power.busy ? "Starting…" : "Start VM"}</button>
-        <span id={startHintID} className="console-hint">Starts the VM with this console open, so it attaches in time to answer “Press any key to boot from CD or DVD”.</span>
+        <span id={startHintID} className="console-hint">Starts the VM with this console open, so it attaches in time for any boot prompt, such as “Press any key to boot from CD or DVD”.</span>
       </>}
       <button disabled={!live} onClick={() => rfb.current?.focus({ preventScroll: true })}>Focus console</button>
       <button disabled={!live || viewOnly} onClick={() => rfb.current?.sendCtrlAltDel()}>Send Ctrl+Alt+Del</button>

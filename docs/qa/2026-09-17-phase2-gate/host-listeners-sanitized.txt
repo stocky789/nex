@@ -1,0 +1,21 @@
+SANITIZED EXCERPT, not an untouched capture. Core host socket listing from the Phase 2
+gate5 lab (row 5, 2026-09-17 UTC, build 0.2.10~gate5). The host management address is
+replaced with the documentation address 192.0.2.10; process IDs and file descriptors are
+elided.
+
+TCP listeners (ss -ltnp):
+192.0.2.10:9443     nex-core-local (local web UI)
+0.0.0.0:22          sshd
+0.0.0.0:111         rpcbind (Debian default)
+*:9444              nex-core-local
+[::]:22             sshd
+[::]:111            rpcbind
+(no VNC or SPICE TCP listener)
+
+Controller appliance QEMU display argument:
+-vnc vnc=unix:/var/lib/libvirt/qemu/domain-1-nex-controller/vnc.sock,audiodev=audio1
+
+vm-a domain graphics definition (inactive XML):
+<graphics type='vnc'>
+  <listen type='socket'/>
+</graphics>

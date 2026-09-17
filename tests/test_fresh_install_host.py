@@ -17,7 +17,33 @@ host = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(host)
 
 
+browser_spec = importlib.util.spec_from_file_location(
+    'fresh_install_browser', Path(__file__).parent / 'integration/fresh_install_browser.py')
+browser = importlib.util.module_from_spec(browser_spec)
+browser_spec.loader.exec_module(browser)
+
+
 class FreshInstallHostTests(unittest.TestCase):
+    def test_provenance_uses_the_expected_version_package(self):
+        self.assertEqual(host.core_local_package('/x/dist/nex-core-0.2.10~gate1-amd64.iso', '0.2.10~gate1'),
+                         Path('/x/dist/core-local/nex-core-local_0.2.10~gate1_amd64.deb'))
+        with tempfile.TemporaryDirectory() as directory:
+            lab = Path(directory)
+            (lab / 'config.json').write_text(json.dumps({'iso': str(lab / 'nex-core-0.2.10~gate1-amd64.iso')}))
+            with self.assertRaisesRegex(AssertionError, r'nex-core-local_0\.2\.10~gate1_amd64\.deb'):
+                host.provenance(lab, lab, lab / 'controller.json', '0.2.10~gate1')
+
+    def test_console_typing_presses_shift_explicitly(self):
+        events = []
+        class Keyboard:
+            def down(self, key): events.append(('down', key))
+            def up(self, key): events.append(('up', key))
+            def press(self, key): events.append(('press', key))
+        browser.type_into_console(Keyboard(), 'Aa_:')
+        self.assertEqual(events, [('down', 'Shift'), ('press', 'a'), ('up', 'Shift'), ('press', 'a'),
+                                  ('down', 'Shift'), ('press', '-'), ('up', 'Shift'),
+                                  ('down', 'Shift'), ('press', ';'), ('up', 'Shift')])
+
     def test_service_check_rejects_one_failed_unit_among_healthy_units(self):
         with tempfile.TemporaryDirectory() as directory:
             systemctl = Path(directory) / 'systemctl'
@@ -37,7 +63,7 @@ class FreshInstallHostTests(unittest.TestCase):
             if command == 'hostname':
                 return Result()
             self.assertTrue(any(host.services_active_command(units) in command for units in
-                                [('nex-core-local', 'libvirtd', 'ssh'), ('nex-core-local', 'libvirtd', 'ssh', 'networking', 'chrony')]))
+                                [('nex-core-local', 'libvirtd.socket', 'ssh'), ('nex-core-local', 'libvirtd.socket', 'ssh', 'networking', 'chrony')]))
             raise subprocess.CalledProcessError(1, command)
         with patch.object(host, 'ssh', side_effect=ssh):
             with self.assertRaises(subprocess.CalledProcessError):

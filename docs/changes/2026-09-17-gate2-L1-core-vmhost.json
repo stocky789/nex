@@ -1,0 +1,51 @@
+{
+  "summary": "Core: report console clipboard ready (and display resize available) only when the qemu-vdagent channel is connected and the guest-agent channel is not disconnected, so firmware, GRUB or a VM with no OS no longer reads ready. Set last_success on healthy managed-journal and managed-vms host checks. The console waiting label, resize reason, guest tools and console guides and the API reference now name both guest agents. API impact: existing contract.",
+  "paths": [
+    "internal/vmhost/guest.go",
+    "internal/vmhost/guest_test.go",
+    "internal/protocol/guest.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "docs/changes/2026-09-17-gate2-L1-core-vmhost.json",
+    "web/src/managed.tsx",
+    "web/src/managed.test.mjs",
+    "web/src/console.tsx",
+    "docs/guide/guest-tools.md",
+    "docs/guide/vm-console.md",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "A guest running spice-vdagent without qemu-guest-agent now reads Waiting, so the guest tools troubleshooting for the waiting clipboard and 'Display resize: Not available', the expected result, and the console paste troubleshooting now say qemu-guest-agent must also run and use the new label 'Waiting for guest tools (qemu-guest-agent and spice-vdagent) in the guest'.",
+    "pages": [
+      "docs/guide/guest-tools.md",
+      "docs/guide/vm-console.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "GuestInfo.clipboard and GuestInfo.resize keep their fields and values with a stricter ready condition, documented on the protocol type and in the docs/API.md guest observation paragraph (ready only when the qemu-vdagent channel is connected and the guest-agent channel is not disconnected, with the spice-vdagent-only tradeoff); Check.last_success is an existing optional field now filled for two healthy checks. No Controller change: it passes both through unchanged.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Observation honesty fixes inside existing console and host-health features; no milestone scope or status changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Both changes are live observations computed on each report; nothing new is persisted."
+  },
+  "verification": {
+    "method": "Regression cases added before the fix and confirmed failing: TestObserveGuest (vdagent port connected, guest-agent channel disconnected expects waiting and no resize), TestAppliedSurvivesCorruptJournalEntry and TestAppliedFlagsVMsMissingFromLibvirt (healthy checks carry last_success, failed checks do not). go test -race on vmhost, protocol and agent passes. No lab verification was run. Web: managed.test.mjs asserts the waiting label names both agents (failed against the old 'Waiting for spice-vdagent in the guest' label, passes now); npm --prefix web run test and typecheck pass. The guide text was checked against internal/vmhost/guest.go and the rendered label; no lab walkthrough of the new label was run.",
+    "evidence": [
+      "internal/vmhost/guest_test.go",
+      "internal/vmhost/managed_test.go",
+      "web/src/managed.test.mjs"
+    ]
+  }
+}

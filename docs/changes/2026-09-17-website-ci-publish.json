@@ -1,0 +1,44 @@
+{
+  "summary": "Add CI publish for the static website: nex-website-publish wrapper, host bootstrap sudoers, and Website workflows that build and publish on main when website sources change. API impact: none — static site and hosting tooling only.",
+  "paths": [
+    ".gitea/workflows/website.yml",
+    ".github/workflows/website.yml",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-17-website-ci-publish.json",
+    "docs/guide/operate-website.md",
+    "docs/guide/publish-a-release.md",
+    "packaging/website/README.md",
+    "packaging/website/bootstrap-publish.sh",
+    "scripts/nex-website-publish.py",
+    "scripts/website-ci-deploy.sh",
+    "tests/test_nex_website_publish.py",
+    "website/README.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Maintainers publish the static site through CI or nex-website-publish; operate-website and publish-a-release document the split from ISO/APT release publication.",
+    "pages": [
+      "docs/guide/operate-website.md",
+      "docs/guide/publish-a-release.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller or Core API; static website hosting and CI deploy only.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Hosting automation only; no milestone status change."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Website artifacts and CI secrets; no pool or Controller durable state."
+  },
+  "verification": {
+    "method": "python3 -m unittest discover -s tests -p 'test_nex_website_publish.py' -v; python3 -m unittest discover -s tests -p 'test_website_release.py' -v; python3 -m unittest discover -s tests -p 'test_repository_privacy.py'. Host bootstrap installed nex-website-publish with passwordless sudo for the publishing account. A live publish of the current website/build as release 20260917-ce0c83c3a33b returned HTTP 200 on the private backend and on the public site with expected Nex copy.",
+    "evidence": [
+      "tests/test_nex_website_publish.py"
+    ]
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "summary": "Phase 2 gate round 2, managed VM and storage UI fixes: pending registration rows keyed by operation (UI-1), created VM route carries its creation operation (UI-2, managed half), power confirmation buttons keep danger/primary styling (UI-5), stale VM warning shows the last host-reported state (UI-6), wizard lifecycle help (UI-7/GM-04), console-first General tab note (UI-8/GM-05), generic install ISO banner (UI-9), error punctuation (UI-10, managed half) and a delete notice that survives navigation (GM-10). API impact: none.",
+  "paths": [
+    "web/src/managed.tsx",
+    "web/src/managed.test.mjs",
+    "web/src/storage.tsx",
+    "web/src/storage.test.mjs",
+    "web/src/vm-create.tsx",
+    "web/src/vm-create.test.mjs",
+    "web/src/style.css",
+    "tests/integration/storage_repositories_browser.py",
+    "tests/integration/managed_vm_browser.py",
+    "docs/changes/2026-09-17-gate2-L3-web-managed.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "These paths change on-screen wording and presentation only. The guide pages that quote them (create-virtual-machine.md steps 2, 3 and 6, vm-console.md, delete-virtual-machine.md step 4) are updated in the same gate round by the docs lane under its own change record, after this UI text is final.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "UI only. UI-2 reads the operation already returned by POST /api/v1/vms; UI-6 reads the stored host inventory (inventory.vms[].state, inventory.observed_at) already returned by GET /api/v1/hosts while a host is stale; DELETE /api/v1/vms/{id}, storage, network and media listings are unchanged.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Gate round 2 fixes; no milestone status change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state added. The Controller UI presents host-reported VMs, inventory and registrations and submits existing requests; the route segment is a navigation hint, not a record."
+  },
+  "verification": {
+    "method": "npm --prefix web run typecheck; npm --prefix web run test; npm --prefix web run build; .cache/phase1-qa-venv/bin/python tests/integration/storage_repositories_browser.py (mocked API, built UI); .cache/phase1-qa-venv/bin/python tests/integration/managed_vm_browser.py --simulated (real Controller, simulated mTLS agent, browser-boundary injection for stale, running, power capability and delete reply); python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests -p 'test_repository_privacy.py'. The new browser cases failed against builds without the matching fix (duplicate storage rows, transparent danger confirmation border, missing delete notice). No disposable lab or real host run.",
+    "evidence": [
+      "web/src/managed.test.mjs",
+      "web/src/storage.test.mjs",
+      "web/src/vm-create.test.mjs",
+      "tests/integration/storage_repositories_browser.py",
+      "tests/integration/managed_vm_browser.py"
+    ]
+  }
+}

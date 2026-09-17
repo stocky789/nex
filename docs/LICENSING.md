@@ -9,10 +9,11 @@ license. The complete, unmodified [license text](../LICENSE) was retrieved from
 supports comments. This decision does not relicense third-party material.
 
 The Nex name, logo, and standalone artwork are outside this code-license grant.
-project owner has approved their use in the Nex project and its installer; a broader
-artwork redistribution license and trademark policy have not been selected.
-Do not invent such permission or impose additional restrictions on AGPL-covered
-code. Resolve the separate asset terms before distributing a branded release.
+Original Nex-branded artwork listed in [ARTWORK-LICENSE.md](../ARTWORK-LICENSE.md)
+is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+The Nex, Nex Core, and Nex Controller names, logos, and related brand identifiers
+remain reserved by the Nex project; CC BY 4.0 does not grant trademark rights.
+This reservation does not impose additional restrictions on AGPL-covered code.
 Do not add third-party icons, fonts, or artwork without retaining their actual
 licenses and verifying that the intended distribution is permitted.
 
@@ -36,20 +37,24 @@ have their own notice, source, and replacement/relinking requirements. See
 Modifications to Debian components must comply with their upstream terms;
 Nex's default license does not override them.
 
-The reviewed build script includes Nex notices and a Nex source archive, but
-only inventories the added `.deb` packages and does not collect their upstream
-source or fully inventory the base ISO. Therefore this review supports keeping
-AGPL for Nex; it does **not** establish that an ISO is ready for redistribution.
-The release evidence below remains required, including firmware review and
-resolution of artwork terms. No controller/agent dependency graph or built ISO
-was audited in this review.
+The 0.2.9 release tooling inventories `.deb` and `.udeb` files from the assembled
+media tree, records package identity, origin, checksum and declared source, retains
+matching Debian source material, and writes a final-ISO compliance manifest that
+binds the finished ISO and source bundle by filename and SHA-256. It also retains
+component copyright notices where available. This corrects the former
+added-package-only inventory limitation. It does **not** establish that any ISO is
+ready for redistribution: the exact final artifacts, complete notice/firmware
+review, source delivery, hosted publication, and applicable installation checks
+must still be inspected and recorded. No controller/agent dependency graph or
+published ISO was audited in this review.
 
 ## Installer and installed system
 
-Include `LICENSE`, `NOTICE`, and this document in the ISO's Nex documentation
-directory and install them under `/usr/share/doc/nex-core/`. Include the exact
-Nex source/build configuration used for that ISO in an accompanying source
-archive; record its digest and the build revision or source-tree digest.
+Include `LICENSE`, `NOTICE`, `ARTWORK-LICENSE.md`, and this document in the
+ISO's Nex documentation directory and install them under
+`/usr/share/doc/nex-core/`. Include the exact Nex source/build configuration
+used for that ISO in an accompanying source archive; record its digest and the
+build revision or source-tree digest.
 Preserve upstream notices on the ISO and installed packages' copyright files
 under `/usr/share/doc/<package>/copyright`. The original ISO's notices are not
 replaced by Nex's `LICENSE`.
@@ -76,8 +81,8 @@ Before handing out a binary ISO, produce and inspect:
   Prefer hosting the matching source bundle alongside each downloadable ISO
   with clear access instructions. Merely pointing to Debian mirrors is not the
   release process: their contents change and the distributor has obligations.
-- A license review of any firmware or other separately licensed binaries and
-  resolved redistribution terms for included Nex artwork.
+- A license review of any firmware or other separately licensed binaries. The
+  Nex artwork notice and CC BY 4.0 license must accompany branded releases.
 
 Packages downloaded from a Debian mirror during installation must be recorded
 in installed inventory separately from packages redistributed inside the ISO.
@@ -91,6 +96,39 @@ Do not ship a placeholder or broken source link.
 
 This file records scope and required evidence; it does not certify a release
 or substitute for checking each component's license terms.
+
+## 0.2.9 distribution tooling
+
+The 0.2.9 ISO builder removes these unreviewed firmware packages from every
+media-tree package location and package index before source collection and ISO
+mastering: `dahdi-firmware-nonfree`, `atmel-firmware`, `bluez-firmware`,
+`firmware-sof-signed`, `firmware-b43-installer`, and
+`firmware-b43legacy-installer`. It refreshes affected `Packages`, `Packages.gz`,
+firmware metadata, and Debian `Release` checksums, then fails if an excluded
+package remains. This is a scoped omission, not a conclusion about the terms of
+all remaining firmware.
+
+The builder produces `nex-core-<version>-source.tar.gz` from the media inventory
+and retained inputs. Its compliance manifest is written only after mastering and
+records the exact final ISO and source-bundle filename and SHA-256. The download
+publisher verifies both bindings before atomically publishing the ISO, source
+bundle, manifest, and their SHA-256 sidecars. The forge release carries those six
+files plus the Core and Controller Debian packages, for eight assets total.
+
+The artwork prerequisite is no longer open: branded artwork covered by this
+repository is identified and licensed in [ARTWORK-LICENSE.md](../ARTWORK-LICENSE.md).
+That resolves the Nex artwork redistribution basis only; it does not clear any
+third-party component, firmware, source, notice, build, boot, CI, or publication
+gate.
+
+**0.2.9 exact-artifact evidence:** the final ISO (`4c44133a…2f2b9`), source bundle
+(`eba9a430…a9679`) and manifest (`78237830…9a25`) pass their sidecars and binding checks.
+The media/source inspection covers 1,585 component records, all 573 required exact source
+package/version pairs, 725 extracted package notices plus the Nex notices, and confirms the six
+excluded firmware packages are absent. BIOS/UEFI menu boots and unattended offline UEFI
+installation, first boot and reboot passed under TCG. The full ISO, corresponding-source bundle,
+manifest and both packages were then published and independently downloaded over public HTTPS;
+their hashes, manifest bindings and signed APT metadata passed. Hosted CI remains unverified.
 
 ## OVMF 2023 certificate package — 2026-09-16
 
@@ -110,12 +148,45 @@ inspected for this package, retained source and parsed enrolled `db` certificate
 first boot and reboot checks passed. This is a scoped
 source-retention result for one firmware package. It does **not** complete the whole-ISO component
 manifest, source delivery, firmware-term review or external redistribution gate above. A release
-still needs a tested public source-delivery location and all remaining component and artwork work.
+still needs a tested public source-delivery location and all remaining component work.
 
 The later exact-tree 0.2.9 ISO
 `fe49ea1d69e16b45eaf3abd25cfec0e1645096a9fbe0a2532b6b2e5b136d1f64` also passed the
 parsed 2023 `db` certificate, unattended offline installation, first-boot and reboot checks. This
 reconfirms the scoped OVMF package result and does not close any whole-ISO distribution gate.
+
+## virtio-win guest driver ISO — 2026-09-16
+
+The 0.2.9 public Core installer deliberately does not stage a virtio-win ISO. Operators may
+import their own driver disc through the normal ISO-library workflow, and Nex retains the second
+CD-drive and media-selection support needed to use it. Automatic bundling remains blocked until
+complete corresponding source and notices are retained and covered by the release manifest.
+
+The candidate previously considered for bundling was Fedora's public virtio-win `0.1.302` ISO
+(`virtio-win-0.1.302-1`, SHA-256
+`303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d`, 877373440 bytes).
+
+This is the public Fedora build (attestation/test-signed), not RHEL WHQL, redistributed
+unmodified. It is not only BSD driver code. A listing of that exact ISO (checksum verified) on
+2026-09-16 found:
+
+| Content on the ISO | License evidence |
+| --- | --- |
+| Windows VirtIO drivers and driver utilities (Balloon, NetKVM, viostor, vioscsi, vioserial, viorng, vioinput, viofs, viosock and others) | BSD-3-Clause: `virtio-win_license.txt` and `debug/LICENSE` on the ISO; source [kvm-guest-drivers-windows](https://github.com/virtio-win/kvm-guest-drivers-windows) |
+| `guest-agent/qemu-ga-i386.msi`, `guest-agent/qemu-ga-x86_64.msi` (MSI version 110.2.3) | QEMU guest agent `qemu-ga`, GPL-2.0-or-later, plus bundled GLib, libintl and iconv (LGPL), PCRE2 and MinGW runtime DLLs under their own terms. No license text inside the MSI. |
+| `virtio-win-guest-tools.exe` | Installer bundle embedding the driver MSIs, the qemu-ga MSIs, the SPICE guest agent (vdagent-win 0.10.5) and SPICE QXL display driver (0.21.2.0) MSIs. SPICE components are GPL-licensed upstream; the bundle's `license.rtf` lists MS-RL (installer runtime), GPL-2.0 and Apache-2.0. |
+| `virtio-win-gt-x64.msi`, `virtio-win-gt-x86.msi` | Driver installer MSIs |
+
+The staged notice records this inventory. Retain it with redistributed copies.
+
+The investigated media did not have retained corresponding source for the GPL/LGPL binaries
+(qemu-ga and its LGPL libraries, SPICE agent and driver) or the MS-RL installer runtime. Fedora
+publishes `virtio-win-0.1.302-1.src.rpm` in the same
+[download directory](https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/), but it
+has not been inspected or shown to be complete corresponding source for those binaries. Either
+retain exact matching source (for example the QEMU and SPICE releases those MSIs were built
+from) with a tested delivery path, or keep the ISO out of Nex release media. The 0.2.9 build uses
+the latter choice. The exact upstream license version of each SPICE component was not inspected.
 
 ## VM storage client dependencies — 2026-09-11
 
@@ -164,7 +235,7 @@ explicit validated Core clustered-storage configuration may enable Corosync and
 Pacemaker. Preserve each exact binary package's installed copyright, source
 package/version, checksum, and corresponding source with the ISO component
 manifest before external distribution. This review is not release certification;
-the existing complete-source, notice, firmware, and artwork gates remain open.
+the existing complete-source, notice, and firmware gates remain open.
 
 BUG-0128 requires a separately rebuilt Debian DLM package whose fencing helper
 matches the selected Pacemaker ABI. The Nex build recipe remains original AGPL
@@ -197,7 +268,7 @@ GPL-2-or-later source (0.125), not GPL-2.0-only; GPLv3-compatible use is availab
 The rebuilt GTK module uses the existing installer runtime libraries. Development packages
 are confined to the build container. Review retained component notices and corresponding
 source for the complete combined binary before external distribution; the new frontend
-archive does not close the existing whole-ISO source, firmware or artwork release gates.
+archive does not close the existing whole-ISO source or firmware release gates.
 
 ## Upfront wizard and network configuration — 2026-09-08
 
@@ -222,8 +293,9 @@ and exact required sources; listing them here does not satisfy source delivery.
 The build derives supported timezone identifiers from the builder's tzdata `2026b-0+deb13u1`
 `zone.tab`; its inspected
 header explicitly places that file in the public domain. This is not a blanket license claim
-for all tzdata package contents. The approved raster brand asset keeps its separate terms.
-The whole-ISO component/source, firmware and artwork release gates above remain open.
+for all tzdata package contents. The approved raster brand asset is covered by
+[ARTWORK-LICENSE.md](../ARTWORK-LICENSE.md). The whole-ISO component/source and
+firmware release gates above remain open.
 
 
 ## Controller virtual appliance and local-host package — 2026-09-08
@@ -241,7 +313,7 @@ useful inputs, not complete Debian source retention or a release certification.
 Before sharing this appliance or a host package containing it, apply the release
 evidence requirements above to the complete base cloud image, added binaries and
 firmware as applicable; retain exact required corresponding sources, notices and
-a tested delivery path. Resolve the existing Nex artwork terms independently.
+a tested delivery path. Include ARTWORK-LICENSE.md with branded delivery.
 
 The finished Nex manifest is signed for deployment integrity/authenticity; this is
 separate from license compliance. Debian's [official cloud-image guidance](https://cloud.debian.org/images/cloud/)
@@ -264,7 +336,7 @@ the corresponding source snapshot also records its toolchain notice/version.
 
 Review exact artifacts and their retained notices in the [security package evidence](qa/security/package.md).
 A clean advisory scan is not license certification or complete appliance source-delivery
-evidence. The Debian component/source, artwork and external-distribution gates above
+evidence. The Debian component/source and external-distribution gates above
 remain applicable to the security rebuild.
 
 ## Host root authentication — 2026-09-08

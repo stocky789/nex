@@ -430,3 +430,30 @@ func TestSingleHostCoreIsItsPoolMasterForRemoteStorage(t *testing.T) {
 		t.Fatal("startup replaced an existing membership record")
 	}
 }
+
+// The first bundled media seed copies and hashes an ~877 MB ISO; it must not run on the
+// worker goroutine that receives Controller commands, and only one seed may run at a time.
+func TestBundledMediaSeedRunsOffWorkerOneAtATime(t *testing.T) {
+	var running atomic.Bool
+	release, started := make(chan struct{}), make(chan struct{}, 2)
+	seed := func() { started <- struct{}{}; <-release }
+	returned := make(chan struct{})
+	go func() { startBundledSeed(&running, seed); startBundledSeed(&running, seed); close(returned) }()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("starting a bundled media seed blocked the worker")
+	}
+	<-started
+	close(release)
+	select {
+	case <-started:
+		t.Fatal("a second bundled media seed started while one was running")
+	case <-time.After(50 * time.Millisecond):
+	}
+	for deadline := time.Now().Add(5 * time.Second); running.Load(); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("finished seed did not clear its running flag")
+		}
+	}
+}

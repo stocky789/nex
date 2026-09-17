@@ -81,6 +81,7 @@ func observeGuest(ctx context.Context, virsh func(context.Context, ...string) ([
 		return nil, errors.New("invalid VM definition")
 	}
 	g := &protocol.GuestInfo{Agent: "no-channel", Clipboard: "no-channel"}
+	vdagentConnected := false
 	for _, ch := range d.Devices.Channels {
 		attached := ch.Target.State == "connected"
 		switch {
@@ -91,10 +92,17 @@ func observeGuest(ctx context.Context, virsh func(context.Context, ...string) ([
 			}
 		case ch.Type == "qemu-vdagent":
 			g.Clipboard = "waiting"
-			if attached {
-				g.Clipboard = "ready"
-			}
+			vdagentConnected = attached
 		}
+	}
+	// A connected vdagent port alone is not a running guest vdagent: libvirt reports it
+	// connected in firmware, GRUB and with no OS installed, while the guest-agent channel on
+	// the same virtio-serial bus still shows nothing in the guest has opened it. Require
+	// both, after the loop so channel order in the definition does not matter. A guest that
+	// runs spice-vdagent without qemu-guest-agent therefore reads "waiting"; that is the
+	// conservative direction, as for resize below.
+	if vdagentConnected && g.Agent != "disconnected" {
+		g.Clipboard = "ready"
 	}
 	virtioDisplay := false
 	for _, v := range d.Devices.Video {

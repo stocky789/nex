@@ -71,6 +71,8 @@ assert 'appliance/build.py' in build, 'ISO builds must rebuild the Controller ap
 assert 'assert_iso_artifacts_current' in build, 'ISO builds must verify Core/Controller source freshness'
 assert 'stage_ovmf_generic' in build and 'local version=2026.05-2' in build and 'ovmf-generic=$version' in build
 assert '0f2d4de080ebeaf0972c5e212253c28dd2d90aa641542f42f37c6d6ecd4c67eb' in build
+assert 'stage_virtio_win' not in build
+assert 'refusing to publish virtio-win.iso without complete corresponding-source and legal accounting' in build
 assert 'Dir::Etc::sourceparts=-' in build and 'sid main' in build
 assert "grep -aFq 'Microsoft UEFI CA 2023'" in build
 assert "grep -aFq 'Windows UEFI CA 2023'" in build
@@ -79,6 +81,9 @@ assert '40-edk2-x86_64-secure-enrolled.json' in build
 assert 'third-party/ovmf-generic' in build and 'checksums.sha256' in build
 assert 'Unset CORE_LOCAL_DEB and NEX_SKIP_APPLIANCE_REBUILD' in build, 'ISO builds must reject reused packages'
 assert 'dist/nex-source.tar.gz required' in build
+assert 'ARTWORK-LICENSE.md is required for branded media.' in build
+assert 'cp LICENSE NOTICE ARTWORK-LICENSE.md docs/LICENSING.md "$stage/nex/docs/"' in build
+assert 'cp -f LICENSE NOTICE ARTWORK-LICENSE.md docs/LICENSING.md "$source_stage/nex-source/"' in build
 assert 'cp -a installer "$source_stage/nex-source/"' in build
 assert re.search(r'tar .* -czf "\$stage/nex/nex-source\.tar\.gz" \\\s*LICENSE NOTICE docs/LICENSING\.md installer', build) is None, \
     'Do not ship installer-only source as the sole ISO archive'

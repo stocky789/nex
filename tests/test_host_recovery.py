@@ -2,6 +2,7 @@
 import base64
 import importlib.util
 import io
+import os
 from pathlib import Path
 import unittest
 from unittest.mock import patch, MagicMock
@@ -54,6 +55,10 @@ class RecoveryTransport(unittest.TestCase):
                 recovery.virsh('qemu:///system', 'domstate', 'uuid')
 
     def test_external_original_requires_explicit_exclusion(self):
+        # main() sets os.umask(0o077); restore it so later tests keep the real umask.
+        umask = os.umask(0)
+        os.umask(umask)
+        self.addCleanup(os.umask, umask)
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             archive = root / 'archive'

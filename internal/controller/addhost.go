@@ -251,8 +251,8 @@ func failWithHostID(w http.ResponseWriter, status int, msg, hostID string) {
 // operator already saw from probeHost, signs in to the host's local API with the root
 // password (used once, never stored or logged), mints a site-bound enrollment token,
 // and pushes it to the host's local enrollment endpoint. The host then enrolls with
-// this controller through the existing agent-enrollment contract and becomes the
-// master of a new pool in this site.
+// this controller through the existing agent-enrollment contract. A new host becomes the
+// master of a new pool in this site; a host that already has a pool keeps its host-owned pool.
 func (c *Controller) addSiteHost(w http.ResponseWriter, r *http.Request, user, csrf string) {
 	site := r.PathValue("id")
 	var v addHostRequest

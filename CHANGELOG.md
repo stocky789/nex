@@ -6,12 +6,78 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.2.9` →
-> Debian `0.2.9`).
+> development software. Builds use the newest numbered changelog heading (`0.3.0` →
+> Debian `0.3.0`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.3.0] — 2026-09-17
+
+### Minor Feature
+
+- VMs and hosts have a **Stats** tab with CPU, memory, network and disk charts (and load for hosts)
+  from the last 10 minutes back to a year, recorded by each Nex Core host so a replacement
+  Controller shows the same history. Charts offer a **Stacked** toggle, hover values, drag-to-zoom
+  and series toggles, and a **Realtime** drawer shows 1-second samples on request. Upgrade Nex
+  Controller before Nex Core.
+- Pushes that change the public website now build and publish the static site when website
+  deploy secrets are configured, separate from ISO and APT release publication.
+
+### Bug Fixes
+
+- Right-click **Delete…** on a VM now opens the confirmation dialog again (BUG-0218).
+- Inserting or ejecting the driver disc from the VM console no longer fails with "invalid JSON
+  request", and the same ISO can no longer be placed in both CD drives (BUG-0235).
+- Creating or editing a VM now refuses a driver disc the host cannot attach or has not imported
+  (BUG-0228).
+- An interrupted change from UEFI to BIOS now finishes on recovery instead of leaving the VM
+  without a definition (BUG-0219).
+- Changing a VM from UEFI to BIOS now warns that its UEFI variables will be deleted and needs
+  confirmation before saving (BUG-0225).
+- One save that renames a stopped UEFI VM and changes Secure Boot no longer ends in
+  "needs attention" (BUG-0220).
+- A VM edit that removes or reorders network interfaces no longer changes the wrong interface
+  (BUG-0226).
+- An interrupted VM delete now finishes when retried, and retrying after changing the disk choice
+  no longer fails with "request_id already used" (BUG-0221, BUG-0227).
+- Disks permanently deleted with their VM no longer block detaching the storage (BUG-0222).
+- A queued storage, network or ISO row no longer lingers after it succeeds (BUG-0236).
+- A failed VM creation now shows the failure and a link to its task instead of "Object not found"
+  (BUG-0237).
+- The VM Activity tab now lists the VM's own console, power, media, edit and delete actions
+  (BUG-0238).
+- **Add host** errors such as "already enrolled" now stay visible in the form (BUG-0239).
+- Power confirmation buttons keep their warning and primary styling (BUG-0240).
+- A VM on an unreachable host now shows its last reported state (BUG-0241).
+- **Open console** is fully visible on narrow screens in the host-local page (BUG-0242).
+- Console clipboard and display resize no longer report ready before a guest OS is running
+  (BUG-0243).
+- Healthy host checks now show when they last succeeded (BUG-0244).
+- Deleting a VM from its page now shows the "Delete queued" notice (BUG-0245).
+- The `nex-controller` package now contains a Controller that starts. Packages from 0.1.6~alpha1
+  through 0.2.9 were built without the database driver and exit at start (BUG-0246).
+- An interrupted VM delete that resumes no longer briefly shows "needs attention" (BUG-0247).
+- A VM that is still being created shows its creation progress, not Edit and Delete (BUG-0248).
+- The "Start queued" notice now disappears once the task finishes (BUG-0249).
+- The Guest tools badge shows the agent's state instead of "stale" (BUG-0250).
+- Starting a Controller appliance now asks for confirmation and warns against running two
+  Controllers (BUG-0251).
+- The delete dialog's disk checkbox sits next to its label again (BUG-0252).
+- VMs on an unreachable host are greyed in the resource tree instead of looking running
+  (BUG-0253).
+- Removing a network interface and adding a new one in the same VM edit now saves, and the new
+  interface always gets its own MAC address instead of the removed one's (BUG-0254).
+- Adding a network interface to a running VM no longer reuses the MAC address of an interface the
+  guest has not yet released. Nex Core now refuses that change until the guest releases the old
+  interface or the VM is stopped, and new interfaces no longer get a recently removed address
+  (BUG-0256).
+
+### Miscellaneous
+
+- Tidied the VM right-click menu layout, icons and disabled-state colours.
+- Removed the sample age row from the VM usage panel.
 
 ## [0.2.9] — 2026-09-16
 
@@ -32,6 +98,13 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (BUG-0217).
 - New installations include the current OVMF Secure Boot certificate template, with the 2023
   Microsoft UEFI and Windows UEFI certificate authorities verified during installation checks.
+
+### Miscellaneous
+
+- Release builds now include a matching source bundle and compliance manifest with checksums,
+  and leave six unreviewed firmware packages out of the ISO.
+- The public ISO does not bundle virtio-win driver media. Import matching driver media into the
+  host ISO library before selecting it in a Windows VM's driver disc drive.
 
 ## [0.2.8] — 2026-09-16
 

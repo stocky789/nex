@@ -119,3 +119,22 @@ The original engine-only run used libvirt 12.7 / QEMU 11.1 rather than an instal
 Later final-package and deployed-Controller checks are recorded separately. The independent
 Windows TPM/Secure Boot requirements matrix and current BUG-0213 graceful-shutdown timing remain
 open in the [production-readiness tracker](2026-09-14-production-readiness-handoff.md#vm-foundation-added-2026-09-16).
+
+## Follow-up after acceptance — bundled virtio-win (2026-09-16; reopened 2026-09-17)
+
+The second CD drive fixed the install path; the recorded lab used manually imported virtio-win
+media. The 2026-09-16 staging, host-seeding and wizard-preselection rollout was implemented and
+unit-tested, but has been reopened: the public 0.2.9 ISO excludes the bundled ISO because complete
+corresponding source and a tested delivery path for its GPL/LGPL contents are not retained.
+
+Automatic installer staging, host seeding and wizard pre-selection remain blocked until that
+source/legal closure is complete. Until then, operators import matching media as a normal
+`iso-import` and select it as **Driver disc**. The second-drive contract and
+`drivers_media_id` validation are unchanged (API impact: existing contract; no schema change).
+The historical manual-import lab evidence remains valid; it does not verify the withdrawn
+bundled-media rollout.
+
+Driver disc from the console, 2026-09-17: console insert and eject of the driver disc failed with
+400 (BUG-0235, fixed for 0.3.0; not in the published 0.2.9 release). A review follow-up in the uncommitted working tree also makes
+Nex Core refuse inserting the same ISO into both drives itself; it has unit regression tests only
+and awaits the project owner's code review and commit.

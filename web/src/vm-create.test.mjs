@@ -19,7 +19,7 @@ const stubbed = code
   .replace('from "./managed"', 'from "data:text/javascript,"')
   .replace('from "./storage"', 'from "data:text/javascript,export const storageUsable=()=>true;"');
 writeFileSync(file, stubbed);
-const { restoredNICs, autoDiskName, topologyIssue, vmNameIssue, bootKeys, renumber, defaultTPM, effectiveBoot, secureBootText, tpmText, driversDriveReady } = await import(`file://${file}`);
+const { restoredNICs, autoDiskName, topologyIssue, vmNameIssue, bootKeys, renumber, defaultTPM, defaultDriversMedia, nextDriversMedia, effectiveBoot, secureBootText, tpmText, driversDriveReady } = await import(`file://${file}`);
 
 // BUG-0196: Windows 11 refuses to install without a TPM 2.0, so a Windows guest is drafted with
 // one and every other guest is not. The wizard applies this to a new draft and whenever the
@@ -28,8 +28,26 @@ assert.equal(defaultTPM("windows"), "2.0");
 assert.equal(defaultTPM("linux"), "none");
 assert.equal(defaultTPM("other"), "none");
 assert.equal(defaultTPM(""), "none");
+assert.equal(defaultDriversMedia("linux", [{ id: "v", name: "virtio-win.iso", host_id: "h", status: "succeeded" }]), "");
+assert.equal(defaultDriversMedia("windows", [{ id: "v", name: "virtio-win.iso", host_id: "h", status: "succeeded" }]), "v");
+assert.equal(defaultDriversMedia("windows", [{ id: "v", name: "virtio-win.iso", host_id: "h", status: "succeeded" }], "v"), "");
+assert.equal(defaultDriversMedia("windows", [{ id: "a", name: "windows.iso", host_id: "h", status: "succeeded" }]), "");
+// F2: a host without vm-media-drivers-drive-v1 never gets a driver disc preselected, and a stale
+// one is cleared, because its disabled select cannot show or clear the choice and its Core
+// would ignore the second drive. F3: leaving Windows removes the virtio-win disc the wizard
+// chose itself, but keeps a disc the operator picked.
+const isos = [{ id: "v", name: "virtio-win.iso", host_id: "h", status: "succeeded" }, { id: "d", name: "drivers.iso", host_id: "h", status: "succeeded" }];
+assert.equal(nextDriversMedia("", "linux", "windows", isos, "", true), "v");
+assert.equal(nextDriversMedia("", "linux", "windows", isos, "", false), "", "no preselect when the host cannot attach a driver disc");
+assert.equal(nextDriversMedia("v", "windows", "windows", isos, "", false), "", "a value the host cannot attach is cleared");
+assert.equal(nextDriversMedia("v", "windows", "linux", isos, "", true), "", "leaving Windows clears the automatic virtio-win disc");
+assert.equal(nextDriversMedia("v", "windows", "other", isos, "", true), "");
+assert.equal(nextDriversMedia("d", "windows", "linux", isos, "", true), "d", "an operator's own choice stays");
+assert.equal(nextDriversMedia("d", "linux", "windows", isos, "", true), "d");
+assert.doesNotMatch(src, /defaultDriversMedia\((draft\.guest_os|guest_os),/, "wizard call sites go through the readiness-aware nextDriversMedia");
+assert.match(src, /drivers_media_id: driversReady \? draft\.drivers_media_id : ""/, "a host without the capability is never sent a driver disc");
 assert.match(src, /if \(!r\.boot\?\.tpm\) d\.boot = \{ \.\.\.d\.boot, tpm: defaultTPM\(d\.guest_os\) \};/);
-assert.match(src, /tpmChosen \? \{\} : \{ boot: \{ \.\.\.draft\.boot, tpm: defaultTPM\(e\.target\.value\) \} \}/);
+assert.match(src, /tpmChosen \? \{\} : \{ boot: \{ \.\.\.draft\.boot, tpm: defaultTPM\(guest_os\) \} \}/);
 
 // Secure Boot and an emulated TPM are UEFI features; a BIOS VM is created without either,
 // whatever the disabled controls last held. The protocol also refuses secure_boot "on" on BIOS.
@@ -99,5 +117,10 @@ const restoredOrder = {
   media_id: "iso-1",
 };
 assert.deepEqual(bootKeys(restoredOrder), ["disk-0", "media"]);
+
+// UI-7/GM-04: the host starts the VM as the last step of the creation task; there is no second
+// start task on success, so the wizard must not promise two tasks.
+assert.doesNotMatch(src, /you will see two tasks/);
+assert.match(src, /as the last step of the creation task/);
 
 console.log("vm-create.test.mjs: ok");

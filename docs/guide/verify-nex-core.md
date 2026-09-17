@@ -81,7 +81,14 @@ created by this procedure.
 
 ## Verification
 
-The Step 1–3 commands were rehearsed on a disposable host; Step 4 reboot was not. See the
+Steps 1–2 were checked again on `0.2.10~gate5` in the [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md)
+(2026-09-17, disposable nested-KVM lab, by the installation check harness over an SSH session
+pinned against the console host key): the OS release and installed package report the build
+version, the Nex Core services are active, and `permitrootlogin no` was recorded before the test
+key was added. `virt-host-validate qemu` (step 3) was not rerun on gate5; it last passed, apart
+from optional IOMMU and secure-guest warnings, on `0.2.10~gate3`. The gate5 run rebooted the host
+and confirmed its identity and VMs with its own harness, but Step 4 was not repeated from the
+local console. The Step 1–3 commands were also rehearsed earlier on a disposable host. See the
 [guide command rehearsal](../qa/guide-host-checks.md), the
 [alpha1 QA report](../qa/iso/2026-09-08-alpha1.md) and the
 [single Nex Core version checks](../qa/single-nex-core-version.md). These checks do not establish

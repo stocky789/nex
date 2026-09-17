@@ -2,9 +2,20 @@
 
 Date: 2026-09-10
 Status: Implemented and committed on 2026-09-10 (`4a60e45`, media/adapter follow-up `38aa856`);
-independent review round completed with corrections verified. Open: the Gitea `phase1` browser
-walkthrough (red on BUG-0047, fix pending push), the journal round-trip integration run, and the
-Phase 2 acceptance gate in a disposable nested-KVM lab. See [acceptance](#acceptance).
+independent review round completed with corrections verified. Phase 2 acceptance gate open: on
+the final gate run, build 0.2.10~gate5 (lab run 2026-09-17 UTC, disposable nested-KVM lab, virtual
+hardware only; [gate report](../qa/2026-09-17-phase2-gate/checks.md)), 15 of 16 checklist rows, COVERAGE-1 and both G7 halves passed,
+but row 11 failed on a **major defect open in the gated product**: a network interface added to a
+running VM can reuse the MAC of an interface the guest has not yet released, leaving a duplicate MAC
+on the bridge while the task reports succeeded ([open defect 1](../qa/2026-09-17-phase2-gate/checks.md#owner-triage-open-defect-1); code
+reading indicates released 0.2.9 is also affected, not lab-reproduced). gate5 was the last lab cycle
+of this effort, so the defect is not fixed in the gated build; it went to the project owner with a
+[triage](../qa/2026-09-17-phase2-gate/checks.md#owner-triage-open-defect-1) and was then fixed in the
+uncommitted working tree as BUG-0256 with unit tests against a simulated libvirt only (**not
+lab-verified**). The gate4 code-review NIC finding was not reproduced. The
+gate stays open until that fix is proven on a new gated build that reruns row 11 and the G7 rows,
+and until the project owner's code review and refactor of this work, independent review, the owner
+commit, hosted CI on both workflows after the owner pushes and the open owner decisions are resolved. See [acceptance](#acceptance).
 Parent: [platform plan](2026-09-08-nex-platform.md) [Phase 2](2026-09-08-nex-platform.md#2-one-host-vm-management),
 items 3, 4, 6 and 7, and the Phase 2 acceptance gate.
 
@@ -199,30 +210,62 @@ uncommitted working tree. Unticked boxes were **not run**; none of them may be c
 - [x] Controller rejects unauthorized, wrong-host/pool, stale-resource, invalid-input, duplicate-MAC,
       over-capacity and replayed requests; `StartAfterCreate` dispatches the existing `vm-power`
       start only after creation succeeds (Go tests).
-- [ ] Journal round-trip: the full specification and per-disk paths persist on the pool master and a
+- [x] Journal round-trip: the full specification and per-disk paths persist on the pool master and a
       replaced Controller re-adopts the VM with identity, name and shape intact
       (`tests/integration/controller_replacement.py`).
-      **Not run**: updated for the new shape but never executed; no libvirt host available.
+      **Passed locally (gate5, 2026-09-17 UTC)**: the repository `controller_replacement_debian.sh`
+      with `--vm` passed both phases, and row 12 re-adopted host-1's VMs with the same IDs, names,
+      specs, revisions, inactive XML and journal set using the gate5 package binary
+      ([gate report](../qa/2026-09-17-phase2-gate/checks.md#g6-in-detail), rows 12 and G7). Limits: the script built from the shared
+      working tree, not the gate5 source snapshot, and hosted CI has not run it.
 - [x] OpenAPI schemas match the protocol structs; generated reference current (contract tests).
       `python3 -m unittest tests.test_api_contract` 21 tests OK; `generate_api.py --check` exit 0.
 - [ ] Browser walkthrough of all six steps including validation, empty, stale, failed and
       interrupted states, narrow-screen and keyboard operation; captures inspected.
-      **In progress**: Gitea `phase1` now runs `managed_vm_browser.py --simulated` on every push
-      (runs 3798, 3801, 3804). It drives the six steps and fails at the disk-name default check
-      (BUG-0047 in `docs/BUG_LEDGER.md`); the fix is in the working tree and the walkthrough is
-      verified only once that job is green. No local Playwright captures exist.
+      **Open**: the gate5 lab walked all six steps in headless Chromium at desktop and keyboard-driven
+      at 360 px, with unauthorized, failed, stale and offline states captured ([gate report](../qa/2026-09-17-phase2-gate/checks.md),
+      rows 4 and 13). BUG-0248 stays fixed, but the queued-create page still shows the VM name,
+      unknown state and tabs above the Creation panel, and shows **Creation dispatched** for up to
+      10 s after the host refused ([open defect 3](../qa/2026-09-17-phase2-gate/checks.md#open-defects-after-gate5)). It stays open until
+      that is resolved and the simulated `phase1` browser jobs are green in hosted CI after the owner
+      pushes.
 - [ ] **Phase 2 acceptance gate**, folded into this slice by project owner's decision on 2026-09-10:
       create a VM through Nex Controller, install a real guest from an uploaded ISO using the
       browser console, reboot it, and verify written data survives guest and host reboot; stop the
       Controller and confirm the VM keeps running, then confirm reconnect refreshes inventory and
       resolves unfinished tasks.
-      **Not run**: no guest installed, no reboot data check, no Controller-outage or reconnect test.
-      Needs a disposable nested-KVM lab; it was not part of this implementation batch.
+      **Functional clauses passed on virtual hardware, gate open** (final gate run, build
+      0.2.10~gate5, 2026-09-17 UTC, [gate report](../qa/2026-09-17-phase2-gate/checks.md)): create and Debian install from an uploaded
+      ISO through the browser console (rows 3, 4, 6); marker data unchanged across a guest reboot and
+      a host reboot (rows 8, 14); the VM kept running through a 107 s Controller outage (row 9);
+      reconnect refreshed inventory and delivered the queued task once (row 10). Not ticked:
+      - **major open defect 1** (row 11 failed: a network interface hot-plugged into a running VM can
+        reuse the MAC of an interface the guest has not released, while the task reports succeeded;
+        [open defect 1](../qa/2026-09-17-phase2-gate/checks.md#owner-triage-open-defect-1), [owner triage](../qa/2026-09-17-phase2-gate/checks.md#owner-triage-open-defect-1))
+        is fixed in the working tree as BUG-0256 with unit regression tests only, not lab-verified; it
+        needs a new gated build and a rerun of at least row 11 (including the running-VM remove, add
+        and add-again sequence, probe c2) and the G7 provenance rows. The cross-VM manual-MAC variant
+        and a pending-unplug indicator remain open;
+      - the report has had no independent review, and the required slice reviews are outstanding;
+      - hosted CI has not run on either forge;
+      - the tree is not committed and awaits the project owner's code review and refactor; the
+        BUG-0256 fix changed product files after the gate5 build, so the committed product paths no
+        longer match the gate5 product-path fingerprint and need the new gated build;
+      - G6 is partial: same-host appliance redeploy is blocked by the product and backup restore was
+        not exercised, and these and the other [owner decisions](../qa/2026-09-17-phase2-gate/checks.md#open-owner-decisions) are open.
+      See the [remaining requirements](../qa/2026-09-17-phase2-gate/checks.md#remaining-gate-requirements-outside-this-lab). No physical
+      hardware was tested.
 - [ ] Guide, API reference and scoped change assessment updated; documentation checker and both CI
       workflows run the new checks.
       `documentation.yml` is green on the committed slice (Gitea runs 3799, 3802) and
       `check_docs.py --all` passes at HEAD; the earlier range-mode failures were fixed in the
       review round and by `8103af4`. Neither workflow runs `go vet ./...` or `git diff --check`.
+      **Open (gate5, DOC-1 partial)**: install-nex-core.md step 8 contradicts the installer step list
+      that loses its current step for up to about 24 s ([open defect 2](../qa/2026-09-17-phase2-gate/checks.md#open-defects-after-gate5));
+      vm-console.md step 2 overstates how soon the console attaches (open defect 4); the edit guide
+      did not cover MAC reuse across saves (open defect 1) or the single-interface replacement 400
+      (open defect 5), now added to its Troubleshooting without a new walkthrough; and hosted CI has
+      not run on the gated tree.
 - [x] Independent implementation and documentation review; findings resolved and corrections verified.
       See the [review round](../qa/vm-creation/checks.md#independent-review-round--2026-09-10):
       dedicated-memory admission control was the material defect, fixed with a mutation-checked
@@ -231,7 +274,8 @@ uncommitted working tree. Unticked boxes were **not run**; none of them may be c
 ## Follow-ups
 
 Stopped-VM editing and deletion with disk retention (the remaining Phase 2 work, and the upgrade
-path for VMs created before this slice); templates, clones and cloud-init; bulk creation; CPU weight
+path for VMs created before this slice; both since implemented, see the [VM edit plan](2026-09-10-vm-edit.md)
+and the [delete guide](../guide/delete-virtual-machine.md), and covered by the gate run above); templates, clones and cloud-init; bulk creation; CPU weight
 and cap; pressure-driven memory reclaim.
 
 Deferred from this slice during review, both recorded rather than silently dropped:

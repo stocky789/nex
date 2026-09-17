@@ -1,0 +1,40 @@
+{
+  "summary": "Repair test drift found by the pre-gate tree checks: test_source_bundle sets umask 022 for dpkg-deb, test_storage_packaging follows the current installer package resolution, and the ISO URL and storage repository browser harnesses seed the signed-in marker and expect the current transfer banners. API impact: none — the ISO URL mock now returns a media record, matching the existing contract. tests/test_host_recovery.py restores the process umask after calling recovery.main(), which sets 0077.",
+  "paths": [
+    "tests/test_source_bundle.py",
+    "tests/test_storage_packaging.py",
+    "tests/integration/iso_url_browser.py",
+    "tests/integration/storage_repositories_browser.py",
+    "tests/test_host_recovery.py",
+    "docs/changes/2026-09-16-test-harness-drift.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Test-only changes; the banners the harness expects already ship and no guide page quotes the old wording.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Test harnesses and assertions only; no operation, error or field changed.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone status changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Tests persist nothing in the product."
+  },
+  "verification": {
+    "method": "Test-drift lane: python3 -m unittest discover -s tests (283 then 285 tests OK) and the two browser harnesses against their simulated Controller (exit 0). The umask leak's source is fixed in tests/test_host_recovery.py (in-process umask 0o77 before, 0o22 after; discover run 285 tests OK); the guard in test_source_bundle stays as defense in depth.",
+    "evidence": [
+      "tests/test_source_bundle.py",
+      "tests/test_storage_packaging.py",
+      "tests/integration/iso_url_browser.py",
+      "tests/integration/storage_repositories_browser.py",
+      "tests/test_host_recovery.py"
+    ]
+  }
+}

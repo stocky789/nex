@@ -1,0 +1,33 @@
+{
+  "summary": "Gate 3 main.tsx fixes. A VM page on its creation route shows the Creation task, not VM details with Edit and Delete, until the create has succeeded. A power notice keeps its task id and clears once that task leaves queued or dispatched, and on a tab change. Start from the console and from the tree context menu on a protected Controller appliance opens the two-Controllers confirmation; that dialog now opens modal so the toolbar cannot cover it, and the console-only page renders it too. A VM on a host that is not fresh is greyed in the tree with the title \"State unknown: host not fresh\". That dialog shows a refused request as an alert inside itself, reuses one request_id per VM and action until the request succeeds, and disables Confirm and Cancel while the request is pending. Browser regression cases cover these and the web-components fixes for the Guest tools badge and the delete dialog checkbox. API impact: none.",
+  "paths": [
+    "web/src/main.tsx",
+    "tests/integration/managed_vm_browser.py",
+    "docs/changes/2026-09-17-gate3-main-tsx.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "These are bug fixes that make screens behave as the guide already describes (create-virtual-machine.md step 6 shows the task while the create runs). The protected-appliance Start warning wording is documented by the separate gate 3 docs lane, which owns vm-power.md and manage-controller.md.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. The UI reads operation.id from the existing POST /api/v1/vms/{id}/power 202 response, the existing VM status and operation_id fields, and GET /api/v1/operations; no endpoint, field or Core command changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fixes to existing screens; no feature is added, dropped or reordered.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Presentation only: the notice's task id lives in browser memory; no setting, record or Controller table is added."
+  },
+  "verification": {
+    "method": "Simulated browser acceptance only (Chromium, real HTTPS Controller, simulated mTLS agent, responses injected at the browser boundary): tests/integration/managed_vm_browser.py --simulated with evidence written outside docs/qa. Each new case was shown failing against a UI bundle built with only that fix reverted, and all cases pass with the fixes. No lab, native host or hardware walkthrough was run. The refused-Start case (409 injected on POST /power from the console tab) failed against the previous bundle, where the error went only to the page notice behind the modal, and passes now; it also asserts a second confirm reuses the first request_id. The disabled-while-pending state is not separately asserted.",
+    "evidence": [
+      "tests/integration/managed_vm_browser.py"
+    ]
+  }
+}

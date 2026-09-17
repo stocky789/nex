@@ -24,8 +24,10 @@ under [Troubleshooting](#troubleshooting)). Use a private management network or 
 - Matching Controller, agent, and web assets from the same development build; see the
   [development instructions](../development.md). Keep Controller outside the host being installed.
 - A Controller HTTPS address that the host can reach, a server certificate valid for that
-  address, its private key, and a trusted copy of its issuing CA certificate. Obtain trust
-  material through an authenticated channel; do not bypass certificate verification.
+  address, its private key, and a trusted copy of its issuing CA certificate. The file given
+  to `-tls-cert` should hold the server certificate followed by that issuing CA certificate:
+  **Add host** sends that file's certificates to the host as its trust anchors for Controller.
+  Obtain trust material through an authenticated channel; do not bypass certificate verification.
 - A private directory on each machine for persistent state. Do not share an agent state
   directory between hosts: it contains that host's private identity and operation journal.
 - Access to the host's read-only libvirt observations. Missing permissions, `/dev/kvm`,
@@ -89,8 +91,9 @@ under [Troubleshooting](#troubleshooting)). Use a private management network or 
    Use Tab to reach menus and controls, Enter to open a menu, and Escape to close it.
    On narrow screens the resource pane is above the details area.
 3. With the site selected, choose **Add host** (toolbar, File menu or the empty-state button).
-   The form is titled **Add host to** followed by the site name; it explains that the new host
-   becomes the master of a new pool in this site. Enter:
+   The form is titled **Add host to** followed by the site name; it explains that a new host
+   becomes the master of a new pool in this site, and a host that already belongs to a pool
+   keeps it. Enter:
    - **Host address** — the host's IP or hostname (`10.0.0.5`), with an optional `:port`
      (default `9443`, the `nex-core-local` listener).
    - **Root password** — the host's current OS root password. It is sent once, over a
@@ -98,6 +101,9 @@ under [Troubleshooting](#troubleshooting)). Use a private management network or 
    - **Controller address** — prefilled with this browser's address; edit it if the host
      must reach the Controller by a different name or IP. The help text under the field
      is a reminder that the host, not your browser, must be able to open this address.
+     A loopback or port-forwarded browser address such as `https://127.0.0.1:…` is never
+     reachable from the host; replace it with the Controller's address on the management
+     network.
 
    Select **Connect**. Controller opens an unauthenticated TLS handshake to the host and
    shows the certificate's **Address**, **Certificate fingerprint** (`sha256:…`),
@@ -105,9 +111,15 @@ under [Troubleshooting](#troubleshooting)). Use a private management network or 
    output before continuing — this confirmation is the only trust check before the root
    password is used, so do not skip it. Select **Confirm and add host** to proceed, or
    **Cancel** to change the address. On success the panel shows
-   `Host <id> enrolled as master of a new pool; it appears in the tree after its first report.`
-   (A re-enrolled host reads `re-enrolled and keeps its pool` instead.)
-   and the password field is cleared.
+   `Host <id> enrolled in pool <pool>; it appears in the tree after its first report.` and the
+   password field is cleared. `<pool>` is the pool the host reports: a new pool for a new host,
+   or the host's existing pool when it already belonged to one.
+   The host then trusts exactly the certificates in Controller's `-tls-cert` file when it
+   connects to Controller. With the server certificate followed by its issuing CA, the host
+   accepts a renewed server certificate from that CA. A file holding only the server
+   certificate pins that certificate: after replacing it, revoke and re-enroll each host (step 8).
+   The chained-file case (a server certificate followed by its separate issuing CA) was
+   exercised in the Phase 2 gate run on `0.2.10~gate4`: the host enrolled and reported fresh.
 4. If the Controller cannot reach the host directly (an isolated management network, a
    firewalled interface, or a host behind NAT), expand **Manual enrollment** inside the
    same panel instead. Select **Generate enrollment token**. Treat the token as a secret:
@@ -275,6 +287,11 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
   host record is missing or revoked. The pool and its resources remain; re-enroll the same
   host with **Re-enroll host** to restore it. Changing a pool's master is not available
   in this build.
+- **Confirm and add host reports "Already enrolled":** the message continues
+  `Host <id> still trusts a Controller at this address. Use Re-enroll host on that host, or check the Controller address.`
+  The host is already enrolled with a Controller at the same address and with the same
+  certificate authority, so nothing changed. Use **Re-enroll host** on that host, or, when
+  connecting a replacement Controller, check that **Controller address** names the replacement.
 - **Credential revoked or expired:** use the deliberate revoke/re-enroll procedure for the
   same host. Do not create a second active identity as an automatic recovery shortcut.
 - **Controller or agent state is lost:** stop and retain what remains before recovery. There is
@@ -282,16 +299,29 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
   host-deployed appliance, the Controller-scoped state (database, identity, TLS keys) is carried
   by the [recovery export and manual restore](deploy-controller-appliance.md#troubleshooting).
   Do not run two Controllers from copied state or copy an agent identity to another host.
-- **Replace a failed Controller:** deploy or install a new Controller
-  ([deploy the appliance](deploy-controller-appliance.md)), sign in, create a site, then connect
+- **Replace a failed Controller:** install the new Controller somewhere other than the host
+  that ran the failed Controller appliance: either the development setup in steps 1-2, or an
+  appliance deployed on a separate clean Nex Core host that is not enrolled, as in
+  [Deploy the Controller appliance](deploy-controller-appliance.md) (that appliance route has not
+  been walked through for replacement). This build cannot deploy a new appliance on a host that is
+  enrolled or already has an appliance deployment, and it cannot remove the old appliance there. First exclude the old
+  appliance, as in [Deploy the Controller appliance](deploy-controller-appliance.md#troubleshooting):
+  on the host's root console disable its autostart, shut it down, and wait until libvirt reports
+  it `shut off`; an unreachable Controller is not proof that it stopped. Keep its disk. The new
+  Controller later lists the old appliance as the protected **Controller** VM with **Start**
+  available: **do not start it**. Starting it runs two Controllers for the same hosts. Selecting
+  **Start** on that VM opens a confirmation that reads "This is a Controller appliance. If another
+  Controller now manages this host, starting it runs two Controllers; never do that. Recover it
+  from the host-local page instead." Select **Cancel**. Then sign
+  in to the new Controller, create a site, and connect
   each pool master with an enrollment token or the **Add host** address-and-root-password
   flow (step 3). Wait for the host to report; each pool returns with its original ID and
   name and its master with its original host ID, because the host keeps that identity and
   presents it at enrollment (a host enrolled before host-owned identity and never re-enrolled
   since presents no pool ID, so it lands in a new pool named after its hostname, which
   receives its resources), and its storage registrations, networks, ISO records and VM
-  definitions return with their original names and IDs. The Controller appliance VM itself returns too, as the
-  protected **Controller** VM on the host that deployed it, and the host's failed or
+  definitions return with their original names and IDs. The old Controller appliance VM returns too, as the
+  protected **Controller** VM on the host that deployed it (observed shut off), and the host's failed or
   interrupted tasks reappear in **Tasks** with their original status and error. Replacing the
   Controller does not stop the host: a task still running when the old Controller went away
   finishes on the host. A task the host's agent was interrupted in (its process died) shows
@@ -326,9 +356,23 @@ Recorded checks and their limits:
 - [Add host lab checks](../qa/simple-host-enrollment/lab/checks.md) — step 3 and revoke/re-enroll
   in a nested-KVM lab; the manual fallback and package upgrade were not exercised.
 - [Pool master checks](../qa/pool-master/checks.md) and [lab run](../qa/pool-master/lab/checks.md).
+- [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md) — `0.2.10~gate5`, 2026-09-17,
+  disposable nested-KVM lab, headless Chromium. An appliance deployment was replaced by a
+  Controller outside the host, running the gate5 `nex-controller` package binary with a new data
+  directory and a `-tls-cert` file holding a server certificate followed by its issuing CA.
+  Sign-in, **Create site** and browser **Add host** (step 3) re-adopted the same host, pool,
+  storage, network, ISOs, VM identities, specifications and revisions with nothing re-entered;
+  failed registrations returned only as failed tasks. A repeated **Add host** showed "Already
+  enrolled" and kept it on screen. **Start** on the old appliance from the toolbar, the Console
+  tab and the tree menu each asked for confirmation (and again after a host reboot), and edits and
+  creates succeeded afterwards. The repository Controller replacement contract script also
+  passed. Step 1 was not walked exactly as written: the binary came from the package rather than
+  `make build` and listened on a loopback lab port. The host was added through a lab port forward,
+  and the old appliance was shut down from an SSH shell rather than the physical console.
+  Same-host appliance redeploy (blocked by the product) and backup restore were not exercised. The
+  same replacement also passed in the earlier gate4 run.
 - [Pool VLAN network checks](../qa/pool-vlan-networks/checks.md) — Controller replacement with
-  real processes and libvirt. The browser **Add host** flow against a replacement Controller, the
-  packaged agent and an appliance deployment followed by replacement are not walked through.
+  real processes and libvirt.
 - [Health reasons walkthrough](../qa/2026-09-12-bug-ledger.md), [site selector](../qa/site-selector/browser.md),
   [desktop layout](../qa/controller-desktop-layout/checks.md) and
   [security browser walkthrough](../qa/security/browser.md).

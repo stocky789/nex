@@ -105,10 +105,12 @@ Later updates come from the signed Nex APT archive; see [software updates](softw
    unchecked and resets whenever you return to Review. This is the
    destructive confirmation; do not expect another routine erase question.
 8. Let installation finish. A single Nex progress panel stays in place during and between backend steps.
-   The step list on the left continues the wizard's own steps — **Welcome**, **Host**,
-   **Network**, **Disk**, **Review**, then **Install** — with the steps you completed marked
-   with a tick and the current one marked with a bullet, so the position does not restart when
-   installation begins.
+   The step list on the left keeps the wizard's own steps — **Welcome**, **Host**,
+   **Network**, **Disk**, **Review**, then **Install** — so the position does not restart when
+   installation begins. During installation the bullet follows the setting being applied: it
+   marks **Network** while the network is configured and **Disk** while the disk is prepared,
+   then moves to **Install** for package and bootloader work. Only the steps before the bullet
+   are ticked, so **Disk** and **Review** are not ticked while **Network** is current.
    The indicator describes the current step, not an estimated overall completion percentage.
    Error and recovery prompts appear when your input is needed.
    Packages are bundled; a mirror or working network is not required.
@@ -123,8 +125,9 @@ Later updates come from the signed Nex APT archive; see [software updates](softw
    Select the same disposable OS disk for GRUB. This is the advanced/manual alternative;
    the graphical per-NIC editor and its whole-disk confirmation do not apply to this path.
 10. In the GUI, wait for **Nex Core installation complete**, eject the ISO and choose **Restart now**
-    to boot the installed disk. **Restart now** is the only button on that screen: the disk has
-    already been written, so there is nothing to go back to and no back button is offered.
+    to boot the installed disk. Apart from the installer's **Screenshot** button, **Restart now**
+    is the only action on that screen: the disk has already been written, so there is nothing to
+    go back to and no back button is offered.
     Minimal mode retains its native final restart prompt. Sign in as `root` at the local console using
     your chosen password. Before login, the console should show the local web UI URL once
     `nex-core-local` has a management address. Continue with [host verification](verify-nex-core.md).
@@ -180,6 +183,16 @@ to configured Debian repositories. No Nex package repository is configured yet.
   There is no Nex undo for an accepted disk overwrite.
 
 ## Verification
+
+The [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md) (`0.2.10~gate5`, 2026-09-17,
+disposable nested-KVM lab with SeaBIOS, screen captured every 4 s) walked the graphical steps 1–8
+and 10: checksum, boot menu, host and network pages, the only target disk, the unconfirmed-erase
+refusal, progress, completion and the installed console, with the installed package, version and
+files checked against the build. Step 8 matched apart from one open defect: twice between backend
+steps, once for about 4 s and once for about 20–24 s, the step list showed "Preparing the next
+installation step…" with no current step and no ticks before returning to the right step (the
+gate4 run saw 4–8 s). UEFI host installation and the minimal text installer (step 9) were not
+exercised in that run.
 
 The [fresh local installation](../qa/fresh-install/checks.md) covers a graphical BIOS
 installation onto a blank disk through Controller deployment. Installer details are recorded in

@@ -130,6 +130,8 @@ def main():
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1440, "height": 1000})
             page.set_default_timeout(2500)
+            # The UI probes the session only for a browser that signed in before (BUG-0208).
+            page.add_init_script("localStorage.setItem('nex-signed-in', '1')")
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.route("**/api/v1/**", api)
             url = f"http://127.0.0.1:{server.server_port}/#/pools/pool-qa"
@@ -363,6 +365,23 @@ def main():
 
             page.set_viewport_size({"width": 1440, "height": 1000})
             page.get_by_role("navigation", name="Resource views").get_by_role("button", name="Storage", exact=True).click()
+            # UI-1: queued and failed registrations have no repository id yet (id ""). When the
+            # queued one becomes healthy with a real id, its old row must not stay behind.
+            # Core has not checked access for a registration it has not accepted yet.
+            pending = lambda record, **fields: {**{k: v for k, v in record.items() if k != "access"}, "id": "", **fields}
+            failed = [pending(unsuitable, name=f"Failed repository {n}", status="failed", operation_id=f"storage-register-failed-{n}", error="export not found") for n in (1, 2)]
+            data["storage"] = [pending(healthy, status="queued"), *failed]
+            page.get_by_role("button", name="Refresh view", exact=True).click()
+            storage_rows = page.locator("tr[data-storage-id]")
+            expect(storage_rows).to_have_count(3)
+            expect(storage_rows.filter(has_text="VM share")).to_contain_text("queued")
+            data["storage"] = [healthy, *failed]
+            page.get_by_role("button", name="Refresh view", exact=True).click()
+            expect(page.locator('tr[data-storage-id="core-assigned-repository"]')).to_be_visible()
+            expect(storage_rows).to_have_count(3)
+            expect(page.locator("tr[data-storage-id] .badge").filter(has_text="queued")).to_have_count(0)
+            page.screenshot(path=str(args.evidence / "pending-row-replaced.png"), full_page=True)
+            checks.append("Two failed and one queued registration without ids render three rows; the queued row is replaced, not duplicated, once Core reports its id")
             mode["unauthorized"] = True
             page.get_by_role("row").filter(has_text="VM share").get_by_role("button", name="Recheck", exact=True).click()
             expect(page.get_by_label("Username", exact=True)).to_be_visible()

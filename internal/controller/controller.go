@@ -43,6 +43,7 @@ type Controller struct {
 	observed    map[string]observationReceipt
 	credentials *credentialBroker
 	consoles    consoleHub
+	stats       statsHub // transient host stats channels
 	clusterOnce sync.Once
 	clusters    storageClusterBroker // transient storage-cluster report round-trips
 	stop        chan struct{}
@@ -306,7 +307,10 @@ func (c *Controller) Handler() http.Handler {
 	m.HandleFunc("GET /api/v1/vms/{id}/console/{ticket}", c.admin(c.browserConsole))
 	m.HandleFunc("POST /api/v1/hosts/{id}/console", c.admin(c.openHostConsole))
 	m.HandleFunc("GET /api/v1/hosts/{id}/console/{ticket}", c.admin(c.browserConsole))
+	m.HandleFunc("GET /api/v1/vms/{id}/stats", c.admin(c.vmStats))
+	m.HandleFunc("GET /api/v1/hosts/{id}/stats", c.admin(c.hostStats))
 	m.HandleFunc("POST /api/v1/agent/console/{token}", c.agent(c.agentConsole))
+	m.HandleFunc("POST /api/v1/agent/stats/{token}", c.agent(c.agentStats))
 	m.HandleFunc("GET /api/v1/agent/media/{id}", c.agent(c.agentMedia))
 	m.HandleFunc("POST /api/v1/appliances/adopt", c.admin(c.adoptAppliance))
 	m.HandleFunc("POST /api/v1/appliances/bootstrap", c.admin(c.bootstrapAppliance))

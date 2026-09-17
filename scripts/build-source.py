@@ -14,7 +14,7 @@ import tempfile
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES = ('go.mod', 'go.sum', 'LICENSE', 'NOTICE', 'Makefile',
+FILES = ('go.mod', 'go.sum', 'LICENSE', 'NOTICE', 'ARTWORK-LICENSE.md', 'Makefile',
          'cmd/nex-controller/main.go', 'cmd/nex-core-agent/main.go',
          'web/public/nex-brand.png', 'web/public/third-party-notices.txt', 'docs/brand/README.md',
          'web/package.json', 'web/package-lock.json', 'web/build.mjs', 'web/tsconfig.json',
@@ -37,6 +37,9 @@ TREES = {'cmd': {'.go'}, 'internal': {'.go', '.sql'}, 'web/src': {'.tsx', '.ts',
          'packaging/cluster-storage': {'.sh'},
          'docs/api': {'.json', '.html', '.css'}}
 SCRIPTS = ('scripts/build-source.py', 'tests/test_build_source.py',
+           'scripts/build-source-bundle.py', 'scripts/prune-iso-packages.py',
+           'scripts/release-publish.py', 'tests/test_source_bundle.py',
+           'tests/test_prune_iso_packages.py', 'tests/test_release_publish.py',
            'scripts/generate_api.py', 'tests/test_api_contract.py',
            'tests/test_agent_service.py', 'tests/integration/phase1.py',
            'tests/integration/managed_vm.py', 'tests/integration/managed_vm_lab.py',

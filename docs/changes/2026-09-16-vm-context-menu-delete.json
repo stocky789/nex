@@ -1,0 +1,38 @@
+{
+  "summary": "Fix context-menu Delete dialog race and tidy VM right-click menu. API impact: none.",
+  "paths": [
+    "web/src/managed.tsx",
+    "web/src/main.tsx",
+    "web/src/icons.tsx",
+    "web/src/style.css",
+    "web/src/managed.test.mjs",
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-16-vm-context-menu-delete.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator steps for right-click Delete are unchanged; the dialog that the guide already describes now opens again.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "UI-only fix for mounting the existing delete confirmation; DELETE /api/v1/vms/{id} is unchanged.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone status change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state; Controller only presents host-reported VMs and submits the existing delete request."
+  },
+  "verification": {
+    "method": "npm --prefix web run test; npm --prefix web run typecheck; python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests -p 'test_repository_privacy.py'",
+    "evidence": [
+      "web/src/managed.test.mjs"
+    ]
+  }
+}

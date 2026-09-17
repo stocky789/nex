@@ -6,7 +6,8 @@ import { join } from "node:path";
 import assert from "node:assert/strict";
 
 const src = readFileSync(new URL("./storage.tsx", import.meta.url), "utf8");
-assert.match(src, /<tr key=\{s\.id\} data-storage-id=\{s\.id\}>/);
+// UI-1: queued and failed registrations all have id "", so the key falls back to the operation.
+assert.match(src, /<tr key=\{s\.id \|\| `op:\$\{s\.operation_id\}`\} data-storage-id=\{s\.id\}>/);
 assert.match(src, />Domain</);
 assert.match(src, /storage-existing-badge/);
 assert.doesNotMatch(src, /Existing directory within share/);

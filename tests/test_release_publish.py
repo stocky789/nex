@@ -2,6 +2,7 @@
 """ISO publishing into the website download tree, without touching a real host."""
 import importlib.machinery
 import importlib.util
+import json
 import subprocess
 import shutil
 import tempfile
@@ -22,12 +23,38 @@ def make_iso(directory, version, content=b"iso-bytes"):
     return path
 
 
+def make_source(directory, version, content=b"source-bytes"):
+    path = Path(directory) / f"nex-core-{version}-source.tar.gz"
+    path.write_bytes(content + version.encode())
+    return path
+
+
+def make_manifest(directory, version):
+    path = Path(directory) / f"nex-core-{version}-compliance-manifest.json"
+    iso = Path(directory) / f"nex-core-{version}-amd64.iso"
+    source = Path(directory) / f"nex-core-{version}-source.tar.gz"
+    path.write_text(json.dumps({
+        "version": version,
+        "iso": {"file": iso.name, "sha256": publish.sha256(iso) if iso.is_file() else "missing"},
+        "source_bundle": {"file": source.name, "sha256": publish.sha256(source) if source.is_file() else "missing"},
+    }) + "\n")
+    return path
+
+
+def publish_release(root, directory, version, keep=3, content=b"iso-bytes"):
+    return publish.publish(root, make_iso(directory, version, content),
+                           make_source(directory, version, content),
+                           make_manifest(directory, version), keep)
+
+
 class PublishTests(unittest.TestCase):
     def test_publishes_iso_with_checksum_and_latest_link(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "downloads"
             iso = make_iso(tmp, "0.1.6~alpha1")
-            version, digest, newest, removed = publish.publish(root, iso, keep=3)
+            source = make_source(tmp, "0.1.6~alpha1")
+            manifest = make_manifest(tmp, "0.1.6~alpha1")
+            version, digest, newest, removed = publish.publish(root, iso, source, manifest, keep=3)
             self.assertEqual(version, "0.1.6~alpha1")
             self.assertEqual(newest, "0.1.6~alpha1")
             self.assertEqual(removed, [])
@@ -36,6 +63,9 @@ class PublishTests(unittest.TestCase):
             self.assertEqual(installed.read_bytes(), iso.read_bytes())
             sidecar = (root / "0.1.6~alpha1" / (iso.name + ".sha256")).read_text()
             self.assertEqual(sidecar, f"{digest}  {iso.name}\n")
+            for asset in (source, manifest):
+                self.assertEqual((root / version / asset.name).read_bytes(), asset.read_bytes())
+                self.assertTrue((root / version / (asset.name + ".sha256")).is_file())
             self.assertEqual((root / "latest").resolve().name, "0.1.6~alpha1")
 
     def test_sidecar_verifies_with_sha256sum(self):
@@ -43,7 +73,7 @@ class PublishTests(unittest.TestCase):
             self.skipTest("sha256sum required")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "downloads"
-            publish.publish(root, make_iso(tmp, "0.1.6"), keep=3)
+            publish_release(root, tmp, "0.1.6")
             release = root / "0.1.6"
             result = subprocess.run(["sha256sum", "-c", "nex-core-0.1.6-amd64.iso.sha256"],
                                     cwd=release, capture_output=True, text=True)
@@ -53,7 +83,7 @@ class PublishTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "downloads"
             for version in ("0.1.4", "0.1.5", "0.1.6~alpha1", "0.1.6", "0.1.7"):
-                publish.publish(root, make_iso(tmp, version), keep=3)
+                publish_release(root, tmp, version)
             kept = publish.existing_releases(root)
             self.assertEqual(kept, ["0.1.6~alpha1", "0.1.6", "0.1.7"])
             self.assertEqual((root / "latest").resolve().name, "0.1.7")
@@ -77,9 +107,11 @@ class PublishTests(unittest.TestCase):
     def test_republishing_the_same_version_replaces_it_cleanly(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "downloads"
-            publish.publish(root, make_iso(tmp, "0.1.6", b"first"), keep=3)
+            publish_release(root, tmp, "0.1.6", content=b"first")
             second = make_iso(tmp, "0.1.6", b"second")
-            _, digest, _, _ = publish.publish(root, second, keep=3)
+            _, digest, _, _ = publish.publish(
+                root, second, make_source(tmp, "0.1.6", b"second"),
+                make_manifest(tmp, "0.1.6"), keep=3)
             installed = root / "0.1.6" / second.name
             self.assertEqual(installed.read_bytes(), second.read_bytes())
             self.assertEqual(publish.sha256(installed), digest)
@@ -90,7 +122,8 @@ class PublishTests(unittest.TestCase):
             bad = Path(tmp) / "something-else.iso"
             bad.write_bytes(b"x")
             with self.assertRaisesRegex(publish.ReleasePublishError, "unexpected ISO filename"):
-                publish.publish(Path(tmp) / "downloads", bad, keep=3)
+                publish.publish(Path(tmp) / "downloads", bad, make_source(tmp, "0.1.6"),
+                                make_manifest(tmp, "0.1.6"), keep=3)
 
     def test_rejects_symlinked_iso(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -98,24 +131,49 @@ class PublishTests(unittest.TestCase):
             link = Path(tmp) / "nex-core-0.1.7-amd64.iso"
             link.symlink_to(real)
             with self.assertRaisesRegex(publish.ReleasePublishError, "regular file"):
-                publish.publish(Path(tmp) / "downloads", link, keep=3)
+                publish.publish(Path(tmp) / "downloads", link, make_source(tmp, "0.1.7"),
+                                make_manifest(tmp, "0.1.7"), keep=3)
 
     def test_keep_below_one_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "downloads"
-            publish.publish(root, make_iso(tmp, "0.1.6"), keep=3)
+            publish_release(root, tmp, "0.1.6")
             with self.assertRaisesRegex(publish.ReleasePublishError, "at least 1"):
                 publish.prune(root, 0)
 
     def test_failed_publish_leaves_no_partial_release(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "downloads"
-            publish.publish(root, make_iso(tmp, "0.1.6"), keep=3)
+            publish_release(root, tmp, "0.1.6")
             missing = Path(tmp) / "nex-core-0.1.7-amd64.iso"
             with self.assertRaises(publish.ReleasePublishError):
-                publish.publish(root, missing, keep=3)
+                publish.publish(root, missing, make_source(tmp, "0.1.7"),
+                                make_manifest(tmp, "0.1.7"), keep=3)
             self.assertEqual(publish.existing_releases(root), ["0.1.6"])
             self.assertFalse(any(p.name.startswith(".") and p.is_dir() for p in root.iterdir()))
+
+    def test_rejects_assets_for_a_different_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(publish.ReleasePublishError, "source bundle must be named"):
+                publish.publish(Path(tmp) / "downloads", make_iso(tmp, "0.1.6"),
+                                make_source(tmp, "0.1.7"), make_manifest(tmp, "0.1.6"), keep=3)
+
+    def test_rejects_manifest_without_matching_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = make_manifest(tmp, "0.1.6")
+            manifest.write_text('{"version":"0.1.7"}\n')
+            with self.assertRaisesRegex(publish.ReleasePublishError, "compliance manifest version"):
+                publish.publish(Path(tmp) / "downloads", make_iso(tmp, "0.1.6"),
+                                make_source(tmp, "0.1.6"), manifest, keep=3)
+
+    def test_rejects_manifest_with_mismatched_artifact_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            iso = make_iso(tmp, "0.1.6")
+            source = make_source(tmp, "0.1.6")
+            manifest = make_manifest(tmp, "0.1.6")
+            source.write_bytes(b"tampered")
+            with self.assertRaisesRegex(publish.ReleasePublishError, "source_bundle binding"):
+                publish.publish(Path(tmp) / "downloads", iso, source, manifest, keep=3)
 
 
 if __name__ == "__main__":

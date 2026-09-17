@@ -14,6 +14,14 @@ if [ -d /cdrom/nex/third-party/ovmf-generic ]; then
     mkdir -p /target/usr/share/doc/nex-core/third-party
     cp -a /cdrom/nex/third-party/ovmf-generic /target/usr/share/doc/nex-core/third-party/
 fi
+if [ -d /cdrom/nex/third-party/virtio-win ]; then
+    mkdir -p /target/usr/share/doc/nex-core/third-party
+    cp -a /cdrom/nex/third-party/virtio-win /target/usr/share/doc/nex-core/third-party/
+fi
+if [ -f /cdrom/nex/media/virtio-win.iso ]; then
+    install -d -m755 /target/usr/share/nex/media
+    install -m644 /cdrom/nex/media/virtio-win.iso /target/usr/share/nex/media/virtio-win.iso
+fi
 mkdir -p /target/var/cache/nex-install
 cp -a /cdrom/nex/repo /target/var/cache/nex-install/
 cp /cdrom/nex/packages.txt /target/var/cache/nex-install/

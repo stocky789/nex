@@ -1,0 +1,53 @@
+{
+  "summary": "Core and Controller: fix Phase 2 gate5 open major defect 1 (BUG-0256). While validating a running VM's edit, before allocating any disk or changing any device, Core compares the live and persistent domains and reports the vm-update failed, changing nothing, when a requested interface's MAC is still on a live interface the guest has not released. updateVM draws new automatic MACs above the highest derived index the current definition uses, falling back to the lowest free index, instead of refilling the lowest free one. Not covered: a manual MAC that is still live on another running VM is not refused (cross-VM case, as recorded in BUG-0256). API impact: existing contract (vm-update gains a failure reason; PUT /api/v1/vms/{id} automatic MAC choice changes; shapes unchanged).",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_update_test.go",
+    "internal/controller/managed.go",
+    "internal/controller/update_test.go",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer.html",
+    "docs/api/peer-openapi.json",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-17-phase2-gate/checks.md",
+    "docs/changes/2026-09-17-nic-live-mac-reuse.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Edit guide step 2 states that a new automatic MAC does not refill a gap left by an earlier removal; Troubleshooting replaces the open duplicate-MAC warning with the new refusal (task reports failed, no disk created, nothing attached, previous settings kept) and what to do; Verification notes the fix is unit-tested only.",
+    "pages": [
+      "docs/guide/edit-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No new operation, field or capability. The vm-update command can now be reported failed at validation, before any disk allocation or device change, with \"network interface MAC <mac> is still attached to the running VM; wait for the guest to release it or stop the VM, then save again\", reported through the existing operation result; a retry after release or while stopped succeeds. updateVM (PUT /api/v1/vms/{id}) freezes new automatic MACs above the highest derived index the current definition uses, falling back to the lowest free index. Older Controllers work with this Core, and this Controller with older Core keeps the old Core behavior. Documented in docs/API.md VM editing and the updateVM and VMNIC mac descriptions in docs/api/openapi.json and the VMNIC mac description in docs/api/peer-openapi.json, regenerated with scripts/generate_api.py.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html",
+      "docs/api/peer-openapi.json",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Fixes an existing edit feature; the Phase 2 gate stays open pending a gated rebuild and rerun, recorded in the gate report.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable state. Core reads the live domain libvirt already holds; the Controller derives the next address from the VM definition the pool master's Nex Core journals and reports, which a fresh Controller re-adopts."
+  },
+  "verification": {
+    "method": "TestManagedUpdateRefusesMACStillLive (Execute with fake virsh: failed, exact error, no device calls, no allocating or attaching stage; retry after release attaches once, but stops at the unit harness's missing storage registration, so a fully succeeded retry is not proven) fails with the check disabled and passes with it. TestUpdateVMAddAfterRunningRemovalSkipsRemovedMAC and TestUpdateVMAutomaticMACHighestIndexFromCurrentDefinition failed before their fixes and pass after. go test -race ./internal/vmhost/... ./internal/controller/... ./internal/protocol/... passes; go vet clean; gofmt -l clean on changed files. Not walked on a real host or libvirt; not in a gate build.",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "internal/vmhost/managed_update_test.go",
+      "internal/controller/update_test.go"
+    ]
+  }
+}

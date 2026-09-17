@@ -135,9 +135,11 @@ jobs:
         run: |
           set -euo pipefail
           iso="dist/nex-core-${NEX_VERSION}-amd64.iso"
+          source="dist/nex-core-${NEX_VERSION}-source.tar.gz"
+          manifest="dist/nex-core-${NEX_VERSION}-compliance-manifest.json"
           core="dist/core-local/nex-core-local_${NEX_VERSION}_amd64.deb"
           controller="dist/controller/nex-controller_${NEX_VERSION}_amd64.deb"
-          for artifact in "$iso" "$core" "$controller"; do
+          for artifact in "$iso" "$source" "$manifest" "$core" "$controller"; do
             [ -f "$artifact" ] || { echo "missing artifact: $artifact" >&2; exit 1; }
           done
           # A matching filename is not proof of a matching package version.
@@ -146,8 +148,12 @@ jobs:
             [ "$actual" = "$NEX_VERSION" ] || {
               echo "$deb declares $actual, expected $NEX_VERSION" >&2; exit 1; }
           done
-          ( cd dist && sha256sum "nex-core-${NEX_VERSION}-amd64.iso" \
-              > "nex-core-${NEX_VERSION}-amd64.iso.sha256" )
+          ( cd dist && for artifact in \
+              "nex-core-${NEX_VERSION}-amd64.iso" \
+              "nex-core-${NEX_VERSION}-source.tar.gz" \
+              "nex-core-${NEX_VERSION}-compliance-manifest.json"; do
+              sha256sum "$artifact" > "$artifact.sha256"
+            done )
 
       - name: Create or replace the release
         env:
@@ -161,6 +167,10 @@ jobs:
             --name "Nex Core $NEX_VERSION" --notes .cache/release-notes.md \
             "dist/nex-core-${NEX_VERSION}-amd64.iso" \
             "dist/nex-core-${NEX_VERSION}-amd64.iso.sha256" \
+            "dist/nex-core-${NEX_VERSION}-source.tar.gz" \
+            "dist/nex-core-${NEX_VERSION}-source.tar.gz.sha256" \
+            "dist/nex-core-${NEX_VERSION}-compliance-manifest.json" \
+            "dist/nex-core-${NEX_VERSION}-compliance-manifest.json.sha256" \
             "dist/core-local/nex-core-local_${NEX_VERSION}_amd64.deb" \
             "dist/controller/nex-controller_${NEX_VERSION}_amd64.deb"
 
@@ -229,6 +239,8 @@ jobs:
           # shellcheck disable=SC2086
           scp $ssh_opts \
             "dist/nex-core-${NEX_VERSION}-amd64.iso" \
+            "dist/nex-core-${NEX_VERSION}-source.tar.gz" \
+            "dist/nex-core-${NEX_VERSION}-compliance-manifest.json" \
             "dist/core-local/nex-core-local_${NEX_VERSION}_amd64.deb" \
             "dist/controller/nex-controller_${NEX_VERSION}_amd64.deb" \
             scripts/release-publish.py \
@@ -239,7 +251,7 @@ jobs:
           # shellcheck disable=SC2086
           ssh $ssh_opts "$target" "set -eu
             sudo -n /usr/local/sbin/nex-apt-publish '$staging/nex-core-local_${NEX_VERSION}_amd64.deb' '$staging/nex-controller_${NEX_VERSION}_amd64.deb'
-            python3 '$staging/release-publish.py' --iso '$staging/nex-core-${NEX_VERSION}-amd64.iso' --keep 3
+            python3 '$staging/release-publish.py' --iso '$staging/nex-core-${NEX_VERSION}-amd64.iso' --source '$staging/nex-core-${NEX_VERSION}-source.tar.gz' --compliance-manifest '$staging/nex-core-${NEX_VERSION}-compliance-manifest.json' --keep 3
             rm -rf '$staging'"
 
       - name: Confirm the release is actually reachable
@@ -253,7 +265,9 @@ jobs:
           for path in \
             "/apt/dists/nex/InRelease" \
             "/apt/dists/nex/main/binary-amd64/Packages" \
-            "/downloads/${NEX_VERSION}/nex-core-${NEX_VERSION}-amd64.iso.sha256"; do
+            "/downloads/${NEX_VERSION}/nex-core-${NEX_VERSION}-amd64.iso.sha256" \
+            "/downloads/${NEX_VERSION}/nex-core-${NEX_VERSION}-source.tar.gz" \
+            "/downloads/${NEX_VERSION}/nex-core-${NEX_VERSION}-compliance-manifest.json"; do
             code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 60 "${NEX_PUBLIC_URL}${path}")
             [ "$code" = 200 ] || { echo "$path returned $code" >&2; exit 1; }
           done

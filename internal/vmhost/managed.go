@@ -661,6 +661,8 @@ func managedJournalCheck(bad []string, observedAt time.Time) protocol.Check {
 	journal := protocol.Check{Name: "managed-journal", Status: "healthy", ObservedAt: observedAt}
 	if len(bad) > 0 {
 		journal.Status, journal.Error = "failed", "unreadable managed journal entries skipped: "+strings.Join(bad, "; ")
+	} else {
+		journal.LastSuccess = &observedAt
 	}
 	return journal
 }
@@ -1380,6 +1382,13 @@ func storageDependencies(js []managedJournal, id string) []string {
 			out = append(out, "VM "+vmID)
 		}
 	}
+	// A succeeded wipe delete removed every retained path of its VM (managedDeleteDiskPaths).
+	wiped := map[string]bool{}
+	for _, j := range js {
+		if j.Command.Kind == "vm-delete" && j.Result.Status == "succeeded" && j.Command.Delete != nil && j.Command.Delete.DeleteDisks {
+			wiped[j.Command.Delete.VMID] = true
+		}
+	}
 	for _, j := range js {
 		if j.Result.Status != "succeeded" {
 			continue
@@ -1397,7 +1406,7 @@ func storageDependencies(js []managedJournal, id string) []string {
 		case j.Command.Delete != nil:
 			vmID = j.Command.Delete.VMID
 		}
-		if vmID == "" {
+		if vmID == "" || wiped[vmID] {
 			continue
 		}
 		s, err := managedStorage(js, id)
@@ -1626,6 +1635,9 @@ func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []
 			}
 		}
 	}
+	if vms.Status == "healthy" {
+		vms.LastSuccess = &now
+	}
 	return out, []protocol.Check{journal, vms}
 }
 
@@ -1771,7 +1783,7 @@ func (e *ManagedEngine) ReconcileRemoteVMUpdate(ctx context.Context, validate fu
 	if err == nil {
 		err = ctx.Err()
 	}
-	if err == nil && j.Stage == "cleaning-nvram" {
+	if err == nil && firmwareRemovalPending(j) {
 		err = e.finishFirmwareRemoval(ctx, &j)
 	}
 	if err == nil && j.Stage == secureBootVariablesStage {
@@ -2468,10 +2480,16 @@ type cpuModelXML struct {
 }
 
 // Maximum uses a virtio balloon to report free guest pages; dedicated has no balloon
-// and uses physical memory backing below.
+// and uses physical memory backing below. The stats period lets the guest's balloon driver
+// report memory used inside the guest for usage history; it is never compared on
+// validation, because it changes nothing the guest can be tricked by.
 type managedBalloon struct {
-	Model             string `xml:"model,attr"`
-	FreePageReporting string `xml:"freePageReporting,attr,omitempty"`
+	Model             string               `xml:"model,attr"`
+	FreePageReporting string               `xml:"freePageReporting,attr,omitempty"`
+	Stats             *managedBalloonStats `xml:"stats,omitempty"`
+}
+type managedBalloonStats struct {
+	Period int `xml:"period,attr"`
 }
 type managedMemoryBacking struct {
 	NoSharePages *struct{} `xml:"nosharepages,omitempty"`
@@ -2625,7 +2643,7 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 		d.MemoryBacking = dedicatedMemoryBacking()
 		d.Devices.Memballoon = managedBalloon{Model: "none"}
 	} else {
-		d.Devices.Memballoon = managedBalloon{Model: "virtio", FreePageReporting: "on"}
+		d.Devices.Memballoon = managedBalloon{Model: "virtio", FreePageReporting: "on", Stats: &managedBalloonStats{Period: 5}}
 	}
 	sockets, cores, threads := v.CPU.Topology()
 	d.CPU = managedCPU{Mode: v.CPU.Model, Check: "none", Topology: &managedTopology{sockets, cores, threads}}
@@ -3721,30 +3739,38 @@ func (e *ManagedEngine) prepareSecureBootVariables(ctx context.Context, j *manag
 	if len(j.SecureBootPreviousDomain) == 0 {
 		return errors.New("VM Secure Boot predecessor was not recorded; inspect the VM on its host")
 	}
-	var domain managedDomain
-	if xml.Unmarshal(j.Domain, &domain) != nil || domain.OS.NVRAM == nil || domain.OS.NVRAM.Path == "" {
-		return errors.New("cannot read VM firmware variable store before changing Secure Boot")
-	}
-	digest, info, err := firmwareVariablesDigest(domain.OS.NVRAM.Path)
+	path, digest, mode, uid, gid, err := secureBootSource(ctx, j.Domain, j.SecureBootEnabled)
 	if err != nil {
 		return err
 	}
-	if j.SecureBootEnabled {
-		_, enrolled, err := firmwareVariablesState(ctx, domain.OS.NVRAM.Path)
-		if err != nil {
-			return err
-		}
-		if !enrolled {
-			return errors.New("this VM's firmware variables have no enrolled Secure Boot keys; recreate the VM with Secure Boot on or wait for a Secure Boot enrollment policy")
-		}
-	}
-	mode, uid, gid, err := secureBootMetadata(info)
-	if err != nil {
-		return err
-	}
-	j.SecureBootNVRAM, j.SecureBootBefore = domain.OS.NVRAM.Path, digest
+	j.SecureBootNVRAM, j.SecureBootBefore = path, digest
 	j.SecureBootMode, j.SecureBootUID, j.SecureBootGID = mode, uid, gid
 	return e.save(*j)
+}
+
+// secureBootSource reads, without changing anything, the variable store a Secure Boot edit
+// would modify and refuses the edit when the store cannot carry the requested state.
+func secureBootSource(ctx context.Context, domainXML []byte, enabled bool) (path, digest string, mode, uid, gid uint32, err error) {
+	var domain managedDomain
+	if xml.Unmarshal(domainXML, &domain) != nil || domain.OS.NVRAM == nil || domain.OS.NVRAM.Path == "" {
+		return "", "", 0, 0, 0, errors.New("cannot read VM firmware variable store before changing Secure Boot")
+	}
+	path = domain.OS.NVRAM.Path
+	digest, info, err := firmwareVariablesDigest(path)
+	if err != nil {
+		return "", "", 0, 0, 0, err
+	}
+	if enabled {
+		_, enrolled, err := firmwareVariablesState(ctx, path)
+		if err != nil {
+			return "", "", 0, 0, 0, err
+		}
+		if !enrolled {
+			return "", "", 0, 0, 0, errors.New("this VM's firmware variables have no enrolled Secure Boot keys; recreate the VM with Secure Boot on or wait for a Secure Boot enrollment policy")
+		}
+	}
+	mode, uid, gid, err = secureBootMetadata(info)
+	return path, digest, mode, uid, gid, err
 }
 
 // finishSecureBootVariables is safe after a process death: source and temporary hashes decide
@@ -3871,6 +3897,14 @@ func (e *ManagedEngine) finishSecureBootDefinition(ctx context.Context, j *manag
 	return nil
 }
 
+// firmwareRemovalPending reports a UEFI-to-BIOS edit whose BIOS define is not yet observed:
+// either the undefine boundary (cleaning-nvram) or the define after it (defining, which only
+// firmware removal enters with NVRAMPath recorded). Both resume through finishFirmwareRemoval,
+// so an interrupted or refused define after undefine is retried instead of stranding the VM.
+func firmwareRemovalPending(j managedJournal) bool {
+	return j.Stage == "cleaning-nvram" || (j.Stage == "defining" && j.NVRAMPath != "")
+}
+
 // finishFirmwareRemoval is safe to retry after the journal records cleaning-nvram. A UEFI
 // definition proves the BIOS redefine landed; an absent domain proves undefine landed. In both
 // cases it removes the exact journaled file after path validation, because libvirt can report a
@@ -3891,6 +3925,10 @@ func (e *ManagedEngine) finishFirmwareRemoval(ctx context.Context, j *managedJou
 		var d managedDomain
 		if xml.Unmarshal(b, &d) != nil || d.OS.Firmware != "efi" {
 			return errors.New("VM firmware cleanup state is not recognisable; inspect the VM on its host")
+		}
+		if j.Stage == "defining" {
+			// Undefine already landed before this stage was saved; a UEFI domain now is not ours.
+			return errors.New("VM definition changed during firmware cleanup; inspect the VM on its host")
 		}
 		if d.OS.NVRAM == nil || d.OS.NVRAM.Path == "" {
 			return errors.New("existing UEFI VM has no firmware variable store; inspect it on the host before editing")
@@ -3937,9 +3975,12 @@ func (e *ManagedEngine) finishFirmwareRemoval(ctx context.Context, j *managedJou
 	return nil
 }
 
-func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protocol.Result, error) {
-	j.Result.Status = "needs_attention"
-	j.Result.Error = "interrupted operation retained; inspect host resources before creating a new request; no effects replayed"
+// reconcile resumes or observes an interrupted operation. The entry stays pending while a
+// resume runs, so a helper's mid-way save never persists a provisional needs_attention; only
+// a result still unsettled at the end becomes needs_attention, keeping its reason.
+func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (r protocol.Result, err error) {
+	j.Result.Status, j.Result.Error = "pending", ""
+	defer func() { r = unsettledNeedsAttention(r) }()
 	if j.Command.Kind == "storage-register" || j.Command.Kind == "storage-update" || j.Command.Kind == "storage-recheck" || j.Command.Kind == "storage-detach" || j.Command.Kind == "storage-credential-retire" || j.Command.Kind == "network-register" {
 		js, err := e.journals()
 		if err != nil {
@@ -3960,14 +4001,15 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protoc
 	if j.Command.Kind == "vm-create" && (j.Stage == "defining" || j.Stage == "defined") {
 		// The start step was never reached, so the re-sent creation runs it once now.
 		if err := e.observer()(ctx, j, "shut off"); err == nil {
-			j.Result.Status, j.Result.Error, j.Stage = "succeeded", "", "defined"
+			j.Stage = "defined"
 			if err = e.startCreated(ctx, &j); err != nil {
 				return j.Result, err
 			}
+			j.Result.Status, j.Result.Error = "succeeded", ""
 		}
 	}
 	// An interrupted edit is proven the same way, in whichever state it was applied.
-	if j.Command.Kind == "vm-update" && j.Stage == "cleaning-nvram" {
+	if j.Command.Kind == "vm-update" && firmwareRemovalPending(j) {
 		if err := e.finishFirmwareRemoval(ctx, &j); err == nil {
 			if err = e.observer()(ctx, j, "shut off"); err == nil {
 				j.Result.Status, j.Result.Error, j.Stage = "succeeded", "", "defined"
@@ -4070,7 +4112,7 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protoc
 				}
 				j.Result.Error = err.Error()
 			}
-		} else if err := deleteObserved(ctx, *j.Command.Delete, j); err == nil {
+		} else if err := e.resumeDelete(ctx, &j); err == nil {
 			j.Result.Status = "succeeded"
 			j.Result.Error = ""
 		} else {
@@ -4085,8 +4127,19 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (protoc
 			_ = os.Remove(j.MediaPath + ".partial")
 		}
 	}
+	j.Result = unsettledNeedsAttention(j.Result)
 	j.Result.ObservedAt = time.Now().UTC()
 	return j.Result, e.save(j)
+}
+
+func unsettledNeedsAttention(r protocol.Result) protocol.Result {
+	if r.Status == "pending" {
+		r.Status = "needs_attention"
+		if r.Error == "" {
+			r.Error = "interrupted operation retained; inspect host resources before creating a new request; no effects replayed"
+		}
+	}
+	return r
 }
 
 // vmEverHad reports whether any journaled definition of this VM, at any revision and whatever
@@ -4123,6 +4176,22 @@ func (e *ManagedEngine) deleteVM(ctx context.Context, j *managedJournal, js []ma
 			continue
 		}
 		id, _ := managedIdentity(old.Command)
+		if id == req.VMID && old.Command.Kind == "vm-delete" && (old.Stage == "undefining" || old.Stage == "wiping") {
+			// A replaced Controller never re-sends the interrupted delete, so a new delete for
+			// the same VM finishes it, but only when both requests make the same disk choice:
+			// a new request never wipes disks it asked to keep, nor settles a wipe as a retain.
+			if old.Command.Delete.DeleteDisks != req.DeleteDisks {
+				return errors.New("an earlier interrupted delete for this VM made a different disk choice; re-send the delete with delete_disks=" + strconv.FormatBool(old.Command.Delete.DeleteDisks) + " to finish it, or resolve it on the host")
+			}
+			r, err := e.reconcile(ctx, old)
+			if err != nil {
+				return err
+			}
+			if r.Status == "succeeded" {
+				return errors.New("VM is already deleted on this host: an earlier interrupted delete has now finished")
+			}
+			return errors.New("an earlier interrupted delete for this VM is still unresolved: " + r.Error)
+		}
 		if id == req.VMID && (old.Command.Kind == "vm-create" || old.Command.Kind == "vm-update" || old.Command.Kind == "vm-power" || old.Command.Kind == "vm-media" || old.Command.Kind == "vm-delete") {
 			return errors.New("a change, power, media or delete request for this VM is still unresolved")
 		}
@@ -4140,14 +4209,19 @@ func (e *ManagedEngine) deleteVM(ctx context.Context, j *managedJournal, js []ma
 	if err = e.save(*j); err != nil {
 		return err
 	}
-	// Per-VM host state outlives the revision that asked for it. Firmware and the TPM are both
-	// editable (NeedsStop lists them), and neither a redefine that drops the device nor anything
-	// else in Core removes what the earlier revision left on the host, so asking only the current
-	// definition would strand it: create with UEFI or a TPM, edit it away, delete, and the NVRAM
-	// file or the swtpm directory survives. swtpm's state under /var/lib/libvirt/swtpm/<uuid>
-	// holds the endorsement key and whatever the guest sealed to it, and a later VM given the
-	// same UUID fails to start against state it does not own. Ask every revision this VM ever
-	// had, failed ones included: a revision that was journaled may have started before it failed.
+	return e.finishDelete(ctx, j, js, true)
+}
+
+// finishDelete runs the effects of a delete whose disk list is already journaled: undefine
+// (when the domain is still defined) and, if requested, the wipe. A resumed delete re-runs
+// whichever of them the interruption left undone; both are safe to repeat.
+func (e *ManagedEngine) finishDelete(ctx context.Context, j *managedJournal, js []managedJournal, undefine bool) error {
+	req := j.Command.Delete
+	// The flags come from every revision the journal holds, failed ones included, but libvirt
+	// removes NVRAM and swtpm state only for devices the persistent definition still carries
+	// (BUG-0196, BUG-0214). Asking every revision does not recover state an earlier edit
+	// dropped; NeedsStop refusing TPM removal and the firmware-removal cleanup are what keep
+	// host state and definition in step. The flags matter only for devices still defined.
 	args := []string{req.VMID}
 	if vmEverHad(js, req.VMID, func(v protocol.VMCreateSpec) bool { return v.Boot.Firmware == "uefi" }) {
 		args = append(args, "--nvram")
@@ -4155,15 +4229,17 @@ func (e *ManagedEngine) deleteVM(ctx context.Context, j *managedJournal, js []ma
 	if vmEverHad(js, req.VMID, func(v protocol.VMCreateSpec) bool { return v.Boot.TPMEnabled() }) {
 		args = append(args, "--tpm")
 	}
-	if _, err = managedVirsh(ctx, append([]string{"undefine"}, args...)...); err != nil {
-		return err
+	if undefine {
+		if _, err := managedVirsh(ctx, append([]string{"undefine"}, args...)...); err != nil {
+			return err
+		}
 	}
 	if req.DeleteDisks {
 		j.Stage = "wiping"
-		if err = e.save(*j); err != nil {
+		if err := e.save(*j); err != nil {
 			return err
 		}
-		if err = wipeManagedDisks(paths); err != nil {
+		if err := wipeManagedDisks(j.Retained); err != nil {
 			return err
 		}
 		j.Retained = nil
@@ -4176,6 +4252,30 @@ func (e *ManagedEngine) deleteVM(ctx context.Context, j *managedJournal, js []ma
 		return errors.New("VM domain is still defined after undefine")
 	}
 	return nil
+}
+
+// resumeDelete finishes a delete interrupted after its disk list was journaled. A domain that
+// is still defined must be shut off before it is undefined; nothing else is re-decided.
+func (e *ManagedEngine) resumeDelete(ctx context.Context, j *managedJournal) error {
+	js, err := e.journals()
+	if err != nil {
+		return err
+	}
+	defined := domains(ctx)
+	if defined == nil {
+		return errors.New("libvirt did not list domains after an interrupted delete")
+	}
+	still := defined[strings.ToLower(j.Command.Delete.VMID)]
+	if still {
+		state, err := managedVirsh(ctx, "domstate", j.Command.Delete.VMID)
+		if err != nil {
+			return errors.New("VM state cannot be established after an interrupted delete")
+		}
+		if observed := strings.TrimSpace(string(state)); observed != "shut off" {
+			return errors.New("stop the VM so its interrupted delete can finish; observed state is " + observed)
+		}
+	}
+	return e.finishDelete(ctx, j, js, still)
 }
 
 func managedDeleteDiskPaths(js []managedJournal, cur managedJournal) []string {
@@ -4223,29 +4323,6 @@ func wipeManagedDisks(paths []string) error {
 			continue
 		}
 		_ = os.Remove(dir)
-	}
-	return nil
-}
-
-// deleteObserved reconciles an interrupted delete: the domain must be gone, and when disks
-// were requested for wipe every recorded path must be absent.
-func deleteObserved(ctx context.Context, req protocol.VMDeleteRequest, j managedJournal) error {
-	defined := domains(ctx)
-	if defined == nil {
-		return errors.New("libvirt did not list domains after an interrupted delete")
-	}
-	if defined[strings.ToLower(req.VMID)] {
-		return errors.New("VM domain is still defined after an interrupted delete")
-	}
-	if !req.DeleteDisks {
-		return nil
-	}
-	for _, path := range j.Retained {
-		if _, err := os.Stat(path); err == nil {
-			return errors.New("disk file still present after an interrupted wipe: " + path)
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
 	}
 	return nil
 }
@@ -4344,11 +4421,20 @@ func powerObserved(ctx context.Context, p protocol.VMPowerRequest) error {
 // when the domain has none; QEMU cannot hot-plug SATA, so a running VM without a tray is refused.
 func (e *ManagedEngine) changeMedia(ctx context.Context, j *managedJournal, js []managedJournal) error {
 	req := *j.Command.VMMedia
-	if _, err := managedVM(js, req.VMID); err != nil {
+	vm, err := managedVM(js, req.VMID)
+	if err != nil {
 		return err
 	}
 	path := ""
 	if req.Action == "insert" {
+		// The recorded definition must keep the two drives on different ISOs (ValidateVMSpec),
+		// whatever the requesting Controller believes; refuse before touching libvirt.
+		if driveName(req.Drive) == protocol.DriversDrive && req.MediaID == vm.MediaID {
+			return errors.New("that ISO is already in the install drive; the driver disc must differ from the install media")
+		}
+		if driveName(req.Drive) == protocol.InstallDrive && req.MediaID == vm.DriversMediaID {
+			return errors.New("that ISO is already in the driver disc drive; the install media must differ from the driver disc")
+		}
 		m, mediaPath, err := managedMedia(js, req.MediaID)
 		if err != nil {
 			return err
@@ -4829,6 +4915,32 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 			return errors.New("stop the VM and save its settings to apply the dedicated memory reservation before live editing")
 		}
 	}
+	if running {
+		// A detach drops an interface from the persistent definition at once, but the live device
+		// stays until the guest acknowledges the unplug, and firmware or guests without hotplug
+		// never do. Attaching a new interface with that address would put one MAC on the bridge
+		// twice, so it is refused here, before allocating or attaching anything.
+		persistent, err := dumpManagedDomain(ctx, v.ID, false)
+		if err != nil {
+			return err
+		}
+		live, err := dumpManagedDomain(ctx, v.ID, true)
+		if err != nil {
+			return err
+		}
+		held := map[string]bool{}
+		for _, n := range live.Devices.Interfaces {
+			held[n.MAC.Address] = true
+		}
+		for _, n := range persistent.Devices.Interfaces {
+			delete(held, n.MAC.Address)
+		}
+		for i, n := range v.NICs {
+			if mac := protocol.NICMAC(v.ID, i, n); held[mac] {
+				return fmt.Errorf("network interface MAC %s is still attached to the running VM; wait for the guest to release it or stop the VM, then save again", mac)
+			}
+		}
+	}
 	if v.Name != cur.Command.VM.Name {
 		names, err := managedVirsh(ctx, "list", "--all", "--name")
 		if err != nil {
@@ -4939,55 +5051,8 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 		if err = e.applyLive(ctx, v.ID, j.Domain, mediaPath, driversPath); err != nil {
 			return err
 		}
-	} else {
-		removeFirmware := firmwareRemoved(*cur.Command.VM, v)
-		changingSecureBoot := secureBootChanged(*cur.Command.VM, v)
-		if changingSecureBoot {
-			// The XML selects the matching OVMF build, but the existing variable store is
-			// authoritative for enforcement and guest boot entries. Journal its native edit
-			// before invoking the tool; recovery never replaces it with a template.
-			j.SecureBootEnabled = v.Boot.SecureBootEnabled()
-			j.Stage = secureBootVariablesStage
-			if err = e.prepareSecureBootVariables(ctx, j); err != nil {
-				return err
-			}
-			if err = e.finishSecureBootVariables(ctx, j); err != nil {
-				return err
-			}
-			if err = e.finishSecureBootDefinition(ctx, j); err != nil {
-				return err
-			}
-		}
-		if removeFirmware {
-			// Libvirt can remove NVRAM only while the persistent definition still describes
-			// UEFI. Persist this boundary first; finishFirmwareRemoval observes before any
-			// retry, so an interruption cannot replay an ambiguous undefine.
-			j.Stage = "cleaning-nvram"
-			if err = e.save(*j); err != nil {
-				return err
-			}
-			if err = e.finishFirmwareRemoval(ctx, j); err != nil {
-				return err
-			}
-		}
-		if v.Name != cur.Command.VM.Name && !removeFirmware {
-			if _, err = managedVirsh(ctx, "domrename", v.ID, "--", v.Name); err != nil {
-				return fmt.Errorf("libvirt refused the rename (%v); inspect the VM on its host", err)
-			}
-		}
-		if !removeFirmware && !changingSecureBoot {
-			domainPath := filepath.Join(e.stateDir, j.Command.OperationID+".xml")
-			if err = atomicWrite(domainPath, j.Domain); err != nil {
-				return err
-			}
-			j.Stage = "defining"
-			if err = e.save(*j); err != nil {
-				return err
-			}
-			if _, err = managedVirsh(ctx, "define", domainPath); err != nil {
-				return errors.New("VM redefinition outcome uncertain; observation required before recovery")
-			}
-		}
+	} else if err = e.applyStopped(ctx, j, *cur.Command.VM); err != nil {
+		return err
 	}
 	if err = setAutostart(ctx, v, js); err != nil {
 		return err
@@ -4996,6 +5061,85 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 		return err
 	}
 	j.Stage = "defined"
+	return nil
+}
+
+// applyStopped writes a stopped VM's new definition: Secure Boot variables, UEFI-to-BIOS
+// cleanup, rename and define, each journaled so recovery observes before any retry.
+func (e *ManagedEngine) applyStopped(ctx context.Context, j *managedJournal, prev protocol.VMCreateSpec) error {
+	v := *j.Command.VM
+	var err error
+	removeFirmware := firmwareRemoved(prev, v)
+	changingSecureBoot := secureBootChanged(prev, v)
+	if changingSecureBoot {
+		if v.Name != prev.Name && j.SecureBootNVRAM == "" {
+			// Decide every read-only refusal before the rename, so a refused edit leaves
+			// libvirt untouched rather than renamed under a failed Nex record.
+			if _, _, _, _, _, err = secureBootSource(ctx, j.Domain, v.Boot.SecureBootEnabled()); err != nil {
+				return err
+			}
+		}
+		if v.Name != prev.Name {
+			// libvirt refuses to define an existing UUID under another name, so rename
+			// before touching the variable store, then re-observe the renamed predecessor
+			// (a legacy name-derived NVRAM path may move with it).
+			if _, err = managedVirsh(ctx, "domrename", v.ID, "--", v.Name); err != nil {
+				return fmt.Errorf("libvirt refused the rename (%v); inspect the VM on its host", err)
+			}
+			current, readErr := managedVirsh(ctx, "dumpxml", v.ID, "--inactive")
+			if readErr != nil {
+				return errors.New("cannot read VM firmware variable store after rename")
+			}
+			if j.Domain, err = carryFirmwareVariables(j.Domain, current); err != nil {
+				return err
+			}
+			j.SecureBootPreviousDomain = current
+		}
+		// The XML selects the matching OVMF build, but the existing variable store is
+		// authoritative for enforcement and guest boot entries. Journal its native edit
+		// before invoking the tool; recovery never replaces it with a template.
+		j.SecureBootEnabled = v.Boot.SecureBootEnabled()
+		j.Stage = secureBootVariablesStage
+		if err = e.prepareSecureBootVariables(ctx, j); err != nil {
+			return err
+		}
+		if err = e.finishSecureBootVariables(ctx, j); err != nil {
+			return err
+		}
+		if err = e.finishSecureBootDefinition(ctx, j); err != nil {
+			return err
+		}
+	}
+	if removeFirmware {
+		// Libvirt can remove NVRAM only while the persistent definition still describes
+		// UEFI. Persist this boundary first; finishFirmwareRemoval observes before any
+		// retry, so an interruption cannot replay an ambiguous undefine.
+		j.Stage = "cleaning-nvram"
+		if err = e.save(*j); err != nil {
+			return err
+		}
+		if err = e.finishFirmwareRemoval(ctx, j); err != nil {
+			return err
+		}
+	}
+	if v.Name != prev.Name && !removeFirmware && !changingSecureBoot {
+		if _, err = managedVirsh(ctx, "domrename", v.ID, "--", v.Name); err != nil {
+			return fmt.Errorf("libvirt refused the rename (%v); inspect the VM on its host", err)
+		}
+	}
+	if !removeFirmware && !changingSecureBoot {
+		domainPath := filepath.Join(e.stateDir, j.Command.OperationID+".xml")
+		if err = atomicWrite(domainPath, j.Domain); err != nil {
+			return err
+		}
+		j.Stage = "defining"
+		if err = e.save(*j); err != nil {
+			return err
+		}
+		if _, err = managedVirsh(ctx, "define", domainPath); err != nil {
+			return errors.New("VM redefinition outcome uncertain; observation required before recovery")
+		}
+	}
 	return nil
 }
 

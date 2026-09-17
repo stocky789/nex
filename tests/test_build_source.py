@@ -52,8 +52,12 @@ class SourceArchiveTests(unittest.TestCase):
             source.copy_sources(root, target)
             self.assertTrue((target / 'cmd/controller/main.go').exists())
             self.assertTrue((target / 'web/public/nex-brand.png').exists())
+            self.assertTrue((target / 'ARTWORK-LICENSE.md').exists())
             self.assertTrue((target / 'web/public/third-party-notices.txt').exists())
             self.assertTrue((target / 'docs/brand/README.md').exists())
+            self.assertTrue((target / 'scripts/build-source-bundle.py').exists())
+            self.assertTrue((target / 'scripts/prune-iso-packages.py').exists())
+            self.assertTrue((target / 'scripts/release-publish.py').exists())
             for name in ('appliance/firstboot.py', 'packaging/core-local/build.py',
                          'packaging/core-local/nex-root-auth.c', 'packaging/core-local/nex-core-local.pam',
                          'packaging/core-local/libvirtd-apparmor-policy.py', 'docs/api/local-openapi.json'):

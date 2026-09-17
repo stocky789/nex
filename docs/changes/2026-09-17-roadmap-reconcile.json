@@ -1,0 +1,47 @@
+{
+  "summary": "Reconcile plans, roadmap, changelog and guide index with the Phase 2 gate report (0.2.10~gate5, 2026-09-17 UTC) and the current working tree. Open defect 1 is now described as fixed in the uncommitted tree as BUG-0256 with unit tests only, not lab-verified, needing a gated rebuild and a rerun of row 11 and the G7 rows. The platform plan top status lists VM editing and deletion as implemented and records next steps (project owner code review, refactor and commit; gated rebuild; owner decisions including G6 same-host retire and the affected published nex-controller packages). The production-readiness handoff records BUG-0246 and release owner decisions 6 and 8. The VM creation and VM edit plans, the Windows 11 batch handover and lab-fixes plans, and the VM creation QA outstanding note record the BUG-0254/BUG-0256/BUG-0235 tree state. CHANGELOG lists BUG-0256 under the latest numbered heading per its maintainer note. The guide index no longer calls VM deletion planned. The public roadmap moves VM deletion to built, describes the end-to-end check as passed on a test build with a fix awaiting review and re-run, narrows the UEFI item to Secure Boot host installation, and adds same-host Controller appliance replacement as outstanding. All work is presented as implemented and awaiting project owner review and commit, not released or accepted. API impact: none; documentation only. The 0.2.9 release QA record's truncated nex-controller SHA-256 is completed from sha256sum of the preserved 0.2.9 deb (prefix and suffix confirmed).",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/guide/README.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-10-vm-creation-system.md",
+    "docs/plans/2026-09-10-vm-edit.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "docs/plans/2026-09-16-windows-11-batch-handover.md",
+    "docs/plans/2026-09-16-windows-11-lab-fixes.md",
+    "docs/qa/vm-creation/checks.md",
+    "website/src/routes/roadmap/+page.svelte",
+    "docs/qa/2026-09-16-nex-core-0.2.9-release.md",
+    "docs/changes/2026-09-17-roadmap-reconcile.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The guide index said deleting a VM was planned and unavailable while the delete-virtual-machine page it links documents the implemented workflow; only that stale sentence changed.",
+    "pages": [
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Status and planning text only; no Controller/Core or client-facing contract changes, and docs/API.md implemented-versus-planned labels were checked and are current.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "VM deletion moves from outstanding to built in the one-host milestone (gate rows 16 and COVERAGE-1 passed); the end-to-end check stays outstanding with its gate5 result; the installable-host milestone narrows the UEFI item and adds same-host appliance replacement. Both milestones remain in testing.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation only; no setting, record or table is added."
+  },
+  "verification": {
+    "method": "Statements compared against docs/qa/2026-09-17-phase2-gate/checks.md, docs/BUG_LEDGER.md (BUG-0219, BUG-0221, BUG-0235, BUG-0246, BUG-0254, BUG-0256) and docs/qa/2026-09-16-nex-core-0.2.9-release.md. No lab walkthrough; nothing new is claimed verified. Documentation, privacy and website checks run as reported in the handoff.",
+    "evidence": [
+      "docs/qa/2026-09-17-phase2-gate/checks.md",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

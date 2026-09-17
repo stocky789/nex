@@ -4,6 +4,7 @@ set -euo pipefail
 mkdir /build
 cd /build
 tar -xzf /input/nex-source.tar.gz --strip-components=1
+export CGO_ENABLED=1
 go build -mod=vendor -trimpath -ldflags "-X nex.local/nex/internal/version.Version=${NEX_VERSION}" -o /build/nex-controller ./cmd/nex-controller
 (cd web && npm ci && npm run typecheck && npm run build)
 pkg=/build/package
@@ -32,7 +33,7 @@ install -m755 packaging/controller/postinst packaging/controller/prerm "$pkg/DEB
 cp -a web/dist "$pkg/usr/local/share/nex/"
 cp -a docs/api "$pkg/usr/local/share/nex/"
 cp /input/nex-source.tar.gz "$pkg/usr/local/share/nex/"
-cp LICENSE NOTICE docs/LICENSING.md "$pkg/usr/share/doc/nex-controller/"
+cp LICENSE NOTICE ARTWORK-LICENSE.md docs/LICENSING.md "$pkg/usr/share/doc/nex-controller/"
 install -m644 /usr/local/go/LICENSE "$pkg/usr/share/doc/nex-controller/go-LICENSE"
 go version /build/nex-controller > "$pkg/usr/share/doc/nex-controller/go-version.txt"
 cat > "$pkg/DEBIAN/control" <<CONTROL

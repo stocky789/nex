@@ -19,10 +19,19 @@ const num = (v: number) => Number.isNaN(v) ? "" : v;
 // editBlocker explains why a VM cannot be edited now; empty means the Edit button is live.
 export function editBlocker(vm: VM, host?: Host): string {
   return vm.protected ? "The Controller appliance is managed from its host's local page."
+    : vm.status === "failed" || vm.status === "needs_attention" ? "The creation task did not succeed; check it in Task history."
+    : vm.status && vm.status !== "succeeded" ? "Wait for the creation task to finish."
     : !vm.spec ? "This VM has no definition to edit."
     : !host || !readyHost(host) ? "Editing needs a freshly connected host with managed-VM support."
     : !host.capabilities?.includes("vm-update-v1") ? "The host agent does not support editing VMs; upgrade Nex Core."
     : "";
+}
+
+// firmwareIssue holds Save on a UEFI-to-BIOS change until the operator acknowledges that Core
+// deletes the VM's UEFI variable store (boot entries and Secure Boot variables); switching back
+// starts from a fresh store.
+export function firmwareIssue(current: string, next: string, acknowledged: boolean): string {
+  return current === "uefi" && next === "bios" && !acknowledged ? "Confirm that switching to BIOS deletes this VM's UEFI variable store." : "";
 }
 
 // bootIssue mirrors the shared validator: boot order values are unique and positive; gaps are
@@ -50,6 +59,7 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
   }));
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
+  const [nvramAck, setNVRAMAck] = useState(false);
   const ids = useRef<Record<string, string>>({});
   const existingDisks = new Set((spec.disks || []).map(d => d.name));
   const existingMACs = new Set((spec.nics || []).map(n => n.mac).filter(Boolean));
@@ -70,7 +80,8 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
   const macIssue = macs.some(m => !new RegExp(`^${macPattern}$`).test(m)) ? "A manual MAC must be six lower-case hex octets separated by colons and unicast, such as 52:54:00:12:34:56."
     : macs.some((m, i) => macs.indexOf(m) !== i) ? "MAC addresses must be unique within this VM." : "";
   const orderIssue = bootIssue(draft);
-  const issue = vmNameIssue(draft.name) || topoIssue || diskIssue || macIssue || orderIssue;
+  const dropsNVRAM = spec.boot.firmware === "uefi" && draft.boot.firmware === "bios";
+  const issue = vmNameIssue(draft.name) || topoIssue || diskIssue || macIssue || orderIssue || firmwareIssue(spec.boot.firmware, draft.boot.firmware, nvramAck);
   const lock = (title = stopFirst) => running ? { disabled: true, title } : {};
 
   function removeDisk(i: number) {
@@ -204,11 +215,15 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
       </div>
       <p className="help">Lower numbers boot first; 0 leaves a device out. The CD drive keeps its place while empty, so an ISO can be ejected from a running VM. The driver disc sits in a second CD drive, for the virtio-win ISO a Windows installer needs beside its install media; it is not in the boot order.{driversReady ? "" : " This host's Nex Core does not provide a second CD drive yet; upgrade it to attach a driver disc."}</p>
       <p className="help">Secure Boot and the TPM are part of the firmware a guest is installed against: changing either needs the VM stopped, and an installed guest that stores BitLocker keys in its TPM cannot unlock without it.</p>
+      {dropsNVRAM && <div className="warning" role="alert">
+        <p>Switching this VM from UEFI to BIOS permanently deletes its UEFI variable store: boot entries and Secure Boot variables the guest or installer wrote. Switching back to UEFI starts from a fresh store, and an installed UEFI guest may not boot without repair. This cannot be undone.</p>
+        <label className="console-option"><input type="checkbox" checked={nvramAck} onChange={e => setNVRAMAck(e.target.checked)} /> I understand the UEFI variable store will be deleted</label>
+      </div>}
       {orderIssue && <p className="task-error">{orderIssue}</p>}
     </fieldset>
     <fieldset>
       <legend>Lifecycle</legend>
-      <label className="console-option"><input type="checkbox" style={{ width: "auto" }} checked={draft.autostart} onChange={e => edit({ autostart: e.target.checked })} /> Start automatically when the host boots</label>
+      <label className="console-option"><input type="checkbox" checked={draft.autostart} onChange={e => edit({ autostart: e.target.checked })} /> Start automatically when the host boots</label>
     </fieldset>
     {error && <p className="task-error" role="alert">{error}</p>}
     <div className="actions"><button type="button" disabled={working} onClick={onClose}>Cancel</button><button className="primary" disabled={working || unavailable || Boolean(issue)}>{working ? "Submitting…" : "Save changes"}</button></div>

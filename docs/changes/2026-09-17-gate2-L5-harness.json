@@ -1,0 +1,38 @@
+{
+  "summary": "Fresh-install lab harness fixes for the second Phase 2 gate run: Controller appliance provenance reads the nex-core-local package for --expected-version instead of a hard-coded 0.1.0+managed1 path, console typing helper sends Shift as its own key event, and a new interrupt-delete recovery stage (not yet run in a lab) kills nex-core-local at the wiping or cleaning-nvram journal stage of one named disposable guest and requires succeeded or needs_attention with a reason after restart; the record marks killed_while_pending, since only a pending kill is interrupted-operation evidence, and --hold is limited to wiping, where it makes the wipe fail before the kill (failed-wipe restart evidence). API impact: none; test harness only.",
+  "paths": [
+    "tests/integration/fresh_install_host.py",
+    "tests/test_fresh_install_host.py",
+    "tests/integration/fresh_install_browser.py",
+    "tests/integration/fresh_install_recovery.py",
+    "tests/test_fresh_install_recovery.py",
+    "docs/changes/2026-09-17-gate2-L5-harness.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Only contributor lab harnesses changed; no operator workflow, product behavior or message changed.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. The harness reads the existing host journal and systemd unit over SSH in a disposable lab and calls no new or changed Controller or Core API.",
+    "pages": [],
+    "contracts": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Gate evidence tooling only; interrupted-delete lab evidence (P2-4b, P2-4c) stays outstanding until the new stage is run.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Test harness only; it writes evidence files to an operator-selected directory and keeps no product state."
+  },
+  "verification": {
+    "method": "Unit checks only: python3 -m unittest tests.test_fresh_install_host tests.test_fresh_install_recovery tests.test_fresh_install_lab tests.test_fresh_install_gate_guest. The provenance and interrupt-delete lab stages were not run against a disposable lab in this change.",
+    "evidence": [
+      "tests/test_fresh_install_host.py",
+      "tests/test_fresh_install_recovery.py"
+    ]
+  }
+}

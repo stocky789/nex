@@ -112,7 +112,9 @@ const render = props => renderToStaticMarkup(createElement(Console, { ...base, .
 // BUG-0197: Start belongs on the console so the operator is attached before the guest boots.
 const stopped = render({ power: { state: "shut off", onStart() {} } });
 assert.match(stopped, /<button type="button" class="primary"[^>]*>Start VM<\/button>/);
-assert.match(stopped, /Press any key to boot from CD or DVD/);
+assert.match(stopped, /attaches in time for any boot prompt, such as “Press any key to boot from CD or DVD”/);
+// Gate3: the clipboard toast names both guest tools, not only spice-vdagent.
+assert.match(src, /it only arrives when the guest tools \(qemu-guest-agent and spice-vdagent\) run in the guest/);
 assert.doesNotMatch(render({ power: { state: "running", onStart() {} } }), /Start VM/, "a running VM offers no Start");
 assert.doesNotMatch(render({}), /Start VM/, "no power control without the power prop");
 assert.match(render({ power: { state: "shut off", busy: true, onStart() {} } }), /<button type="button" class="primary" disabled=""[^>]*>Starting…<\/button>/);

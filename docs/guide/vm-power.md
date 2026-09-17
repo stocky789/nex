@@ -7,8 +7,7 @@ virtual machine from Nex Controller. Each request becomes a durable task for the
 assigned host; the host's next report shows the resulting state. Shut down and Reboot are
 ACPI requests that a guest without ACPI support, such as a firmware boot menu, ignores.
 Force reboot is a hard guest reset, not ACPI. It also covers the offer to eject install
-media once a guest is installed, so the VM stops stopping at "Press any key to boot from
-CD or DVD" on every start. Editing a VM is covered in
+media once a guest is installed, so later starts no longer boot the ISO first. Editing a VM is covered in
 [Edit a virtual machine](edit-virtual-machine.md); deletion is covered in
 [Delete a virtual machine](delete-virtual-machine.md).
 
@@ -40,9 +39,10 @@ CD or DVD" on every start. Editing a VM is covered in
    observed state under the VM's name after the next host report.
 5. After you install a guest from an ISO, open the VM's **General** tab. While the VM is
    running with its install ISO still in the CD drive ahead of every bootable disk, the
-   page offers **Eject install media** above the details, with the reason: every start
-   shows "Press any key to boot from CD or DVD", and a key press in the console starts the
-   installer again. Select it once the guest is installed, and only then: ejecting while an
+   page offers **Eject install media** above the details, with the reason: every start boots
+   the ISO first, so the installer starts again, or the VM waits at a boot prompt such as
+   "Press any key to boot from CD or DVD" on BIOS VMs or Windows media. Select it once the
+   guest is installed, and only then: ejecting while an
    installer is still running interrupts it. Nex never ejects by itself and never rewrites
    the VM's definition for you.
 6. The eject is the same durable `vm-media` task as the console's **Eject** control. Follow
@@ -114,13 +114,23 @@ place, so the firmware skips it and boots the disk, and inserting an ISO again n
 
 ## Verification
 
-Start, Reboot and Force stop were walked through in a disposable nested-KVM lab; ACPI shutdown of
-a cooperating guest and physical hardware were not. Queueing was checked with simulation. See the
+The [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md) (`0.2.10~gate5`, 2026-09-17,
+disposable nested-KVM lab, headless Chromium) walked steps 1–4 in the browser from the toolbar on
+an installed Debian UEFI guest, through a replacement Controller: Escape on **Shut down** and on
+**Force stop** sent nothing, and Shut down (ACPI), Start, Force stop, Start, Reboot and Force reboot
+each sent one request, showed the queued notice and settled to the host's outcome, with the ACPI
+confirmations styled primary and the force confirmations styled as danger. It also confirmed that
+power controls are disabled while the host is stale. The VM header can lag the settled state until
+the next 10 s refresh (open defect). Physical hardware and the power queue behind pending tasks
+were not exercised.
+
+Earlier, Start, Reboot and Force stop were walked through in a disposable nested-KVM lab. Queueing was checked with simulation. See the
 [console QA report](../qa/console/checks.md), [toolbar QA report](../qa/controller-toolbar/checks.md)
 and [power queue checks](../qa/power-queue/checks.md).
 
-The **Eject install media** offer has been exercised only against the Controller UI rendered
-with fixed sample data in a browser (the offer's wording, its conditions and the greyed cases)
-and by the `web/src/managed.test.mjs` regression check. Ejecting the ISO of a real installed
-guest through this offer, and the resulting boot without the "Press any key" prompt, have not
-been run on a host yet; that walkthrough is outstanding.
+The **Eject install media** banner was shown on a running installed guest in the gate5 run
+after the ISO was inserted, and its **Eject** cleared it (its text was logged; the capture
+scrolled past the banner). The boot without the
+"Press any key" prompt after that eject has not been run on a host: the gate guest used a UEFI
+ISO with no such prompt, so the BIOS walkthrough is still outstanding. The offer's greyed cases
+are covered only by fixed sample data in a browser and the `web/src/managed.test.mjs` check.

@@ -1,0 +1,40 @@
+{
+  "summary": "Audit the proposed virtio-win 0.1.302 ISO and find GPL/LGPL, SPICE and MS-RL components without proven complete corresponding source. Remove the media from the 0.2.9 installer and retain the licensing evidence for any future bundling decision. API impact: none.",
+  "paths": [
+    "installer/build.sh",
+    "docs/LICENSING.md",
+    "tests/test_distribution_packaging.py",
+    "docs/changes/2026-09-16-virtio-win-notice-inventory.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The VM guide now directs operators to import their own driver ISO because the public 0.2.9 installer does not bundle virtio-win.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Removing an unaccounted build-time binary changes no Controller/Core or client-facing contract.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "Automatic bundled-media delivery is open until complete corresponding source and notices are retained; second-driver-disc support remains complete.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Build-time notice and manifest files persist no pool or Controller state."
+  },
+  "verification": {
+    "method": "Listed the checksum-verified candidate ISO and recorded its embedded licenses. The installer regression check now rejects any virtio-win staging in the public build, and final 0.2.9 ISO inspection confirms it is absent. The Fedora src.rpm and exact SPICE source/license versions remain unverified, so automatic bundling remains open.",
+    "evidence": [
+      "tests/test_distribution_packaging.py",
+      "docs/LICENSING.md",
+      "docs/qa/2026-09-16-nex-core-0.2.9-release.md"
+    ]
+  }
+}

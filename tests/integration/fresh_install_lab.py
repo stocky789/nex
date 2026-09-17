@@ -46,7 +46,7 @@ def port():
         return s.getsockname()[1]
 
 
-def prepare(evidence):
+def prepare(evidence, memory_mib=12288, vcpus=4):
     lab = Path(tempfile.mkdtemp(prefix='nex-fresh-install.', dir=ROOT / '.cache'))
     disk = lab / 'host.raw'
     with disk.open('xb') as f:
@@ -65,13 +65,14 @@ def prepare(evidence):
         'local_url': f'https://127.0.0.1:{ports["core"]}', 'controller_url': f'https://127.0.0.1:{ports["controller"]}',
         'root_password_file': str(lab / 'root-password'), 'controller_password_file': str(lab / 'controller-password'),
         'controller_address': '10.0.2.20/24', 'gateway': '10.0.2.2', 'dns': '10.0.2.3',
-        'guest_iso': str(ROOT / '.cache/nex-iso/debian-13.6.0-amd64-netinst.iso')}
+        'guest_iso': str(ROOT / '.cache/nex-iso/debian-13.6.0-amd64-netinst.iso'),
+        'memory_mib': memory_mib, 'vcpus': vcpus}
     (lab / 'config.json').write_text(json.dumps(config, indent=2) + '\n')
     evidence.mkdir(parents=True, exist_ok=True)
     safe_info = {k: v for k, v in info.items() if k != 'filename'}
     (evidence / 'blank-disk.json').write_text(json.dumps({'creation': 'Exclusive new regular-file creation (xb), sparse truncate; no old disk or backing image',
         'allocated_blocks_before_boot': disk.stat().st_blocks, 'image_info': safe_info,
-        'memory_mib': 12288, 'vcpus': 4, 'network': 'isolated QEMU user networking; all forwards bind127.0.0.1; one virtio NIC; installed br0 bridges only inside guest'}, indent=2) + '\n')
+        'memory_mib': memory_mib, 'vcpus': vcpus, 'network': 'isolated QEMU user networking; all forwards bind127.0.0.1; one virtio NIC; installed br0 bridges only inside guest'}, indent=2) + '\n')
     print(lab)
     return lab
 
@@ -80,7 +81,7 @@ def start(lab, iso, evidence, installed=False):
     lab = validate_lab(lab)
     config = json.loads((lab / 'config.json').read_text())
     p = config['ports']
-    command = ['qemu-system-x86_64', '-accel', 'kvm', '-cpu', 'host', '-m', '12288', '-smp', '4',
+    command = ['qemu-system-x86_64', '-accel', 'kvm', '-cpu', 'host', '-m', str(config.get('memory_mib', 12288)), '-smp', str(config.get('vcpus', 4)),
         '-display', 'none', '-monitor', 'none', '-serial', f'file:{lab}/serial.log',
         '-qmp', f'unix:{lab}/qmp.sock,server=on,wait=off', '-vga', 'none', '-device', 'VGA,xres=800,yres=600',
         '-device', 'qemu-xhci,id=xhci', '-device', 'usb-tablet,bus=xhci.0',
@@ -147,10 +148,14 @@ if __name__ == '__main__':
     p.add_argument('--iso', type=Path)
     p.add_argument('--installed', action='store_true')
     p.add_argument('--poweroff', action='store_true', help='request graceful ACPI poweroff of only the validated running fresh lab')
-    p.add_argument('--evidence', type=Path, default=ROOT / 'docs/qa/fresh-install')
+    p.add_argument('--memory-mib', type=int, default=12288, help='lab guest RAM, recorded in config.json at --prepare')
+    p.add_argument('--vcpus', type=int, default=4, help='lab guest vCPUs, recorded in config.json at --prepare')
+    p.add_argument('--evidence', type=Path, help='new evidence directory; required to prepare or boot the installer, never the committed docs/qa evidence')
     args = p.parse_args()
+    if (args.prepare or not (args.poweroff or args.installed)) and not args.evidence:
+        p.error('--evidence is required')
     if args.prepare:
-        prepare(args.evidence)
+        prepare(args.evidence, args.memory_mib, args.vcpus)
     elif args.poweroff:
         lab = validate_target(args.lab_dir)
         qmp(lab / 'qmp.sock', 'system_powerdown')

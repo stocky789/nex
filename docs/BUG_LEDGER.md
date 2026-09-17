@@ -2221,3 +2221,394 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: the failed `vm-create` row remains as Controller task/audit and idempotent-replay data, but its managed-resource ID moves to the internal `failed-vm-create:<operation-id>` form so it cannot collide with a Core VM identity. VM-list, ownership, placement and adoption conflict queries exclude terminal failed rows. Historical adoption relocates a failed row with the same Core VM ID before storing Core's succeeded definition.
 - Regression: `TestFailedVMCreateDoesNotLeaveControllerProjection` and `TestHistoricalFailedVMCreateStaysHiddenAndReplayable` in `internal/controller/delete_test.go`, plus `TestCreateVMSpecificationReferencesAndScope` in `internal/controller/managed_test.go`, which verifies a failed duplicate-MAC create is absent from `GET /api/v1/vms` while its error remains in `GET /api/v1/operations`. Focused same-ID race cases passed: `go test -race ./internal/controller -run 'Test(CreateVMSpecificationReferencesAndScope|FailedVMCreateDoesNotLeaveControllerProjection|HistoricalFailedVMCreateStaysHiddenAndReplayable)$' -count=1`. Full Controller race passed: `go test -race ./internal/controller -count=1` (`ok nex.local/nex/internal/controller 124.279s`). Both GitHub and Gitea `phase1` workflows run the existing Controller Go suite.
 - Avoid: treating a Controller projection as proof that Core created a VM; deleting a failed request row and breaking its idempotent replay; letting terminal failures occupy VM ownership or name admission.
+
+## BUG-0218 — Context-menu Delete closed the confirm dialog on mount
+
+- Date: 2026-09-16. Status: fixed; regression added.
+- Symptom: right-click **Delete…** on a VM in Resources closed the menu and nothing else appeared; General-tab Delete VM still worked.
+- Root cause: `VMDelete` started with `open=false`, then its dialog sync effect called `onOpenChange(false)` on first paint. The context-menu host cleared `menuDeleteVM` and unmounted the dialog before `openSignal` could open it.
+- Fix: seed `open` from `openSignal`, sync the `<dialog>` separately, and notify `onOpenChange` only after the first open/close transition. Menu polish: console/delete icons, aligned rows, disabled danger items no longer stay red.
+- Regression: `web/src/managed.test.mjs` asserts `openSignal` seeds the confirm markup, closed without it, and the old sync+notify pattern is gone. Command: `npm --prefix web run test`, run by both GitHub and Gitea `phase1` workflows.
+- Avoid: notifying a parent that unmounts on close from the initial closed mount of a signal-opened dialog.
+
+## BUG-0219 — An interrupted UEFI-to-BIOS define left the VM with no domain
+
+- Date: 2026-09-16. Status: fixed; regression added; not verified on a host. Follows BUG-0214.
+- Symptom: a stopped UEFI VM was edited to BIOS, and the define that follows `undefine --nvram` was interrupted or refused. The VM then had no libvirt domain, recovery stayed `needs_attention`, and a new edit was refused with "VM not found or its state cannot be established on this host".
+- Root cause: `finishFirmwareRemoval` journals stage `defining` before the define, but local `reconcile` and `ReconcileRemoteVMUpdate` re-entered it only at `cleaning-nvram`. At `defining` recovery only observed, and observation fails when the domain is absent.
+- Fix: `firmwareRemovalPending` treats `defining` with a recorded NVRAM path like `cleaning-nvram` in both recovery paths: `reconcile` when the same operation is delivered again, and the periodic `ReconcileRemoteVMUpdate` for shared storage only. `finishFirmwareRemoval` confirms with `list --all --uuid` that the domain is absent, then defines the journaled BIOS XML. A UEFI domain found at `defining` is never undefined; recovery returns "VM definition changed during firmware cleanup; inspect the VM on its host".
+- Regression: `TestReconcileFirmwareRemovalDefinesAfterInterruptedDefine` (`internal/vmhost/firmware_gate_test.go`). Failed with the pre-fix predicate (needs_attention, no define); a review mutation that removed the UEFI-at-`defining` guard also failed it. Passes now: `go test -race -count=1 ./internal/vmhost/ -run TestReconcileFirmwareRemovalDefinesAfterInterruptedDefine` ok. Runs in `go test -race ./...`, job `go`, in both GitHub and Gitea `phase1` workflows on push and pull request. Fake virsh only; no real-libvirt walkthrough.
+- Avoid: journaling a recovery stage after a destructive step that recovery cannot resume from; replaying undefine; telling the operator to resubmit an edit for a VM whose domain no longer exists. Open limit: a local-storage edit already reported `needs_attention` at `defining` is not redelivered by Controller, and background `promote` only observes it, so it stays `needs_attention` until inspected on the host.
+
+## BUG-0220 — A stopped edit that renamed a VM and changed Secure Boot failed after rewriting NVRAM
+
+- Date: 2026-09-16. Status: fixed; regressions added; not verified on a host. Related: BUG-0199, BUG-0214.
+- Symptom: one save that renamed a stopped UEFI VM and toggled Secure Boot ended `needs_attention` with "VM Secure Boot redefinition outcome uncertain". The variable store already had the new SecureBootEnable value while the definition did not, and every recovery pass retried the same failing define.
+- Root cause: the Secure Boot define used XML with the new name for an existing UUID, and `domrename` ran only afterwards. libvirt refuses to define a known UUID under a different name; the existing fake virsh accepted it.
+- Fix: the stopped branch moved to `ManagedEngine.applyStopped`. The read-only Secure Boot checks (NVRAM path, digest, enrolled keys when enabling, ownership metadata) run first in `secureBootSource`; then `domrename`; then the renamed XML is re-read into `SecureBootPreviousDomain` with the NVRAM path carried over; only then the variable edit and define. The later plain rename is skipped for this case. Review of the first version found that it renamed before those checks, so a refusal such as "no enrolled Secure Boot keys" left libvirt renamed while Nex recorded the edit as failed; the checks were moved ahead of the rename before this change landed.
+- Regression: `TestStoppedRenameWithSecureBootToggleRenamesBeforeDefine` (fake virsh now refuses a define whose name differs for the UUID; failed with calls `dumpxml,define` before the fix) and `TestStoppedRenameWithRefusedSecureBootDoesNotRename` (failed with calls `domrename,dumpxml` before the check reorder), both in `internal/vmhost/firmware_gate_test.go`. `go test -race -count=1 ./internal/vmhost/ -run TestStoppedRename` ok. Job `go` in both `phase1` workflows.
+- Avoid: fakes that accept what real libvirt rejects; testing rename and firmware changes only as separate edits; running a native mutation before validation that can still refuse the operation. Open limit: a stopped edit that fails after `domrename` landed is refused on resend with "VM name already exists".
+
+## BUG-0221 — An interrupted VM delete could never finish or be retried
+
+- Date: 2026-09-16. Status: fixed; regressions added; not verified on a host. Related: BUG-0196.
+- Symptom: if the agent died after journaling `undefining`, or during the disk wipe, re-sending the same delete operation returned `needs_attention` every time ("disk file still present after an interrupted wipe" / "VM domain is still defined after an interrupted delete"), and a new delete was refused as "still unresolved". The VM definition and disks stayed.
+- Root cause: `reconcile` only observed an interrupted `vm-delete` (`deleteObserved`); it never re-ran undefine or the wipe. `deleteVM` refused new deletes while that entry was unresolved, and `promote` does not cover `vm-delete`.
+- Fix: `reconcile` resumes through `resumeDelete`/`finishDelete`: a still-defined domain must be shut off, undefine re-runs with the same flags, a requested wipe re-runs over the journaled paths (missing files ignored), and the entry succeeds. A new delete for the same VM settles the interrupted one only when both requests make the same `delete_disks` choice, then reports "VM is already deleted on this host: an earlier interrupted delete has now finished". Review of the first version found that a new retain delete wiped disks using the earlier request's `delete_disks=true`; a differing choice is now refused and tells the operator to resend with the earlier value or resolve it on the host.
+- Regression: `TestInterruptedWipeDeleteResumesOnResend`, `TestNewDeleteSettlesInterruptedDelete`, `TestInterruptedDeleteRefusesRunningDomain`, `TestNewRetainDeleteRefusesInterruptedWipeDelete` in `internal/vmhost/delete_resume_test.go`. All failed before their fixes (the last: disk wiped and "already deleted"); `go test -race -count=1 ./internal/vmhost/ -run 'TestInterrupted|TestNewDelete|TestNewRetain'` ok. Job `go` in both `phase1` workflows.
+- Avoid: treating a leftover disk or domain after an interrupted destructive step as needing manual work when the journal records intent and exact targets; letting a later request skip an unresolved entry; finishing an interrupted delete with a destructive disk choice the latest request did not make. Open decision: background `promote` still does not resume interrupted deletes, and a mismatched choice is refused in both directions. Limit: the new-delete path is reachable through Controller only while the domain is still defined and observed shut off; after undefine (every interruption during the wipe) Controller refuses the new delete with "stop the VM before deleting it", so recovery relies on redelivery of the original still-dispatched operation. No test covers the Controller path. Open decision for the project owner: whether Controller should accept a delete for a VM the host reports as missing but journaled as an interrupted delete.
+
+## BUG-0222 — Wiped disks of a deleted VM blocked storage detach forever
+
+- Date: 2026-09-16. Status: fixed; regression added.
+- Symptom: after deleting a VM with "Permanently delete disks", detaching its storage repository was still refused with "retained disk for VM <id>" for disks that no longer existed.
+- Root cause: `storageDependencies` counted every succeeded entry's `Retained` paths. A wipe delete cleared only its own list and left earlier `vm-update` lists that `managedDeleteDiskPaths` had already wiped.
+- Fix: `storageDependencies` ignores `Retained` paths of VMs with a succeeded `vm-delete` that set `DeleteDisks`. A retain delete still blocks detach.
+- Regression: `TestWipedVMRetainedDisksAreNotStorageDependencies` (`internal/vmhost/delete_resume_test.go`); failed before ("wiped disks still block detach"), passes now; a review mutation removing the skip failed it. Job `go` in both `phase1` workflows.
+- Avoid: skipping paths that `os.Stat` reports missing — an unmounted remote repository would then allow detach while disks exist.
+
+## BUG-0223 — The bundled virtio-win ISO was seeded onto a detached storage registration
+
+- Date: 2026-09-16. Status: fixed; regressions added; not verified on a host.
+- Symptom: if the default Local storage had been detached and registered again before the first seed, the bundled virtio-win ISO was journaled under the detached storage ID and the Controller showed it as needing attention ("storage ... is not adopted on this host").
+- Root cause: `SeedBundledMedia` scanned raw journals in operation-ID filename order and took the first succeeded registration with the default path, ignoring the generation and detach-tombstone logic in `storageProjection`. After BUG-0224 moved the seed off the worker, a detach during the long copy could also land between the seed's read and its save.
+- Fix: the target comes from `storageProjection` (live registration at the default path, lowest ID first); nothing is seeded while only a detached registration exists. The copy and hash run unlocked, then the seed takes the managed engine's operations lock, re-resolves the target and any existing virtio-win entry through `bundledMediaTarget`, and journals only if nothing changed, otherwise removes the copy.
+- Regression: `TestSeedBundledMediaUsesLiveDefaultStorageAfterDetach` (failed before: published to "old-storage"), `TestSeedBundledMediaSkipsDetachedOnlyDefaultStorage`, `TestSeedBundledMediaDiscardsCopyWhenStorageDetachedMeanwhile` (failed with the lock step removed) in `internal/vmhost/bundled_media_test.go`. `go test -race -count=1 ./internal/vmhost/ -run TestSeedBundledMedia` ok. Job `go` in both `phase1` workflows. The lowest-ID choice itself is untested.
+- Avoid: scanning raw storage journals to find a repository; moving a journal mutator off the serialized worker without re-deciding under the operations lock.
+
+## BUG-0224 — The first bundled media seed blocked Controller commands on the agent
+
+- Date: 2026-09-16. Status: fixed; regression added; not verified on a host.
+- Symptom: on a new host with `/var` on a different filesystem from `/usr`, or a slow disk, the first tick copied and hashed an ISO of about 877 MB while `vm-create` and storage commands waited, and shutdown waited on a copy that could not be cancelled.
+- Root cause: `managedWorker` called `SeedBundledMedia` synchronously in its command select loop, and `publishBundledISO`'s copy never checked the context.
+- Fix: `startBundledSeed` runs the seed in a background goroutine, one at a time (`atomic.Bool`); the cross-filesystem copy reads through a context-checking reader. Journaling is serialized with commands as described in BUG-0223.
+- Regression: `TestBundledMediaSeedRunsOffWorkerOneAtATime` (`internal/agent/managed_test.go`); before the fix the seed could only run synchronously (build failure against the new entry point). `go test -race -count=1 ./internal/agent/ -run TestBundledMediaSeedRunsOffWorkerOneAtATime` ok. Job `go` in both `phase1` workflows. Outstanding: the context-checking copy path has no unit test (a cross-filesystem copy cannot be forced reliably), and `verifyISO` still hashes to completion after shutdown.
+- Avoid: multi-hundred-MB file work inline in the managed worker's command loop.
+
+## BUG-0225 — A UEFI-to-BIOS edit deleted the variable store without warning
+
+- Date: 2026-09-16. Status: fixed; regressions added. Related: BUG-0214, BUG-0219.
+- Symptom: changing Firmware from UEFI to BIOS in the VM editor saved without any warning, and Core permanently deleted the VM's NVRAM (boot entries and Secure Boot variables).
+- Root cause: the Firmware select in `web/src/vm-edit.tsx` had no destructive-change handling; the loss only happens in Core's firmware removal path.
+- Fix: `firmwareIssue(current, next, acknowledged)` joins the editor's issue gate. A UEFI-to-BIOS draft shows an inline warning and Save stays disabled until "I understand the UEFI variable store will be deleted" is ticked.
+- Regression: `web/src/vm-edit.test.mjs` (failed before: `firmwareIssue is not a function`), run by `npm --prefix web run test`, job `web`; `tests/integration/vm_edit_browser.py` checks the warning, disabled Save and enabled Save after acknowledgement, job `controller-browser`. Both jobs run in GitHub and Gitea `phase1` workflows on push and pull request. The browser capture was inspected in a simulated run.
+- Avoid: relying on help text alone for an irreversible change, or blocking a legitimate firmware change outright.
+
+## BUG-0226 — A VM edit that removed or swapped a NIC changed the wrong interface
+
+- Date: 2026-09-16. Status: fixed; regression added.
+- Symptom: `PUT /api/v1/vms/{id}` that kept only the second of two automatic-MAC interfaces with an empty MAC was accepted, and Core detached the second interface instead of the first (live when running). A same-count request that removed one NIC and added another applied the kept NIC's settings to the removed device.
+- Root cause: `NeedsStop` and the Controller's MAC freeze loop resolve an empty MAC from its position in the request (`DerivedMAC(id, index)`); once an interface is removed or reordered, that position names another device. The first guard only checked for a shorter NIC list, which review showed a remove-plus-add bypasses.
+- Fix: `updateVM` checks each index. An empty MAC at an existing index is accepted only when no interface is removed and its network, model and MTU match the current NIC at that index; only NICs appended past the current count may omit a MAC. Otherwise 400 "when removing, reordering or changing a network interface, give every existing interface its MAC address".
+- Regression: `TestUpdateVMRemovingInterfaceRequiresNamedMACs` (`internal/controller/update_test.go`) covering removal and the swap case; failed before each fix (202, want 400), passes now. Job `go` in both `phase1` workflows.
+- Avoid: guarding on NIC count; guessing the caller's intent from network or model; relying on the bundled UI sending effective MACs. Open decision: freezing derived MACs at creation would remove position matching entirely.
+- Correction (2026-09-17, BUG-0254): the per-index guard assumed an empty MAC at an existing index always names the current interface there. The bundled editor sends every existing interface's effective MAC but sends new interfaces with an empty MAC, so an editor save that removed one interface and added another was refused with 400, and an accepted new interface could be frozen to the removed interface's address. The guard now applies only to requests that name no current interface by MAC; see BUG-0254.
+
+## BUG-0227 — Retrying a VM delete after changing the wipe choice returned 409
+
+- Date: 2026-09-16. Status: fixed; regression added. Related: BUG-0218.
+- Symptom: after an uncertain delete response, ticking "Permanently delete disks" and retrying sent the old `request_id` with a different payload, and the Controller returned 409 "request_id already used with another payload".
+- Root cause: `VMDelete` kept one request id, cleared only on success, regardless of payload.
+- Fix: the id is keyed by the wipe choice (`request.current[String(wipe)]`), matching the VM editor's per-payload ids; all ids clear after success.
+- Regression: `web/src/managed.test.mjs` source assertions (failed before), `npm --prefix web run test`, job `web` in both `phase1` workflows. The check is a source pattern, not a rendered behaviour test.
+- Avoid: resetting the id on every dialog open, which loses safe retry of the same payload.
+
+## BUG-0228 — The create wizard preselected a driver disc on hosts that cannot attach one
+
+- Date: 2026-09-16. Status: fixed (UI and Controller); regressions added. Related: BUG-0235.
+- Symptom: on a host without `vm-media-drivers-drive-v1` that had a virtio-win ISO, a Windows VM draft showed a disabled Driver disc holding virtio-win that could not be cleared; the review page said it would attach and the older Core ignored it. Directly through the API, `createVM` and `updateVM` accepted any `drivers_media_id` (unknown IDs, media on another host, hosts without the capability) and queued work Core could only fail or apply without the drive.
+- Root cause: `chooseHost` and the Guest OS change called `defaultDriversMedia` without checking `driversDriveReady`. `createVM` and `updateVM` in `internal/controller/managed.go` resolved `media_id` with `readyResource(iso-import)` but never checked `drivers_media_id` or `DriversDriveCapability`; the adoption pass had the same gap.
+- Fix: UI — `nextDriversMedia()` returns empty when the host is not ready, and the submitted definition and review page drop `drivers_media_id` for such hosts. Controller — when `drivers_media_id` is set, both handlers return 409 "the selected host agent does not support a driver disc drive; upgrade Nex Core" (edit: "the VM's host agent …") without the capability, then resolve it like the install ISO (404 "the driver disc ISO is not registered and verified on the selected host and pool"). Both checks run after the replay check, so replays stay idempotent. Adoption marks a VM needs attention when either ISO is not adopted on the host.
+- Regression: `web/src/vm-create.test.mjs` (failed before: `nextDriversMedia is not a function`), job `web`; `tests/integration/managed_vm_browser.py --simulated` expects the disabled, empty Driver disc, job `controller-browser`. `go test ./internal/controller/ -run TestVMDriversMediaIsValidatedLikeInstallMedia` failed before the Controller fix (got 202 want 409; with only the ID check disabled, 202 want 404) and passes now; `go test -race ./internal/controller/...` ok. It runs in job `go` (`go test -race ./...`). All three jobs are in GitHub and Gitea `phase1` workflows on push and pull request. The adoption-pass check has no dedicated test.
+- Avoid: only disabling a select, which still submits and displays its value; relying on Core or the web form to reject an unverifiable reference instead of refusing it at the Controller API before queuing.
+
+## BUG-0229 — Switching Guest OS away from Windows kept the automatic virtio-win disc
+
+- Date: 2026-09-16. Status: fixed; regression added.
+- Symptom: choosing Windows, then Linux, created a Linux VM with virtio-win in its second CD drive.
+- Root cause: the Guest OS change only filled an empty Driver disc and never removed the value it had chosen itself.
+- Fix: `nextDriversMedia()` clears the Driver disc when it still holds the previous guest OS's automatic choice; an operator's own choice is kept.
+- Regression: `web/src/vm-create.test.mjs` (failed before), `npm --prefix web run test`, job `web` in both `phase1` workflows. The browser run cannot cover this: the simulated host lacks the drivers-drive capability.
+- Avoid: clearing the Driver disc on every Guest OS change.
+
+## BUG-0230 — A stopped VM lost its last 1-year usage point
+
+- Date: 2026-09-16. Status: fixed; regressions added.
+- Symptom: an hour after a VM stopped, the agent dropped it from memory together with the open day step's average, so `range=1y` showed that day as unknown without any restart.
+- Root cause: flush eviction checked only time since the last sample, not whether a tier still held memory-only accumulators for an unfinished step. The first fix kept such objects in memory until the day boundary, and review found they still counted toward the 256-VM cap, so stopped VMs could refuse history to newly started ones.
+- Fix: evict only when idle for over an hour and `ringFile.pending()` is false; `record()` counts toward the cap only objects sampled in the last hour and re-checks the cap before an idle object resumes.
+- Regression: `TestIdleObjectIsKeptUntilItsDayStepIsFinished` (failed before: day point unknown, want 50) and the extended `TestHistoryCapsSeriesAndRecordedVMs` (failed before: "stopped VMs still in memory blocked a newly running VM") in `internal/agent/usage_history_test.go`; both pass. Job `go` in both `phase1` workflows.
+- Avoid: treating eviction as free because slots are on disk; treating "loaded in memory" as "actively recording".
+
+## BUG-0231 — A backwards clock step wiped stored usage history
+
+- Date: 2026-09-16. Status: fixed; regression added; open decision recorded.
+- Symptom: a clock step back of more than one step (for example a boot before NTP with a slow RTC) reset the 24h/30d/1y rings and rewrote the file; in the repro 180 known 24h points dropped to 1.
+- Root cause: `ringFile.add` reset every tier when a sample's step was behind the stored step, and the next flush persisted the wipe.
+- Fix: stored tiers ignore samples behind their current step until the clock reaches it again and log once per object that stored history is ahead of the clock; only the memory-only 5 s tier restarts.
+- Regression: `TestRingKeepsStoredTiersWhenTheClockGoesBack` (`internal/agent/usage_history_test.go`), replacing `TestRingRestartsATierWhenTheClockGoesBack`, which locked in the wipe; failed before ("a backwards clock step scheduled a whole-file rewrite"), passes now. Job `go` in both `phase1` workflows.
+- Avoid: assuming the current clock is right and restarting a durable tier. Open decision for the project owner: a clock that ran ahead and is corrected now pauses stored tiers for as long as it was ahead (every boot on an RTC that runs ahead); options are ordering the agent unit after time sync, gating on kernel sync status, or accepting the gap.
+
+## BUG-0232 — The stats relay accepted short series and its range error omitted live
+
+- Date: 2026-09-16. Status: fixed; regression added.
+- Symptom: an invalid range returned "range must be one of 10m, 24h, 30d or 1y" although `live` is accepted, and a host reply with fewer values than the tier's points was relayed as valid.
+- Root cause: the message was not updated when `live` was added, and `validHistory` only rejected `len(Values) > tier.Points`.
+- Fix: the message reads "range must be live, 10m, 24h, 30d or 1y" and `validHistory` requires exactly `tier.Points` values, returning 502 otherwise. Current agents always send full-length series.
+- Regression: `TestStatsRelay` (`internal/controller/stats_test.go`); failed before on both assertions, passes now. Job `go` in both `phase1` workflows.
+- Avoid: padding short series in the UI, which invents unknown data instead of refusing a reply that breaks the contract.
+
+## BUG-0233 — Stacked usage charts drew hidden series
+
+- Date: 2026-09-16. Status: fixed; regressions added.
+- Symptom: with Stacked on, hiding vCPU 0 left vCPU 1's band offset by vCPU 0's share; hiding a middle series left the band above it unfilled.
+- Root cause: `plotValues` ignored the hidden set and the chart never recomputed data on legend toggle; bands were fixed adjacent pairs, and uPlot does not fill a band whose lower series is hidden.
+- Fix: `plotValues(series, stacked, hidden)` skips hidden series in the sums; `stackBands()` pairs each visible series with the nearest visible same-unit series below it; `StatsChart` rebuilds bands and re-runs `setData` on visibility change, keeping zoom.
+- Regression: `web/src/stats.test.mjs` (failed before: "hidden vCPU 0 no longer offsets vCPU 1", then `stackBands` not exported), job `web`; `tests/integration/managed_vm_browser.py --simulated` counts fill pixels with vCPU 1 hidden (failed before: single-fill pixels 130 to 65; passes 130/129 with 0 overlap), job `controller-browser`. Both jobs in GitHub and Gitea `phase1` workflows. Simulated agent only.
+- Avoid: trusting a pure data unit test for chart rendering; re-weighting by visible count; forcing a chart rebuild that resets zoom. Open limit: on hosts with more than 64 cores the CPU stack covers only the first 64 per-core series.
+
+## BUG-0234 — The virtio-win notice described a GPL-bearing ISO as BSD driver source
+
+- Date: 2026-09-16. Status: fixed for the staged notice, manifest and licensing record; release-artifact gap and source retention outstanding.
+- Symptom: the staged virtio-win `NOTICE` and `docs/LICENSING.md` described the bundled virtio-win 0.1.302 ISO as BSD-3-Clause driver source, and its `manifest.tsv` had a single row. The ISO also ships GPL QEMU guest agent MSIs, SPICE agent and QXL driver MSIs inside the guest tools bundle, LGPL libraries and an MS-RL installer runtime, with no corresponding source retained.
+- Root cause: the notice was written from the upstream driver repository's license, not from an inventory of the media.
+- Fix: inventoried the checksum-verified ISO; `installer/build.sh` writes a NOTICE listing each component and license, and `manifest.tsv` gains license and `source_retained` columns with one row per embedded component; `docs/LICENSING.md` records the missing corresponding source, and that the compliance manifest and `SOURCE-DELIVERY.txt` do not yet cover the ISO, as outstanding before external distribution.
+- Regression: `tests.test_distribution_packaging.VirtioWinNoticeTests` (failed before: 2 subtests, then 1 for the manifest); `python3 -m unittest tests.test_distribution_packaging.VirtioWinNoticeTests` OK. Runs through `unittest discover`, job `contracts`, in both `phase1` workflows. Outstanding: `scripts/build-source-bundle.py` still omits the ISO and its notice and claims complete source; retain source or stop shipping those components (project owner decision).
+- Avoid: describing bundled media by its headline project's license without listing the media; treating a src.rpm or upstream link as corresponding source without inspecting it.
+
+## BUG-0235 — Console driver disc insert and eject always failed with 400
+
+- Date: 2026-09-16. Status: fixed; regression added. Not in the published 0.2.9 release (commits 4fb8570 and 76a28b6 lack the Controller `drive` field); listed under 0.3.0. Related: BUG-0228.
+- Symptom: in the VM console, every insert or eject on the **Driver disc** drive failed with 400 "invalid JSON request"; the install drive kept working.
+- Root cause: `changeVMMedia` in `web/src/main.tsx` sends `{"drive":"drivers"}` to `POST /api/v1/vms/{id}/media`, but the Controller's `mediaChangeRequest` (`internal/controller/vmmedia.go`) had no `drive` field and `decodeLimit` rejects unknown fields. Core already accepted `VMMediaRequest.Drive` and advertised `vm-media-drivers-drive-v1`; only the Controller contract was missing it.
+- Fix: `mediaChangeRequest` gains an optional `drive`, validated as empty, `install` or `drivers` (400 "drive must be install or drivers"); `drivers` requires the VM's host to report `vm-media-drivers-drive-v1` (409 "the VM's host agent does not support a driver disc drive; upgrade Nex Core"). A non-empty drive joins the replay payload (an omitted drive is not stored, so older replays still match) and is passed to Core as `VMMediaRequest.Drive`.
+- Regression: `go test ./internal/controller/ -run TestVMMediaDriversDrive -count=1 -v` failed before the fix (`vmmedia_test.go:308 invalid drive: {"error":"invalid JSON request"}`) and passes now (`--- PASS: TestVMMediaDriversDrive`); `go test -race ./internal/controller/...` ok. Job `go` (`go test -race ./...`) in both `.github/workflows/phase1.yml` and `.gitea/workflows/phase1.yml` on push and pull request. No browser or lab run exercised the UI against a real host.
+- Avoid: a UI that sends a field the Controller contract never accepted, with no contract test across UI and Controller; a UI unit test that only asserts the request body it builds proves nothing about acceptance.
+- Follow-up (review, same day): with drives addressable, an insert could put the ISO already in the VM's other drive into this one; Core journals it and the Controller mirror then fails `ValidateVMSpec` ("the driver disc must differ from the install media") on later edits and marks the VM needs attention on re-adoption. `mediaVM` now refuses that insert with 400 using the VM's current `vm-create` mirror, and its 404 names the drive ("the driver disc ISO …" or "the install ISO …" on the VM's host and pool). `TestVMMediaDriversDrive` covers both directions and the unknown driver disc; with the guard disabled it failed (`got 202 want 400`). Hiding the other drive's ISO in the console list remains open.
+- Core half (review follow-up, 2026-09-17): `changeMedia` in `internal/vmhost/managed.go` did not refuse that insert itself, so an older, third-party or stale Controller could still make Core journal a definition `ValidateVMSpec` rejects. It now compares the request with the VM's own journaled definition (`managedVM`) before any libvirt call and fails the operation with "that ISO is already in the install drive; …" or "that ISO is already in the driver disc drive; …"; re-inserting into the same drive stays allowed. Regression: the extended `TestManagedMediaDriversDrive` (`internal/vmhost/firmware_test.go`) failed before the fix (`firmware_test.go:1161: install insert of the driver disc ISO must be refused: {… Status:succeeded …}`) and passes now with `go test ./internal/vmhost/ -run TestManagedMediaDriversDrive -count=1`; `go test -race ./internal/vmhost/... ./internal/agent/...` ok. Job `go` (`go test -race ./...`) in both `phase1` workflows.
+
+## BUG-0236 — A queued storage row stayed on screen after its registration became healthy
+
+- Date: 2026-09-17. Status: fixed; regression added.
+- Symptom: in the Phase 2 gate lab run on 0.2.10~gate1, the storage table kept a stale "queued" row next to the healthy registration after the queued registration succeeded, until the page was reloaded.
+- Root cause: the Controller returns queued, dispatched and failed registrations with `id ""`, and `web/src/storage.tsx` (and the network and ISO tables in `web/src/managed.tsx`) keyed rows by `id`. Duplicate empty keys made React reconcile the wrong row.
+- Fix: rows use `key={s.id || \`op:${s.operation_id}\`}` in the storage, network and ISO tables.
+- Regression: `.cache/phase1-qa-venv/bin/python tests/integration/storage_repositories_browser.py --evidence <dir>` pending-row case failed against the pre-fix build (5 rows where 3 were expected) and passes after; `npm --prefix web run test` (`storage.test.mjs`, `managed.test.mjs` key asserts) passes. CI: step "Verify storage repository browser workflows with simulated host" in job `controller-browser`, and job `web`, in both `.github/workflows/phase1.yml` and `.gitea/workflows/phase1.yml`. Simulated host only.
+- Avoid: keying list rows by an ID that pending records do not have yet.
+
+## BUG-0237 — A VM page opened after a create turned into "Object not found" when the create failed
+
+- Date: 2026-09-17. Status: fixed; regression added.
+- Symptom: in the Phase 2 gate lab run on 0.2.10~gate1, an over-capacity create went to the new VM's page; once the create task failed, the next reload showed "Object not found" with no reason or link to the task.
+- Root cause: the VM listing deliberately omits failed creates (no VM exists), but `create()` in `web/src/managed.tsx` dropped the `operation` from the 202 response and navigated to `#/vms/<vm_id>`, a route that only resolves from the listing.
+- Fix: `create()` navigates to `#/vms/<vm_id>/<operation_id>`; `web/src/main.tsx` renders a "Creation <status>" panel with the task error and a **Task history** link when the VM is absent and the third segment is a `vm-create` operation. A VM route without the operation still shows Object not found.
+- Regression: `.cache/phase1-qa-venv/bin/python tests/integration/managed_vm_browser.py --simulated --evidence <dir>` failed on the previous build (region "Creation task" not found) and passes after (13 PASS); `managed.test.mjs` source assert. CI: step "Verify managed VM browser workflows with simulated host" in job `controller-browser`, and job `web`, in both `phase1` workflows. Simulated host only.
+- Avoid: sending the operator to a route that only resolves from a listing that excludes the failure.
+
+## BUG-0238 — The VM Activity tab showed pool and host rows but not the VM's own actions
+
+- Date: 2026-09-17. Status: fixed; regressions added. Audit rows written before the fix keep their old resource IDs.
+- Symptom: in the Phase 2 gate lab run on 0.2.10~gate1, the VM Activity tab omitted console.open, vm-create, vm-power, vm-media and vm-update rows and listed pool, site and host rows instead.
+- Root cause: two causes. The Activity filter in `web/src/main.tsx` kept rows for the site, pool and pool hosts but never checked the VM ID. And `saveResourceStatus` in `internal/controller/managed.go` audited the managed_resources key, which for vm-power, vm-media, vm-update and vm-delete is an operation or row ID, not the VM ID.
+- Fix: `saveResourceStatus` audits the name argument (the VM ID at every caller) for `vm-*` kinds other than `vm-create`; the Activity tab keeps only `resource_id === vm.id` when a VM is selected and shows VM names as targets.
+- Regression: `go test ./internal/controller/ -run TestVMOperationAuditsNameTheVM` failed before (4 actions audited non-VM IDs) and passes after (rerun 2026-09-17: ok); `managed_vm_browser.py --simulated` with only the filter reverted gave 2 rows instead of 3 and passes after. CI: job `go` (`go test -race ./...`) and step "Verify managed VM browser workflows with simulated host" in job `controller-browser`, in both `phase1` workflows.
+- Avoid: scoping VM activity by host or pool IDs; a UI-only `vm.id` filter that cannot match operation-keyed audit rows; adding a new `Operation.resource_id` contract field when the caller already has the VM ID.
+
+## BUG-0239 — Add host silently swallowed a 409 "already enrolled"
+
+- Date: 2026-09-17. Status: fixed; regression added.
+- Symptom: in the Phase 2 gate lab run on 0.2.10~gate1, adding a host that still trusted another Controller showed no error in three attempts.
+- Root cause: `action()` in `web/src/main.tsx` wrote request errors into the inventory reload error state, which every successful 10 s poll cleared, and showed it outside the open form with a misleading Retry. A failed update apply used the same channel.
+- Fix: a separate `actionError` state, set and cleared by `action()`, `open()`, Close, route changes and update apply, rendered with `role=alert` inside the open form panel (or as a page alert without Retry); `api()` keeps `host_id` so the 409 message names the host and the Re-enroll route.
+- Regression: `.cache/phase1-qa-venv/bin/python tests/integration/site_selector_browser.py --evidence <dir>` (probe 200, add 409 with host_id, 12 s wait with an observed poll; and a failed update apply) failed on the previous build and passes after (9 PASS). The script previously never reached the workspace in CI because it lacked the signed-in init script; that is fixed too. CI: step "Verify searchable site selection" in job `controller-browser` in both `phase1` workflows.
+- Avoid: routing operator request errors through the inventory reload error channel.
+
+## BUG-0240 — Power confirmation buttons lost their danger and primary styling
+
+- Date: 2026-09-17. Status: fixed; regression added.
+- Symptom: in the Phase 2 gate lab run on 0.2.10~gate1, **Confirm force stop** and **Confirm shut down** rendered as flat text identical to Cancel.
+- Root cause: the power dialog sits inside `.toolbar`; `.toolbar button` in `web/src/style.css` has the same specificity as `button.danger`/`button.primary` and comes later, so it won.
+- Fix: the toolbar rules (base, hover, disabled, disabled icon, mobile) apply only to `.toolbar-group > button` and `.toolbar > button`.
+- Regression: `managed_vm_browser.py --simulated` computed-style check failed with the old CSS (`'UI-5 danger confirmation keeps its border', 'rgba(0, 0, 0, 0)'`) and passes after. CI: step "Verify managed VM browser workflows with simulated host" in job `controller-browser` in both `phase1` workflows.
+- Avoid: descendant selectors on containers that host dialogs.
+
+## BUG-0241 — The stale VM warning always said "Last reported state: unknown"
+
+- Date: 2026-09-17. Status: fixed; regression added.
+- Symptom: in the Phase 2 gate lab run on 0.2.10~gate1, a VM on a stale host always showed "Last reported state: unknown" although the host had reported its state.
+- Root cause: the VM listing deliberately reports `unknown` for a VM on a host that is not fresh, and the warning printed that listing field.
+- Fix: the warning reads the VM's state and `observed_at` from the host inventory in `GET /api/v1/hosts`, which is still returned while the host is stale, and falls back to unknown.
+- Regression: `npm --prefix web run test` (`managed.test.mjs` expects "Last reported state: running") failed before and passes after; `managed_vm_browser.py --simulated` stale case expects the host's last state. CI: job `web` and step "Verify managed VM browser workflows with simulated host" in job `controller-browser`, in both `phase1` workflows.
+- Avoid: changing the listing's `unknown` state, which correctly gates actions.
+
+## BUG-0242 — The host-local VM table clipped Open console at 360 px
+
+- Date: 2026-09-17. Status: fixed; regression added; CI coverage conditional.
+- Symptom: in the Phase 2 gate lab run on 0.2.10~gate1, the host-local login page at 360 px cut off the fourth Console column, so Open console was reachable only by an unmarked sideways scroll.
+- Root cause: four columns inside `.table-scroll{overflow:auto}`; the Local control cell's stacked buttons or long blocked reason pushed Console past the card edge.
+- Fix: Open console (or "Console: start the VM first") moved into the Local control cell and the Console column was removed (`web/src/local.tsx`, `web/src/local.css`).
+- Regression: `.cache/phase1-qa-venv/bin/python tests/integration/localcore_browser.py --blocked-only` new 360x800 case failed before (button right edge 400.5 px vs table edge 323 px) and passes after. CI: step "Verify local host browser authentication and preflight blockers" in job `host` in both `phase1` workflows, but that step runs only when the runner capability check passes; on a runner without it the regression is skipped, so CI coverage there is outstanding.
+- Avoid: shrinking mobile padding or letter-spacing only, which still overflows with a long blocked reason.
+
+## BUG-0243 — Console clipboard and resize showed ready with no guest OS running
+
+- Date: 2026-09-17. Status: fixed; regression added.
+- Symptom: in the Phase 2 gate lab run on 0.2.10~gate1, a VM in firmware, in GRUB or with no OS reported clipboard "ready" and display resize available.
+- Root cause: `observeGuest` in `internal/vmhost/guest.go` treated libvirt's `state='connected'` on the qemu-vdagent channel as proof of a running guest vdagent; that port reads connected even while the guest-agent channel on the same virtio-serial bus is disconnected.
+- Fix: after the channel loop, report ready only when the vdagent channel is connected and the guest agent is not `disconnected`; resize follows. Tradeoff: a guest with spice-vdagent but no qemu-guest-agent now reads waiting.
+- Regression: `go test -race ./internal/vmhost/ -run TestObserveGuest`, case "vdagent port connected without a guest OS", failed before (ready/true) and passes after (rerun 2026-09-17: ok). CI: job `go` (`go test -race ./...`) in both `phase1` workflows. Follow-up done 2026-09-17: the console waiting label now reads "Waiting for guest tools (qemu-guest-agent and spice-vdagent) in the guest", the resize reason names both agents, and `docs/guide/guest-tools.md`, `docs/guide/vm-console.md` and the `docs/API.md` guest observation paragraph state the stricter condition and tradeoff. `npm --prefix web run test` (`managed.test.mjs` label assert) failed with the old label and passes now (ok); CI: job `web` in both `phase1` workflows.
+- Avoid: relying on the vdagent port state alone, or on the order of channels in the definition.
+
+## BUG-0244 — Healthy managed checks showed "Last success Not observed"
+
+- Date: 2026-09-17. Status: fixed; regression added.
+- Symptom: in the Phase 2 gate lab run on 0.2.10~gate1, Host Health showed managed-journal and managed-vms as healthy with "Last success Not observed".
+- Root cause: Core built both checks as healthy without setting the optional `LastSuccess`.
+- Fix: `managedJournalCheck` and `Applied` in `internal/vmhost/managed.go` set `LastSuccess` to the observation time when healthy; failed and unknown checks keep nil.
+- Regression: `go test -race ./internal/vmhost/ -run 'TestAppliedSurvivesCorruptJournalEntry|TestAppliedFlagsVMsMissingFromLibvirt'` failed before (LastSuccess nil) and passes after (rerun 2026-09-17: ok). CI: job `go` in both `phase1` workflows.
+- Avoid: filling `last_success` in the Controller, which passes checks through; the host owns the observation.
+
+## BUG-0245 — Deleting a VM from its page showed no "Delete queued" notice
+
+- Date: 2026-09-17. Status: fixed; regression added.
+- Symptom: in the Phase 2 gate lab run on 0.2.10~gate1, deleting from the VM page returned to the host page with no confirmation notice.
+- Root cause: `VMDelete.submit` in `web/src/managed.tsx` set the notice before changing the hash, and the hashchange handler in `web/src/main.tsx` clears notices.
+- Fix: call `onNotice` after `await reload()`, so the navigation runs first.
+- Regression: `managed_vm_browser.py --simulated` injected-delete case failed with the old call order ("Delete queued for" not visible on the host page) and passes after; `managed.test.mjs` source-order assert. CI: job `web` and step "Verify managed VM browser workflows with simulated host" in job `controller-browser`, in both `phase1` workflows.
+- Avoid: setting page notices before a navigation that resets them.
+
+## BUG-0246 — Every nex-controller package from 0.1.6~alpha1 to 0.2.9 shipped a Controller that cannot start
+
+- Date: 2026-09-17. Status: fixed; regression added; release smoke-start outstanding.
+- Symptom: in the Phase 2 gate3 lab run on 0.2.10~gate3, the `nex-controller` deb binary exited at start with "Binary was compiled with CGO_ENABLED=0, go-sqlite3 requires cgo to work. This is a stub". `go version -m` on the packaged binaries reports `CGO_ENABLED=0` for 0.1.6~alpha1, 0.2.2, 0.2.5, 0.2.6, 0.2.7, 0.2.9 and 0.2.10~gate3, so every Controller package from 0.1.6~alpha1 through 0.2.9 is affected. A Controller installed from the package, including one upgraded through apt, gets a binary that cannot open its database, and the service keeps restarting; recovery needs a shell. Appliances built from the image keep their own working binary.
+- Root cause: `packaging/controller/Dockerfile` installed no C toolchain (`gcc`, `libc6-dev`) and neither `packaging/controller/build-inside.sh` nor `appliance/build-inside.sh` set `CGO_ENABLED`, so `go build` silently fell back to `CGO_ENABLED=0` and linked the go-sqlite3 stub.
+- Fix: the controller builder image installs `gcc` and `libc6-dev`, and both build scripts `export CGO_ENABLED=1` before `go build`, so a builder without a compiler fails the build instead of producing the stub.
+- Regression: `python3 -m unittest tests.test_distribution_packaging.ControllerCgoBuildTests` failed before the fix (1 failure, 2 errors) and passes after; the full module ran 23 tests OK. Artifact check: a throwaway `0.2.10~cgocheck` package built with `packaging/controller/build.py` reports `CGO_ENABLED=1` in `go version -m`, and its binary started on 127.0.0.1 with an empty data directory, created `controller.db` and answered HTTPS 200. CI: step "Check contracts and contributor tools" (`unittest discover -s tests -p 'test_*.py'`) in job `contracts` in both `phase1` workflows.
+- Follow-up (release-workflow owner): the release workflow checks only the package version and never extracts or smoke-starts the packaged Controller binary, so a runtime-broken package can still be published; add a `go version -m` cgo check or a start-with-empty-data-dir check to artifact verification. Withdrawing or superseding the published broken packages and operator recovery guidance remain an owner decision.
+- Avoid: relying on Go's implicit cgo default in a builder image with no C compiler; it builds without error and fails only at runtime.
+
+## BUG-0247 — A resumed interrupted delete briefly published needs_attention while it was still running
+
+- Date: 2026-09-17. Status: fixed; regression added.
+- Symptom: in the Phase 2 gate3 lab run on 0.2.10~gate3, after `nex-core-local` was killed during a wipe delete, the journal entry read needs_attention after restart and then settled succeeded about 0.3 s later.
+- Root cause: `reconcile` in `internal/vmhost/managed.go` set `Result.Status` to needs_attention in memory before resuming, and saves made part-way by the resume helpers (`finishDelete` at stage `wiping`, `startCreated`, `finishFirmwareRemoval`, `finishSecureBoot*`) wrote that provisional status to disk.
+- Fix: `reconcile` keeps the result pending during the resume; only a result still unsettled at the end (or on an early error return) becomes needs_attention, keeping its reason or the retained-operation message. A resumed create records succeeded after its start step.
+- Regression: `go test -race -count=1 -run TestResumedDeleteMidwaySaveStaysPending ./internal/vmhost/` failed before the fix (mid-way save read needs_attention) and passes after; the full `./internal/vmhost/... ./internal/agent/...` race run passed. CI: job `go` (`go test -race ./...`) in both `phase1` workflows.
+- Avoid: setting a pessimistic final status before the side effects run; every save made part-way publishes it. Related: BUG-0221.
+
+## BUG-0248 — A queued create showed full VM details with Edit and Delete
+
+- Date: 2026-09-17. Status: fixed; regression added.
+- Symptom: in the Phase 2 gate3 lab run on 0.2.10~gate3, for about 1–2 s after submit a queued create showed the full VM details view with Edit and Delete instead of the "Creation queued" panel.
+- Root cause: `GET /api/v1/vms` lists creates that have not failed, and `web/src/main.tsx` showed the Creation panel only when no VM row existed; `editBlocker` in `web/src/vm-edit.tsx` ignored the create task status (the server still refused the edit).
+- Fix: `main.tsx` also shows the Creation panel while `vm.status` is not succeeded and the route's operation segment equals `vm.operation_id`; `editBlocker` returns "Wait for the creation task to finish." while queued or dispatched and "The creation task did not succeed; check it in Task history." for failed or needs_attention.
+- Regression: `node web/src/vm-edit.test.mjs` failed with the fix reverted and passes after; `.cache/phase1-qa-venv/bin/python tests/integration/managed_vm_browser.py --simulated` queued-create route case failed with the `main.tsx` hunk reverted ("Creation queued" not found) and passes after (16 PASS lines). CI: job `web` (`npm --prefix web run test`) and step "Verify managed VM browser workflows with simulated host" in job `controller-browser`, in both `phase1` workflows.
+- Avoid: treating the presence of a VM row as proof that its create succeeded.
+
+## BUG-0249 — The "Start queued" notice stayed after its task succeeded
+
+- Date: 2026-09-17. Status: fixed; regression added.
+- Symptom: in the Phase 2 gate3 lab run on 0.2.10~gate3, the "Start queued" notice stayed on the VM page long after the task succeeded, including across tab changes.
+- Root cause: the notice in `web/src/main.tsx` had no task identity and was cleared only on hash change or by `action()`; tab changes keep the hash.
+- Fix: power notices carry the operation ID from the 202 response (`VMPower` in `web/src/managed.tsx`, console Start, context menu and its dialog); an effect clears the notice once that operation leaves queued/dispatched, and detail-tab clicks clear it.
+- Regression: `managed_vm_browser.py --simulated` notice case failed with the effect and tab clear reverted ("Locator expected to have count 0") and passes after. The `managed.tsx` source assertion in `managed.test.mjs` was not shown failing on its own. CI: job `web` and step "Verify managed VM browser workflows with simulated host" in job `controller-browser`, in both `phase1` workflows.
+- Avoid: page notices without a task identity that nothing expires.
+
+## BUG-0250 — The Guest tools badge said "stale" on a fresh VM
+
+- Date: 2026-09-17. Status: fixed; regression added.
+- Symptom: in the Phase 2 gate3 lab run on 0.2.10~gate3, the Guest tools badge read stale while the VM and host were fresh (during a guest reboot, and steadily on a VM with no OS).
+- Root cause: `web/src/managed.tsx` mapped the guest agent's `disconnected`/`unresponsive` states onto freshness words.
+- Fix: the badge keeps its colour class but shows the agent's own state, for example "disconnected".
+- Regression: `node web/src/managed.test.mjs` ("guest agent badge must not say stale") failed with the fix reverted and passes after; `managed_vm_browser.py --simulated` disconnected-agent case failed against a bundle with the old badge (showed "stale") and passes after. CI: job `web` and step "Verify managed VM browser workflows with simulated host" in job `controller-browser`, in both `phase1` workflows.
+- Avoid: using freshness words for anything but report age.
+
+## BUG-0251 — A replacement Controller started the old Controller appliance without confirmation
+
+- Date: 2026-09-17. Status: fixed in the UI; regression added; Core-side refusal is an owner decision.
+- Symptom: in the Phase 2 gate3 lab run on 0.2.10~gate3, a replacement Controller offered an enabled Start for the excluded old appliance, and Start was sent with no warning, which would run two Controllers.
+- Root cause: Start has no confirm text, and the power dialog in `web/src/managed.tsx` opened only when an item had one; console Start and the context menu in `web/src/main.tsx` also sent Start directly. Nothing refuses it server-side.
+- Fix: `powerConfirmText(item, vm)` gives Start on a protected VM the two-Controllers warning, and the toolbar, console and context-menu Start paths all open the confirmation dialog, which now opens modal, shows its own errors and reuses the retry-safe `request_id`.
+- Regression: `managed_vm_browser.py --simulated` covers toolbar, context-menu and console Start and asserts no POST before Confirm start; it failed on context-menu Start with the `main.tsx` hunks reverted and passes after. The refused-Start case (error inside the dialog, same `request_id` on retry) failed against the previous bundle. The `managed.tsx` half in `node web/src/managed.test.mjs` was not shown failing on its own. CI: job `web` and step "Verify managed VM browser workflows with simulated host" in job `controller-browser`, in both `phase1` workflows.
+- Avoid: gating confirmation on per-action confirm text alone; protected VMs need it for Start too.
+
+## BUG-0252 — The delete dialog's disk checkbox rendered far from its label
+
+- Date: 2026-09-17. Status: fixed; regression added.
+- Symptom: in the Phase 2 gate3 lab run on 0.2.10~gate3, the delete dialog's wipe checkbox rendered far from its label.
+- Root cause: the global `input { width: 100% }` rule in `web/src/style.css` stretched the checkbox inside the flex label.
+- Fix: `input:where([type="checkbox"], [type="radio"]) { width: auto; }` placed after the global input width rule.
+- Regression: `node web/src/managed.test.mjs` ("checkbox width rule must follow the input width rule") failed with the fix reverted and passes after; `managed_vm_browser.py --simulated` checks the checkbox is at most 24 px wide and within 16 px of its label, and failed with the rule reverted (`252.84375, 11`). CI: job `web` and step "Verify managed VM browser workflows with simulated host" in job `controller-browser`, in both `phase1` workflows.
+- Avoid: placing the rule before the input width rule, where equal specificity makes it lose; and measuring only the gap, which passed without the fix.
+
+## BUG-0253 — VMs on a stale host showed the running icon in the tree
+
+- Date: 2026-09-17. Status: fixed; regression added.
+- Symptom: in the Phase 2 gate3 lab run on 0.2.10~gate3, while host-1 was stale the Resources tree showed its shut-off VMs with the running icon.
+- Root cause: `web/src/main.tsx` applied `vm-off` only to a fresh shut-off VM; a VM on a stale host reports state `unknown` and fell back to the default icon.
+- Fix: tree VM links get class `vm-unknown` and the title "State unknown: host not fresh" when freshness is not fresh; `web/src/style.css` greys that icon without muting the text.
+- Regression: `managed_vm_browser.py --simulated` stale case (class, title and grayscale filter) failed with the hunk reverted and passes after. CI: step "Verify managed VM browser workflows with simulated host" in job `controller-browser` in both `phase1` workflows.
+- Avoid: inferring a running state from the absence of a fresh shut-off report.
+
+## BUG-0254 — A VM edit that removed one interface and added another was refused or reused the removed MAC
+
+- Date: 2026-09-17. Status: fixed; regression added; walked on a real host in the Phase 2 gate5 run (0.2.10~gate5, 2026-09-17 UTC, disposable nested-KVM lab): [gate report](qa/2026-09-17-phase2-gate/checks.md) row 11 checks (a) remove on a never-edited stopped VM keeps the survivor's MAC, (b) remove plus add of a different model gives a MAC distinct from both originals, and (c) remove plus add on a running VM is accepted with Controller and host definitions in agreement, all confirmed; (d) single-interface replacement was not checked (known limitation, open defect 5). The fix holds within one save only: reuse of a MAC removed in an earlier save is part of open major defect 1 ([owner triage](qa/2026-09-17-phase2-gate/checks.md#owner-triage-open-defect-1)), not this entry.
+- Symptom: the final code review of the Phase 2 gate4 build (0.2.10~gate4) reported that the BUG-0226 guard in `updateVM` refuses the editor's NIC removal or change on a never-edited VM. Checking it showed removal or change alone works, because `GET /api/v1/vms` fills every interface's effective MAC and the editor sends it back. The real failures: an editor save that removed an interface and added a new one (which the editor sends with an empty MAC) whose settings differ from the current interface at that index was refused with 400 "when removing, reordering or changing a network interface, give every existing interface its MAC address"; when they matched it was accepted, but the new interface was frozen to the first derived MAC not in the request, often the MAC of the interface just removed. On a running VM the Controller ran its stop-first check before freezing, so it judged a different definition from the one Core checks.
+- Root cause: BUG-0226 assumed that an empty MAC at an existing index names the current interface at that index, i.e. that the client sends no MACs at all. The bundled editor sends existing interfaces with their MACs and new ones without, and no test used the editor's real payload. The freeze loop also left current MACs out of the taken set and ran after `NeedsStop`.
+- Fix: in `internal/controller/managed.go` `updateVM`, a request that names any current interface by its effective MAC (`protocol.NICMAC`) treats every empty-MAC interface as new and skips the positional guard; a request that names none keeps the 400 for removal, reorder or change, and an unchanged unnamed interface keeps the current MAC at its position. Automatic MACs are frozen before `NeedsStop`, skipping every requested and current effective MAC.
+- Regression: `go test -race -run TestUpdateVM ./internal/controller/` passes (2026-09-17). `TestUpdateVMRemovePlusAddGetsFreshMAC` failed on a scratch copy with the fix reverted (reconstructed pre-fix guard): with the VM running, 409 "stop the VM first to change network interface" (the new interface took the removed d0); with it stopped, "new interface must get a fresh MAC". The 400 on a differing new interface was seen by the fixing session before its fix, not rerun here. `TestUpdateVMEditorRoundTripOnNeverEditedVM` (editor payload from the VM list; remove first interface, change first model) and `TestUpdateVMRemovingInterfaceRequiresNamedMACs` (MAC-less API client still gets 400) pass. `npm --prefix web run test` ("vm-edit firmware and interface check ok") passes. `tests/integration/vm_edit_browser.py` (simulated host) passes its never-edited step: remove interface 1 and add an rtl8139 interface in one save; revision 1 keeps the second MAC and gives the new interface a distinct MAC. CI: job `go` (`go test -race ./...`), job `web` (`npm --prefix web run test`) and step "Verify VM editing browser workflow with simulated host" (`vm_edit_browser.py`) in job `controller-browser`, in both `phase1` workflows.
+- Avoid: a guard that assumes a client payload shape without a test that sends the real client's payload; reasoning about what the UI sends from `vmDefinition`/`createVM` without following the `GET /api/v1/vms` serializer; checking stop requirements on a definition other than the one dispatched.
+
+## BUG-0255 — Realtime stats showed CPU and memory for a stopped VM
+
+- Date: 2026-09-17. Status: fixed; regression added; verified on a disposable nested-KVM host.
+- Symptom: in the usage-history lab run (uncommitted working tree), realtime (`range=live`) for a force-stopped VM returned HTTP 200 with 7 known points (`cpu.total` 0.5/0/0 %, `memory.assigned` 1 GiB) instead of all nulls, so the Realtime drawer drew small CPU rates and assigned memory for a VM that was not running.
+- Root cause: on libvirt 11.3, `virsh domstats --raw --nowait --cpu-total --balloon <uuid>` still returns `cpu.time`, `cpu.user`, `cpu.system` and `balloon.*` for a shut-off domain, and a never-started domain returned the same increasing `cpu.time`, so the counter is not the domain's own. `liveViews.sample` in `internal/agent/usage_history_live.go` treated any block with `cpu.time` as a running domain. Stored history was unaffected because its sampler uses `--list-running`.
+- Fix: the realtime `domstats` call adds `--state`; only `state.state=1` (running) is sampled. Shut-off, paused or state-less answers record nulls and reset the counters, so the first rate after a restart is unknown.
+- Regression: `TestLiveSampleTreatsOnlyARunningStateAsRunning` (`internal/agent/usage_history_live_test.go`) uses the stopped-VM output captured on the lab host as its fixture; it failed before the fix (`sampled as running = true`) and passes after it, with shut-off, paused and running cases. `go test -race -count=1 ./internal/agent/` passes (2026-09-17). The final `tests/integration/usage_history_lab.py` run (2026-09-17) returned all nulls for the stopped VM while libvirt still reported the stale counters ([QA record](qa/2026-09-16-usage-history.md), L5). CI: job `go` (`go test -race ./...`) in both `phase1` workflows.
+- Avoid: treating the presence of libvirt counters as proof a domain is running; ask for and check the domain state.
+
+## BUG-0256 — An interface added to a running VM reused the MAC of an interface the guest had not released
+
+- Date: 2026-09-17. Status: fixed in the working tree; regression added; **not lab-verified** (needs a gated rebuild and a rerun of [gate report](qa/2026-09-17-phase2-gate/checks.md) row 11, including probe c2, and the G7 rows). This is Phase 2 gate5 open major defect 1 ([owner triage](qa/2026-09-17-phase2-gate/checks.md#owner-triage-open-defect-1)).
+- Symptom: on gate5 (0.2.10~gate5, disposable nested-KVM lab), a running VM at its firmware had an interface removed; a later add-only save froze the new interface to the removed interface's MAC and hot-plugged it. `virsh domiflist` showed that MAC twice on `br0` while the task reported succeeded and the Controller showed one interface fewer than libvirt.
+- Root cause: `virsh detach-device --persistent` drops the interface from the persistent definition at once, but the live device stays until the guest acknowledges the unplug, which firmware, installer menus and guests without hotplug never do. Core's `applyLive` (`internal/vmhost/managed.go`) read only `dumpxml --inactive` and attached every wanted MAC missing from it; `validateManagedDefinition` also checks only the inactive XML, so the operation succeeded. The Controller's `updateVM` freeze loop (`internal/controller/managed.go`) picked the lowest `protocol.DerivedMAC(id, k)` not in the request or current definition, so a MAC removed in an earlier save was handed out again.
+- Fix: `update` (`internal/vmhost/managed.go`), in its validating stage next to the dedicated-memory refusal and before any disk allocation or device operation, reads the persistent and live domains of a running guest and fails with "network interface MAC <mac> is still attached to the running VM; wait for the guest to release it or stop the VM, then save again" when a requested interface's MAC is live but absent from the persistent definition. Because no allocating or attaching stage was saved, `Execute` records `failed` (not `needs_attention`), background promotion leaves it alone, and the previous revision stays current. An independent review rejected a first version that ran the check inside `applyLive`: that runs after the journal stage becomes `attaching`, so the refusal became `needs_attention` after new disks were already allocated. `updateVM` draws new automatic MACs from the first derived index above the highest one the current definition uses (request MACs do not raise it), skipping taken addresses, and falls back to the lowest free index when none above is free. Known limits: the Controller has no live interface data, so after the highest-index interface is removed, or once index 255 is in use (for example a manual MAC equal to the last derived address), the next automatic MAC can be a recently removed one; Core refuses it while it is live. Not done: extending the create/update cross-VM MAC scans to other running domains' live XML (a manual MAC still live on another VM is not refused).
+- Regression: `TestManagedUpdateRefusesMACStillLive` (`internal/vmhost/managed_update_test.go`) drives `Execute` with a fake virsh whose live XML holds a MAC the inactive XML lacks. With the check disabled it fails ("Status:needs_attention", after an attach); with the fix it asserts `failed`, the exact error text, no `attach-device`, `detach-device`, `change-media` or `autostart` call, and no `allocating` or `attaching` stage or domain saved. After release, the retry passes validation and attaches exactly once; it then stops at the final disk observation with "storage is not registered on this host", because a unit test cannot register a storage repository (root-owned mount, `libvirt-qemu` probe), so a fully `succeeded` retry is not proven here and needs the lab rerun. `TestUpdateVMAddAfterRunningRemovalSkipsRemovedMAC` (`internal/controller/update_test.go`, running VM `[:00, :01]`, save 1 removes `:00`, save 2 adds) failed before the fix ("new interface recycled a removed MAC") and passes after it (new MAC `:02`). `TestUpdateVMAutomaticMACHighestIndexFromCurrentDefinition` (current `[:01]`, request adds manual `:ff` and an automatic interface; then a further add) failed with the first version's request-MAC high-water ("a manual last derived address must not restart allocation at d0") and passes after it (`:02`, then fallback `:00`). `TestUpdateVMRemovePlusAddGetsFreshMAC`'s last step, which asserted the recycled `:00`, now expects `:03`. `go test -race ./internal/vmhost/... ./internal/controller/... ./internal/protocol/...` passes (2026-09-17); `go vet` on those packages is clean and `gofmt -l` on the changed Go files is empty. CI: job `go` (`go test -race ./...`) in both `.github/workflows/phase1.yml` and `.gitea/workflows/phase1.yml`.
+- Avoid: judging whether a MAC is free only against the persistent definition (inactive XML, journal or Controller mirror); on a running domain a detached device can still be live. Do not track removed addresses in the Controller database: it cannot see the live domain and a Controller-only history would not survive replacement.
+
+## BUG-0257 — A failed bundled-media import prevented a later seed retry
+
+- Date: 2026-09-17. Status: fixed; regression added. The public 0.2.9 installer intentionally does not bundle virtio-win, so this affects only a future authorized bundled-media seed.
+- Symptom: a failed `iso-import` journal entry with the bundled image's name or SHA-256 made later Core startup seeding return without retrying, leaving the image unavailable until manual journal intervention.
+- Root cause: `bundledMediaTarget` treated any matching import journal as proof the image existed, without checking its result status.
+- Fix: suppress a seed only for a matching `succeeded` import; failed imports are retried through the existing Core-owned `iso-import` journal and inventory-adoption flow. No API shape, guide workflow or durable record changed.
+- Regression: `TestSeedBundledMediaRetriesFailedImport` starts with a failed matching import and now requires a later succeeded import. The focused test against the staged baseline, compiled through an isolated temporary Go overlay, failed exit 1 with `failed import blocked bundled media seeding`; it passes after the fix. `go test -race -count=1 ./internal/vmhost` passed in 12.430 s after the fix. CI: job `go` runs `go test -race ./...` in both `.github/workflows/phase1.yml` and `.gitea/workflows/phase1.yml`.
+- Avoid: treating a journal entry's matching identity as completed work; a retry-safe seed must distinguish terminal success from a failed attempt.
+
+## BUG-0258 — Website publish ran recursive chmod as root on a caller-supplied artifact
+
+- Date: 2026-09-17. Status: fixed; regression added.
+- Symptom: `nex-website-publish`, which a publishing account may run through sudo, recursively removed execute bits from every regular file in its supplied artifact before validation. A traversable root-owned artifact could therefore be changed by the wrapper.
+- Root cause: the wrapper repaired artifact modes with `strip_execute_bits` instead of leaving validation to the release tool.
+- Fix: remove that root-side mutation. `website-release.py` continues to reject executable files before its root-owned staging copy; the wrapper now fails and leaves the supplied artifact unchanged.
+- Regression: `test_executable_artifact_is_rejected_without_mode_mutation` failed before the fix because the executable bit was cleared and downstream validation passed; it now requires wrapper failure and the unchanged executable bit. `python3 -m unittest discover -s tests -p 'test_nex_website_publish.py' -v` (5) and `python3 -m unittest discover -s tests -p 'test_website_release.py' -v` (7) pass. CI: both phase1 workflows run `python3 -m unittest discover -s tests -p 'test_*.py' -v`.
+- Avoid: mutating a caller-controlled path as root to make invalid input acceptable; reject it before privileged staging.
+
+## BUG-0259 — Stats treated stale hosts and unsupported Core versions as generic retry errors
+
+- Date: 2026-09-17. Status: fixed; regression added; browser/component verification remains outstanding.
+- Symptom: both an older Core without usage history and a stale host return existing HTTP 409 responses, but the Stats tab showed either as a generic alert with Retry. Operators were not told to upgrade an unsupported Core, and stale data was not labelled stale.
+- Root cause: the UI retained only an undifferentiated error string.
+- Fix: classify the existing 409 response text: an unsupported host shows **Upgrade Nex Core to see usage history** and clears old charts; a stale host preserves loaded history with an out-of-date warning and Retry. Other errors keep the existing alert behavior.
+- Regression: `statsFailure` assertions in `web/src/stats.test.mjs` distinguish capability, stale and ordinary failures; `npm test`, typecheck and build pass. The proposed Stats module was not in HEAD or the index, so no repository baseline failure was executed or claimed. No browser or component runner was available; retained-chart and recovery behavior need browser/component coverage.
+- Avoid: collapsing different safe operator actions behind one retry-only message when the existing error contract supplies the distinction.
+
+## BUG-0260 — A same-named imported ISO suppressed the pinned bundled-media seed
+
+- Date: 2026-09-17. Status: fixed; regression added. Public 0.2.9 remains unaffected because bundled virtio-win seeding is blocked.
+- Symptom: a succeeded unrelated ISO named `virtio-win.iso` stopped a future authorized bundled-media seed, even when its digest did not match the pinned bundle.
+- Root cause: Core considered either a matching name or SHA-256 to identify the bundle.
+- Fix: only a succeeded `iso-import` with the pinned SHA-256 suppresses seeding. The existing Core-owned journal, media file and inventory adoption path are unchanged.
+- Regression: `TestSeedBundledMediaDoesNotTreatSameNamedISOAsPinnedBundle` failed before the fix with `same-named ISO blocked the pinned bundled media seed`, then passed. `go test -race ./internal/vmhost -run 'TestSeedBundledMedia' -count=1` and `go test -race -count=1 ./internal/vmhost` (12.640 s) pass. CI: both phase1 workflows run `go test -race ./...`.
+- Avoid: use the pinned digest, not a mutable display filename, as the identity of an exact bundled artifact.

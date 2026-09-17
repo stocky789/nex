@@ -222,6 +222,7 @@ type ReportResponse struct {
 	StorageClusters        *StorageClusterSupport    `json:"storage_clusters_support,omitempty"`
 	StorageDiscoveries     []StorageDiscoveryRequest `json:"storage_discoveries,omitempty"`
 	StorageClusterRequests []StorageClusterRequest   `json:"storage_clusters,omitempty"`
+	StatsChannels          []StatsChannelRequest     `json:"stats_channels,omitempty"`
 }
 
 // StorageClusterCapability acknowledges the proof request identifier. A Core

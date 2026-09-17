@@ -75,7 +75,8 @@ network or VPN, with no direct Internet exposure. Automatic Controller failover 
    Select **Deploy Controller**. Keep the resource defaults unless the host can support a
    larger allocation. **Local storage** is fixed to the host path; select **LAN bridge**.
 
-4. Enter **Controller hostname** under **Appliance resources**. In **Network settings**,
+4. Under **Appliance resources**, keep or change **Controller hostname** (prefilled
+   `nex-controller`). In **Network settings**,
    choose **Automatic (DHCP)** or **Static IPv4** under **IP configuration**.
    DHCP is selected by default and obtains its address, gateway and DNS automatically. For
    static addressing, enter **IPv4 address / prefix**, **IPv4 gateway** and **DNS servers**;
@@ -160,7 +161,13 @@ remain read-only here; manage them from Controller. Unknown ownership prevents l
 - **Controller address unreachable:** verify the DHCP lease or reserved static address,
   bridge path and gateway. Do not mark deployment complete merely because the guest runs.
 - **Local action refused:** preserve the ownership restriction. Controller outage does not
-  authorize starting another copy or taking over shared writable storage.
+  authorize starting another copy or taking over shared writable storage. This build refuses a
+  new appliance deployment on a host that is enrolled or already has an appliance deployment,
+  and has no way to remove the old appliance there, so a failed appliance cannot be redeployed
+  on its own host. To replace it, exclude the old appliance (autostart disabled and observed
+  `shut off`, as in the replacement recovery steps below) and install a new Controller elsewhere:
+  the development setup, or an appliance on a separate clean Nex Core host that is not enrolled
+  (not yet walked through for replacement), as in [Replace a failed Controller](manage-controller.md#troubleshooting).
 
 Controller recovery exports contain database state, identity, TLS private keys and other
 secrets. Store a protected copy outside the hosting server; a same-host VM snapshot is not
@@ -296,6 +303,15 @@ original exclusion.
 ## Verification
 
 Recorded checks and their limits:
+
+- [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md) — `0.2.10~gate5`, 2026-09-17,
+  disposable nested-KVM lab, headless Chromium. Steps 2–6 in the browser from root login to a
+  ready deployment (queued, copying disk, initializing, cleanup, ready) with enrollment and
+  appliance adoption. The served Controller certificate matched the ready page fingerprint, and
+  the running appliance files matched the signed image. The management bridge and default route
+  were unchanged. The deployment used a static address; the DHCP default and the form at 360 px
+  were not re-observed in this run (they were in the gate4 run). The appliance's browser console
+  reached its login prompt; no console login was made.
 
 - [Fresh local installation](../qa/fresh-install/checks.md) — ISO install, root login, deployment,
   enrollment and appliance adoption.

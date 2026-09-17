@@ -6,6 +6,7 @@ trap 'chown -R "${OUTPUT_UID:?}:${OUTPUT_GID:?}" /output' EXIT
 mkdir /build
 cd /build
 tar -xzf /input/nex-source.tar.gz --strip-components=1
+export CGO_ENABLED=1
 go build -mod=vendor -trimpath -ldflags "-X nex.local/nex/internal/version.Version=${NEX_VERSION:-0.1.0-dev}" -o /build/nex-controller ./cmd/nex-controller
 go version /build/nex-controller > /output/go-version.txt
 (cd web && npm ci && npm run typecheck && npm run build)
@@ -21,6 +22,7 @@ virt-customize -a /output/controller.qcow2 --install cloud-init,qemu-guest-agent
  --copy-in /build/web/dist:/usr/local/share/nex \
  --copy-in /build/docs/api:/usr/local/share/nex \
  --upload /input/nex-source.tar.gz:/usr/local/share/nex/nex-source.tar.gz \
+ --upload /build/ARTWORK-LICENSE.md:/usr/local/share/nex/ARTWORK-LICENSE.md \
  --upload /build/appliance/firstboot.py:/usr/local/lib/nex/appliance-firstboot \
  --upload /build/appliance/run-controller.sh:/usr/local/lib/nex/run-controller \
  --upload /build/packaging/controller/apply-update:/usr/local/lib/nex/apply-update \
@@ -38,4 +40,4 @@ virt-customize -a /output/controller.qcow2 --install cloud-init,qemu-guest-agent
 virt-cat -a /output/controller.qcow2 /usr/local/share/nex/components.tsv > /output/components.tsv
 qemu-img check /output/controller.qcow2
 cp /input/nex-source.tar.gz /output/
-cp /build/LICENSE /build/NOTICE /output/
+cp /build/LICENSE /build/NOTICE /build/ARTWORK-LICENSE.md /output/

@@ -874,3 +874,52 @@ func TestCoreRecoverySettlesControllerOperation(t *testing.T) {
 		t.Fatalf("stale recovery outcome downgraded success: %+v", replay)
 	}
 }
+
+// VM power, media, update and delete requests audit the VM they act on, so a VM's activity can
+// be read from GET /api/v1/audit (GM-08). vm-create already audits its VM id.
+func TestVMOperationAuditsNameTheVM(t *testing.T) {
+	l := newManagedLab(t, protocol.ManagedVMCapability, protocol.PowerCapability, protocol.UpdateCapability, protocol.MediaCapability, protocol.DeleteCapability)
+	spec := l.spec("audited")
+	var created createdVM
+	read(t, l.create("create-audit", spec, 202), &created)
+	id := created.VMID
+	commands := l.report().Commands
+	if len(commands) != 1 || commands[0].Kind != "vm-create" {
+		t.Fatalf("dispatch %+v", commands)
+	}
+	applied := *commands[0].VM
+	state := &protocol.ManagedState{VMs: []protocol.VMCreateSpec{applied}}
+	settle := func() {
+		t.Helper()
+		var results []protocol.Result
+		for _, cmd := range l.reportState("shut off", state).Commands {
+			results = append(results, protocol.Result{OperationID: cmd.OperationID, Status: "succeeded"})
+		}
+		l.reportState("shut off", state, results...)
+	}
+	settle()
+	next := spec
+	next.Description = "audited edit"
+	l.update("edit-audit", id, next, 202)
+	settle()
+	l.a.call("POST", "/api/v1/vms/"+id+"/power", map[string]string{"request_id": "power-audit", "action": "start"}, nil, 202)
+	settle()
+	l.a.call("POST", "/api/v1/vms/"+id+"/media", map[string]string{"request_id": "media-audit", "action": "eject"}, nil, 202)
+	settle()
+	l.a.call("DELETE", "/api/v1/vms/"+id, map[string]any{"request_id": "delete-audit"}, nil, 202)
+	var audits []protocol.Audit
+	read(t, l.a.call("GET", "/api/v1/audit", nil, nil, 200), &audits)
+	seen := map[string]bool{}
+	for _, e := range audits {
+		switch e.Action {
+		case "vm-create", "vm-update", "vm-power", "vm-media", "vm-delete":
+			if e.ResourceID != id {
+				t.Errorf("%s audited resource_id %q, want VM id %q", e.Action, e.ResourceID, id)
+			}
+			seen[e.Action] = true
+		}
+	}
+	if len(seen) != 5 {
+		t.Fatalf("audit actions %v in %+v", seen, audits)
+	}
+}

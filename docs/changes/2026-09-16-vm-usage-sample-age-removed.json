@@ -1,0 +1,46 @@
+{
+  "summary": "Remove the Sample age row from the VM usage panel. Host freshness remains on the panel heading; observed_at stays on the API. API impact: none; no endpoint or field changed.",
+  "paths": [
+    "web/src/managed.tsx",
+    "web/src/managed.test.mjs",
+    "tests/integration/managed_vm_browser.py",
+    "CHANGELOG.md",
+    "docs/API.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "website/src/routes/roadmap/+page.svelte",
+    "docs/changes/2026-09-16-vm-usage-sample-age-removed.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "VM usage instructions no longer tell operators to check Sample age; they use the fresh/stale badge instead.",
+    "pages": [
+      "docs/guide/edit-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. The UI stopped rendering usage.observed_at; GET /api/v1/vms and Core observation fields are unchanged. docs/API.md only drops the UI sample-age wording.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "Public roadmap milestone lists VM usage among built items; living plans no longer claim a Sample age row.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state. Usage remains ephemeral host observation; the Controller still does not store it."
+  },
+  "verification": {
+    "method": "npm --prefix web run test, python3 scripts/check_docs.py --all, and python3 -m unittest discover -s tests -p 'test_repository_privacy.py'. Unit coverage asserts Sample age and Sampled wording are absent. Slice accepted 2026-09-16.",
+    "evidence": [
+      "web/src/managed.test.mjs",
+      "tests/integration/managed_vm_browser.py",
+      "docs/guide/edit-virtual-machine.md"
+    ]
+  }
+}

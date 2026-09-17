@@ -114,7 +114,10 @@ func storageClusterResultsForController(results []protocol.StorageClusterResult,
 	return out
 }
 
-type RunConfig struct{ Heartbeat, ProbeInterval, ProbeTimeout time.Duration }
+type RunConfig struct {
+	Heartbeat, ProbeInterval, ProbeTimeout time.Duration
+	history                                *usageHistory // set by Run; answers stats channels
+}
 
 // ApplianceJournalDir is the local appliance engine's deploy journal (nex-core-local's
 // data directory plus /vmhost). Its deployments are reported as this host's appliances.
@@ -246,10 +249,10 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	// DriversDriveCapability is deliberately absent from the legacy v1 list below: a host
 	// defines the second CD drive either way, but the capability is the Controller's signal
 	// that it may send drive="drivers", and a strict v1 decoder must not be handed v2 names.
-	capabilities := []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.DriversDriveCapability}
+	capabilities := []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.DriversDriveCapability, protocol.UsageHistoryCapability}
 	if s.State.StorageProtocolLegacy {
 		version = protocol.LegacyVersion
-		capabilities = []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.MediaCapability, protocol.UpdateCapability, protocol.DeleteCapability}
+		capabilities = []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.MediaCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.UsageHistoryCapability}
 		// A strict v1 decoder must not see v2 managed storage/receipt fields.
 		legacy := *inv
 		legacy.Managed = nil
@@ -369,6 +372,16 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 				}
 			}
 		}(console)
+	}
+	for _, channel := range response.StatsChannels {
+		if cfg.history == nil {
+			break
+		}
+		go func(req protocol.StatsChannelRequest) {
+			if err := serveStatsChannel(ctx, s.State, req, cfg.history); err != nil {
+				log.Printf("stats channel: %v", err)
+			}
+		}(channel)
 	}
 	if len(response.Commands) > 0 {
 		m.Tick(ctx)
@@ -566,7 +579,9 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	if membership, membershipErr := Membership(s); membershipErr == nil && membership.MasterHostID != s.State.HostID {
 		ReleaseUnusedPoolStorageReservations(ctx, s)
 	}
-	m := NewMonitor(cfg.ProbeTimeout, NativeProbes(version.Version))
+	cfg.history = newUsageHistory(filepath.Join(s.dir, "usage"), s.State.HostID)
+	sampler := newUsageSampler(cfg.history)
+	m := NewMonitor(cfg.ProbeTimeout, NativeProbes(version.Version, sampler))
 	storage := vmhost.NewStorageMonitor(cfg.ProbeTimeout)
 	var poolReconcileRunning atomic.Bool
 	var clusterReconcileRunning atomic.Bool
@@ -603,6 +618,8 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		}()
 	}
 	scheduleClusterReconcile()
+	runWork.Add(1)
+	go func() { defer runWork.Done(); sampler.run(probeCtx) }()
 	go m.WatchLibvirt(probeCtx)
 	runWork.Add(1)
 	go func() {
@@ -691,6 +708,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 				if done.result.OperationID != active || (entry.Status != "succeeded" && entry.Status != "failed" && entry.Status != "needs_attention") {
 					return errors.New("invalid local managed command completion")
 				}
+				forgetDeletedVM(cfg.history, entry)
 			}
 			s.State.Journal[active] = entry
 			if err = s.Save(); err != nil {

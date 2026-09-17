@@ -111,11 +111,12 @@ class AptUpdatePathTests(unittest.TestCase):
         self.assertIn('Path("dists")', publish)
         self.assertIn("InRelease", publish)
 
-    def test_both_packages_ship_the_archive_keyring_and_source(self):
+    def test_both_packages_ship_the_archive_keyring_source_and_artwork_license(self):
         for build in ("packaging/core-local/build-inside.sh",
                       "packaging/controller/build-inside.sh"):
             with self.subTest(build=build):
                 self.assertIn(KEYRING, (ROOT / build).read_text())
+                self.assertIn('ARTWORK-LICENSE.md', (ROOT / build).read_text())
         for script in ("packaging/core-local/postinst",
                        "packaging/controller/postinst"):
             with self.subTest(script=script):
@@ -126,6 +127,33 @@ class AptUpdatePathTests(unittest.TestCase):
         for script in ("packaging/core-local/prerm", "packaging/controller/prerm"):
             with self.subTest(script=script):
                 self.assertIn(APT_SOURCE, (ROOT / script).read_text())
+
+
+class ControllerCgoBuildTests(unittest.TestCase):
+    """The Controller links go-sqlite3; a CGO_ENABLED=0 build cannot open its database."""
+
+    def test_controller_builders_have_a_c_toolchain_and_enable_cgo(self):
+        for dockerfile in ("packaging/controller/Dockerfile", "appliance/Dockerfile"):
+            with self.subTest(dockerfile=dockerfile):
+                packages = (ROOT / dockerfile).read_text().split()
+                self.assertIn("gcc", packages)
+                self.assertIn("libc6-dev", packages)
+        for build in ("packaging/controller/build-inside.sh", "appliance/build-inside.sh"):
+            with self.subTest(build=build):
+                lines = (ROOT / build).read_text().splitlines()
+                export = lines.index("export CGO_ENABLED=1")
+                go_build = next(i for i, line in enumerate(lines) if line.startswith("go build"))
+                self.assertLess(export, go_build)
+
+
+class VirtioWinReleaseExclusionTests(unittest.TestCase):
+    """Public ISO builds must not carry media whose source accounting is incomplete."""
+
+    def test_build_neither_stages_nor_allows_virtio_win(self):
+        build = (ROOT / "installer/build.sh").read_text()
+        self.assertNotIn("stage_virtio_win", build)
+        self.assertNotIn("third-party/virtio-win", build)
+        self.assertIn("refusing to publish virtio-win.iso without complete corresponding-source and legal accounting", build)
 
 
 class ControllerUpdateHelperRecoveryTests(unittest.TestCase):

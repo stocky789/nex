@@ -1,0 +1,166 @@
+{
+  "completed": true,
+  "passed": [
+    "Enrolled agent built from the working tree reports usage-history-v1",
+    "New VM definition carries <stats period='5'/> on its virtio balloon",
+    "virsh list --uuid --name prints \"uuid name\"; domstats --list-running --nowait prints Domain blocks with cpu, vcpu, balloon, block and net counters",
+    "VM 10m/24h and host 10m history contain known CPU, memory, disk and network points after two minutes",
+    "Realtime VM query: 1 s steps, 120 values, newest CPU point known on nearly every poll after 2 s, plausible rates",
+    "Realtime host query: 1 s steps, 120 values, newest CPU point known on nearly every poll after 2 s, plausible rates",
+    "After the 2-minute lease plus 5 s, per-VM domstats stopped and realtime added or resized no history files",
+    "After a force stop the VM history keeps earlier points and records a gap, not zeros",
+    "Realtime query for a stopped VM returns 200 with only null values",
+    "After an agent restart the stats channel reopens and every earlier 24h point is still served from the host file",
+    "Stats queries reject an invalid range (400), an unknown VM (404) and a missing session (401)",
+    "A replacement Controller with an empty database serves the same VM and host history from the host",
+    "VM and host Stats tabs render real host history (Stacked, 24h), the Realtime drawer shows moving live charts with a Live badge, the tooltip and legend chip work, closing the drawer stops polling, no page errors",
+    "History files have fixed sizes on the host and the usage check stays healthy",
+    "Deleting the VM removes its history file on the host; its stats are no longer served"
+  ],
+  "measurements": {
+    "vm_10m_first_query_seconds": 0.754,
+    "vm_10m_second_query_seconds": 0.002,
+    "vm_24h_query_seconds": 0.003,
+    "host_10m_query_seconds": 0.002,
+    "vm_10m_known_points": {
+      "cpu.total": 29,
+      "memory.assigned": 30,
+      "memory.host": 30,
+      "memory.guest_used": 23,
+      "disk.vda.read_bytes": 29,
+      "disk.vda.write_bytes": 29,
+      "disk.vda.read_iops": 29,
+      "disk.vda.write_iops": 29,
+      "net.0.rx": 29,
+      "net.0.tx": 29,
+      "cpu.vcpu.0": 29,
+      "cpu.vcpu.1": 29
+    },
+    "vm_24h_known_points": {
+      "cpu.total": 4,
+      "memory.assigned": 4,
+      "memory.host": 4,
+      "memory.guest_used": 3,
+      "disk.vda.read_bytes": 4,
+      "disk.vda.write_bytes": 4,
+      "disk.vda.read_iops": 4,
+      "disk.vda.write_iops": 4,
+      "net.0.rx": 4,
+      "net.0.tx": 4,
+      "cpu.vcpu.0": 4,
+      "cpu.vcpu.1": 4
+    },
+    "host_10m_known_points": {
+      "cpu.total": 38,
+      "memory.used": 39,
+      "memory.total": 39,
+      "net.nex0.rx": 38,
+      "net.nex0.tx": 38,
+      "net.nex1.rx": 38,
+      "net.nex1.tx": 38,
+      "net.virbr0.rx": 38,
+      "net.virbr0.tx": 38,
+      "disk.vda.read_bytes": 38,
+      "disk.vda.write_bytes": 38,
+      "disk.vda.read_iops": 38,
+      "disk.vda.write_iops": 38,
+      "disk.vdb.read_bytes": 38,
+      "disk.vdb.write_bytes": 38,
+      "disk.vdb.read_iops": 38,
+      "disk.vdb.write_iops": 38,
+      "load.1": 39,
+      "load.5": 39,
+      "load.15": 39,
+      "cpu.core.0": 38,
+      "cpu.core.1": 38,
+      "cpu.core.2": 38,
+      "cpu.core.3": 38
+    },
+    "vm_live_polls": 20,
+    "vm_live_newest_cpu_known_after_2s": "17/17",
+    "vm_live_latency_seconds": {
+      "first": 0.001,
+      "max_after_first": 0.003,
+      "median": 0.002
+    },
+    "vm_live_cpu_range": [
+      0.547,
+      0.855
+    ],
+    "vm_live_known_cpu_points_last_poll": 18,
+    "vm_live_domstats_execs_while_leased_10s": 10,
+    "host_live_newest_cpu_known_after_2s": "17/17",
+    "host_live_latency_seconds": {
+      "first": 0.002,
+      "max_after_first": 0.003,
+      "median": 0.002
+    },
+    "host_live_cpu_range": [
+      2.01,
+      3.518
+    ],
+    "vm_live_domstats_execs_10s_after_lease": 0,
+    "usage_files_unchanged_by_realtime": true,
+    "usage_dir_entries": [
+      "host.rrd 244316",
+      "vm-fixture-vm-01.rrd 122184"
+    ],
+    "vm_10m_cpu_tail_after_stop": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "stopped_vm_live_known_points": 0,
+    "stopped_vm_live_known_series": {},
+    "stopped_vm_domstats": "shut off\n\nDomain: 'usage-qa-<run>'\n  cpu.time=2800000000\n  cpu.user=1740000000\n  cpu.system=1060000000\n  balloon.current=1048576\n  balloon.maximum=1048576\n\n",
+    "vm_last_running_minute": "2026-09-16T22:20:00+00:00",
+    "vm_24h_query_after_agent_restart_seconds": 0.135,
+    "vm_24h_points_before_stop": 35,
+    "vm_24h_points_missing_after_agent_restart": 0,
+    "vm_last_running_minute_kept_after_restart": true,
+    "vm_24h_first_query_on_controller_b_seconds": 0.938,
+    "vm_24h_points_missing_on_controller_b": 0,
+    "host_24h_points_before_replacement": 192,
+    "host_24h_points_missing_on_controller_b": 0,
+    "browser_realtime_canvas_changed_over_3s": true,
+    "browser_realtime_requests_in_first_11s": 14,
+    "browser_tooltip_text": "17/09/2026, 07:37:00\nCPU\nno sample\nvCPU 0\nno sample\nvCPU 1\nno sample",
+    "browser_realtime_requests_after_close": 0,
+    "host_stats_chart_count": 5,
+    "history_files": [
+      "host.rrd 244316",
+      "vm-fixture-vm-01.rrd 122184"
+    ],
+    "usage_check_status": "healthy"
+  },
+  "captures": [
+    "vm-stats-10m",
+    "vm-stats-10m-stacked",
+    "vm-stats-24h",
+    "vm-stats-realtime",
+    "vm-stats-tooltip",
+    "vm-stats-chip-hidden",
+    "vm-stats-realtime-closed",
+    "host-stats-10m"
+  ],
+  "limits": [
+    "Nested KVM lab, not physical hardware",
+    "Guest idle at the installer boot menu: no guest-generated disk or network load",
+    "Heartbeat shortened to 1 s, so first-query latency does not show the 10 s default",
+    "Runs of a few minutes: 30d and 1y tiers are not filled",
+    "Hosted CI not exercised"
+  ],
+  "failures": [],
+  "versions": {
+    "chromium": "151.0.7922.34",
+    "uplot": "1.6.32",
+    "host": "NAME=\"Nex Core\"\nPRETTY_NAME=\"Nex Core 0.1.0-alpha1\"\nCompiled against library: libvirt 11.3.0\nUsing library: libvirt 11.3.0\nUsing API: QEMU 11.3.0\n"
+  },
+  "artifacts": {
+    "controller": "74004480c291bc60cc96d8646aceabb80c138f2ea642026ed5b79bfc6f8909a6",
+    "agent": "a57a2159f8eff81cf419c5938579df59c2787884ce668771da856adbe995b27a",
+    "app.js": "13ba8d80427da49de7b16eecdb149ad66cb211282a5f0e30d1ff0d5dd99a945f"
+  }
+}

@@ -18,13 +18,16 @@ to skip building (needed when the namespace has no Go toolchain access). Storage
 needs root-owned directories, so run the namespace as root (sudo unshare -nm) with
 --storage-root naming a new directory on a local ext4/XFS/Btrfs filesystem; it is removed at the end.
 With --vm (needs system libvirt, qemu-img and /dev/kvm in the namespace) a stopped VM is also
-defined on Controller A and must come back on Controller B; a second VM is then created on B
-from the adopted storage/network/ISO, proving the host resolves them by ID.
+defined on Controller A with two disks and two NICs, a second one is edited to revision 1, and
+both must come back on Controller B with the same IDs, names, per-disk definitions, NICs and
+revision; B then edits the edited VM to revision 2, and a further VM is created on B from the
+adopted storage/network/ISO, proving the host resolves them by ID.
 """
 import argparse
 import http.client
 import json
 import os
+import re
 import ssl
 import urllib.parse
 from pathlib import Path
@@ -122,14 +125,39 @@ def vm_spec(scope, name, storage_id, network_id, media_id):
             'media_id': media_id, 'start_after_create': False, 'autostart': False}
 
 
-def same_spec(item, sent):
+AUTO_MAC = re.compile(r'52:54:00:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}')
+
+
+def same_spec(item, sent, revision=0):
     """Every requested field must come back unchanged. pool_id/host_id are asserted
-    separately against the (preserved) host, and id against the VM."""
-    ignored = ('id', 'pool_id', 'host_id', 'request_id')
+    separately against the (preserved) host, and id against the VM. An automatic MAC comes
+    back as its effective derived address; revision is the host's journal revision."""
+    ignored = ('id', 'pool_id', 'host_id', 'request_id', 'revision')
     got = {k: v for k, v in item['spec'].items() if k not in ignored}
     want = {k: v for k, v in sent.items() if k not in ignored}
+    want['nics'] = [dict(n, mac=g['mac']) if not n['mac'] and AUTO_MAC.fullmatch(g['mac'] or '') else n
+                    for n, g in zip(sent['nics'], got.get('nics') or [])]
     assert got == want, (got, want)
+    assert item['spec'].get('revision', 0) == revision, item['spec']
     return True
+
+
+def edit_spec(spec, item, **changes):
+    """A complete vm-update body built from the current reported definition."""
+    body = {k: item['spec'][k] for k in ('pool_id', 'host_id', 'name', 'description', 'guest_os', 'cpu', 'memory', 'disks', 'nics', 'boot', 'media_id', 'autostart')}
+    return {**body, 'start_after_create': False, **changes}
+
+
+def registration(item):
+    """The host-owned identity fields a replacement Controller must reproduce for storage and
+    networks. A v1 path-only storage registration has an empty kind, which the host reads as
+    local, and an empty source object; status is asserted separately."""
+    fields = {k: item.get(k) for k in ('id', 'name', 'pool_id', 'host_id', 'kind', 'path', 'source', 'uplink', 'vlan')}
+    if 'path' in item and not fields['kind']:
+        fields['kind'] = 'local'
+    if isinstance(fields['source'], dict) and not any(fields['source'].values()):
+        fields['source'] = None
+    return fields
 
 
 def fresh_host(lab):
@@ -182,11 +210,23 @@ def main():
             vm = settled(lab, '/api/v1/vms', created['vm_id'])
             assert vm['id'] in virsh('list', '--all', '--uuid'), 'VM not defined in libvirt'
             assert same_spec(vm, spec) and vm['spec']['id'] == vm['id'], vm['spec']
+            # A second VM edited while stopped: the host journals revision 1 as its current definition.
+            edited_create = vm_spec(scope, 'replacement-edited', storage['id'], network['id'], media['id'])
+            edited_create['nics'][1]['mac'] = '52:54:00:ab:cd:e1'
+            created = lab.api('/api/v1/vms', {**edited_create, 'request_id': str(uuid.uuid4())}, expected=202)
+            edited = settled(lab, '/api/v1/vms', created['vm_id'])
+            edited_spec = edit_spec(edited_create, edited, description='Edited before replacement',
+                                    cpu={'count': 1, 'sockets': 1, 'cores': 1, 'threads': 1, 'model': 'host-model'},
+                                    memory={'mode': 'maximum', 'size_mib': 768})
+            lab.api(f"/api/v1/vms/{edited['id']}", {**edited_spec, 'request_id': str(uuid.uuid4())}, method='PUT', expected=202)
+            edited = eventually(lambda: next((x for x in lab.api('/api/v1/vms') if x['id'] == created['vm_id'] and x['spec'].get('revision') == 1), None),
+                                'edited VM revision 1 reported', timeout=60)
+            assert same_spec(edited, edited_spec, revision=1), edited['spec']
         old_identity = json.loads((state / 'state.json').read_text())
         pool_a = next(p for p in lab.api('/api/v1/pools') if p['id'] == host['pool_id'])
         assert old_identity['host_id'] == host['id'] and old_identity['pool_id'] == pool_a['id'] and old_identity['pool_name'] == pool_a['name'], 'Controller A did not adopt the host-owned identity'
-        evidence['steps'].append({'controller': 'A', 'url': lab.url, **scope, 'pool': pool_a, 'storage': storage, 'network': applied, 'media': media, 'vm': vm})
-        lab.passed('Controller A enrolled the real agent; the agent verified local storage, applied a pool network, transferred an uploaded ISO' + (' and defined a stopped VM in libvirt' if vm else ''))
+        evidence['steps'].append({'controller': 'A', 'url': lab.url, **scope, 'pool': pool_a, 'storage': storage, 'network': applied, 'media': media, 'vm': vm, 'edited_vm': edited if vm else None})
+        lab.passed('Controller A enrolled the real agent; the agent verified local storage, applied a pool network, transferred an uploaded ISO' + (' and defined a stopped two-disk two-NIC VM plus one edited to revision 1 in libvirt' if vm else ''))
 
         # Destroy Controller A completely: process and database.
         lab.stop(a_process)
@@ -248,6 +288,11 @@ def main():
             assert operation['actor'] == 'system' and operation['status'] == 'succeeded' and operation['request_id'].startswith('adopt-' + kind + ':'), operation
             adopted[kind], operations[kind] = item, operation
         assert adopted['storage']['path'] == str(storage_dir) and adopted['network']['source'] == args.bridge and adopted['media']['storage_id'] == storage['id']
+        readoption = {'pool': {'before': {k: pool_a[k] for k in ('id', 'name', 'master_host_id')}, 'after': {k: pool_b[k] for k in ('id', 'name', 'master_host_id')}},
+                      'storage': {'before': registration(storage), 'after': registration(adopted['storage'])},
+                      'network': {'before': registration(applied), 'after': registration(adopted['network'])}}
+        assert all(r['before'] == r['after'] for r in readoption.values()), readoption
+        evidence['readoption_diff'] = readoption
         if vm:
             item = eventually(lambda: next((x for x in lab.api('/api/v1/vms') if x['id'] == vm['id']), None), 'VM adopted by Controller B', timeout=30)
             assert item['name'] == vm['name'] and item['status'] == 'succeeded' and item['host_id'] == host_b['id'] and item['pool_id'] == host_b['pool_id'], item
@@ -257,6 +302,10 @@ def main():
             item = eventually(lambda: next((x for x in lab.api('/api/v1/vms') if x['id'] == vm['id'] and x['state'] == 'shut off' and x['freshness'] == 'fresh'), None),
                               'adopted VM observed shut off by libvirt on Controller B', timeout=30)
             adopted['vm'] = item
+            item = eventually(lambda: next((x for x in lab.api('/api/v1/vms') if x['id'] == edited['id'] and x['freshness'] == 'fresh'), None), 'edited VM adopted by Controller B', timeout=30)
+            assert item['name'] == edited['name'] and item['status'] == 'succeeded' and item['host_id'] == host_b['id'] and item['pool_id'] == host_b['pool_id'], item
+            assert item['spec']['id'] == edited['id'] and same_spec(item, edited_spec, revision=1), item['spec']
+            adopted['edited_vm'] = item
         # Seeded host truth on Controller B: the failed task with the host's operation ID, status and
         # error; every other entry adopted despite the corrupt file, which the host names in a check.
         seeded = eventually(lambda: next((op for op in lab.api('/api/v1/operations') if op['id'] == 'seed-failed'), None), 'failed journal entry listed by Controller B', timeout=30)
@@ -280,7 +329,7 @@ def main():
         eventually(lambda: not [op for op in lab.api('/api/v1/operations') if op['status'] in ('queued', 'dispatched')],
                    'auto registrations settled', timeout=60)
         counts = {p: len(lab.api(p)) for p in ('/api/v1/networks', '/api/v1/media', '/api/v1/vms')}
-        assert counts == {'/api/v1/networks': 1, '/api/v1/media': 1, '/api/v1/vms': 2 if vm else 0}, counts
+        assert counts == {'/api/v1/networks': 1, '/api/v1/media': 1, '/api/v1/vms': 3 if vm else 0}, counts
         assert sum(1 for op in lab.api('/api/v1/operations') if op['id'] == 'seed-failed') == 1, 'seeded outcome duplicated'
         storages = lab.api('/api/v1/storage')
         assert any(s['id'] == storage['id'] and s['status'] == 'succeeded' for s in storages), storages
@@ -300,9 +349,15 @@ def main():
             assert same_spec(second_vm, after), second_vm['spec']
             assert second_vm['id'] in virsh('list', '--all', '--uuid') and vm['id'] in virsh('list', '--all', '--uuid')
             adopted['vm_after_replacement'] = second_vm
+            # The next edit of the adopted edited VM continues its host-owned revision sequence.
+            next_spec = edit_spec(edited_spec, adopted['edited_vm'], description='Edited after replacement')
+            lab.api(f"/api/v1/vms/{edited['id']}", {**next_spec, 'request_id': str(uuid.uuid4())}, method='PUT', expected=202)
+            adopted['edited_vm_after_replacement'] = eventually(lambda: next((x for x in lab.api('/api/v1/vms') if x['id'] == edited['id'] and x['spec'].get('revision') == 2), None),
+                                                                'edit on Controller B reported as revision 2', timeout=60)
+            assert same_spec(adopted['edited_vm_after_replacement'], next_spec, revision=2)
         evidence['steps'].append({'controller': 'B', 'url': lab.url, 'host_id': host_b['id'], 'pool_id': host_b['pool_id'], 'pool': pool_b, 'identity_preserved': True, 'adopted': adopted,
                                   'adoption_operations': operations, 'counts_after_repeat_reports': counts, 'new_media_after_replacement': second})
-        lab.passed('Controller B, started empty with a different certificate, adopted the host and pool with their original IDs and pool name, plus storage, network, ISO record' + (', VM definition' if vm else '') + ' with the same IDs and names under actor system, with no command and no duplicates; a new ISO transfer' + (' and a new VM' if vm else '') + ' on the adopted resources succeeded')
+        lab.passed('Controller B, started empty with a different certificate, adopted the host and pool with their original IDs and pool name, plus storage, network, ISO record' + (', VM definition' if vm else '') + ' with the same IDs and names under actor system, with no command and no duplicates; a new ISO transfer' + (', a new VM and a revision-2 edit of the adopted revision-1 VM' if vm else '') + ' on the adopted resources succeeded')
         evidence['checks'] = lab.results
         evidence['environment'] = 'Real nex-controller and nex-core-agent processes on loopback inside a disposable network namespace as root; real directory storage and ISO transfer; bridge verified read-only; ' + ('real system libvirt defines the VMs (KVM device present, VMs never started)' if vm else 'no libvirt, so VM definitions are not covered')
         evidence['agent_state_dir_reused'] = True

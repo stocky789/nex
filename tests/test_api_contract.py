@@ -100,6 +100,8 @@ class APIContractTests(unittest.TestCase):
             elif go_type == 'time.Time':
                 self.assertEqual(schema['type'], 'string')
                 self.assertEqual(schema['format'], 'date-time')
+            elif go_type == 'float64':
+                self.assertEqual(schema['type'], 'number')
             elif go_type in ('string', 'bool', 'int', 'int64', 'uint16', 'uint32', 'uint64'):
                 self.assertEqual(schema['type'], {'bool': 'boolean', 'int': 'integer',
                                                  'int64': 'integer', 'uint16': 'integer',

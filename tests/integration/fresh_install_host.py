@@ -166,7 +166,7 @@ def wait_for_host_reboot(lab, previous_boot_id, timeout=300):
     deadline, last = time.monotonic() + timeout, ''
     while time.monotonic() < deadline:
         try:
-            result = ssh(lab, 'set -eu; ' + services_active_command(('nex-core-local', 'libvirtd', 'ssh')) + '; cat /proc/sys/kernel/random/boot_id', text=True).stdout
+            result = ssh(lab, 'set -eu; ' + services_active_command(('nex-core-local', 'libvirtd.socket', 'ssh')) + '; cat /proc/sys/kernel/random/boot_id', text=True).stdout
             current_boot_id = boot_id(result)
             if current_boot_id != previous_boot_id:
                 return current_boot_id
@@ -247,7 +247,7 @@ def bios_guest_persistence(lab, evidence, expected_version, image_path, key_path
 
 def baseline(lab, evidence, expected_version='0.1.0+managed1'):
     assert ssh(lab, 'hostname', text=True).stdout.strip() == 'nex-fresh-lab'
-    ssh(lab, services_active_command(('nex-core-local', 'libvirtd', 'ssh', 'networking', 'chrony')), text=True)
+    ssh(lab, services_active_command(('nex-core-local', 'libvirtd.socket', 'ssh', 'networking', 'chrony')), text=True)
     output = ssh(lab, '''set -eu
 uname -a
 cat /etc/os-release
@@ -309,11 +309,17 @@ cat /etc/ssh/sshd_config.d/00-nex-core.conf /etc/ssh/sshd_config.d/00-00-nex-qa-
     print('PASS: installed package/version, required services and br0/KVM; boot has no ISO attached (artifact provenance checked separately)')
 
 
-def provenance(lab, evidence, expected_controller):
+def core_local_package(iso, version):
+    """The nex-core-local package built next to the ISO under test, for the expected version."""
+    return Path(iso).parent / 'core-local' / f'nex-core-local_{version}_amd64.deb'
+
+
+def provenance(lab, evidence, expected_controller, expected_version):
     config = json.loads((lab / 'config.json').read_text())
+    package = core_local_package(config['iso'], expected_version)
+    assert package.is_file(), f'missing {package.name} next to the ISO under test; build it or pass the matching --expected-version'
     deployment = json.loads((evidence / 'browser-deployment-state.json').read_text())
     vm_id = deployment['operation']['vm_id']
-    package = Path(config['iso']).parent / 'core-local/nex-core-local_0.1.0+managed1_amd64.deb'
     expected_local = {}
     proc = subprocess.Popen(['ar', 'p', str(package), 'data.tar.xz'], stdout=subprocess.PIPE)
     with tarfile.open(fileobj=proc.stdout, mode='r|xz') as archive:
@@ -353,7 +359,7 @@ def provenance(lab, evidence, expected_controller):
 if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--lab-dir', type=Path, required=True)
-    p.add_argument('--evidence', type=Path, default=ROOT / 'docs/qa/fresh-install')
+    p.add_argument('--evidence', type=Path, required=True, help='new evidence directory; never the committed docs/qa evidence')
     p.add_argument('--expected-controller', type=Path)
     p.add_argument('--expected-version', default='0.1.0+managed1')
     p.add_argument('--bios-guest-persistence', action='store_true', help='exercise only a newly converted disposable BIOS guest disk')
@@ -368,6 +374,6 @@ if __name__ == '__main__':
         bios_guest_persistence(validate_lab(args.lab_dir), args.evidence, args.expected_version,
                                args.bios_guest_image, args.bios_guest_key, args.bios_guest_host_key, args.bios_guest_image_sha256)
     elif args.expected_controller:
-        provenance(validate_lab(args.lab_dir), args.evidence, args.expected_controller)
+        provenance(validate_lab(args.lab_dir), args.evidence, args.expected_controller, args.expected_version)
     else:
         baseline(validate_lab(args.lab_dir), args.evidence, args.expected_version)

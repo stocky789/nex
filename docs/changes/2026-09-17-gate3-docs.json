@@ -1,0 +1,43 @@
+{
+  "summary": "Gate 3 documentation fixes. install-nex-core.md step 8 describes the progress rail as the installer draws it (the bullet follows the setting being applied, then Install) and step 10 mentions the Screenshot button; its Verification section no longer lists those two as open mismatches, and gate report defect 14 points to the post-gate3 guide corrections. vm-power.md describes the install-media offer with generic boot wording. manage-controller.md states that Add host gives the host the certificates in the -tls-cert file as its trust anchors, recommends the server certificate plus its issuing CA, notes that a leaf-only file pins the certificate and that the chained case is not exercised, and warns not to start the old appliance after a replacement, quoting the new confirmation. storage-repositories.md Verification cites the gate row that walked steps 2-4. The Phase 2 gate report uses UTC-only dates, aliases the lab loopback port, redacts the local-time timestamp in the stale-VM capture, notes that check_docs --all was not in the pre-build runner, and adds a post-gate3 fixes section stating that a gate4 rebuild and full rerun follow.",
+  "paths": [
+    "docs/guide/install-nex-core.md",
+    "docs/guide/vm-power.md",
+    "docs/guide/manage-controller.md",
+    "docs/guide/storage-repositories.md",
+    "docs/qa/2026-09-17-phase2-gate/checks.md",
+    "docs/qa/2026-09-17-phase2-gate/g6-readoption-sanitized.txt",
+    "docs/qa/2026-09-17-phase2-gate/stale-vm-warning-360.png",
+    "docs/changes/2026-09-17-gate3-docs.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Guide text is corrected to match the installer and Controller behavior observed on gate3 and the post-gate3 confirmation wording in web/src/managed.tsx (powerConfirmText).",
+    "pages": [
+      "docs/guide/install-nex-core.md",
+      "docs/guide/vm-power.md",
+      "docs/guide/manage-controller.md",
+      "docs/guide/storage-repositories.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Documentation only; the Add host trust text describes the existing ca_pem field of the existing host enrollment push (internal/controller/addhost.go), which is unchanged.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Corrections to existing guide pages and a gate report; no feature is added, dropped or reordered.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation only; no setting, record or table is added."
+  },
+  "verification": {
+    "method": "Not lab-verified. install-nex-core.md steps 8 and 10 were compared against installer/gui/nex-shell.c and the gate3 lab observations recorded in the gate report; vm-power.md step 5 against the offer text in web/src/managed.tsx; the manage-controller.md trust text against internal/controller/addhost.go (ca_pem is the -tls-cert file contents); the replacement warning quotes powerConfirmText in web/src/managed.tsx, verified by the simulated browser run of the main.tsx lane, not in a lab. The chained-certificate case and the new Start confirmation remain unwalked on real hosts; a gate4 rebuild and full rerun follow. The redacted capture was inspected after editing.",
+    "evidence": [
+      "docs/qa/2026-09-17-phase2-gate/checks.md"
+    ]
+  }
+}

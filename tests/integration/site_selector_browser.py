@@ -45,9 +45,13 @@ def acceptance(url, evidence):
     assets = {name: hashlib.sha256((ROOT / 'web/dist' / name).read_bytes()).hexdigest()
               for name in ('app.js', 'app.css')}
     data = inventory(500)
+    update_status = {'package': 'nex-controller', 'installed_version': '1.0', 'available_version': '1.1',
+                     'update_available': True, 'repo_url': 'https://updates.example.invalid'}
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(viewport={'width': 1440, 'height': 1000})
+        # The UI skips the session probe unless this browser signed in before.
+        page.add_init_script("localStorage.setItem('nex-signed-in', '1')")
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
 
@@ -59,6 +63,16 @@ def acceptance(url, evidence):
                 site = {'id': 'site-created', 'name': route.request.post_data_json['name']}
                 data['sites'].append(site)
                 route.fulfill(status=201, json=site)
+            elif path == 'hosts/probe' and route.request.method == 'POST':
+                route.fulfill(json={'address': route.request.post_data_json['address'], 'fingerprint': 'SHA256:simulated-fixture',
+                                    'subject': 'CN=simulated-host', 'not_after': '2030-01-01T00:00:00Z'})
+            elif path == 'sites/site-created/hosts' and route.request.method == 'POST':
+                route.fulfill(status=409, json={'error': 'already enrolled', 'host_id': 'host-enrolled'})
+            elif path == 'updates' and route.request.method == 'GET':
+                route.fulfill(json=update_status)
+            elif path == 'updates/apply' and route.request.method == 'POST':
+                update_status.update(phase='failed', error='fixture apt failure')
+                route.fulfill(status=202, json={})
             elif route.request.method == 'GET' and path in data:
                 route.fulfill(json=data[path])
             else:
@@ -238,6 +252,36 @@ def acceptance(url, evidence):
             expect(page.get_by_role('button', name='Create pool')).to_have_count(0)
         capture('only-site-overview')
         passed('The sole default site with no hosts can open Site overview from workspace/tasks, shows Add your first host and exposes Add host without any Create pool action')
+        # A refused Add host must stay visible in its panel across the 10 s inventory poll.
+        page.get_by_role('button', name='Add host', exact=True).first.click()
+        panel = page.get_by_role('region', name='Add host', exact=True)
+        panel.get_by_label('Host address', exact=True).fill('192.0.2.10')
+        panel.get_by_label('Root password', exact=True).fill('fixture-password')
+        panel.get_by_role('button', name='Connect', exact=True).click()
+        panel.get_by_role('button', name='Confirm and add host', exact=True).click()
+        alert = panel.get_by_role('alert')
+        expect(alert).to_contain_text(re.compile('already enrolled', re.I))
+        polls = []
+        page.on('request', lambda request: polls.append(request.url) if request.url.endswith('/api/v1/sites') and request.method == 'GET' else None)
+        page.wait_for_timeout(12000)
+        assert polls, 'inventory poll must run during the wait'
+        expect(alert).to_contain_text(re.compile('already enrolled', re.I))
+        expect(alert).to_contain_text('host-enrolled')
+        expect(page.get_by_role('button', name='Retry', exact=True)).to_have_count(0)
+        capture('add-host-409-after-poll')
+        passed('A 409 already enrolled from Add host stays in the Add host panel with its host ID after an inventory poll')
+        # A failed update apply is an operator request error, so the inventory poll must not clear it.
+        page.goto(url + '/#/updates')
+        page.get_by_role('button', name='Update', exact=True).click()
+        failure = page.get_by_role('alert').filter(has_text='fixture apt failure')
+        expect(failure).to_be_visible()
+        polls.clear()
+        page.wait_for_timeout(12000)
+        assert polls, 'inventory poll must run during the wait'
+        expect(failure).to_be_visible()
+        expect(page.get_by_role('button', name='Retry', exact=True)).to_have_count(0)
+        capture('update-failed-after-poll')
+        passed('A failed update apply stays visible without an inventory Retry after an inventory poll')
         assert not errors, errors
         browser.close()
     assert assets == {name: hashlib.sha256((ROOT / 'web/dist' / name).read_bytes()).hexdigest()

@@ -1,0 +1,104 @@
+{
+  "summary": "Record VM and host usage history on Nex Core and chart it on new Stats tabs, with a realtime drawer. API impact: new contract — GET /api/v1/vms/{id}/stats and GET /api/v1/hosts/{id}/stats (ranges live, 10m, 24h, 30d, 1y; 429 when a host already samples 8 live objects), POST /api/v1/agent/stats/{token}, report response stats_channels and the usage-history-v1 capability, with range=live one-second sampling under a host-owned lease; vms[].usage keeps its shape. Review fixes in the same slice: stored tiers ignore samples behind their step instead of resetting (UH-2), idle objects stay in memory until their open step is written and the VM cap counts only recently sampled VMs (UH-1, UHR-1), the relay requires exact series length and names live in its range error (UH-7), and stacked charts exclude hidden series and re-pair bands (UH-8, WEB-R2). Review and host-run fixes in this slice are recorded as BUG-0230 to BUG-0233 and BUG-0255 (realtime sampled a stopped VM) in docs/BUG_LEDGER.md.",
+  "paths": [
+    "internal/protocol/stats.go",
+    "internal/protocol/protocol.go",
+    "internal/agent/usage_history.go",
+    "internal/agent/usage_history_sample.go",
+    "internal/agent/usage_history_channel.go",
+    "internal/agent/usage_history_test.go",
+    "internal/agent/probes.go",
+    "internal/agent/probes_test.go",
+    "internal/agent/run.go",
+    "internal/vmhost/managed.go",
+    "internal/controller/stats.go",
+    "internal/controller/stats_test.go",
+    "internal/controller/controller.go",
+    "internal/controller/identity.go",
+    "web/package.json",
+    "web/package-lock.json",
+    "web/public/third-party-notices.txt",
+    "web/src/stats.tsx",
+    "web/src/stats.css",
+    "web/src/stats.test.mjs",
+    "web/src/main.tsx",
+    "tests/test_api_contract.py",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/API.md",
+    "docs/guide/usage-history.md",
+    "docs/guide/README.md",
+    "docs/plans/2026-09-16-usage-history.md",
+    "docs/changes/2026-09-16-usage-history.json",
+    "internal/agent/usage_history_live.go",
+    "internal/agent/usage_history_live_test.go",
+    "internal/vmhost/managed_test.go",
+    "tests/integration/usage_history_lab.py",
+    "docs/qa/2026-09-16-usage-history.md",
+    "docs/qa/usage-history/host-stats-10m.png",
+    "docs/qa/usage-history/results.json",
+    "docs/qa/usage-history/virsh-domstats-list-running.txt",
+    "docs/qa/usage-history/virsh-list-uuid-name.txt",
+    "docs/qa/usage-history/vm-stats-10m-stacked.png",
+    "docs/qa/usage-history/vm-stats-10m.png",
+    "docs/qa/usage-history/vm-stats-24h.png",
+    "tests/integration/managed_vm_browser.py",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/usage-history/vm-stats-chip-hidden.png",
+    "docs/qa/usage-history/vm-stats-realtime-closed.png",
+    "docs/qa/usage-history/vm-stats-realtime.png",
+    "docs/qa/usage-history/vm-stats-tooltip.png",
+    "packaging/systemd/nex-core-agent.service",
+    "CHANGELOG.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "website/src/routes/roadmap/+page.svelte"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "New Stats tab workflow on VM and host pages.",
+    "pages": [
+      "docs/guide/usage-history.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "API impact: new contract. Stats query endpoints with range=live, 400/404/409/429/502/503/504 statuses, the agent stats channel, report response stats_channels and schemas are documented and generated. The relay now answers 502 for a series whose length is not the range's point count; current Core always sends full-length series.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ],
+    "contracts": [
+      "vm-stats",
+      "host-stats",
+      "agent-stats-channel",
+      "report"
+    ]
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "The public roadmap's VM foundation milestone lists VM and host usage history with the realtime view as built; the milestone's status is unchanged.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Usage history is observed state recorded by each host; the Controller relays queries and stores nothing.",
+    "record": "Each host's agent state directory holds usage/host.rrd and usage/vm-<uuid>.rrd round-robin files; a fresh Controller keeps nothing and reads them through the stats channel once the host reports usage-history-v1."
+  },
+  "verification": {
+    "method": "Ran go test -race ./internal/agent ./internal/controller ./internal/protocol ./internal/vmhost (sampler, ring store, realtime sampling, channel and relay tests), python3 scripts/generate_api.py --check and the API contract unittest, the packaging unittests, and npm typecheck/test/build in web/. The Stats tab and Realtime drawer were reviewed in headless Chromium against a mocked API. Two independent code reviews ran; their findings were fixed. The final tests/integration/usage_history_lab.py run (2026-09-17, docs/qa/2026-09-16-usage-history.md) used a simulated nested-KVM host with a 1 s heartbeat and an idle guest and passed every exercised check: real virsh formats, 10m/24h VM and host history, stopped-VM gap, agent restart, Controller replacement with no missing points, 400/404/401, realtime for VM, host and stopped VM, lease expiry with no further virsh calls or file writes, VM deletion removing its history, and the Stats and Realtime UI in a browser. Not verified on a host: the guide walkthrough as written, the 10 s default heartbeat latency, 30d/1y tiers and retention, the 8-object realtime cap (unit tests only), rates under load, and the specific conditions of review fixes UH-1, UH-2 and UHR-1 (unit tests only). Made after the Phase 2 gate4 build fingerprint (0.2.10~gate4) and after the final usage-history host run, so covered by neither: the After=time-sync.target ordering in packaging/systemd/nex-core-agent.service (packaging unittests only) and the compact realtime Disk chart time-label fix in web/src/stats.tsx (web checks and mocked browser scripts only).",
+    "evidence": [
+      "internal/agent/usage_history_test.go",
+      "internal/agent/usage_history_live_test.go",
+      "internal/controller/stats_test.go",
+      "web/src/stats.test.mjs",
+      "docs/qa/2026-09-16-usage-history.md",
+      "docs/plans/2026-09-16-usage-history.md",
+      "tests/integration/usage_history_lab.py"
+    ]
+  }
+}

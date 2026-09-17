@@ -58,6 +58,23 @@ export const driversDriveReady = (h?: Host) => Boolean(h && !h.revoked && h.conn
 // changes measured boot and can bind BitLocker keys, so it is not added to every VM.
 export const defaultTPM = (guestOS: string) => guestOS === "windows" ? "2.0" : "none";
 
+// defaultDriversMedia picks the host's shipped virtio-win ISO when creating a Windows guest.
+// Only fills an empty Driver disc; never overrides an operator choice or the install ISO.
+export function defaultDriversMedia(guestOS: string, media: Media[], installMediaID = ""): string {
+  if (guestOS !== "windows") return "";
+  const match = media.find(m => m.id !== installMediaID && /^virtio-win/i.test(m.name));
+  return match?.id || "";
+}
+
+// nextDriversMedia is the Driver disc after the guest OS or host changes. A host that cannot
+// attach a driver disc gets none: its select is disabled, so a preselect could be neither seen
+// as a choice nor cleared, and its Core would ignore it. Otherwise an empty disc, or the one the
+// previous guest OS chose automatically, follows the new guest OS; an operator's choice stays.
+export function nextDriversMedia(current: string, fromOS: string, toOS: string, media: Media[], installMediaID: string, ready: boolean): string {
+  if (!ready) return "";
+  return !current || current === defaultDriversMedia(fromOS, media, installMediaID) ? defaultDriversMedia(toOS, media, installMediaID) : current;
+}
+
 // Secure Boot and an emulated TPM are UEFI features. effectiveBoot is what a BIOS VM is actually
 // created with, whatever the (disabled) controls last held, so the review page, the submitted
 // definition and the VM Core defines all say the same thing. The protocol also refuses
@@ -210,7 +227,14 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
   function chooseHost(id: string) {
     const s = storage.filter(x => storageUsable(x, id));
     const n = readyNetworks(id);
-    edit({ host_id: id, media_id: "", drivers_media_id: "", disks: draft.disks.map(d => ({ ...d, storage_id: s.length === 1 ? s[0].id : "" })), nics: draft.nics.map(x => ({ ...x, network_id: n.length === 1 ? n[0].id : "" })) });
+    const mediaForHost = media.filter(m => m.host_id === id && m.status === "succeeded");
+    edit({
+      host_id: id,
+      media_id: "",
+      drivers_media_id: nextDriversMedia("", draft.guest_os, draft.guest_os, mediaForHost, "", driversDriveReady(hosts.find(h => h.id === id))),
+      disks: draft.disks.map(d => ({ ...d, storage_id: s.length === 1 ? s[0].id : "" })),
+      nics: draft.nics.map(x => ({ ...x, network_id: n.length === 1 ? n[0].id : "" })),
+    });
   }
   // Renaming the VM carries the derived disk names with it, but only while a disk still holds
   // the name we generated: once the operator types their own label it is left alone.
@@ -231,11 +255,18 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
 
   return <section className="panel form-panel vm-wizard" aria-label="Create VM">
     <div className="section-heading"><h2 ref={heading} tabIndex={-1}>Create VM · {step + 1} of 6: {steps[step]}</h2><button disabled={busy} onClick={onClose}>Close</button></div>
-    <form onSubmit={e => { e.preventDefault(); if (step < 5) go(step + 1); else void create({ ...draft, boot, pool_id: poolID }); }}>
+    <form onSubmit={e => { e.preventDefault(); if (step < 5) go(step + 1); else void create({ ...draft, drivers_media_id: driversReady ? draft.drivers_media_id : "", boot, pool_id: poolID }); }}>
       {step === 0 && <>
         <label>VM name<input required maxLength={200} ref={el => { el?.setCustomValidity(vmNameIssue(draft.name)); }} value={draft.name} autoFocus onChange={e => renameVM(e.target.value)} /></label>
         <label>Description<textarea rows={2} maxLength={4096} value={draft.description} onChange={e => edit({ description: e.target.value })} /><small>Optional. At most 4096 characters; stored with the VM definition on the pool master.</small></label>
-        <label>Guest operating system<select value={draft.guest_os} onChange={e => edit({ guest_os: e.target.value, ...(tpmChosen ? {} : { boot: { ...draft.boot, tpm: defaultTPM(e.target.value) } }) })}><option value="linux">Linux</option><option value="windows">Windows</option><option value="other">Other</option></select><small>Chooses the firmware defaults on the Boot and media step: a Windows guest starts with an emulated TPM 2.0, which Windows 11 requires. Nex does not install or configure the guest.</small></label>
+        <label>Guest operating system<select value={draft.guest_os} onChange={e => {
+          const guest_os = e.target.value;
+          edit({
+            guest_os,
+            drivers_media_id: nextDriversMedia(draft.drivers_media_id, draft.guest_os, guest_os, hostMedia, draft.media_id, driversReady),
+            ...(tpmChosen ? {} : { boot: { ...draft.boot, tpm: defaultTPM(guest_os) } }),
+          });
+        }}><option value="linux">Linux</option><option value="windows">Windows</option><option value="other">Other</option></select><small>Chooses the firmware defaults on the Boot and media step: a Windows guest starts with an emulated TPM 2.0, which Windows 11 requires. Nex does not install or configure the guest.</small></label>
         <label>Placement host<select required value={draft.host_id} onChange={e => chooseHost(e.target.value)}><option value="">Select host</option>{hosts.map(h => <option key={h.id} value={h.id} disabled={!readyHost(h)}>{h.hostname} · {h.connection}{!h.capabilities?.includes("managed-vm-v1") ? " · agent upgrade required" : ""}</option>)}</select></label>
         <p className="help">The VM belongs to this pool and is assigned to the selected host. Local storage, networks and ISO images must be validated for that host.</p>
         {!hosts.some(readyHost) && <p className="warning">A freshly connected host with managed-VM support is required. Enroll, reconnect or upgrade the host agent first.</p>}
@@ -253,9 +284,9 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
         <p className="help">Host passthrough gives the guest this host's exact processor. Host model presents a common processor instead. The remaining choices are models this host's QEMU reports; use a common baseline across hosts for future migration.</p>
         <fieldset>
           <legend>Memory mode</legend>
-          <label className="console-option"><input type="radio" style={{ width: "auto" }} name="vm-memory-mode" value="dedicated" checked={draft.memory.mode === "dedicated"} onChange={() => edit({ memory: { ...draft.memory, mode: "dedicated" } })} /> Dedicated</label>
+          <label className="console-option"><input type="radio" name="vm-memory-mode" value="dedicated" checked={draft.memory.mode === "dedicated"} onChange={() => edit({ memory: { ...draft.memory, mode: "dedicated" } })} /> Dedicated</label>
           <p className="help">Requires updated Nex Core. Dedicated mode allocates and locks the full amount in host RAM while running, preventing swap and sharing. Stopping releases RAM but keeps its Nex capacity commitment.</p>
-          <label className="console-option"><input type="radio" style={{ width: "auto" }} name="vm-memory-mode" value="maximum" checked={draft.memory.mode === "maximum"} onChange={() => edit({ memory: { ...draft.memory, mode: "maximum" } })} /> Maximum</label>
+          <label className="console-option"><input type="radio" name="vm-memory-mode" value="maximum" checked={draft.memory.mode === "maximum"} onChange={() => edit({ memory: { ...draft.memory, mode: "maximum" } })} /> Maximum</label>
           <p className="help">The VM may use up to this much but reserves nothing. It returns memory it frees, which requires guest tools running in the guest.</p>
         </fieldset>
         <label>Memory (MiB)<input type="number" required min={512} max={maxMiB} step={1} value={num(draft.memory.size_mib)} onChange={e => edit({ memory: { ...draft.memory, size_mib: e.target.valueAsNumber } })} /></label>
@@ -325,7 +356,7 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
           {hostMedia.filter(m => m.id !== draft.media_id).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
           {staleDrivers && <option value={draft.drivers_media_id} disabled>{selectedDrivers?.name || draft.drivers_media_id} · not available</option>}
         </select></label>
-        <p className="help">Optional second CD drive, beside the install ISO. A Windows guest installing to a VirtIO disk needs the virtio-win driver ISO here: Setup lists no disk until its driver is loaded from this drive.{driversReady ? "" : " This host's Nex Core does not provide a second CD drive yet; upgrade it to attach a driver disc."}</p>
+        <p className="help">Optional second CD drive beside the install ISO. Windows on VirtIO needs virtio-win here (shipped hosts pre-select it).{driversReady ? "" : " This host's Nex Core does not provide a second CD drive yet; upgrade it to attach a driver disc."}</p>
         {mediaIssue && <p className="task-error" id="vm-media-issue">{mediaIssue}</p>}
         {!hostMedia.length && <p className="help">No transferred ISO is available on this host. <button type="button" onClick={() => setTab("ISO library")}>Open ISO library</button></p>}
         <fieldset>
@@ -348,14 +379,14 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
           <dt>Secure Boot</dt><dd>{secureBootText(boot)}</dd>
           <dt>TPM</dt><dd>{tpmText(boot)}</dd>
           <dt>Install ISO</dt><dd>{draft.media_id ? selectedMedia?.name || "Unavailable" : "None"}</dd>
-          <dt>Driver disc</dt><dd>{draft.drivers_media_id ? selectedDrivers?.name || "Unavailable" : "None · second CD drive empty"}</dd>
+          <dt>Driver disc</dt><dd>{driversReady && draft.drivers_media_id ? selectedDrivers?.name || "Unavailable" : "None · second CD drive empty"}</dd>
           <dt>Boot order</dt><dd><ol>{order.map(k => <li key={k}>{bootLabel(k)}</li>)}</ol></dd>
         </dl>
         <fieldset>
           <legend>Lifecycle</legend>
-          <label className="console-option"><input type="checkbox" style={{ width: "auto" }} checked={draft.start_after_create} onChange={e => edit({ start_after_create: e.target.checked })} /> Start after creation</label>
-          <p className="help">The VM is always created stopped. Nex issues a separate start request only after creation succeeds, so you will see two tasks.</p>
-          <label className="console-option"><input type="checkbox" style={{ width: "auto" }} checked={draft.autostart} onChange={e => edit({ autostart: e.target.checked })} /> Start automatically when the host boots</label>
+          <label className="console-option"><input type="checkbox" checked={draft.start_after_create} onChange={e => edit({ start_after_create: e.target.checked })} /> Start after creation</label>
+          <p className="help">The host starts the VM once, as the last step of the creation task. If that start fails, creation still succeeds and a separate failed power task records why the VM stayed stopped.</p>
+          <label className="console-option"><input type="checkbox" checked={draft.autostart} onChange={e => edit({ autostart: e.target.checked })} /> Start automatically when the host boots</label>
         </fieldset>
         <p>Follow the durable task to see validation and creation results. A creation task that does not report a result is uncertain, not failed; check Task history before retrying.</p>
         {(staleDisks || staleNICs || staleMedia) && <p className="warning">{staleText}</p>}

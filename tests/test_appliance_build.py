@@ -45,6 +45,8 @@ class ApplianceTests(unittest.TestCase):
 
     def test_public_guest_assets_are_readable_by_service_user(self):
         script = (ROOT / 'appliance/build-inside.sh').read_text()
+        self.assertIn('--upload /build/ARTWORK-LICENSE.md:/usr/local/share/nex/ARTWORK-LICENSE.md', script)
+        self.assertIn('ARTWORK-LICENSE.md /output/', script)
         command = re.search(r'chmod -R [^;]+ /usr/local/share/nex', script).group(0)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

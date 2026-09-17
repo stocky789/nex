@@ -63,6 +63,9 @@
 <li><a href="#deleteVM">DELETE /api/v1/vms/{id}</a></li>
 <li><a href="#downloadMedia">POST /api/v1/media/download</a></li>
 <li><a href="#deleteMedia">DELETE /api/v1/media/{id}</a></li>
+<li><a href="#vmStats">GET /api/v1/vms/{id}/stats</a></li>
+<li><a href="#hostStats">GET /api/v1/hosts/{id}/stats</a></li>
+<li><a href="#agentStats">POST /api/v1/agent/stats/{token}</a></li>
 </ul></nav>
 <section><h2>refresh-inventory</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -217,7 +220,7 @@
   &quot;result&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
-  &quot;semantics&quot;: &quot;Undefine a stopped managed VM. Requires observed shut off. delete_disks=false retains qcow2 paths in the journal; delete_disks=true unlinks them after undefine. UEFI guests use virsh undefine --nvram. Succeeded deletes omit the VM from Applied.vms and emit DeletedVMs tombstones for Controller mirror removal. Interrupted undefine/wipe is reconciled by observation only.&quot;
+  &quot;semantics&quot;: &quot;Undefine a stopped managed VM. Requires observed shut off. delete_disks=false retains qcow2 paths in the journal; delete_disks=true unlinks them after undefine. UEFI guests use virsh undefine --nvram. Succeeded deletes omit the VM from Applied.vms and emit DeletedVMs tombstones for Controller mirror removal. An interrupted undefine or wipe resumes when the same operation is delivered again: a domain still defined must be shut off (otherwise needs_attention &#x27;stop the VM so its interrupted delete can finish; observed state is &lt;state&gt;&#x27;), undefine repeats with the same flags and a requested wipe repeats over the journaled paths, ignoring files already gone. A later vm-delete for the same VM settles the interrupted one only when delete_disks matches and then fails as already deleted; a different delete_disks choice is refused. Disks of a VM deleted with delete_disks=true no longer count as storage-detach dependencies.&quot;
 }</pre></section>
 <section><h2>vm-media</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -239,7 +242,7 @@
   &quot;result&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
-  &quot;semantics&quot;: &quot;Apply one revision of an existing VM&#x27;s definition; refuse a revision other than current + 1. Classify the difference from the journal&#x27;s current definition (NeedsStop): a shut-off guest is redefined after any new disks are allocated and a rename (domrename), with the same capacity, name and MAC conflict checks as creation; a running guest takes only device additions, removals and media changes, applied with attach-device/detach-device --persistent and change-media --live --config, and is refused before any effect for anything else. Disks are matched by name and keep their journaled target names; interfaces by MAC. Removed disk files are retained and listed in the journal. The persistent definition and per-disk ownership are then observed against the regenerated XML by device identity; an interruption is reconciled by observation only. The journal reports the highest succeeded revision as the VM&#x27;s current definition.&quot;
+  &quot;semantics&quot;: &quot;Apply one revision of an existing VM&#x27;s definition; refuse a revision other than current + 1. Classify the difference from the journal&#x27;s current definition (NeedsStop): a shut-off guest is redefined after any new disks are allocated and a rename (domrename), with the same capacity, name and MAC conflict checks as creation; a running guest takes only device additions, removals and media changes, applied with attach-device/detach-device --persistent and change-media --live --config, and is refused before any effect for anything else; an added interface whose MAC is still live after an earlier removal the guest has not released is refused and the task fails before any effect. Disks are matched by name and keep their journaled target names; interfaces by MAC. Removed disk files are retained and listed in the journal. The persistent definition and per-disk ownership are then observed against the regenerated XML by device identity; an interruption is reconciled by observation, except a UEFI-to-BIOS change interrupted after its undefine (stage cleaning-nvram or defining), which Core finishes by confirming the domain is absent and defining the journaled BIOS XML, and which refuses to undefine a UEFI domain that reappeared. A stopped edit that renames the VM and changes Secure Boot runs the read-only Secure Boot checks first, then domrename, then the variable-store edit and define. The journal reports the highest succeeded revision as the VM&#x27;s current definition.&quot;
 }</pre></section>
 <section><h2>GET /appliance-ready.json</h2><pre>{
   &quot;description&quot;: &quot;Appliance-only public JSON file served by the existing Controller UI file handler, not a separately registered API route. First boot atomically publishes it after initialization, verified local HTTPS UI HTTP 200, and guest bootstrap-secret cleanup. It must be absent from a pristine appliance image and may return 404 before preparation or on non-appliance deployments. A persisted marker records first-boot completion; it is not continuous health or successful host enrollment/adoption.&quot;,
@@ -797,12 +800,12 @@
   &quot;x-audience&quot;: &quot;client&quot;
 }</pre></details></section>
 <section id="listAudit"><h2>GET <code>/api/v1/audit</code></h2>
-<p>List audit</p><p>Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped. Returns at most 1000 records, newest first; no pagination in this development version.</p>
+<p>List audit</p><p>Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped. Returns at most 1000 records, newest first; no pagination in this development version. For vm-create, vm-power, vm-media, vm-update, vm-delete and console.open, resource_id is the VM ID; rows written before this change keep the operation ID (or an internal row ID for vm-update) for power, media, update and delete.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;listAudit&quot;,
   &quot;summary&quot;: &quot;List audit&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped. Returns at most 1000 records, newest first; no pagination in this development version.&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped. Returns at most 1000 records, newest first; no pagination in this development version. For vm-create, vm-power, vm-media, vm-update, vm-delete and console.open, resource_id is the VM ID; rows written before this change keep the operation ID (or an internal row ID for vm-update) for power, media, update and delete.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -2122,12 +2125,12 @@
   }
 }</pre></details></section>
 <section id="createVM"><h2>POST <code>/api/v1/vms</code></h2>
-<p>Create a stopped guest VM</p><p>Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Shared bounds, enforced identically on Controller and Core: 1–8 disks of 1–2048 GiB on virtio, sata or scsi with names unique in the VM; at most 8 NICs on virtio or e1000e with unicast lower-case manual MACs; at least 1 vCPU with sockets × cores × threads equal to the count when a topology is given; at least 512 MiB in memory mode dedicated or maximum; uefi or bios; boot orders unique and positive across disks and install media (gaps are allowed, since ejecting media leaves one), with at least one boot device. Controller additionally caps CPU at 64 and memory at 262144 MiB, assigns the UUID and refuses capacity above the host&#x27;s observed CPU or memory. The host decides everything its own record answers: VM name and MAC uniqueness against its managed journal and libvirt domains, and dedicated-memory admission against total host memory, are reported as a failed vm-create result with the reason (visible in Task history), not as an HTTP refusal. Storage, network and ISO must have succeeded on this host and pool. The install ISO may be on any verified storage on that host; it need not share a repository with the VM disks. Core journals effects and reconciles per-disk ownership before replay; needs_attention preserves uncertain resources for manual recovery. start_after_create is honoured by the host inside the same creation: once the definition is verified the creation has succeeded, and Core starts the guest once, recording the outcome in the journal entry&#x27;s start field so a retry never starts it twice. A failed automatic start keeps the VM as a normal stopped managed VM and is reported as a separate failed vm-power outcome (&lt;operation-id&gt;:start, &#x27;VM created but not started: &lt;reason&gt;&#x27;) in Task history; start it from the Power controls. autostart is a libvirt property set while the stopped VM is defined. No console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64 and machine-type libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint.</p>
+<p>Create a stopped guest VM</p><p>Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Shared bounds, enforced identically on Controller and Core: 1–8 disks of 1–2048 GiB on virtio, sata or scsi with names unique in the VM; at most 8 NICs on virtio or e1000e with unicast lower-case manual MACs; at least 1 vCPU with sockets × cores × threads equal to the count when a topology is given; at least 512 MiB in memory mode dedicated or maximum; uefi or bios; boot orders unique and positive across disks and install media (gaps are allowed, since ejecting media leaves one), with at least one boot device. Controller additionally caps CPU at 64 and memory at 262144 MiB, assigns the UUID and refuses capacity above the host&#x27;s observed CPU or memory. The host decides everything its own record answers: VM name and MAC uniqueness against its managed journal and libvirt domains, and dedicated-memory admission against total host memory, are reported as a failed vm-create result with the reason (visible in Task history), not as an HTTP refusal. Storage, network and ISO must have succeeded on this host and pool. The install ISO may be on any verified storage on that host; it need not share a repository with the VM disks. Core journals effects and reconciles per-disk ownership before replay; needs_attention preserves uncertain resources for manual recovery. start_after_create is honoured by the host inside the same creation: once the definition is verified the creation has succeeded, and Core starts the guest once, recording the outcome in the journal entry&#x27;s start field so a retry never starts it twice. A failed automatic start keeps the VM as a normal stopped managed VM and is reported as a separate failed vm-power outcome (&lt;operation-id&gt;:start, &#x27;VM created but not started: &lt;reason&gt;&#x27;) in Task history; start it from the Power controls. autostart is a libvirt property set while the stopped VM is defined. No console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64 and machine-type libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint. A non-empty drivers_media_id requires the host to report vm-media-drivers-drive-v1 (409 &quot;the selected host agent does not support a driver disc drive; upgrade Nex Core&quot;) and a succeeded ISO import on the same host and pool (404 &quot;the driver disc ISO is not registered and verified on the selected host and pool&quot;); both are checked after the replay check.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;createVM&quot;,
   &quot;summary&quot;: &quot;Create a stopped guest VM&quot;,
-  &quot;description&quot;: &quot;Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Shared bounds, enforced identically on Controller and Core: 1\u20138 disks of 1\u20132048 GiB on virtio, sata or scsi with names unique in the VM; at most 8 NICs on virtio or e1000e with unicast lower-case manual MACs; at least 1 vCPU with sockets \u00d7 cores \u00d7 threads equal to the count when a topology is given; at least 512 MiB in memory mode dedicated or maximum; uefi or bios; boot orders unique and positive across disks and install media (gaps are allowed, since ejecting media leaves one), with at least one boot device. Controller additionally caps CPU at 64 and memory at 262144 MiB, assigns the UUID and refuses capacity above the host&#x27;s observed CPU or memory. The host decides everything its own record answers: VM name and MAC uniqueness against its managed journal and libvirt domains, and dedicated-memory admission against total host memory, are reported as a failed vm-create result with the reason (visible in Task history), not as an HTTP refusal. Storage, network and ISO must have succeeded on this host and pool. The install ISO may be on any verified storage on that host; it need not share a repository with the VM disks. Core journals effects and reconciles per-disk ownership before replay; needs_attention preserves uncertain resources for manual recovery. start_after_create is honoured by the host inside the same creation: once the definition is verified the creation has succeeded, and Core starts the guest once, recording the outcome in the journal entry&#x27;s start field so a retry never starts it twice. A failed automatic start keeps the VM as a normal stopped managed VM and is reported as a separate failed vm-power outcome (&lt;operation-id&gt;:start, &#x27;VM created but not started: &lt;reason&gt;&#x27;) in Task history; start it from the Power controls. autostart is a libvirt property set while the stopped VM is defined. No console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64 and machine-type libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint.&quot;,
+  &quot;description&quot;: &quot;Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Shared bounds, enforced identically on Controller and Core: 1\u20138 disks of 1\u20132048 GiB on virtio, sata or scsi with names unique in the VM; at most 8 NICs on virtio or e1000e with unicast lower-case manual MACs; at least 1 vCPU with sockets \u00d7 cores \u00d7 threads equal to the count when a topology is given; at least 512 MiB in memory mode dedicated or maximum; uefi or bios; boot orders unique and positive across disks and install media (gaps are allowed, since ejecting media leaves one), with at least one boot device. Controller additionally caps CPU at 64 and memory at 262144 MiB, assigns the UUID and refuses capacity above the host&#x27;s observed CPU or memory. The host decides everything its own record answers: VM name and MAC uniqueness against its managed journal and libvirt domains, and dedicated-memory admission against total host memory, are reported as a failed vm-create result with the reason (visible in Task history), not as an HTTP refusal. Storage, network and ISO must have succeeded on this host and pool. The install ISO may be on any verified storage on that host; it need not share a repository with the VM disks. Core journals effects and reconciles per-disk ownership before replay; needs_attention preserves uncertain resources for manual recovery. start_after_create is honoured by the host inside the same creation: once the definition is verified the creation has succeeded, and Core starts the guest once, recording the outcome in the journal entry&#x27;s start field so a retry never starts it twice. A failed automatic start keeps the VM as a normal stopped managed VM and is reported as a separate failed vm-power outcome (&lt;operation-id&gt;:start, &#x27;VM created but not started: &lt;reason&gt;&#x27;) in Task history; start it from the Power controls. autostart is a libvirt property set while the stopped VM is defined. No console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64 and machine-type libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint. A non-empty drivers_media_id requires the host to report vm-media-drivers-drive-v1 (409 \&quot;the selected host agent does not support a driver disc drive; upgrade Nex Core\&quot;) and a succeeded ISO import on the same host and pool (404 \&quot;the driver disc ISO is not registered and verified on the selected host and pool\&quot;); both are checked after the replay check.&quot;,
   &quot;security&quot;: [
     {
       &quot;AdminSession&quot;: []
@@ -2217,6 +2220,16 @@
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
             &quot;$ref&quot;: &quot;#/components/schemas/CreateVMResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;A disk storage, network, install ISO or driver disc ISO reference is not verified on the selected host and pool.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
           }
         }
       }
@@ -4648,12 +4661,12 @@
   }
 }</pre></details></section>
 <section id="mediaVM"><h2>POST <code>/api/v1/vms/{id}/media</code></h2>
-<p>Insert or eject ISO media on a VM CDROM</p><p>Queues a durable vm-media command on the VM assigned host. Requires administrator session, CSRF, stable request_id, action insert|eject, and media_id for insert of a verified ISO on that host. Host must report vm-media-v1. Both actions apply to a running VM, on pool-shared storage too: the record changes media_id only, so no boot order changes and no stop is required. Audited; operation appears in the operations list.</p>
+<p>Insert or eject ISO media on a VM CDROM</p><p>Queues a durable vm-media command on the VM assigned host. Requires administrator session, CSRF, stable request_id, action insert|eject, and media_id for insert of a verified ISO on that host. Host must report vm-media-v1. Both actions apply to a running VM, on pool-shared storage too: the record changes media_id only, so no boot order changes and no stop is required. Audited; operation appears in the operations list. Optional drive selects install (default) or drivers; drivers requires vm-media-drivers-drive-v1.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;mediaVM&quot;,
   &quot;summary&quot;: &quot;Insert or eject ISO media on a VM CDROM&quot;,
-  &quot;description&quot;: &quot;Queues a durable vm-media command on the VM assigned host. Requires administrator session, CSRF, stable request_id, action insert|eject, and media_id for insert of a verified ISO on that host. Host must report vm-media-v1. Both actions apply to a running VM, on pool-shared storage too: the record changes media_id only, so no boot order changes and no stop is required. Audited; operation appears in the operations list.&quot;,
+  &quot;description&quot;: &quot;Queues a durable vm-media command on the VM assigned host. Requires administrator session, CSRF, stable request_id, action insert|eject, and media_id for insert of a verified ISO on that host. Host must report vm-media-v1. Both actions apply to a running VM, on pool-shared storage too: the record changes media_id only, so no boot order changes and no stop is required. Audited; operation appears in the operations list. Optional drive selects install (default) or drivers; drivers requires vm-media-drivers-drive-v1.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -4698,6 +4711,15 @@
                 &quot;eject&quot;
               ]
             },
+            &quot;drive&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;enum&quot;: [
+                &quot;&quot;,
+                &quot;install&quot;,
+                &quot;drivers&quot;
+              ],
+              &quot;description&quot;: &quot;Optional. Omitted, empty or install addresses the install drive; drivers addresses the driver disc drive and requires the VM&#x27;s host to report vm-media-drivers-drive-v1. A non-empty drive is part of the replay payload. Controllers older than this field reject it as an unknown field (400 invalid JSON request).&quot;
+            },
             &quot;media_id&quot;: {
               &quot;type&quot;: &quot;string&quot;,
               &quot;description&quot;: &quot;Required for insert; forbidden for eject.&quot;
@@ -4709,7 +4731,7 @@
   },
   &quot;responses&quot;: {
     &quot;202&quot;: {
-      &quot;description&quot;: &quot;Power request queued.&quot;,
+      &quot;description&quot;: &quot;Media change queued.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -4719,7 +4741,7 @@
       }
     },
     &quot;200&quot;: {
-      &quot;description&quot;: &quot;Replay of an existing request_id with the same VM and action.&quot;,
+      &quot;description&quot;: &quot;Replay of an existing request_id with the same VM, action, drive and media_id.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -4729,7 +4751,7 @@
       }
     },
     &quot;400&quot;: {
-      &quot;description&quot;: &quot;Malformed JSON, unknown field, invalid request_id or unsupported action.&quot;,
+      &quot;description&quot;: &quot;Malformed JSON, unknown field, invalid request_id, unsupported action, drive not install or drivers (\&quot;drive must be install or drivers\&quot;), or an insert of the ISO the VM&#x27;s other drive currently holds (\&quot;the driver disc must differ from the install media\&quot;).&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -4759,7 +4781,7 @@
       }
     },
     &quot;404&quot;: {
-      &quot;description&quot;: &quot;VM not found.&quot;,
+      &quot;description&quot;: &quot;VM not found, or the inserted ISO is not a succeeded import on the VM&#x27;s host and pool (\&quot;the install ISO is not registered and verified on the VM&#x27;s host and pool\&quot;, or \&quot;the driver disc ISO ...\&quot; for drive drivers).&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -4769,7 +4791,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Host not fresh, revoked, outside the pool or without vm-power-v1; request_id reused with different input; or another power request for this VM is pending.&quot;,
+      &quot;description&quot;: &quot;Host not fresh, revoked, outside the pool or without vm-media-v1; drive drivers on a host without vm-media-drivers-drive-v1 (\&quot;the VM&#x27;s host agent does not support a driver disc drive; upgrade Nex Core\&quot;); request_id reused with different input (including a different drive); or another edit, power or media request for this VM is pending.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -4791,12 +4813,12 @@
   }
 }</pre></details></section>
 <section id="updateVM"><h2>PUT <code>/api/v1/vms/{id}</code></h2>
-<p>Replace a VM&#x27;s definition on its assigned host</p><p>Implemented in development product 0.1.0, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different body under the same id is 409. The body is the complete desired definition (the same shape as creation); Controller validates its shape and references like creation, refuses immutable changes (an existing disk&#x27;s storage, size or provisioning), and, when the VM is observed running, changes that need it stopped (name, CPU, memory, firmware, machine type, any boot order, an existing disk&#x27;s bus, an existing interface&#x27;s network, model, MAC or MTU, or adding a SATA disk); it freezes every automatic MAC into the definition, then queues a vm-update command at revision current + 1 for the host&#x27;s next report. Name and MAC uniqueness against other VMs and dedicated-memory admission are checked by the host against its journal and libvirt, as for creation. Core applies live what a running guest can take (adding or removing VirtIO/SCSI disks and interfaces, inserting, swapping or ejecting the ISO, description, guest OS hint and autostart) and redefines a shut-off guest from the regenerated XML; removed disks are detached and their files retained, never deleted. The host reports the new definition as current and Controller refreshes its mirror from that report; poll operations for the result. One vm-update, vm-power or vm-media request per VM may be in flight.</p>
+<p>Replace a VM&#x27;s definition on its assigned host</p><p>Implemented in development product 0.1.0, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different body under the same id is 409. The body is the complete desired definition (the same shape as creation); Controller validates its shape and references like creation, refuses immutable changes (an existing disk&#x27;s storage, size or provisioning), and, when the VM is observed running, changes that need it stopped (name, CPU, memory, firmware, machine type, any boot order, an existing disk&#x27;s bus, an existing interface&#x27;s network, model, MAC or MTU, or adding a SATA disk); interfaces are matched by effective MAC: when the request names any current interface by its effective MAC (as the VM list reports it, and as the bundled editor sends every existing interface), every interface with an empty MAC is new; when it names none, an empty MAC is matched by position and the request is refused with 400 if it removes, reorders or changes an interface at an existing index, while an unchanged interface keeps the current address at its position. Clients that send any existing interface&#x27;s MAC must send all of them, or an omitted one is replaced by a new interface. Controller freezes every automatic MAC into the definition before its stop-first check, drawing new ones from the VM&#x27;s derived range at the first index above the highest one the current definition uses that no requested or current interface holds, or the lowest free index when none above is free, so a new interface never takes the address of one removed in the same edit, nor, unless the highest-index interface was removed or index 255 is in use, of one removed in an earlier edit; then it queues a vm-update command at revision current + 1 for the host&#x27;s next report. Name and MAC uniqueness against other VMs and dedicated-memory admission are checked by the host against its journal and libvirt, as for creation. Core applies live what a running guest can take (adding or removing VirtIO/SCSI disks and interfaces, inserting, swapping or ejecting the ISO, description, guest OS hint and autostart) and redefines a shut-off guest from the regenerated XML; removed disks are detached and their files retained, never deleted. While validating a running guest&#x27;s edit, before allocating any disk or changing any device, Core compares the live and persistent domains and reports the vm-update operation failed, changing nothing, with &quot;network interface MAC &lt;mac&gt; is still attached to the running VM; wait for the guest to release it or stop the VM, then save again&quot; when an added interface&#x27;s MAC is still on a live interface that the guest has not released, changing nothing. The host reports the new definition as current and Controller refreshes its mirror from that report; poll operations for the result. One vm-update, vm-power or vm-media request per VM may be in flight.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;updateVM&quot;,
   &quot;summary&quot;: &quot;Replace a VM&#x27;s definition on its assigned host&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different body under the same id is 409. The body is the complete desired definition (the same shape as creation); Controller validates its shape and references like creation, refuses immutable changes (an existing disk&#x27;s storage, size or provisioning), and, when the VM is observed running, changes that need it stopped (name, CPU, memory, firmware, machine type, any boot order, an existing disk&#x27;s bus, an existing interface&#x27;s network, model, MAC or MTU, or adding a SATA disk); it freezes every automatic MAC into the definition, then queues a vm-update command at revision current + 1 for the host&#x27;s next report. Name and MAC uniqueness against other VMs and dedicated-memory admission are checked by the host against its journal and libvirt, as for creation. Core applies live what a running guest can take (adding or removing VirtIO/SCSI disks and interfaces, inserting, swapping or ejecting the ISO, description, guest OS hint and autostart) and redefines a shut-off guest from the regenerated XML; removed disks are detached and their files retained, never deleted. The host reports the new definition as current and Controller refreshes its mirror from that report; poll operations for the result. One vm-update, vm-power or vm-media request per VM may be in flight.&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different body under the same id is 409. The body is the complete desired definition (the same shape as creation); Controller validates its shape and references like creation, refuses immutable changes (an existing disk&#x27;s storage, size or provisioning), and, when the VM is observed running, changes that need it stopped (name, CPU, memory, firmware, machine type, any boot order, an existing disk&#x27;s bus, an existing interface&#x27;s network, model, MAC or MTU, or adding a SATA disk); interfaces are matched by effective MAC: when the request names any current interface by its effective MAC (as the VM list reports it, and as the bundled editor sends every existing interface), every interface with an empty MAC is new; when it names none, an empty MAC is matched by position and the request is refused with 400 if it removes, reorders or changes an interface at an existing index, while an unchanged interface keeps the current address at its position. Clients that send any existing interface&#x27;s MAC must send all of them, or an omitted one is replaced by a new interface. Controller freezes every automatic MAC into the definition before its stop-first check, drawing new ones from the VM&#x27;s derived range at the first index above the highest one the current definition uses that no requested or current interface holds, or the lowest free index when none above is free, so a new interface never takes the address of one removed in the same edit, nor, unless the highest-index interface was removed or index 255 is in use, of one removed in an earlier edit; then it queues a vm-update command at revision current + 1 for the host&#x27;s next report. Name and MAC uniqueness against other VMs and dedicated-memory admission are checked by the host against its journal and libvirt, as for creation. Core applies live what a running guest can take (adding or removing VirtIO/SCSI disks and interfaces, inserting, swapping or ejecting the ISO, description, guest OS hint and autostart) and redefines a shut-off guest from the regenerated XML; removed disks are detached and their files retained, never deleted. While validating a running guest&#x27;s edit, before allocating any disk or changing any device, Core compares the live and persistent domains and reports the vm-update operation failed, changing nothing, with \&quot;network interface MAC &lt;mac&gt; is still attached to the running VM; wait for the guest to release it or stop the VM, then save again\&quot; when an added interface&#x27;s MAC is still on a live interface that the guest has not released, changing nothing. The host reports the new definition as current and Controller refreshes its mirror from that report; poll operations for the result. One vm-update, vm-power or vm-media request per VM may be in flight.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -4850,7 +4872,7 @@
       }
     },
     &quot;400&quot;: {
-      &quot;description&quot;: &quot;Malformed JSON, unknown field, invalid request_id, name or definition (the shared bounds), start_after_create set, an id or pool/host that does not match the VM, or an existing disk&#x27;s storage, size or provisioning changed.&quot;,
+      &quot;description&quot;: &quot;Malformed JSON, unknown field, invalid request_id, name or definition (the shared bounds), start_after_create set, an id or pool/host that does not match the VM, an existing disk&#x27;s storage, size or provisioning changed, or a request that names no current interface by MAC and removes, reorders or changes an interface at an existing index (\&quot;when removing, reordering or changing a network interface, give every existing interface its MAC address\&quot;).&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -4880,7 +4902,7 @@
       }
     },
     &quot;404&quot;: {
-      &quot;description&quot;: &quot;VM not found as a successfully created guest, or a disk storage, network or ISO reference is not verified on the VM&#x27;s host and pool.&quot;,
+      &quot;description&quot;: &quot;VM not found as a successfully created guest, or a disk storage, network, ISO or driver disc ISO reference is not verified on the VM&#x27;s host and pool (\&quot;the driver disc ISO is not registered and verified on the VM&#x27;s host and pool\&quot;).&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -4890,7 +4912,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;The Controller appliance; host not fresh, revoked, outside the pool or without vm-update-v1; request_id reused with different input; another edit, power or media request for this VM pending; the VM observed running with a change that needs it stopped; ISO not on one of the VM&#x27;s storage targets; or capacity above the host&#x27;s observed CPU or memory.&quot;,
+      &quot;description&quot;: &quot;The Controller appliance; host not fresh, revoked, outside the pool or without vm-update-v1; request_id reused with different input; another edit, power or media request for this VM pending; the VM observed running with a change that needs it stopped; ISO not on one of the VM&#x27;s storage targets; or capacity above the host&#x27;s observed CPU or memory; or a non-empty drivers_media_id on a host without vm-media-drivers-drive-v1 (\&quot;the VM&#x27;s host agent does not support a driver disc drive; upgrade Nex Core\&quot;).&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -4912,12 +4934,12 @@
   }
 }</pre></details></section>
 <section id="deleteVM"><h2>DELETE <code>/api/v1/vms/{id}</code></h2>
-<p>Delete a stopped guest VM on its assigned host</p><p>Implemented in development product 0.2.6, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different body under the same id is 409. Body delete_disks=false retains guest disk files on storage after undefine; delete_disks=true unlinks them after undefine. Requires observed shut off with fresh host report, vm-delete-v1 on the host, and refuses the Controller appliance. One vm-update, vm-power, vm-media or vm-delete request per VM may be in flight. Core journals the delete, reports a DeletedVMs tombstone, and Controller drops its vm-create mirror. Poll operations for the result; HTTP 202 is not proof the domain is gone.</p>
+<p>Delete a stopped guest VM on its assigned host</p><p>Implemented in development product 0.2.6, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different body under the same id is 409. Body delete_disks=false retains guest disk files on storage after undefine; delete_disks=true unlinks them after undefine. Requires observed shut off with fresh host report, vm-delete-v1 on the host, and refuses the Controller appliance. One vm-update, vm-power, vm-media or vm-delete request per VM may be in flight. Core journals the delete, reports a DeletedVMs tombstone, and Controller drops its vm-create mirror. Poll operations for the result; HTTP 202 is not proof the domain is gone. A new delete for a VM whose earlier delete was interrupted finishes that earlier delete when both requests make the same delete_disks choice, then fails with &#x27;VM is already deleted on this host: an earlier interrupted delete has now finished&#x27; (or &#x27;an earlier interrupted delete for this VM is still unresolved: &lt;reason&gt;&#x27;); with a different delete_disks choice Core refuses the new request without finishing the earlier one, so disks a later request asked to keep are never wiped.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;deleteVM&quot;,
   &quot;summary&quot;: &quot;Delete a stopped guest VM on its assigned host&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.2.6, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different body under the same id is 409. Body delete_disks=false retains guest disk files on storage after undefine; delete_disks=true unlinks them after undefine. Requires observed shut off with fresh host report, vm-delete-v1 on the host, and refuses the Controller appliance. One vm-update, vm-power, vm-media or vm-delete request per VM may be in flight. Core journals the delete, reports a DeletedVMs tombstone, and Controller drops its vm-create mirror. Poll operations for the result; HTTP 202 is not proof the domain is gone.&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.2.6, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different body under the same id is 409. Body delete_disks=false retains guest disk files on storage after undefine; delete_disks=true unlinks them after undefine. Requires observed shut off with fresh host report, vm-delete-v1 on the host, and refuses the Controller appliance. One vm-update, vm-power, vm-media or vm-delete request per VM may be in flight. Core journals the delete, reports a DeletedVMs tombstone, and Controller drops its vm-create mirror. Poll operations for the result; HTTP 202 is not proof the domain is gone. A new delete for a VM whose earlier delete was interrupted finishes that earlier delete when both requests make the same delete_disks choice, then fails with &#x27;VM is already deleted on this host: an earlier interrupted delete has now finished&#x27; (or &#x27;an earlier interrupted delete for this VM is still unresolved: &lt;reason&gt;&#x27;); with a different delete_disks choice Core refuses the new request without finishing the earlier one, so disks a later request asked to keep are never wiped.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -5299,6 +5321,349 @@
     },
     &quot;500&quot;: {
       &quot;description&quot;: &quot;Controller storage or audit failure; nothing was removed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="vmStats"><h2>GET <code>/api/v1/vms/{id}/stats</code></h2>
+<p>Read a VM&#x27;s usage history</p><p>Administrator session; read-only and safe to retry. Relays the query to the VM’s assigned host over a stats channel the host dials out (first query waits up to one report heartbeat, then the channel is reused and closes after 5 minutes idle). The history is recorded and kept by Nex Core; the Controller stores nothing. Requires the host to be fresh, not revoked and to report usage-history-v1.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;vmStats&quot;,
+  &quot;summary&quot;: &quot;Read a VM&#x27;s usage history&quot;,
+  &quot;description&quot;: &quot;Administrator session; read-only and safe to retry. Relays the query to the VM\u2019s assigned host over a stats channel the host dials out (first query waits up to one report heartbeat, then the channel is reused and closes after 5 minutes idle). The history is recorded and kept by Nex Core; the Controller stores nothing. Requires the host to be fresh, not revoked and to report usage-history-v1.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    },
+    {
+      &quot;name&quot;: &quot;range&quot;,
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;enum&quot;: [
+          &quot;live&quot;,
+          &quot;10m&quot;,
+          &quot;24h&quot;,
+          &quot;30d&quot;,
+          &quot;1y&quot;
+        ]
+      },
+      &quot;description&quot;: &quot;live returns up to the last 120 one-second samples and starts, or renews for 2 minutes, one-second sampling of this object on the host; poll it about once a second. The other ranges read stored history.&quot;
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;History for the range.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/StatsHistory&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid range.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown VM, or the host holds no history for it.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Host revoked, not freshly connected, or its Nex Core does not support usage history (upgrade Nex Core).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;429&quot;: {
+      &quot;description&quot;: &quot;live range refused: the host is already sampling its maximum number of objects every second (8). The host&#x27;s message is passed through; retry later or use the 10m range.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;502&quot;: {
+      &quot;description&quot;: &quot;Host answered with an error or a reply outside the contract; the channel is closed and the next query reopens it.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Host did not open a stats channel within 20 seconds.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;504&quot;: {
+      &quot;description&quot;: &quot;Host did not answer within 10 seconds; the channel is closed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="hostStats"><h2>GET <code>/api/v1/hosts/{id}/stats</code></h2>
+<p>Read a host&#x27;s usage history</p><p>Administrator session; read-only and safe to retry. Relays the query to the host over a stats channel the host dials out (first query waits up to one report heartbeat, then the channel is reused and closes after 5 minutes idle). The history is recorded and kept by Nex Core; the Controller stores nothing. Requires the host to be fresh, not revoked and to report usage-history-v1.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;hostStats&quot;,
+  &quot;summary&quot;: &quot;Read a host&#x27;s usage history&quot;,
+  &quot;description&quot;: &quot;Administrator session; read-only and safe to retry. Relays the query to the host over a stats channel the host dials out (first query waits up to one report heartbeat, then the channel is reused and closes after 5 minutes idle). The history is recorded and kept by Nex Core; the Controller stores nothing. Requires the host to be fresh, not revoked and to report usage-history-v1.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    },
+    {
+      &quot;name&quot;: &quot;range&quot;,
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;enum&quot;: [
+          &quot;live&quot;,
+          &quot;10m&quot;,
+          &quot;24h&quot;,
+          &quot;30d&quot;,
+          &quot;1y&quot;
+        ]
+      },
+      &quot;description&quot;: &quot;live returns up to the last 120 one-second samples and starts, or renews for 2 minutes, one-second sampling of this object on the host; poll it about once a second. The other ranges read stored history.&quot;
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;History for the range.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/StatsHistory&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid range.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown host, or the host holds no history for it.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Host revoked, not freshly connected, or its Nex Core does not support usage history (upgrade Nex Core).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;429&quot;: {
+      &quot;description&quot;: &quot;live range refused: the host is already sampling its maximum number of objects every second (8). The host&#x27;s message is passed through; retry later or use the 10m range.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;502&quot;: {
+      &quot;description&quot;: &quot;Host answered with an error or a reply outside the contract; the channel is closed and the next query reopens it.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Host did not open a stats channel within 20 seconds.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;504&quot;: {
+      &quot;description&quot;: &quot;Host did not answer within 10 seconds; the channel is closed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="agentStats"><h2>POST <code>/api/v1/agent/stats/{token}</code></h2>
+<p>Attach the host&#x27;s outbound stats channel</p><p>Core sends this over its enrolled mTLS connection with Connection: Upgrade and Upgrade: nex-stats after receiving stats_channels in a report response. The token must name a pending channel for this exact host. After 101 the Controller writes HTTP/1.1 GET /stats?object=vm&amp;id=&lt;uuid&gt;&amp;range=&lt;range&gt; or GET /stats?object=host&amp;range=&lt;range&gt; requests on the connection and Core answers each in order with a StatsHistory (200) or {&quot;error&quot;} (400 invalid query, 404 no history). Either side closes the connection on idle, restart or protocol error. Core never listens for inbound stats connections.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;agentStats&quot;,
+  &quot;summary&quot;: &quot;Attach the host&#x27;s outbound stats channel&quot;,
+  &quot;description&quot;: &quot;Core sends this over its enrolled mTLS connection with Connection: Upgrade and Upgrade: nex-stats after receiving stats_channels in a report response. The token must name a pending channel for this exact host. After 101 the Controller writes HTTP/1.1 GET /stats?object=vm&amp;id=&lt;uuid&gt;&amp;range=&lt;range&gt; or GET /stats?object=host&amp;range=&lt;range&gt; requests on the connection and Core answers each in order with a StatsHistory (200) or {\&quot;error\&quot;} (400 invalid query, 404 no history). Either side closes the connection on idle, restart or protocol error. Core never listens for inbound stats connections.&quot;,
+  &quot;tags&quot;: [
+    &quot;Core \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;HostCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;agent&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;token&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Stats channel token from the report response.&quot;
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;101&quot;: {
+      &quot;description&quot;: &quot;Channel attached; Controller-originated HTTP/1.1 queries follow.&quot;
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Not returned; the channel is the 101 response.&quot;
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Missing Upgrade: nex-stats.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Channel token unknown, expired, for another host, or already attached.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Connection cannot be upgraded.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -7087,6 +7452,16 @@
         &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterRequest&quot;
       },
       &quot;description&quot;: &quot;One-shot addressed relay requests for a Core that has acknowledged and advertises storage-clustered-iscsi-v2. Controller deletes them after delivery, completion, cancellation, or deadline.&quot;
+    },
+    &quot;stats_channels&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StatsChannelRequest&quot;
+      },
+      &quot;description&quot;: &quot;Sent only to a host that offered usage-history-v1 when a browser query needs a stats channel and none is open. Delivered once, never journaled.&quot;
     }
   },
   &quot;required&quot;: [
@@ -7200,7 +7575,8 @@
       &quot;type&quot;: &quot;string&quot;
     },
     &quot;resource_id&quot;: {
-      &quot;type&quot;: &quot;string&quot;
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The resource the action applied to, such as a site, pool, host or VM ID. VM requests record the VM ID; older vm-power, vm-media, vm-update and vm-delete rows keep an operation or internal row ID.&quot;
     },
     &quot;created_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -9742,7 +10118,7 @@
     &quot;mac&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;pattern&quot;: &quot;^(([0-9a-f][02468ace])(:[0-9a-f]{2}){5})?$&quot;,
-      &quot;description&quot;: &quot;Empty derives a stable MAC from the VM ID and the interface index (protocol.DerivedMAC: the 52:54:00 locally administered prefix, two octets of sha256(id) and the index), which never collides across a VM&#x27;s at most 8 interfaces. A manual address must be six octets in canonical lower-case colon form and unicast; the pattern encodes the cleared multicast bit as an even second hex digit. All-zero addresses are refused, addresses are unique within the VM, and Controller additionally enforces uniqueness across the pool by plain string comparison. The VM list reports the effective address, and an edit freezes every automatic address into the definition (drawn from the VM&#x27;s derived range at the first index the VM does not use), so interfaces keep their identity across later edits.&quot;
+      &quot;description&quot;: &quot;Empty derives a stable MAC from the VM ID and the interface index (protocol.DerivedMAC: the 52:54:00 locally administered prefix, two octets of sha256(id) and the index), which never collides across a VM&#x27;s at most 8 interfaces. A manual address must be six octets in canonical lower-case colon form and unicast; the pattern encodes the cleared multicast bit as an even second hex digit. All-zero addresses are refused, addresses are unique within the VM, and Controller additionally enforces uniqueness across the pool by plain string comparison. The VM list reports the effective address, and an edit freezes every automatic address into the definition (drawn from the VM&#x27;s derived range above the highest index the VM uses, or the lowest free index when none above is free), so interfaces keep their identity across later edits.&quot;
     },
     &quot;mtu&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
@@ -10935,7 +11311,7 @@
     &quot;request_id&quot;
   ],
   &quot;additionalProperties&quot;: false,
-  &quot;description&quot;: &quot;The complete desired definition of an existing VM plus a stable request_id. Disks are matched to the current definition by name (storage, size and provisioning of an existing disk cannot change); interfaces by MAC, so send existing interfaces with the address the VM list reports and leave mac empty only for new ones.&quot;
+  &quot;description&quot;: &quot;The complete desired definition of an existing VM plus a stable request_id. Disks are matched to the current definition by name (storage, size and provisioning of an existing disk cannot change); interfaces by MAC, so send existing interfaces with the address the VM list reports and leave mac empty only for new ones. Controller answers 400 when an interface at an existing index has an empty mac and the request removes an interface or that interface&#x27;s network, model or MTU differs from the current interface at that index; an unchanged interface or one appended past the current count may still omit it. Changing an existing interface&#x27;s MAC is treated as removing that interface and adding a new one, which a running VM accepts.&quot;
 }</pre></details>
 <details id="DeleteVMRequest"><summary>DeleteVMRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -11028,5 +11404,145 @@
   ],
   &quot;additionalProperties&quot;: false,
   &quot;x-go-type&quot;: &quot;protocol.VMDeleteRequest&quot;
+}</pre></details>
+<details id="StatsChannelRequest"><summary>StatsChannelRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;token&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Stats channel secret for this host; the host presents it on POST /api/v1/agent/stats/{token}.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;token&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StatsChannelRequest&quot;,
+  &quot;example&quot;: {
+    &quot;token&quot;: &quot;&lt;stats-channel-token&gt;&quot;
+  }
+}</pre></details>
+<details id="StatsTier"><summary>StatsTier</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {},
+  &quot;required&quot;: [],
+  &quot;x-go-type&quot;: &quot;protocol.StatsTier&quot;,
+  &quot;description&quot;: &quot;Not serialized. Range-to-resolution table shared by Core and Controller: 10m = 5 s \u00d7 120, 24h = 1 min \u00d7 1440, 30d = 1 h \u00d7 720, 1y = 1 day \u00d7 365.&quot;
+}</pre></details>
+<details id="StatsSeries"><summary>StatsSeries</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;key&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Stable series key, e.g. cpu.total, cpu.vcpu.0, cpu.core.3, memory.assigned, memory.host, memory.guest_used, memory.used, memory.total, disk.vda.read_bytes, disk.vda.write_iops, net.0.rx, net.eno1.tx, load.1. Keys ending .total are aggregates.&quot;
+    },
+    &quot;group&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;cpu&quot;,
+        &quot;memory&quot;,
+        &quot;network&quot;,
+        &quot;disk&quot;,
+        &quot;load&quot;
+      ]
+    },
+    &quot;label&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Operator-facing label.&quot;
+    },
+    &quot;unit&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;percent&quot;,
+        &quot;bytes&quot;,
+        &quot;bytes_per_second&quot;,
+        &quot;iops&quot;,
+        &quot;load&quot;
+      ]
+    },
+    &quot;values&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;anyOf&quot;: [
+          {
+            &quot;type&quot;: &quot;number&quot;
+          },
+          {
+            &quot;type&quot;: &quot;null&quot;
+          }
+        ]
+      },
+      &quot;description&quot;: &quot;One entry per step from start; null is unknown or not running, never zero. Exactly the range&#x27;s point count (live and 10m 120, 24h 1440, 30d 720, 1y 365); the Controller relay answers 502 for a reply with any other length.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;key&quot;,
+    &quot;group&quot;,
+    &quot;label&quot;,
+    &quot;unit&quot;,
+    &quot;values&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StatsSeries&quot;
+}</pre></details>
+<details id="StatsHistory"><summary>StatsHistory</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;object&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;vm&quot;,
+        &quot;host&quot;
+      ]
+    },
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;VM UUID or host ID.&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Host that holds this history; set by the Controller relay.&quot;
+    },
+    &quot;range&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;live&quot;,
+        &quot;10m&quot;,
+        &quot;24h&quot;,
+        &quot;30d&quot;,
+        &quot;1y&quot;
+      ]
+    },
+    &quot;step_seconds&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;description&quot;: &quot;1 (live), 5, 60, 3600 or 86400.&quot;
+    },
+    &quot;start&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;,
+      &quot;description&quot;: &quot;Time of values[0], aligned to a step boundary.&quot;
+    },
+    &quot;series&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StatsSeries&quot;
+      },
+      &quot;maxItems&quot;: 128
+    }
+  },
+  &quot;required&quot;: [
+    &quot;object&quot;,
+    &quot;id&quot;,
+    &quot;range&quot;,
+    &quot;step_seconds&quot;,
+    &quot;start&quot;,
+    &quot;series&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StatsHistory&quot;,
+  &quot;description&quot;: &quot;Usage history kept on the host in fixed-size round-robin files under the agent state directory. The Controller keeps no copy.&quot;
 }</pre></details>
 </section></main></html>

@@ -1,0 +1,32 @@
+{
+  "summary": "The nex-controller Debian package and Controller appliance builders now install gcc and libc6-dev and export CGO_ENABLED=1 before go build, so the packaged Controller links the real go-sqlite3 driver instead of the CGO-disabled stub that cannot open its database. API impact: none.",
+  "paths": [
+    "packaging/controller/Dockerfile",
+    "packaging/controller/build-inside.sh",
+    "appliance/build-inside.sh",
+    "tests/test_distribution_packaging.py",
+    "docs/changes/2026-09-17-gate3-controller-package-cgo.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Build-time toolchain fix. The documented install, upgrade and appliance workflows are unchanged; a working package now behaves as the guide already describes."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Only how the Controller binary is compiled changes. No Controller-Core operation, agent command, client endpoint or result flow is added or altered."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Defect fix from the Phase 2 gate; no milestone changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state is added or moved; the Controller keeps its existing database, which this fix makes openable again."
+  },
+  "verification": {
+    "method": "Added ControllerCgoBuildTests to tests/test_distribution_packaging.py; it failed before the fix (packaging/controller/Dockerfile lacked gcc and libc6-dev, neither build script exported CGO_ENABLED=1) and passes after. Built a throwaway 0.2.10~cgocheck nex-controller package from a freshly generated source bundle with packaging/controller/build.py in Docker, extracted the binary, confirmed go version -m reports CGO_ENABLED=1, and started it on 127.0.0.1 with an empty data directory and temporary TLS files: it created controller.db, logged listening and answered HTTPS 200 with no go-sqlite3 stub error. The appliance image was not rebuilt; its Dockerfile already installed gcc and libc6-dev. No lab, host install or apt upgrade was exercised.",
+    "evidence": [
+      "tests/test_distribution_packaging.py"
+    ]
+  }
+}

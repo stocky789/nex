@@ -13,6 +13,8 @@ type mediaChangeRequest struct {
 	RequestID string `json:"request_id"`
 	Action    string `json:"action"`
 	MediaID   string `json:"media_id"`
+	// Drive is "" or "install" for the install drive, or "drivers" for the driver disc drive.
+	Drive string `json:"drive"`
 }
 
 // mediaVM queues a durable insert or eject of ISO media for the VM's assigned host.
@@ -33,6 +35,10 @@ func (c *Controller) mediaVM(w http.ResponseWriter, r *http.Request, user, csrf 
 		fail(w, 400, "eject must not name media_id")
 		return
 	}
+	if !protocol.ValidMediaDrive(v.Drive) {
+		fail(w, 400, "drive must be install or drivers")
+		return
+	}
 	id := r.PathValue("id")
 	host, pool, _, _, err := c.vmPlacement(id)
 	if err != nil {
@@ -46,6 +52,10 @@ func (c *Controller) mediaVM(w http.ResponseWriter, r *http.Request, user, csrf 
 	}
 	defer tx.Rollback()
 	payload := map[string]string{"vm_id": id, "request_id": v.RequestID, "action": v.Action, "media_id": v.MediaID}
+	// Only a named drive joins the payload, so replays stored before drives existed still match.
+	if v.Drive != "" {
+		payload["drive"] = v.Drive
+	}
 	if c.replayResource(w, tx, v.RequestID, "vm-media", payload) {
 		return
 	}
@@ -61,6 +71,10 @@ func (c *Controller) mediaVM(w http.ResponseWriter, r *http.Request, user, csrf 
 		fail(w, 409, "the VM's host agent does not support central media changes; upgrade Nex Core")
 		return
 	}
+	if v.Drive == protocol.DriversDrive && !slices.Contains(caps, protocol.DriversDriveCapability) {
+		fail(w, 409, "the VM's host agent does not support a driver disc drive; upgrade Nex Core")
+		return
+	}
 	var pending int
 	if err = tx.QueryRow("SELECT count(*) FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind IN ('vm-media','vm-update') AND r.name=? AND o.status IN ('queued','dispatched')", id).Scan(&pending); err != nil {
 		fail(w, 500, "media request lookup failed")
@@ -71,13 +85,30 @@ func (c *Controller) mediaVM(w http.ResponseWriter, r *http.Request, user, csrf 
 		return
 	}
 	if v.Action == "insert" {
+		what := "the install ISO"
+		if v.Drive == protocol.DriversDrive {
+			what = "the driver disc ISO"
+		}
 		if _, e := readyResource(tx, v.MediaID, "iso-import", pool, host); e != nil {
-			fail(w, 404, "the install ISO is not registered and verified on the selected host and pool")
+			fail(w, 404, what+" is not registered and verified on the VM's host and pool")
 			return
+		}
+		// The other drive must not hold the same ISO: the resulting spec would fail ValidateVMSpec.
+		var createRaw string
+		var create protocol.Command
+		if tx.QueryRow("SELECT command FROM managed_resources WHERE id=? AND kind='vm-create'", id).Scan(&createRaw) == nil && json.Unmarshal([]byte(createRaw), &create) == nil && create.VM != nil {
+			other := create.VM.DriversMediaID
+			if v.Drive == protocol.DriversDrive {
+				other = create.VM.MediaID
+			}
+			if other == v.MediaID {
+				fail(w, 400, "the driver disc must differ from the install media")
+				return
+			}
 		}
 	}
 	opID := random()
-	cmd := protocol.Command{OperationID: opID, Kind: "vm-media", VMMedia: &protocol.VMMediaRequest{VMID: id, PoolID: pool, HostID: host, Action: v.Action, MediaID: v.MediaID}}
+	cmd := protocol.Command{OperationID: opID, Kind: "vm-media", VMMedia: &protocol.VMMediaRequest{VMID: id, PoolID: pool, HostID: host, Action: v.Action, Drive: v.Drive, MediaID: v.MediaID}}
 	op, err := c.saveResource(tx, user, v.RequestID, pool, host, id, opID, cmd, payload)
 	if err != nil || tx.Commit() != nil {
 		fail(w, 500, "media request storage failed")

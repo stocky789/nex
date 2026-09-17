@@ -91,6 +91,16 @@ def walkthrough(lab, config, password, evidence):
         expect(editor.get_by_role('button', name='Save changes', exact=True)).to_be_disabled()
         disk2.get_by_label('Boot order').fill('0')
         expect(editor.get_by_role('button', name='Save changes', exact=True)).to_be_enabled()
+        # UEFI to BIOS deletes the variable store: warned in place, Save held until acknowledged.
+        editor.get_by_label('Firmware').select_option('bios')
+        expect(editor.get_by_text('permanently deletes its UEFI variable store', exact=False)).to_be_visible()
+        expect(editor.get_by_role('button', name='Save changes', exact=True)).to_be_disabled()
+        editor.get_by_text('permanently deletes its UEFI variable store', exact=False).scroll_into_view_if_needed()
+        capture('firmware-bios-warning')
+        editor.get_by_label('I understand the UEFI variable store will be deleted').check()
+        expect(editor.get_by_role('button', name='Save changes', exact=True)).to_be_enabled()
+        editor.get_by_label('Firmware').select_option('uefi')
+        expect(editor.get_by_text('permanently deletes its UEFI variable store', exact=False)).to_have_count(0)
         page.set_viewport_size({'width': 360, 'height': 800})
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'editor narrow page overflow'
         capture('edit-stopped-360')
@@ -108,7 +118,7 @@ def walkthrough(lab, config, password, evidence):
         capture('details-after-stopped-edit')
         ops = [o for o in lab.api('/api/v1/operations') if o['kind'] == 'vm-update']
         assert len(ops) == 1 and ops[0]['status'] == 'succeeded' and ops[0]['actor'] == 'root', ops
-        passed('Edit while stopped from General: rename, description, second disk out of the boot order and second interface saved; repeated boot order refused in place; existing disk size locked; first interface keeps its MAC; vm-update succeeded and details follow the host report; 360px editor without overflow')
+        passed('Edit while stopped from General: UEFI to BIOS warns that the variable store is deleted and holds Save until acknowledged; rename, description, second disk out of the boot order and second interface saved; repeated boot order refused in place; existing disk size locked; first interface keeps its MAC; vm-update succeeded and details follow the host report; 360px editor without overflow')
 
         # Edit while running: stop-first fields are locked with the reason; a device change goes through.
         config['control']['state'] = 'running'
@@ -147,6 +157,37 @@ def walkthrough(lab, config, password, evidence):
         expect(page.get_by_role('status')).to_contain_text('requested')
         page.unroute('**/api/v1/agent/report')
         eventually(lambda: (lambda v: v if v['spec']['revision'] == 3 else None)(current()), 'third revision reported by the host')
+
+        # A never-edited VM with two automatic interfaces: removing the first and adding a new one in
+        # the same save names the survivor by the MAC the listing reports, so the Controller accepts
+        # it, the survivor keeps its address and the new interface gets a fresh one.
+        spec = {k: vm['spec'][k] for k in ('pool_id', 'host_id', 'description', 'guest_os', 'cpu', 'memory', 'boot', 'media_id', 'autostart')}
+        network = vm['spec']['nics'][0]['network_id']
+        spec.update(request_id='edit-vm-nics', name='edit-vm-nics', start_after_create=False,
+                    disks=[{**vm['spec']['disks'][0], 'name': 'nics-system'}],
+                    nics=[{'network_id': network, 'model': 'virtio', 'mac': ''}, {'network_id': network, 'model': 'e1000e', 'mac': ''}])
+        created = lab.api('/api/v1/vms', spec, expected=202)
+        fresh = eventually(lambda: next((v for v in lab.api('/api/v1/vms') if v['id'] == created['vm_id'] and v['status'] == 'succeeded' and v['state'] == 'shut off'), None), 'two-interface VM created and observed stopped', timeout=30)
+        assert fresh['spec']['revision'] == 0 and all(n['mac'] for n in fresh['spec']['nics']), fresh['spec']
+        page.goto(url + '/#/vms/' + fresh['id'])
+        page.get_by_role('button', name='Edit', exact=True).click()
+        editor = page.get_by_role('form', name='Edit VM')
+        expect(editor.get_by_role('group', name='Network interface 2', exact=True).get_by_label('MAC address')).to_have_value(fresh['spec']['nics'][1]['mac'])
+        editor.get_by_role('button', name='Remove network interface 1', exact=True).click()
+        expect(editor.get_by_role('group', name='Network interface 1', exact=True).get_by_label('MAC address')).to_have_value(fresh['spec']['nics'][1]['mac'])
+        editor.get_by_role('button', name='Add network interface', exact=True).click()
+        editor.get_by_role('group', name='Network interface 2 · new', exact=True).get_by_label('Adapter model').select_option('rtl8139')
+        capture('remove-first-nic-never-edited')
+        editor.get_by_role('button', name='Save changes', exact=True).click()
+        expect(page.get_by_role('status')).to_contain_text('requested')
+        dropped = eventually(lambda: next((v for v in lab.api('/api/v1/vms') if v['id'] == fresh['id'] and v['spec']['revision'] == 1), None), 'first-interface removal reported by the host')
+        nics = dropped['spec']['nics']
+        assert [(n['mac'], n['model']) for n in nics[:1]] == [(fresh['spec']['nics'][1]['mac'], 'e1000e')] and len(nics) == 2, dropped['spec']
+        assert nics[1]['model'] == 'rtl8139' and nics[1]['mac'] not in {n['mac'] for n in fresh['spec']['nics']}, dropped['spec']
+        page.reload()
+        expect(page.locator('.details')).to_contain_text(fresh['spec']['nics'][1]['mac'], timeout=30000)
+        capture('remove-first-nic-details')
+        passed('Never-edited VM with two automatic interfaces: the editor shows both listed MACs, removing interface 1 and adding an rtl8139 interface in one save is accepted, and the host-reported revision 1 keeps the second interface with its original MAC plus the new interface with a fresh MAC')
         assert not errors, errors
         passed('Third edit queued and applied; no browser page errors across the walkthrough')
         browser.close()
