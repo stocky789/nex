@@ -279,6 +279,12 @@ func TestDefaultLocalStorageNameIsAccurateAndNeverRenamesAnExistingRegistration(
 		}
 		return out
 	}
+	prev := DefaultStoragePath
+	t.Cleanup(func() { DefaultStoragePath = prev })
+	DefaultStoragePath = filepath.Join(t.TempDir(), "images")
+	if err := os.MkdirAll(DefaultStoragePath, 0755); err != nil {
+		t.Fatal(err)
+	}
 	fresh := NewManaged(filepath.Join(t.TempDir(), "state"))
 	if err := fresh.RegisterDefaults(ctx, "pool-1", "host-1", nics); err != nil {
 		t.Fatal(err)

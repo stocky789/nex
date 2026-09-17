@@ -23,6 +23,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
+- Fixed the enrollment browser check failing when Create VM opened slowly after New VM
+  from a host view, and stopped Core from recording a failed default storage registration
+  when `/var/lib/libvirt/images` is not there yet.
+- Host inventory under load starts the libvirt domain list sooner so a short probe budget
+  cannot skip it, and Add host gives enrollment enough time to finish under busy CI.
 - A guest that put itself to sleep (Windows Sleep, for example) no longer locks up its VM
   and every other VM on the same host. The VM is shown as asleep, **Start** wakes it, Shut
   down and Reboot wake it first, and Force stop and Force reboot work directly. New and

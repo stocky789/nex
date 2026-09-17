@@ -1633,6 +1633,15 @@ func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []
 		}
 	}
 	out.Storage, _ = appliedStorageProjection(js, nil)
+	// Overlap the libvirt domain list with credential projection when VMs need verifying.
+	// Report bounds Applied with ProbeTimeout; doing list only after all local file work meant
+	// a tight deadline could expire without starting virsh (TestReportBoundsManagedLibvirtObservation).
+	// Only start when out.VMs is non-empty so a tombstoned create does not re-list (delete resume).
+	var domainsCh chan map[string]bool
+	if len(out.VMs) > 0 {
+		domainsCh = make(chan map[string]bool, 1)
+		go func() { domainsCh <- domains(ctx) }()
+	}
 	if receipts, err := StorageCredentialReceipts(filepath.Dir(e.stateDir)); err == nil {
 		for i := range receipts {
 			receipts[i].RetireEligible = receipts[i].Status == "ready" && !storageCredentialAttached(js, receipts[i].Receipt)
@@ -1643,7 +1652,8 @@ func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []
 	journal := managedJournalCheck(bad, now)
 	vms := protocol.Check{Name: "managed-vms", Status: "healthy", ObservedAt: now}
 	if len(out.VMs) > 0 {
-		if defined := domains(ctx); defined == nil {
+		defined := <-domainsCh
+		if defined == nil {
 			vms.Status, vms.Error = "unknown", "libvirt did not list domains; VM definitions unverified"
 		} else {
 			for _, v := range out.VMs {
@@ -4794,10 +4804,11 @@ func mediaObserved(ctx context.Context, req protocol.VMMediaRequest, path string
 // matches an existing registration on DefaultStoragePath, never on its name, so a host that
 // registered this directory under an earlier default keeps the name its pool master recorded
 // and is not renamed, duplicated or re-registered by an upgrade (BUG-0205).
-const (
-	DefaultStorageName = "Local storage"
-	DefaultStoragePath = "/var/lib/libvirt/images"
-)
+const DefaultStorageName = "Local storage"
+
+// DefaultStoragePath is the host directory RegisterDefaults publishes as local storage.
+// Tests may point it at a temporary tree.
+var DefaultStoragePath = "/var/lib/libvirt/images"
 
 // DefaultNetworks derives the untagged default network of every bridge on a physical port.
 func DefaultNetworks(nics []protocol.NIC) []protocol.NetworkRegistration {
@@ -4843,7 +4854,16 @@ func (e *ManagedEngine) RegisterDefaults(ctx context.Context, pool, host string,
 	if !slices.ContainsFunc(js, func(j managedJournal) bool {
 		return j.Command.Storage != nil && j.Command.Storage.Path == DefaultStoragePath
 	}) {
-		commands = append(commands, protocol.Command{OperationID: hostID(), Kind: "storage-register", Storage: &protocol.StorageRegistration{ID: hostID(), PoolID: pool, HostID: host, Name: DefaultStorageName, Path: DefaultStoragePath}})
+		// Skip while the directory is absent so a lab host or a Core install that has not
+		// created the path yet does not journal a failed registration that blocks a later
+		// successful default. Unexpected lstat errors still surface.
+		if _, err := os.Lstat(DefaultStoragePath); err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		} else {
+			commands = append(commands, protocol.Command{OperationID: hostID(), Kind: "storage-register", Storage: &protocol.StorageRegistration{ID: hostID(), PoolID: pool, HostID: host, Name: DefaultStorageName, Path: DefaultStoragePath}})
+		}
 	}
 	for _, n := range DefaultNetworks(nics) {
 		if slices.ContainsFunc(js, func(j managedJournal) bool {

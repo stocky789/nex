@@ -269,11 +269,13 @@ func TestClusteredISCSISharedStorageRequiresMembershipAndMasterRegistration(t *t
 func TestReportBoundsManagedLibvirtObservation(t *testing.T) {
 	bin := t.TempDir()
 	started := filepath.Join(bin, "virsh-started")
-	script := "#!/bin/sh\ncase \"$*\" in\n *'list --all --uuid'*) touch \"$NEX_TEST_VIRSH_STARTED\"; exec sleep 30 ;;\n *) exit 1 ;;\nesac\n"
+	// Mark the file before sleeping so a cancelled ProbeTimeout still proves virsh started.
+	// Match both full "$*" and $3=list forms used by managedVirsh (--connect URI list ...).
+	script := "#!/bin/sh\n: > \"$NEX_TEST_VIRSH_STARTED\"\ncase \"$*\" in\n *'list --all --uuid'*|*' list --all --uuid'*) exec sleep 30 ;;\n esac\ncase \"$3\" in list) exec sleep 30 ;; esac\nexit 1\n"
 	if err := os.WriteFile(filepath.Join(bin, "virsh"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("NEX_TEST_VIRSH_STARTED", started)
 
 	reports := make(chan protocol.ReportRequest, 1)
@@ -315,8 +317,10 @@ func TestReportBoundsManagedLibvirtObservation(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// 500ms still far below the blocking sleep, with headroom for -race CI load so virsh
+	// is actually started before the deadline cancels the child (BUG-0086 regression).
 	start := time.Now()
-	if err = report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: 100 * time.Millisecond}); err != nil {
+	if err = report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: 500 * time.Millisecond}); err != nil {
 		t.Fatal(err)
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {

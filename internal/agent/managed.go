@@ -85,7 +85,8 @@ type managedCompletion struct {
 	err    error
 }
 
-// defaultsInterval is how often the worker looks for a new physical uplink to register.
+// defaultsInterval is how often the worker retries default storage/network registration
+// (including when the default storage directory was missing at enroll) and looks for new uplinks.
 const defaultsInterval = time.Minute
 
 // This goroutine executes commands; the bundled media seed below is the one other mutator and
@@ -99,7 +100,6 @@ const defaultsInterval = time.Minute
 // retaken under the operations lock that command execution holds.
 func managedWorker(ctx context.Context, dir string, identity State, commands <-chan protocol.Command, completed chan<- managedCompletion) {
 	engine := vmhost.NewManaged(filepath.Join(dir, "managed-vms"))
-	seen := ""
 	var seeding atomic.Bool
 	defaults := func() {
 		nics, err := HostNICs()
@@ -107,13 +107,11 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 			log.Printf("default resources: %v", err)
 			return
 		}
-		key := fmt.Sprint(vmhost.DefaultNetworks(nics))
-		if key != seen {
-			if err := engine.RegisterDefaults(ctx, cmp.Or(identity.PoolID, identity.HostID), identity.HostID, nics); err != nil {
-				log.Printf("default resources: %v", err)
-				return
-			}
-			seen = key
+		// Call every tick: RegisterDefaults is idempotent once journals hold the path or
+		// bridge, and must retry when the default storage directory appears after enroll.
+		if err := engine.RegisterDefaults(ctx, cmp.Or(identity.PoolID, identity.HostID), identity.HostID, nics); err != nil {
+			log.Printf("default resources: %v", err)
+			return
 		}
 		startBundledSeed(&seeding, func() {
 			if err := engine.SeedBundledMedia(ctx, cmp.Or(identity.PoolID, identity.HostID), identity.HostID); err != nil && ctx.Err() == nil {

@@ -356,6 +356,9 @@ function App() {
   // the request and reports it in the activity dock until the operator navigates or reloads.
   const [upload, setUpload] = useState<Upload | null>(null);
   const [createVM, setCreateVM] = useState(false);
+  // newVM sets this so the hashchange handler keeps the Virtual machines tab instead of
+  // resetting to General and leaving the wizard hidden until a later effect runs.
+  const pendingNewVM = useRef(false);
   const [mediaNote, setMediaNote] = useState("");
   const [mediaChange, setMediaChange] = useState<{ vmID: string; action: "insert" | "eject"; drive: Drive; mediaID: string; operation: Operation } | null>(null);
   const [mediaBusy, setMediaBusy] = useState(false);
@@ -697,7 +700,8 @@ function App() {
       setRoute(location.hash.slice(1) || "/");
       setSearch("");
       setResourceSearch("");
-      setTab("General");
+      setTab(pendingNewVM.current ? "Virtual machines" : "General");
+      pendingNewVM.current = false;
       setForm(null);
       setToken(null);
       setNotice("");
@@ -710,6 +714,19 @@ function App() {
     window.addEventListener("hashchange", change);
     return () => window.removeEventListener("hashchange", change);
   }, []);
+  // New VM from the toolbar or File menu opens the pool's VM wizard; the pool view shows it.
+  function newVM() {
+    if (!pool) return;
+    pendingNewVM.current = true;
+    setCreateVM(true);
+    setTab("Virtual machines");
+    const path = `/pools/${pool.id}`;
+    if ((location.hash.slice(1) || "/") === path) {
+      pendingNewVM.current = false;
+      return;
+    }
+    location.hash = path;
+  }
   useEffect(() => {
     if (noticeOp && data.operations.some(o => o.id === noticeOp && o.status !== "queued" && o.status !== "dispatched")) setNotice("");
   }, [data.operations, noticeOp]);
@@ -748,12 +765,6 @@ function App() {
       setNotice(`Inventory refresh ${op.status}. Follow its progress in Task history.`);
       await reload();
     });
-  }
-  // New VM from the toolbar or File menu opens the pool's VM wizard; the pool view shows it.
-  function newVM() {
-    if (!pool) return;
-    setCreateVM(true);
-    location.hash = `/pools/${pool.id}`;
   }
   const powerStatus = vm && `Observed ${stateText(vm.state)} · ${vm.freshness || "unknown"}. ${powerBlocker(vm, data.hosts.find(h => h.id === vm.host_id)) || "Use the toolbar to start, shut down, reboot, force stop or force reboot this VM."}`;
   const submitName = async (e: FormEvent<HTMLFormElement>) => {

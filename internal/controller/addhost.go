@@ -185,7 +185,10 @@ func addHostClient(fingerprint string, mismatched *bool) (*http.Client, error) {
 		return nil, err
 	}
 	return &http.Client{
-		Timeout: 15 * time.Second,
+		// Enrollment push includes the host's agent.Enroll round-trip back to this
+		// Controller (TLS + CSR + sqlite). 15s was enough on an idle machine but
+		// timed out under go test -race ./... package contention on CI.
+		Timeout: 45 * time.Second,
 		Jar:     jar,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errors.New("host redirects refused")
@@ -292,7 +295,7 @@ func (c *Controller) addSiteHost(w http.ResponseWriter, r *http.Request, user, c
 		return
 	}
 	defer client.CloseIdleConnections()
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
 
 	// (a) Sign in. A fingerprint mismatch fails the TLS handshake itself, so the
@@ -341,6 +344,9 @@ func (c *Controller) addSiteHost(w http.ResponseWriter, r *http.Request, user, c
 			return
 		}
 		detail := enrolled["error"]
+		if detail == "" && err != nil {
+			detail = err.Error()
+		}
 		if detail == "" {
 			detail = "connection failed"
 		}

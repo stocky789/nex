@@ -277,7 +277,9 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         toolbar.get_by_role('button', name='Back', exact=True).click()
         expect(page.get_by_role('heading', name='Health checks', exact=True)).to_be_visible()
         toolbar.get_by_role('button', name='New VM', exact=True).click()
-        expect(page.get_by_role('heading', name=re.compile(r'^Create VM · 1 of 6'))).to_be_visible()
+        # Same matcher as storage_repositories_browser.py. Allow time for the host→pool
+        # hashchange to mount ManagedVMs and for the createVM effect to open the wizard.
+        expect(page.get_by_role('heading', name='Create VM · 1 of 6:', exact=False)).to_be_visible(timeout=15000)
         expect(page.get_by_role('heading', name=pool['name'], exact=True)).to_be_visible()
         capture('toolbar-new-vm')
         page.get_by_role('button', name='Close', exact=True).click()

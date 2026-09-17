@@ -63,38 +63,23 @@ func TestRegisterDefaultsIsIdempotentAndRespectsExistingEntries(t *testing.T) {
 		}
 		return js
 	}
-	js := count(2)
-	var storage, network int
-	for _, j := range js {
-		switch {
-		case j.Command.Storage != nil:
-			storage++
-			s := j.Command.Storage
-			if s.Name != DefaultStorageName || s.Path != DefaultStoragePath || s.HostID != "host-1" || s.PoolID != "pool-1" || !identifier.MatchString(s.ID) {
-				t.Fatalf("default storage %+v", s)
-			}
-		case j.Command.Network != nil:
-			network++
-			n := j.Command.Network
-			if n.Name != "nex0 untagged" || n.Kind != "bridge" || n.Source != "nexbr0" || n.Uplink != "nex0" || n.HostID != "host-1" || n.PoolID != "pool-1" || !identifier.MatchString(n.ID) {
-				t.Fatalf("default network %+v", n)
-			}
-		}
+	// Default storage is skipped while DefaultStoragePath is absent; only the untagged network
+	// is registered. A later tick retries storage once the directory exists.
+	js := count(1)
+	if js[0].Command.Network == nil || js[0].Command.Network.Name != "nex0 untagged" || js[0].Command.Network.Source != "nexbr0" {
+		t.Fatalf("default network %+v", js[0].Command.Network)
 	}
-	if storage != 1 || network != 1 {
-		t.Fatalf("storage %d network %d", storage, network)
-	}
-	// Re-running, in whatever state the entries ended up, adds nothing.
+	// Re-running, in whatever state the entries ended up, adds nothing while the path is still missing.
 	if err := e.RegisterDefaults(ctx, "pool-1", "host-1", nics); err != nil {
 		t.Fatal(err)
 	}
-	count(2)
+	count(1)
 	// A new physical uplink adds exactly its untagged network.
 	nics = append(nics, protocol.NIC{Name: "nex1", Kind: "physical", Master: "nexbr1"}, protocol.NIC{Name: "nexbr1", Kind: "bridge"})
 	if err := e.RegisterDefaults(ctx, "pool-1", "host-1", nics); err != nil {
 		t.Fatal(err)
 	}
-	for _, j := range count(3) {
+	for _, j := range count(2) {
 		if j.Command.Network != nil && j.Command.Network.Source == "nexbr1" && j.Command.Network.Name != "nex1 untagged" {
 			t.Fatalf("new uplink network %+v", j.Command.Network)
 		}
@@ -115,6 +100,40 @@ func TestRegisterDefaultsIsIdempotentAndRespectsExistingEntries(t *testing.T) {
 	}
 	if js := journalsOf(t, issued); len(js) != 2 {
 		t.Fatalf("Controller-issued defaults duplicated: %+v", js)
+	}
+}
+
+func TestRegisterDefaultsSkipsMissingStoragePath(t *testing.T) {
+	ctx := context.Background()
+	prev := DefaultStoragePath
+	t.Cleanup(func() { DefaultStoragePath = prev })
+	DefaultStoragePath = filepath.Join(t.TempDir(), "not-created-yet")
+	e := NewManaged(filepath.Join(t.TempDir(), "state"))
+	nics := []protocol.NIC{{Name: "nex0", Kind: "physical", Master: "nexbr0"}, {Name: "nexbr0", Kind: "bridge"}}
+	if err := e.RegisterDefaults(ctx, "pool-1", "host-1", nics); err != nil {
+		t.Fatal(err)
+	}
+	js := journalsOf(t, e)
+	if len(js) != 1 || js[0].Command.Storage != nil || js[0].Command.Network == nil {
+		t.Fatalf("expected only the default network while storage path is missing: %+v", js)
+	}
+	// Creating the directory alone is not enough for a succeeded registration on a non-root
+	// tree, but the path must be attempted (and no longer skipped as missing).
+	if err := os.MkdirAll(DefaultStoragePath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.RegisterDefaults(ctx, "pool-1", "host-1", nics); err != nil {
+		t.Fatal(err)
+	}
+	js = journalsOf(t, e)
+	var storage bool
+	for _, j := range js {
+		if j.Command.Storage != nil && j.Command.Storage.Path == DefaultStoragePath {
+			storage = true
+		}
+	}
+	if !storage {
+		t.Fatalf("storage registration was not attempted after the path appeared: %+v", js)
 	}
 }
 

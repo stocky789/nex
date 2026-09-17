@@ -1,0 +1,43 @@
+{
+  "summary": "Fix phase1 CI flakes from run 4058: Create VM after New VM from a host view; skip journaling failed default storage when /var/lib/libvirt/images is absent; start libvirt domain listing earlier under ProbeTimeout; give add-host enroll push 45s under race load.",
+  "paths": [
+    "tests/integration/phase1_browser.py",
+    "web/src/main.tsx",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/defaults_test.go",
+    "internal/vmhost/pool_storage_test.go",
+    "internal/agent/managed.go",
+    "internal/agent/managed_test.go",
+    "internal/controller/addhost.go",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-17-phase1-new-vm-defaults.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No operator-facing workflow change; default storage still registers when the directory exists, and Create VM still opens from New VM."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. No Controller↔Core or client API contract changed; RegisterDefaults is host-local journal behavior, UI tab selection on navigation, and add-host client timeout only."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "CI harness and robustness; no milestone status change."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Default local storage registration remains a Core journal record on the pool master when the path exists.",
+    "record": "managed journal storage-register for DefaultStoragePath",
+    "recovery": "A fresh Controller adopts succeeded (and previously failed) storage registrations from Core inventory/outcomes; a missing path is no longer permanently poisoned by a failed default attempt."
+  },
+  "verification": {
+    "method": "Reproduced Gitea run 4058 failures. go test -race for TestReportBoundsManagedLibvirtObservation, TestAddSiteHostSuccess, and RegisterDefaults passed. Prior agent also ran phase1.py --browser successfully.",
+    "evidence": [
+      "internal/vmhost/defaults_test.go",
+      "internal/agent/managed_test.go",
+      "internal/controller/addhost.go",
+      "tests/integration/phase1_browser.py"
+    ],
+    "results": "go race agent/controller/vmhost targeted tests ok"
+  }
+}
