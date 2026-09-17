@@ -1,0 +1,39 @@
+{
+  "summary": "Repair stale and timing-sensitive CI regressions found across recent workflow runs. API impact: none; test fixtures/assertions only, with website endpoint configuration separately unresolved.",
+  "paths": [
+    "internal/agent/managed_test.go",
+    "internal/localcore/handoff_test.go",
+    "tests/integration/cluster_storage_browser.py",
+    "tests/integration/console_controls_browser.py",
+    "tests/integration/installer-shell.py",
+    "tests/integration/phase1_browser.py",
+    "tests/test_website_hosting.py",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/ci/2026-09-17-workflows.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Corrects CI fixtures and assertions to implemented behavior; operator steps and production behavior are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No client request, Controller operation, Core command or observed-state/result contract changes; only simulated sessions and regression lifecycle timing change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Local CI regression repairs do not close native acceptance gates or change milestone status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Test fixtures and evidence add no durable product state."
+  },
+  "verification": {
+    "method": "Inspect all recent job logs including cancelled jobs, reproduce failures, run Python discovery, installer source checks, browser lane and race-enabled Go checks; actual results and limits in the QA report.",
+    "evidence": [
+      "docs/qa/ci/2026-09-17-workflows.md"
+    ]
+  }
+}

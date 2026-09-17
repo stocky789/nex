@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / 'packaging/website/nginx.conf.template'
@@ -20,6 +21,7 @@ class WebsiteHosting(unittest.TestCase):
         if not cls.nginx:
             raise RuntimeError('nginx is required; CI installs nginx-core')
         cls.temp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.temp.cleanup)
         cls.base = Path(cls.temp.name)
         release = cls.base / 'release'
         release.mkdir()
@@ -53,23 +55,22 @@ class WebsiteHosting(unittest.TestCase):
                 path.chmod(0o755 if path.is_dir() else 0o644)
         subprocess.run([cls.nginx, '-t', '-c', str(cls.config)], check=True, capture_output=True, text=True)
         cls.process = subprocess.Popen([cls.nginx, '-c', str(cls.config), '-g', 'daemon off;'])
-        for _ in range(50):
+        cls.addClassCleanup(cls.stop_nginx)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if cls.process.poll() is not None:
+                break
             try:
                 cls.request('/')
-                break
-            except ConnectionRefusedError:
+                return
+            except (ConnectionRefusedError, TimeoutError):
                 time.sleep(.05)
-        else:
-            cls.tearDownClass()
-            raise RuntimeError('nginx did not start')
+        raise RuntimeError(f'nginx did not become ready: {(cls.log_dir / "error.log").read_text()}')
 
     @classmethod
-    def tearDownClass(cls):
-        if hasattr(cls, 'process'):
-            cls.process.terminate()
-            cls.process.wait(timeout=5)
-        if hasattr(cls, 'temp'):
-            cls.temp.cleanup()
+    def stop_nginx(cls):
+        cls.process.terminate()
+        cls.process.wait(timeout=5)
 
     @classmethod
     def free_port(cls):
@@ -80,11 +81,13 @@ class WebsiteHosting(unittest.TestCase):
     @classmethod
     def request(cls, path, method='GET'):
         connection = http.client.HTTPConnection('127.0.0.1', cls.port, timeout=2)
-        connection.request(method, path)
-        response = connection.getresponse()
-        body = response.read()
-        connection.close()
-        return response.status, dict(response.getheaders()), body
+        try:
+            connection.request(method, path)
+            response = connection.getresponse()
+            body = response.read()
+            return response.status, dict(response.getheaders()), body
+        finally:
+            connection.close()
 
     def assert_headers(self, headers):
         self.assertEqual(headers['Content-Security-Policy'], "default-src 'self'; base-uri 'none'; connect-src 'none'; font-src 'self'; form-action 'none'; frame-ancestors 'none'; img-src 'self'; object-src 'none'; script-src 'none'; style-src 'self'")
@@ -118,6 +121,53 @@ class WebsiteHosting(unittest.TestCase):
         unit = (ROOT / 'packaging/website/nex-website.service').read_text()
         self.assertIn('User=nex-website', unit)
         self.assertIn("ExecStart=/usr/sbin/nginx -c /etc/nex-website/nginx.conf -g 'daemon off;'", unit)
+
+
+class HostingStartupRegression(unittest.TestCase):
+    def test_http_timeout_during_startup_is_retried(self):
+        class Fixture(WebsiteHosting):
+            pass
+
+        self.addCleanup(Fixture.doClassCleanups)
+        request = Fixture.request
+        attempts = 0
+
+        def delayed_request(path):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise TimeoutError('worker not ready')
+            return request(path)
+
+        with mock.patch.object(Fixture, 'request', side_effect=delayed_request):
+            Fixture.setUpClass()
+        self.assertGreater(attempts, 1)
+        self.assertEqual(Fixture.request('/')[0], 200)
+        Fixture.doClassCleanups()
+        self.assertIsNotNone(Fixture.process.poll())
+        self.assertFalse(Fixture.base.exists())
+
+    def test_failed_request_closes_the_connection(self):
+        with mock.patch.object(WebsiteHosting, 'port', 12345, create=True), \
+                mock.patch.object(http.client, 'HTTPConnection') as connection:
+            connection.return_value.getresponse.side_effect = TimeoutError('worker not ready')
+            with self.assertRaises(TimeoutError):
+                WebsiteHosting.request('/')
+            connection.return_value.close.assert_called_once()
+
+    def test_startup_deadline_fails_and_cleans_up(self):
+        class Fixture(WebsiteHosting):
+            pass
+
+        result = unittest.TestResult()
+        with mock.patch.object(Fixture, 'request', side_effect=TimeoutError('worker not ready')), \
+                mock.patch.object(time, 'monotonic', side_effect=[0, 0, 11]):
+            unittest.TestSuite([Fixture('test_serving_policy_and_headers')]).run(result)
+        self.assertEqual(len(result.errors), 1)
+        self.assertIn('nginx did not become ready', result.errors[0][1])
+        self.assertEqual(result.testsRun, 0)
+        self.assertIsNotNone(Fixture.process.poll())
+        self.assertFalse(Fixture.base.exists())
 
 
 class PythonPreviewRegression(unittest.TestCase):

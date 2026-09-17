@@ -8,8 +8,14 @@ import tempfile
 
 source = Path('installer/gui/nex-shell.c').read_text()
 log_reader = source[source.index('static gchar *nex_log_tail('):source.index('static gboolean nex_scroll_log(')]
-classifier = source[source.index('static int nex_question_stage('):source.index('static GtkWidget *nex_label')]
+classifier = source[source.index('static const char *nex_stages[]'):source.index('static GtkWidget *nex_label')]
 checks = r'''
+static void assert_stage(const char *tag, const char *name) {
+    int stage = nex_question_stage(tag);
+    assert(stage >= 0 && (unsigned int)stage < G_N_ELEMENTS(nex_stages));
+    assert(strcmp(nex_stages[stage], name) == 0);
+}
+
 int main(int argc, char **argv) {
     gchar *text, *data;
     assert(argc == 2);
@@ -26,15 +32,15 @@ int main(int argc, char **argv) {
 
     assert(nex_question_stage(NULL) == -1);
     assert(nex_question_stage("") == -1);
-    assert(nex_question_stage("debian-installer/language") == 0);
+    assert_stage("debian-installer/language", "Host");
     assert(nex_question_stage("debian-installer/rescue") == -1);
-    assert(nex_question_stage("keyboard-configuration/xkb-keymap") == 0);
-    assert(nex_question_stage("netcfg/get_hostname") == 1);
-    assert(nex_question_stage("passwd/root-password") == 2);
-    assert(nex_question_stage("user-setup/password-empty") == 2);
-    assert(nex_question_stage("partman/confirm") == 3);
-    assert(nex_question_stage("partman-auto/select_disk") == 3);
-    assert(nex_question_stage("base-installer/progress") == 4);
+    assert_stage("keyboard-configuration/xkb-keymap", "Host");
+    assert_stage("netcfg/get_hostname", "Network");
+    assert_stage("passwd/root-password", "Host");
+    assert_stage("user-setup/password-empty", "Host");
+    assert_stage("partman/confirm", "Disk");
+    assert_stage("partman-auto/select_disk", "Disk");
+    assert_stage("base-installer/progress", "Install");
     assert(nex_question_stage("unknown/question") == -1);
     return 0;
 }

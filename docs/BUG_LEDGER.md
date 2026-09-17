@@ -2612,3 +2612,48 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: only a succeeded `iso-import` with the pinned SHA-256 suppresses seeding. The existing Core-owned journal, media file and inventory adoption path are unchanged.
 - Regression: `TestSeedBundledMediaDoesNotTreatSameNamedISOAsPinnedBundle` failed before the fix with `same-named ISO blocked the pinned bundled media seed`, then passed. `go test -race ./internal/vmhost -run 'TestSeedBundledMedia' -count=1` and `go test -race -count=1 ./internal/vmhost` (12.640 s) pass. CI: both phase1 workflows run `go test -race ./...`.
 - Avoid: use the pinned digest, not a mutable display filename, as the identity of an exact bundled artifact.
+
+## BUG-0261 — Installer CI asserted obsolete wizard stage indices
+
+- Date: 2026-09-17. Status: fixed; regression corrected.
+- Symptom: both reviewed Installer runs aborted in `installer-shell.py` on the language-stage assertion.
+- Root cause: BUG-0209 changed the production rail to Welcome/Host/Network/Disk/Review/Install, but the test retained the older numeric indices.
+- Fix: check the actual stage names and index bounds using the production stage array; preserve unknown/rescue checks. Production installer behavior is unchanged.
+- Regression: original `python3 tests/integration/installer-shell.py` failed locally; corrected check and all installer source regressions in the workflow passed. An isolated mutation mapping language to Welcome failed the corrected check. Both `.github/workflows/installer.yml` and `.gitea/workflows/installer.yml` run it on pushes and pull requests. Independent review passed. See [workflow evidence](qa/ci/2026-09-17-workflows.md).
+- Avoid: reverting correct operator behavior to satisfy stale positional test expectations.
+
+## BUG-0262 — Browser fixtures and assertions lagged the delivered Controller UI
+
+- Date: 2026-09-17. Status: fixed; existing browser regressions corrected.
+- Symptom: clustered-storage browser checks timed out on navigation; executing previously blocked downstream checks also found stale console and enrollment assertions.
+- Root cause: cluster and console fixtures supplied a session API response without the `nex-signed-in` browser marker required after BUG-0208. Cluster storage selected a control by position. Console media status and enrollment assertions used superseded wording.
+- Fix: establish the same returning-browser marker used by the other simulated fixtures, select Repository type by its label, and assert the actual media/enrollment messages. Independent review also caught a loading check that could capture the login page after a transient initial render: it now proves fresh login makes no session probe, then holds an actual returning-session request before asserting loading. Its full browser rerun and independent capture inspection passed. No authentication or production UI behavior is changed.
+- Regression: cluster and console failures were reproduced before their corrections; the phase1 browser walkthrough exposed the stale enrollment assertions. Commands and final outcomes are recorded in [workflow evidence](qa/ci/2026-09-17-workflows.md). Both phase1 workflows run these browser checks on pushes and pull requests.
+- Avoid: authenticated API mocks without matching browser state, positional selectors for labeled controls, or dropping operation/error assertions to bypass stale text.
+
+## BUG-0263 — Handoff regression used an operation deadline as its service lifetime
+
+- Date: 2026-09-17. Status: fixed; existing regression corrected.
+- Symptom: `TestHandoffAdoptsObservedApplianceAndResumesOffline` failed with `context deadline exceeded` under hosted race-test load.
+- Root cause: a 15-second parent context covered readiness, enrollment, adoption and later recovery, although production passes a service-lifetime context and bounds individual operations separately.
+- Fix: use a cancellable test-lifetime context and always cancel/release the embedded agent on test exit. Production readiness, adoption and HTTP deadlines are unchanged.
+- Regression: a temporary Go overlay delaying the initial readiness reply by 16 seconds reproduced the original failure (16.71 s); the corrected test passed the same delayed case (23.420 s). `go test -race ./internal/localcore -count=3` passed (28.160 s), and independent focused race review passed. The delay overlay is a simulation, not a permanent CI sleep. Both phase1 workflows run the existing test through `go test -race ./...` on pushes and pull requests.
+- Avoid: imposing one arbitrary short deadline on an entire service/recovery lifecycle, or merely replacing it with another arbitrary lifetime deadline.
+
+## BUG-0264 — Website hosting fixture aborted on transient HTTP startup timeout
+
+- Date: 2026-09-17. Status: fixed; regressions added.
+- Symptom: the contracts lane failed in nginx fixture `setUpClass` while reading the first HTTP response.
+- Root cause: readiness retried only refused TCP connections; HTTP timeout escaped setup, where normal class teardown does not run. Failed HTTP requests also left their connection unclosed. The historical log does not establish why that runner's nginx response was delayed.
+- Fix: retry refused/timed-out requests within a monotonic readiness deadline, detect process exit, register process/temp cleanup before readiness, and close connections in `finally`.
+- Regression: injected startup-timeout and connection-close checks failed before the fix; afterward the website suite passed 15 tests. Six focused hosting tests passed independent review, including a permanent-timeout deadline and cleanup check. Full Python discovery passed 307 tests. Both phase1 workflows run `python3 -m unittest discover -s tests -p 'test_*.py' -v` on pushes and pull requests.
+- Avoid: equating a listening TCP socket with ready HTTP service, or leaking fixture resources when class setup fails.
+
+## BUG-0265 — Identity rejection regression imposed a one-second startup benchmark
+
+- Date: 2026-09-17. Status: fixed; existing regression corrected.
+- Symptom: a Go lane later cancelled by a newer push had already failed `TestManagedWorkerRejectsDifferentHostWithoutEffects` with `worker blocked`.
+- Root cause: the test's one-second guard included goroutine scheduling and native NIC observation, neither of which has a one-second security contract. Its fatal path cancelled but did not join the worker before temporary-directory cleanup. CI's exact scheduling/native-call delay was not captured.
+- Fix: retain a bounded ten-second deadlock guard and always cancel/join the worker, preserving identity rejection and absence-of-journal-effects assertions. No production command handling changes.
+- Regression: 100 original local race repetitions passed; a temporary 1.5-second worker-start delay reproduced the original one-second failure and passed after correction. Removed that simulated delay; 100 final race repetitions passed. Rejection, slow-command reporting/cancellation and nonblocking seed tests passed together with `-race -count=10` (14.837 s). Both phase1 workflows run `go test -race ./...` on pushes and pull requests.
+- Avoid: making security assertions incidental startup benchmarks or letting fatal assertions race fixture cleanup.

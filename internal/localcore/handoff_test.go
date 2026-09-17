@@ -259,8 +259,13 @@ func TestHandoffAdoptsObservedApplianceAndResumesOffline(t *testing.T) {
 	defer srv.Close()
 	trust := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))
 	cfg := HandoffConfig{ControllerURL: srv.URL, TrustPEM: trust, AdminPassword: "test-controller-password", SiteName: "Site", VMID: vmID, Name: "Controller", RequestID: "complete-handoff", AgentStateDir: privateDir(t)}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
+	// Handoff owns its readiness/adoption timeouts; its parent represents the
+	// service lifetime, which must also cover enrollment and subsequent recovery.
+	ctx, cancel := context.WithCancel(t.Context())
+	defer func() {
+		cancel()
+		releaseHandoffAgent(cfg.AgentStateDir)
+	}()
 	result := make(chan error, 1)
 	go func() { result <- Handoff(ctx, cfg) }()
 	select {

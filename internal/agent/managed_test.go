@@ -120,19 +120,21 @@ func TestManagedMediaUsesIdentityAndRefusesRedirectAndTraversal(t *testing.T) {
 
 func TestManagedWorkerRejectsDifferentHostWithoutEffects(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	commands := make(chan protocol.Command, 1)
 	results := make(chan managedCompletion, 1)
 	done := make(chan struct{})
 	dir := t.TempDir()
 	go func() { defer close(done); managedWorker(ctx, dir, State{HostID: "host-1"}, commands, results) }()
+	defer func() { cancel(); <-done }()
 	commands <- protocol.Command{OperationID: "wrong-host", Kind: "storage-register", Storage: &protocol.StorageRegistration{HostID: "host-2", Path: "/var/lib/libvirt/images"}}
 	select {
 	case result := <-results:
 		if result.err != nil || result.result.Status != "failed" || !strings.Contains(result.result.Error, "identity") {
 			t.Fatalf("unexpected completion: %+v", result)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(10 * time.Second):
+		// Identity rejection has no latency contract; allow native NIC discovery and
+		// scheduling under the race-enabled CI suite before declaring a deadlock.
 		t.Fatal("worker blocked")
 	}
 	cancel()

@@ -60,6 +60,8 @@ def main():
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page(viewport={'width': 1280, 'height': 900})
+            # Match the returning signed-in browser whose session the API fixture supplies.
+            page.add_init_script("localStorage.setItem('nex-signed-in', '1')")
             page.on('pageerror', lambda error: errors.append(str(error)))
             page.route('**/api/v1/**', route_api)
             page.route_web_socket('**/mock-console', route_console)
@@ -137,7 +139,7 @@ def main():
                     page.get_by_role('button', name='Eject', exact=True).click()
                 else:
                     attach.select_option('iso-demo')
-                pending = page.get_by_role('status').filter(has_text='Ejecting ISO…' if action == 'eject' else 'Inserting ISO…')
+                pending = page.get_by_role('status').filter(has_text='Ejecting the install media…' if action == 'eject' else 'Inserting the install media…')
                 expect(pending).to_be_visible()
                 operation = data['operations'][-1]
                 operation['status'] = final_status
@@ -187,14 +189,14 @@ def main():
             expect(page.get_by_role('status').filter(has_text='The VM ejected the disc')).to_be_visible()
             page.screenshot(path=str(args.evidence / 'mock-media-guest-ejected.png'), full_page=True)
             attach.select_option('iso-demo')
-            expect(page.get_by_role('status').filter(has_text='Inserting ISO…')).to_be_visible()
+            expect(page.get_by_role('status').filter(has_text='Inserting the install media…')).to_be_visible()
             assert data['operations'][-1]['kind'] == 'vm-media', data['operations']
             data['operations'][-1]['status'] = 'succeeded'
             vm['guest']['media'] = 'loaded'
             page.get_by_role('button', name='Refresh view', exact=True).filter(visible=True).click()
             expect(attach.locator('option:checked')).to_have_text('demo-installer.iso')
             expect(page.get_by_role('status').filter(has_text='The VM ejected the disc')).to_have_count(0)
-            expect(page.get_by_role('status').filter(has_text='Inserting ISO…')).to_have_count(0)
+            expect(page.get_by_role('status').filter(has_text='Inserting the install media…')).to_have_count(0)
             data['operations'].clear()
             del vm['guest']['media']
             checks.append('A guest-ejected tray is reported as ejected, the recorded ISO stays insertable, and reconnecting it clears the notice')

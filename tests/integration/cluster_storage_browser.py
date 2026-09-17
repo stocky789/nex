@@ -94,6 +94,8 @@ def main():
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1440, "height": 1000})
             page.set_default_timeout(3000)
+            # Match the returning signed-in browser whose session the API fixture supplies.
+            page.add_init_script("localStorage.setItem('nex-signed-in', '1')")
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.route("**/api/v1/**", api)
             page.goto(f"http://127.0.0.1:{server.server_port}/#/pools/pool-qa")
@@ -103,7 +105,7 @@ def main():
             # of recreating its native dialog with stale draft data.
             page.get_by_role("button", name="Register storage", exact=True).click()
             registration = page.get_by_role("region", name="Register storage", exact=True)
-            registration.locator("select").nth(1).select_option("nfs")
+            registration.get_by_label("Repository type").select_option("nfs")
             registration.get_by_label("NFS server", exact=True).fill("nfs.example.test")
             mode["browser_deferred"] = True
             registration.get_by_role("button", name="Browse exports", exact=True).click()

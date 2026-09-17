@@ -39,7 +39,15 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         loading_requests = []
         page.route('**/api/v1/session', lambda route: loading_requests.append(route))
         initial_response = page.goto(lab.url)
+        page.wait_for_load_state('networkidle')
+        expect(page.get_by_label('Username')).to_be_focused()
+        assert not loading_requests, 'a fresh browser must not probe a nonexistent session'
+        # A returning browser does probe; hold that request to exercise genuine loading.
+        page.evaluate("localStorage.setItem('nex-signed-in', '1')")
+        with page.expect_request('**/api/v1/session'):
+            page.reload()
         expect(page.get_by_text('Connecting to Nex Controller…')).to_be_visible()
+        assert len(loading_requests) == 1, 'returning-session probe was not intercepted'
         capture('loading')
         for request in loading_requests:
             request.continue_()
@@ -95,7 +103,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         capture('empty-site-desktop')
         page.get_by_role('button', name='Add host', exact=True).first.click()
         expect(page.get_by_role('heading', name='Add host to Browser walkthrough', exact=True)).to_be_visible()
-        expect(page.get_by_text('The new host becomes the master of a new pool in this site.', exact=False)).to_be_visible()
+        expect(page.get_by_text('A new host becomes the master of a new pool in this site; a host that already belongs to a pool keeps it.', exact=False)).to_be_visible()
         capture('add-host-form-desktop')
         page.get_by_text('Manual enrollment', exact=True).click()
         page.get_by_role('button', name='Generate enrollment token', exact=True).click()
@@ -126,7 +134,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         assert not add_host_bodies, 'host add request sent before fingerprint was confirmed'
         capture('add-host-probe-desktop')
         page.get_by_role('button', name='Confirm and add host', exact=True).click()
-        expect(page.get_by_text('Host host-sim enrolled as master of a new pool', exact=False)).to_be_visible()
+        expect(page.get_by_role('status').filter(has_text='Host host-sim enrolled in pool pool-sim; it appears in the tree after its first report.')).to_be_visible()
         assert len(add_host_bodies) == 1, add_host_bodies
         body = add_host_bodies[0]
         assert body['address'] and body['fingerprint'] == fingerprint and body['controller_url'] and body['root_password'] == 'hunter2', body
