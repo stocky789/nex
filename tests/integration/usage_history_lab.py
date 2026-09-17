@@ -75,7 +75,7 @@ def main():
                 '-tls-cert', cert, '-tls-key', key, '-admin-password-file', password, '-source-archive', source,
                 '-stale-after', '3s', '-ui-dir', ROOT / 'web/dist')
             lab.client(cert)
-            eventually(lambda: lab.api('/api/v1/sites', expected=401), 'controller startup')
+            lab.started()
             lab.csrf = lab.api('/api/v1/session', {'username': 'root', 'password': password.read_text()})['csrf_token']
             site = lab.api('/api/v1/sites', {'name': 'Usage QA'}, expected=201)
             return process, cert, lab.api('/api/v1/enrollment-tokens', {'site_id': site['id']}, expected=201)['token']

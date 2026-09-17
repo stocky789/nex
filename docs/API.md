@@ -2039,6 +2039,10 @@ package. Running outside `nex-controller.service` keeps apt from being killed by
 that restart, and a failed upgrade restarts the service before reporting. If the helper or path unit is missing, apply
 returns **503** instead of scheduling. Core apply starts the same work in the
 background and returns 202; the UI polls GET until `phase` is `done` or `failed`.
+A phase left stuck by a service restart mid-install clears itself once the installed version
+matches available, but never while that service is the apply still running: apt reports the
+new version as soon as dpkg unpacks it, and `done` means the apply finished, not that the
+package landed. Stopping the service waits for an apply it started rather than abandoning it.
 Both sides re-read the installed version afterwards and fail the apply if it did not
 advance, because apt exits 0 when nothing needed upgrading.
 

@@ -80,7 +80,7 @@ def capture(lab, args):
         '-admin-username', 'root', '-admin-password-file', password,
         '-stale-after', '5m', '-ui-dir', ROOT / 'web/dist', '-source-archive', source)
     lab.client(cert)
-    eventually(lambda: lab.api('/api/v1/sites', expected=401), 'controller startup')
+    lab.started()
     lab.csrf = lab.api('/api/v1/session', {'username': 'root', 'password': password.read_text()})['csrf_token']
     site = lab.api('/api/v1/sites', {'name': 'Community demo'}, expected=201)
     token = lab.api('/api/v1/enrollment-tokens', {'site_id': site['id']}, expected=201)['token']

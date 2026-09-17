@@ -2749,3 +2749,99 @@ Append resolved defects with their evidence and the approach to avoid.
   fixed build.
 - Avoid: treating libvirt's state set as `running`/`shut off` only, or letting one VM's
   unobservable state fail a host-wide inventory publication.
+
+## BUG-0274 — Core shutdown abandoned a running update, and the page called it done early
+
+- Date: 2026-09-18
+- Symptom: `go test -race ./...` failed intermittently in CI with
+  `TestLocalUpdatesAuthAndApply` ... `TempDir RemoveAll cleanup: unlinkat
+  /tmp/TestLocalUpdatesAuthAndApply*/002/state: directory not empty`; repeated runs of the
+  same package also failed with `update already in progress`.
+- Root cause: two halves of the same mistake. `MergeProgress` repaired a stuck phase to
+  `done` whenever apt already reported the new version, which is also true mid-apply because
+  dpkg unpacks before the service restart, so a status read could report a finished update
+  while the apply goroutine was still working. `Service.Close` never waited for that
+  goroutine (it is not on `s.wg`), so the apply kept writing `progress.json` into the state
+  directory after shutdown — racing the caller that was already removing it.
+- Fix: `nexupdate.WaitApply` waits for the background apply, and `Service.Close` calls it
+  beside the existing enrollment-agent wait; `MergeProgress` repairs a stuck phase only when
+  this process is not the one applying.
+- Regression: `go test -race ./internal/localcore -run TestCloseWaitsForTheBackgroundUpdate`
+  fails without the wait ("Close returned while the apply was still writing to the state
+  directory", with a detected race) and passes with it;
+  `go test -race ./internal/nexupdate -run TestMergeProgressLeavesARunningApplyAlone` reports
+  `done` without the guard and `installing` with it. Full `./internal/localcore` and
+  `./internal/nexupdate` suites passed. Both phase1 workflow copies run these in the `go`
+  lane on pushes and pull requests. No update was applied on a real host for this fix.
+- Avoid: believing a status read over the goroutine that is still writing the status, or
+  leaving a writer running past the Close that owns its directory.
+
+## BUG-0275 — A dropped connection while attaching the ISO failed the whole release
+
+- Date: 2026-09-18
+- Symptom: the release workflow failed in "Create or replace the release" with
+  `ssl.SSLEOFError: EOF occurred in violation of protocol` raised as
+  `urllib.error.URLError` while posting the multi-gigabyte ISO, discarding a 37-minute build.
+- Root cause: `scripts/gitea-release.py` sent each asset exactly once. A connection dropped
+  mid-body had no retry, and a short body the server accepted would have published a
+  truncated download.
+- Fix: each asset is attached with up to three attempts; a retry discards whatever the failed
+  attempt left registered under that name and resends from the start, a stored size that does
+  not match the file is a failure, and a 4xx is not retried.
+- Regression: `python3 -m unittest discover -s tests -p 'test_gitea_release.py'` — 6 tests
+  passed; the dropped-upload test fails with `UPLOAD_ATTEMPTS = 1` (the previous behaviour)
+  and passes with the retry. Both phase1 workflow copies run it in the contracts lane on
+  pushes and pull requests. The fix has not yet been exercised against the real forge; the
+  next release run is that evidence.
+- Avoid: one-shot uploads of release-sized artifacts, or treating 201 as proof the server
+  kept every byte.
+
+## BUG-0276 — The browser lane read a busy runner as a dead Controller
+
+- Date: 2026-09-18
+- Symptom: `Capture Controller gallery with neutral demo inventory` failed with
+  `AssertionError: controller startup; last transport error: <urlopen error [Errno 111]
+  Connection refused>`, after which the Controller process did not stop within the harness's
+  five seconds and had to be killed.
+- Root cause: startup waits used `eventually`'s default 15-second window. Controller startup
+  measured 0.10s on an idle machine, but the phase1 workflow runs six lanes on one host
+  (including `go test -race ./...`), and the wait discarded the Controller's own log, so a
+  slow start and a crashed start produced the same message.
+- Fix: `Lab.started()` in `tests/integration/phase1.py` waits 60 seconds and prints the
+  process log when it gives up; all four Controller startup waits call it.
+- Regression: no automated check asserts a timeout, so regression coverage is outstanding;
+  both paths were exercised by hand against the built Controller — a healthy start returned,
+  and a Controller started without its source archive failed with
+  `matching -source-archive required: stat dist/nex-source.tar.gz: no such file or directory`
+  printed from its log instead of only "connection refused". The browser lanes in both
+  workflow copies exercise the helper on every push and pull request.
+- Avoid: sizing a CI wait to an idle machine, or discarding the log of the process being
+  waited for.
+
+## BUG-0277 — Agent timing checks measured the runner, not the behaviour
+
+- Date: 2026-09-18
+- Symptom: the `go` lane failed intermittently in `internal/agent` with
+  `TestReportBoundsManagedLibvirtObservation`: `report waited for libvirt observation:
+  2.361014647s` (and, in an earlier run, `blocking virsh was not invoked`), and
+  `TestManagedSlowCommandKeepsReportingAndCancels`: `heartbeat blocked during command:
+  0 reports`. The same package took 295s in the failing run against 128s in a passing one.
+- Root cause: both checks asserted wall-clock numbers sized for an idle machine. The
+  observation bound was 2s against a virsh that blocks for 30s, so any slow report failed even
+  though it had not waited for libvirt; the slow-command check gave the whole run 5s to get a
+  child process started and measured "cancelled promptly" from the start of the run rather
+  than from the cancellation, and reported a command that never started as a blocked
+  heartbeat.
+- Fix: bound the observation at 10s, still far below the blocking virsh; give the slow-command
+  run 20s to reach the command (it still ends on the third heartbeat seen during it), measure
+  prompt cancellation from the cancellation, and fail separately when the command never
+  started.
+- Regression: `go test -race -run
+  'TestManagedSlowCommandKeepsReportingAndCancels|TestReportBoundsManagedLibvirtObservation'
+  -count=4 ./internal/agent` passed with all 16 cores saturated by busy loops, and `-count=3`
+  passed idle; full `go test -race ./...` passed except `internal/vmhost`
+  `TestRegisterDefaultsIsIdempotentAndRespectsExistingEntries`, which needs root for `runuser`
+  and is green in CI. The failures are load-dependent, so no check reproduces the original
+  timing on demand; the `go` lane in both workflow copies is the standing check.
+- Avoid: asserting a wall-clock number that a busy build machine controls, or letting one
+  assertion report two different failures.

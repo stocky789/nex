@@ -136,7 +136,7 @@ def main():
             '-stale-after', '2s', '-ui-dir', ROOT / 'web/dist']
         cp = lab.start('controller', *controller_args)
         lab.client(cert)
-        eventually(lambda: lab.api('/api/v1/sites', expected=401), 'controller startup')
+        lab.started()
         for path in ('storage', 'networks', 'media', 'vms'):
             lab.api('/api/v1/' + path, expected=401)
         session = lab.api('/api/v1/session', {'username': 'root', 'password': password.read_text()})

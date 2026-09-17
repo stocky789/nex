@@ -28,6 +28,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   when `/var/lib/libvirt/images` is not there yet.
 - Host inventory under load starts the libvirt domain list sooner so a short probe budget
   cannot skip it, and Add host gives enrollment enough time to finish under busy CI.
+- A Core host update that is still installing is no longer reported as finished, and shutting
+  Core down waits for an update it started instead of leaving the install running behind it
+  (BUG-0274).
+- Publishing a release survives a connection dropped part-way through uploading the ISO: each
+  file is resent instead of failing the whole release, and a file the forge stored short is
+  rejected rather than published as a broken download (BUG-0275).
+- Browser checks give a busy build machine enough time to start the Controller, and print the
+  Controller's own log when it never answers (BUG-0276). Two host-agent checks now measure the
+  behaviour they describe instead of how fast the build machine is (BUG-0277).
 - A guest that put itself to sleep (Windows Sleep, for example) no longer locks up its VM
   and every other VM on the same host. The VM is shown as asleep, **Start** wakes it, Shut
   down and Reboot wake it first, and Force stop and Force reboot work directly. New and

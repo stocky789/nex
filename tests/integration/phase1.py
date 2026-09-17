@@ -69,6 +69,22 @@ class Lab:
         self.processes.append(process)
         return process
 
+    def started(self, name='controller', timeout=60):
+        """Wait for a just-started Controller to answer, then say why if it never does.
+
+        Startup is a tenth of a second on an idle machine. CI runs every lane on one
+        host, so this waits far longer than the work takes rather than calling a
+        contended runner a failure; a process that really is broken still fails, and
+        its log says so, which a bare connection refused cannot.
+        """
+        try:
+            return eventually(lambda: self.api('/api/v1/sites', expected=401), name + ' startup', timeout=timeout)
+        except AssertionError:
+            log = self.path / f'{name}.log'
+            if log.exists():
+                print(f'--- {name}.log ---\n{log.read_text()[-4000:]}', file=sys.stderr, flush=True)
+            raise
+
     def stop(self, process):
         if process.poll() is None:
             process.terminate()
@@ -130,7 +146,7 @@ def acceptance(lab, args):
         '-stale-after', '2s', '-ui-dir', ROOT / 'web/dist', '-source-archive', source]
     cp = lab.start('controller', *controller_args)
     lab.client(cert)
-    eventually(lambda: lab.api('/api/v1/sites', expected=401), 'controller startup')
+    lab.started()
     lab.api('/api/v1/session', {'username': 'root', 'password': 'wrong'}, expected=401)
     session = lab.api('/api/v1/session', {'username': 'root', 'password': password.read_text()})
     lab.csrf = session['csrf_token']

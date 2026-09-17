@@ -1,0 +1,52 @@
+{
+  "summary": "Fix the three failing CI lanes on 49c08aa: Core shutdown now waits for a background update apply (and the update check no longer reports done over a running apply), release asset uploads retry a dropped connection and refuse a short upload, and Controller startup waits in the integration harness allow for a loaded runner and print the process log when they give up. Two agent checks also asserted wall-clock numbers a busy runner controls. BUG-0274, BUG-0275, BUG-0276, BUG-0277.",
+  "paths": [
+    "internal/nexupdate/nexupdate.go",
+    "internal/nexupdate/nexupdate_test.go",
+    "internal/localcore/service.go",
+    "internal/localcore/updates_test.go",
+    "internal/agent/managed_test.go",
+    "scripts/gitea-release.py",
+    "tests/test_gitea_release.py",
+    "tests/integration/phase1.py",
+    "tests/integration/website_controller_captures.py",
+    "tests/integration/controller_replacement.py",
+    "tests/integration/console_lab.py",
+    "tests/integration/console_features_lab.py",
+    "tests/integration/managed_vm.py",
+    "tests/integration/vm_edit_lab.py",
+    "tests/integration/usage_history_lab.py",
+    "docs/API.md",
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-18-ci-release-upload-and-update-shutdown.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No documented step or recovery changes. docs/guide/software-updates.md already describes watching refresh, install and restart, and its stuck-phase recovery (a phase clearing itself once installed matches available) still applies: that repair is only suppressed while the same process is the one applying, which is the progression the page already documents."
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "GET /api/local/v1/updates and POST /api/local/v1/updates/apply keep their request, response and status contract. The reported phase now follows the running apply instead of clearing to done when apt reports the new version mid-install, and stopping the service waits for an apply it started; docs/API.md states both in the software updates section. No field, status code, authorization or retry behaviour changes, so the generated references are unchanged.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone status changes; this fixes CI lanes and update shutdown behaviour inside the already published 0.3.2 scope."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new or changed durable record. The host-side update progress file the apply writes already exists and keeps its format and location; the fix only stops a writer outliving the shutdown that owns its directory."
+  },
+  "verification": {
+    "method": "go test -race ./internal/localcore ./internal/nexupdate passed. TestCloseWaitsForTheBackgroundUpdate fails with the wait removed ('Close returned while the apply was still writing to the state directory', race detected) and passes with it; TestMergeProgressLeavesARunningApplyAlone reports done with the guard removed. python3 -m unittest discover -s tests -p 'test_gitea_release.py' passed 6 tests; the dropped-upload test fails with UPLOAD_ATTEMPTS = 1. Controller startup measured at 0.10s from a fresh data directory, and Lab.started() was exercised by hand on a healthy start and on a Controller missing its source archive, which printed its log. Failing CI evidence read from the forge: run 4064 (release asset upload), run 4063 go lane (TempDir cleanup), run 4067 controller-browser (gallery startup). internal/agent timing checks passed -count=4 with all 16 cores saturated. Full go test -race ./... passed except internal/vmhost TestRegisterDefaultsIsIdempotentAndRespectsExistingEntries, which needs root for runuser locally and is green in CI. 310 tests/test_*.py ran: only test_website_hosting failed, needing nginx, which CI installs. python3 scripts/check_docs.py --worktree, scripts/generate_api.py --check and the repository privacy test passed.",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "internal/localcore/updates_test.go",
+      "internal/nexupdate/nexupdate_test.go",
+      "tests/test_gitea_release.py"
+    ]
+  }
+}

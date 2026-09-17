@@ -89,6 +89,18 @@ var (
 
 var applyMu sync.Mutex
 var applyRunning bool
+var applyWG sync.WaitGroup
+
+// WaitApply blocks until a background apply started by StartApplyLocal has
+// finished writing. A caller that is shutting down (or removing the state
+// directory) must not leave the apply writing progress behind it.
+func WaitApply() { applyWG.Wait() }
+
+func applying() bool {
+	applyMu.Lock()
+	defer applyMu.Unlock()
+	return applyRunning
+}
 
 func NormalizeRepoURL(repoURL string) string {
 	repoURL = strings.TrimRight(strings.TrimSpace(repoURL), "/")
@@ -218,8 +230,11 @@ func MergeProgress(st *Status, stateDir string) {
 		return
 	}
 	// If postinst restarted the service mid-dpkg, progress can stick on installing
-	// even though the new package is already active.
-	if (p.Phase == "downloading" || p.Phase == "installing" || p.Phase == "restarting") &&
+	// even though the new package is already active. Only a restarted process can be
+	// stuck: while this one is still applying, apt has already reported the new
+	// version to Check before the apply has finished its own work.
+	if !applying() &&
+		(p.Phase == "downloading" || p.Phase == "installing" || p.Phase == "restarting") &&
 		!st.UpdateAvailable && st.InstalledVersion != "" && st.AvailableVersion != "" &&
 		CompareVersions(st.InstalledVersion, st.AvailableVersion) >= 0 {
 		p = Progress{Phase: "done", Percent: 100, Message: "Update complete"}
@@ -581,11 +596,13 @@ func StartApplyLocal(repoURL, packageName, stateDir string) (ApplyResult, error)
 	}
 	applyRunning = true
 	_ = WriteProgress(stateDir, Progress{Phase: "downloading", Percent: 0, Message: "Starting update"})
+	applyWG.Add(1)
 	go func() {
 		defer func() {
 			applyMu.Lock()
 			applyRunning = false
 			applyMu.Unlock()
+			applyWG.Done()
 		}()
 		_, _ = ApplyLocal(context.Background(), repoURL, packageName, stateDir)
 	}()
