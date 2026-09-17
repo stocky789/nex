@@ -17,6 +17,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Minor Feature
 
+- VM realtime stats now expand beneath the console, including its separate window, so the
+  guest display and live usage charts can be watched together. Historical charts stay in Stats.
 - New VMs default to a fixed CPU definition shared by the current pool members, discovered
   by Nex Core through libvirt. The selected model and features stay with the VM when the
   pool changes. Manual CPU choices, including `qemu64`, remain available; there are no

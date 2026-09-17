@@ -385,6 +385,8 @@ def main():
             live_requests = []
             page.on('request', lambda r: live_requests.append(time.monotonic()) if 'range=live' in r.url else None)
             page.get_by_label('Stacked').uncheck()
+            expect(page.locator('.stats-drawer')).to_have_count(0)
+            page.get_by_role('button', name='Console', exact=True).click()
             page.locator('.stats-drawer').click()
             assert live_requests == [], 'realtime polled before it was turned on'
             page.get_by_label('Show realtime stats (1-second samples)').check()
@@ -397,14 +399,15 @@ def main():
             m['browser_realtime_canvas_changed_over_3s'] = first_frame != page.locator('.stats-grid-live canvas').first.screenshot()
             m['browser_realtime_requests_in_first_11s'] = len(live_requests)
             assert m['browser_realtime_canvas_changed_over_3s'] and len(live_requests) >= 8, (m['browser_realtime_canvas_changed_over_3s'], len(live_requests))
-            history_plot = page.locator('.stats-grid:not(.stats-grid-live) .u-over').first
+            history_plot = page.locator('.stats-grid-live .u-over').first
+            history_plot.scroll_into_view_if_needed()
             box = history_plot.bounding_box()
             page.mouse.move(box['x'] + box['width'] * 0.97, box['y'] + box['height'] / 2)
             expect(history_plot.locator('.stats-tooltip')).to_be_visible(timeout=5000)
             capture(page, 'vm-stats-tooltip')
             m['browser_tooltip_text'] = history_plot.locator('.stats-tooltip').inner_text()[:200]
             page.mouse.move(5, 5)
-            chip = page.locator('.stats-grid:not(.stats-grid-live) .stats-chip').first
+            chip = page.locator('.stats-grid-live .stats-chip').first
             chip.click()
             expect(chip).to_have_attribute('aria-pressed', 'false')
             capture(page, 'vm-stats-chip-hidden')
@@ -426,7 +429,7 @@ def main():
             assert not errors, errors
             report['versions'] = {'chromium': browser.version, 'uplot': json.loads((ROOT / 'web/node_modules/uplot/package.json').read_text())['version']}
             browser.close()
-        lab.passed('VM and host Stats tabs render real host history (Stacked, 24h), the Realtime drawer shows moving live charts with a Live badge, the tooltip and legend chip work, closing the drawer stops polling, no page errors')
+        lab.passed('VM and host Stats tabs render real host history (Stacked, 24h), the Console realtime drawer shows moving live charts with a Live badge, the tooltip and legend chip work, closing the drawer stops polling, no page errors')
 
         # 8. File sizes and the usage check.
         sizes = ssh(hostlab, f'stat -c "%n %s" {state_dir}/usage/*', text=True).stdout

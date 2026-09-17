@@ -33,6 +33,13 @@ only for the Controller appliance it deployed.
 
 ### From Nex Controller
 
+To watch usage while operating the VM, expand **Realtime** beneath the display and tick
+**Show realtime stats (1-second samples)**. The display stays above the charts; a longer
+chart panel scrolls independently. This also works in the separate VM console window.
+Closing the drawer or leaving the console stops requests. Sampling pauses in a hidden
+browser page and turns off after ten minutes. Historical charts remain in **Stats**;
+host consoles and the host-local console are unchanged. See [usage history](usage-history.md).
+
 Use the small arrow at the top-left edge of the console screen to **Collapse console
 toolbar** and give the display more room. Select **Expand console toolbar** to restore
 all controls, including any open clipboard draft. Connection status and warnings remain
@@ -240,6 +247,8 @@ Leaving the console leaves the VM running. While a reconnect is pending the badg
   to its enrolled Controller. Revoking a host ends its ability to attach consoles.
 
 ## Verification
+
+Realtime placement and polling controls have [separate simulated-browser evidence](../changes/2026-09-17-console-realtime-stats.json); this does not establish native guest sampling.
 
 VM, host-local and toolbar console flows were walked through against a Debian 13 guest in a
 disposable nested-KVM lab; Windows guests, physical hardware, concurrent viewers and long

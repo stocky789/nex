@@ -53,11 +53,14 @@ Known limits:
 6. Drag across a chart to zoom all charts to that period; double-click to zoom back out.
 7. Select a series name below a chart to hide or show that series (a hidden series is dimmed and
    struck through). Hidden series stay hidden while you refresh.
-8. For second-by-second numbers, open the **Realtime** drawer at the top of the tab and tick
-   **Show realtime stats (1-second samples)**. Compact charts of the last two minutes update every
-   second, with a **Live** marker and how long ago they updated. Untick the box, close the drawer, or leave
-   the tab to stop. Realtime pauses while the browser page is hidden and turns itself off after 10
-   minutes; select **Resume** to continue.
+8. For a VM, open its **Console** tab (or its separate console window), expand **Realtime**
+   beneath the display and tick **Show realtime stats (1-second samples)**. The console stays
+   visible above the charts; **Stacked** in the drawer controls the live chart stacking. For a
+   host, **Realtime** remains at the top of its **Stats** tab. Compact charts of the last two
+   minutes update every second, with a **Live** marker and how long ago they updated. Untick
+   the box, close the drawer, or leave the console or host Stats tab to stop. Realtime pauses
+   while the browser page is hidden and turns itself off after 10 minutes; select **Resume**
+   to continue.
 
 ## Expected result
 
@@ -96,6 +99,8 @@ network and disk are throughput per second, and disk also shows operations per s
   on each other.
 
 ## Verification
+
+The console placement is checked separately in the [console realtime assessment](../changes/2026-09-17-console-realtime-stats.json), using a simulated API and guest display; this is not new host-sampling evidence.
 
 2026-09-16: the Stats tab and Realtime drawer were exercised in a real browser against a mocked
 Controller API (loading, empty, error, stale, stacked, hover, zoom, legend chips, keyboard, narrow

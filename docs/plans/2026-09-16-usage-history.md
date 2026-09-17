@@ -168,8 +168,13 @@ history" instead of charts.
 
 ## Realtime drawer, owner request 2026-09-16
 
-Operators can temporarily turn on 1-second stats from a collapsible **Realtime** drawer at the top
-of the Stats tab. Decided design:
+Updated placement, owner request 2026-09-17: VM **Realtime** is beneath the console display,
+in both the Console tab and its separate window, so operators can watch both together.
+Host **Realtime** remains at the top of Stats; VM Stats contains historical charts only.
+The existing component and host-owned sampling lease are reused. **API impact: none** — the existing
+`GET /api/v1/vms/{id}/stats?range=live` contract is unchanged; no new durable state or sampling behavior.
+**Guide impact: updated** in the usage-history and console guides. See the
+[placement checks](../changes/2026-09-17-console-realtime-stats.json). Decided design:
 
 - `range=live` on the existing stats endpoints (step 1 s, 120 points). A live query starts or
   renews a 2-minute **host-owned lease** for 1-second sampling of that one VM or host into a

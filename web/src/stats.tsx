@@ -134,8 +134,9 @@ export function statsFailure(error: unknown): StatsFailure {
   return { kind: "error", message };
 }
 
-function Realtime({ kind, id, api, stacked, limitMS }: { kind: "vm" | "host"; id: string; api: API; stacked: boolean; limitMS: number }) {
+export function RealtimeStats({ kind, id, api, stacked, limitMS = REALTIME_LIMIT_MS }: { kind: "vm" | "host"; id: string; api: API; stacked?: boolean; limitMS?: number }) {
   const [open, setOpen] = useState(false);
+  const [localStacked, setLocalStacked] = useState(false);
   const [on, setOn] = useState(false);
   const [history, setHistory] = useState<StatsHistory | null>(null);
   const [updated, setUpdated] = useState(0);
@@ -205,7 +206,7 @@ function Realtime({ kind, id, api, stacked, limitMS }: { kind: "vm" | "host"; id
   const ready = enoughLiveSamples(history);
   // Announced only when the state changes; the per-second "Updated" counter stays out of the live region.
   const announcement = !on ? (open ? "Realtime off" : "") : error ? "Realtime update failed" : !visible ? "Realtime paused while this page is hidden" : ready ? "Realtime live" : "Collecting realtime samples";
-  return <div className="stats-realtime">
+  return <div className="stats stats-realtime">
     <button type="button" className="stats-drawer" aria-expanded={open} onClick={() => { if (open) toggle(false); setOpen(!open); }}>
       <span className="stats-chevron" aria-hidden="true">{open ? "▾" : "▸"}</span>Realtime
       {on && !error && <span className="stats-live"><span className="stats-live-dot" aria-hidden="true" />Live</span>}
@@ -215,6 +216,7 @@ function Realtime({ kind, id, api, stacked, limitMS }: { kind: "vm" | "host"; id
         <label title="While on, the host samples this object every second. Turning it off stops requests at once; the host stops sampling by itself within 2 minutes.">
           <input type="checkbox" checked={on} onChange={e => toggle(e.target.checked)} /> Show realtime stats (1-second samples)
         </label>
+        {stacked === undefined && <label><input type="checkbox" role="switch" checked={localStacked} onChange={e => setLocalStacked(e.target.checked)} /> Stacked</label>}
         {on && <span className="muted">{!visible ? "Paused while this page is hidden" : updated ? updatedAgo(updated, now) : "Connecting…"}</span>}
         <span className="sr-only" role="status">{announcement}</span>
       </div>
@@ -222,7 +224,7 @@ function Realtime({ kind, id, api, stacked, limitMS }: { kind: "vm" | "host"; id
       {error && <div className="alert" role="alert">{history ? `Realtime update failed; showing the last samples. ${error}` : error} <button type="button" onClick={() => setError("")}>Retry</button></div>}
       {on && !ready && !error && <p className="empty">Collecting realtime samples…</p>}
       {history && ready && (on || error) && <div className="stats-grid stats-grid-live">
-        {charts(history, stacked).map(c => <StatsChart key={c.group} chart={c} history={history} syncKey={`live-${kind}-${id}`} hidden={hidden.current} plots={plots.current} height={120} zoom={false} />)}
+        {charts(history, stacked ?? localStacked).map(c => <StatsChart key={c.group} chart={c} history={history} syncKey={`live-${kind}-${id}`} hidden={hidden.current} plots={plots.current} height={kind === "vm" ? 100 : 120} zoom={false} />)}
       </div>}
       <p className="panel-note">Realtime is off until you turn it on. Closing this drawer or leaving the tab turns realtime off, and it turns itself off after 10 minutes. It pauses while this page is hidden.</p>
     </div>}
@@ -284,7 +286,7 @@ export function Stats({ kind, id, api, realtimeLimitMS = REALTIME_LIMIT_MS }: { 
         {!refreshMS[range] && <button type="button" disabled={loading} onClick={() => setAttempt(a => a + 1)}>Refresh</button>}
       </div>
     </div>
-    <Realtime kind={kind} id={id} api={api} stacked={stacked} limitMS={realtimeLimitMS} />
+    {kind === "host" && <RealtimeStats kind={kind} id={id} api={api} stacked={stacked} limitMS={realtimeLimitMS} />}
     {failure?.kind === "capability" && <p className="stats-state" role="status">Upgrade Nex Core to see usage history.</p>}
     {failure?.kind === "stale" && <div className="stats-stale" role="status">{history ? "The host connection is stale. Showing last loaded usage history; it may be out of date." : "The host connection is stale. Reconnect Nex Core, then retry."} <button type="button" disabled={loading} onClick={() => setAttempt(a => a + 1)}>Retry</button></div>}
     {failure?.kind === "error" && <div className="alert" role="alert">{history ? `Could not refresh; showing the last loaded history. ${failure.message}` : failure.message} <button type="button" disabled={loading} onClick={() => setAttempt(a => a + 1)}>Retry</button></div>}

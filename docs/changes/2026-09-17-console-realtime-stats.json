@@ -1,0 +1,43 @@
+{
+  "summary": "Move VM realtime usage into an expandable panel below the embedded and separate-window VM consoles, reusing the existing sampler and polling component. Historical VM charts and host realtime remain in Stats.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/guide/usage-history.md",
+    "docs/guide/vm-console.md",
+    "docs/plans/2026-09-16-usage-history.md",
+    "web/src/console.css",
+    "web/src/main.tsx",
+    "web/src/stats.tsx",
+    "tests/integration/console_controls_browser.py",
+    "tests/integration/usage_history_lab.py"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The VM realtime entry point moves from Stats to the console; explain simultaneous display/charts, collapse and navigation behavior.",
+    "pages": [
+      "docs/guide/usage-history.md",
+      "docs/guide/vm-console.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "UI placement only: existing GET /api/v1/vms/{id}/stats?range=live and Controller-to-Core stats query/lease contracts, authorization, polling cleanup and responses are unchanged; no API reference change needed.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Placement improvement within delivered console/usage features; no public milestone or acceptance status changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Drawer and enablement are transient browser state. Existing Core history and realtime sampling leases are unchanged; no new durable record."
+  },
+  "verification": {
+    "method": "UI unit tests, TypeScript check and production build passed. The built-UI console browser fixture passed all nine checks against simulated API/RFB: embedded and separate consoles retain their canvas/session while expanding realtime, no polling before enablement, loading/empty samples, retained charts on errors and retry, Stacked, keyboard expansion, collapse/navigation stop, VM history-only Stats and retained host realtime. Desktop geometry verifies an unclipped console and complete first chart/legend; desktop and mobile captures were inspected. Both phase1 workflow copies already run the fixture on pushes and pull requests. Python compilation, documentation/privacy and diff checks passed; independent code review completed. Native usage_history_lab selectors were updated but the native lab was not rerun; no new host-sampling or deployed-build evidence is claimed.",
+    "evidence": [
+      "tests/integration/console_controls_browser.py",
+      "tests/integration/usage_history_lab.py"
+    ]
+  }
+}

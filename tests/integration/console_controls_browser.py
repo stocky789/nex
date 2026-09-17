@@ -5,6 +5,8 @@ import argparse
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import struct
 import threading
@@ -24,11 +26,23 @@ def main():
     vm = {'id': 'vm-demo', 'pool_id': 'pool-demo', 'host_id': host['id'], 'name': 'Demo VM', 'operation_id': '', 'status': 'succeeded', 'state': 'running', 'freshness': 'fresh', 'role': '', 'protected': False, 'spec': {'media_id': 'iso-demo', 'cpu': {'count': 2, 'model': 'host'}, 'memory': {'size_mib': 2048, 'mode': 'dedicated'}, 'boot': {'firmware': 'uefi'}, 'disks': [], 'nics': []}, 'guest': {'agent': 'ready', 'clipboard': 'ready', 'resize': True}}
     data = {'session': {'username': 'operator', 'csrf_token': 'mock-session'}, 'sites': [{'id': 'site-demo', 'name': 'Demo site'}], 'pools': [{'id': 'pool-demo', 'site_id': 'site-demo', 'name': 'Demo pool', 'master_host_id': host['id']}], 'hosts': [host], 'vms': [vm], 'storage': [], 'networks': [], 'media': [{'id': 'iso-demo', 'host_id': host['id'], 'pool_id': 'pool-demo', 'name': 'demo-installer.iso', 'status': 'succeeded'}], 'operations': [], 'audit': []}
     errors, checks, tickets = [], [], []
-    mode = {'failure': False}
+    mode = {'failure': False, 'stats': 'ready'}
+    live_requests = []
 
     def route_api(route):
         path = route.request.url.split('/api/v1/')[1].split('?')[0]
-        if path == 'vms/vm-demo/console':
+        if path.endswith('/stats'):
+            live = 'range=live' in route.request.url
+            if live:
+                live_requests.append(route.request.url)
+                if mode['stats'] == 'error':
+                    route.fulfill(status=503, json={'error': 'Simulated stats unavailable'})
+                    return
+            route.fulfill(json={'object': 'vm' if path.startswith('vms/') else 'host', 'id': path.split('/')[1],
+                'range': 'live' if live else '10m', 'step_seconds': 1 if live else 10,
+                'start': (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat(),
+                'series': [{'key': 'cpu.vcpu.0', 'group': 'cpu', 'label': 'CPU', 'unit': 'percent', 'values': [None] * 120 if live and mode['stats'] == 'collecting' else [25, 50] * 60}]})
+        elif path == 'vms/vm-demo/console':
             tickets.append(path)
             route.fulfill(status=502 if mode['failure'] else 200, json={'error': 'Simulated console unavailable'} if mode['failure'] else {'websocket': '/mock-console'})
         elif path == 'vms/vm-demo/media' and route.request.method == 'POST':
@@ -58,7 +72,7 @@ def main():
 
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
+            browser = pw.chromium.launch(headless=True, executable_path=os.environ.get('PLAYWRIGHT_CHROMIUM_EXECUTABLE'))
             page = browser.new_page(viewport={'width': 1280, 'height': 900})
             # Match the returning signed-in browser whose session the API fixture supplies.
             page.add_init_script("localStorage.setItem('nex-signed-in', '1')")
@@ -131,6 +145,80 @@ def main():
                 page.get_by_role('button', name='Clipboard', exact=True).click()
                 page.get_by_label('View only', exact=True).uncheck()
             checks.append('Popout and embedded collapse grow screen; Enter/Space restore controls, draft and view-only without reconnect or canvas replacement')
+            # Live charts share the console page and leave the existing RFB session intact.
+            for embedded in (False, True):
+                page.goto(url.replace('#/console/', '#/vms/') if embedded else url)
+                if embedded:
+                    page.get_by_role('button', name='Console', exact=True).click()
+                expect(page.locator('.console-screen')).to_have_attribute('data-phase', 'connected')
+                drawer = page.locator('.stats-drawer')
+                expect(drawer).to_have_attribute('aria-expanded', 'false')
+                before = len(live_requests)
+                page.wait_for_timeout(1200)
+                assert len(live_requests) == before, 'collapsed console stats polled'
+                drawer.focus()
+                drawer.press('Enter')
+                page.wait_for_timeout(1200)
+                assert len(live_requests) == before, 'expanded but disabled console stats polled'
+                canvas = page.locator('.console-screen canvas')
+                canvas.evaluate('(canvas) => window.originalCanvas = canvas')
+                ticket_count = len(tickets)
+                mode['stats'] = 'collecting'
+                page.get_by_label('Show realtime stats (1-second samples)').check()
+                expect(page.get_by_text('Collecting realtime samples…', exact=True)).to_be_visible()
+                expect(page.locator('.stats-grid-live canvas')).to_have_count(0)
+                mode['stats'] = 'ready'
+                expect(page.locator('.stats-grid-live canvas').first).to_be_visible()
+                page.wait_for_timeout(1200)
+                assert len(live_requests) >= before + 2
+                page.get_by_label('Stacked', exact=True).check()
+                expect(page.get_by_label('Stacked', exact=True)).to_be_checked()
+                mode['stats'] = 'error'
+                expect(page.get_by_role('alert').filter(has_text='Simulated stats unavailable')).to_be_visible()
+                expect(page.locator('.stats-grid-live canvas').first).to_be_visible()
+                mode['stats'] = 'ready'
+                page.get_by_role('button', name='Retry', exact=True).click()
+                expect(page.get_by_role('alert').filter(has_text='Simulated stats unavailable')).to_have_count(0)
+                expect(page.locator('.stats-live')).to_be_visible()
+                assert canvas.evaluate('(canvas) => canvas === window.originalCanvas')
+                assert len(tickets) == ticket_count, 'opening stats reconnected console'
+                page.locator('.stats-realtime').evaluate('(el) => el.scrollTop = 0')
+                screen_box, stats_box = page.locator('.console-screen').bounding_box(), drawer.bounding_box()
+                page.screenshot(path=str(args.evidence / f'mock-console-realtime-{embedded}.png'), full_page=True)
+                assert stats_box['y'] >= screen_box['y'] + screen_box['height'] - 1, ('stats must follow console', embedded, screen_box, stats_box)
+                chart_box = page.locator('.stats-grid-live figure').first.bounding_box()
+                drawer_box = page.locator('.stats-realtime').bounding_box()
+                assert chart_box['y'] + chart_box['height'] <= drawer_box['y'] + drawer_box['height'] + 1, 'desktop realtime chart or legend clipped'
+                assert screen_box['height'] >= 80, 'realtime hid the console'
+                console_box = page.locator('section.console').bounding_box()
+                assert screen_box['y'] + screen_box['height'] <= console_box['y'] + console_box['height'] + 1, 'console viewport clipped'
+                page.set_viewport_size({'width': 390, 'height': 844})
+                expect(page.locator('.stats-grid-live canvas').first).to_be_visible()
+                assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'console stats overflow'
+                page.screenshot(path=str(args.evidence / f'mock-console-realtime-mobile-{embedded}.png'), full_page=True)
+                drawer.click()
+                before = len(live_requests)
+                page.wait_for_timeout(1600)
+                assert len(live_requests) == before, 'closing console stats kept polling'
+                drawer.click()
+                page.get_by_label('Show realtime stats (1-second samples)').check()
+                expect(page.locator('.stats-grid-live canvas').first).to_be_visible()
+                if embedded:
+                    page.get_by_role('button', name='Stats', exact=True).click()
+                    expect(page.locator('.stats-drawer')).to_have_count(0)
+                else:
+                    page.goto(url.replace('#/console/', '#/vms/'))
+                before = len(live_requests)
+                page.wait_for_timeout(1600)
+                assert len(live_requests) == before, 'leaving console kept polling'
+                page.set_viewport_size({'width': 1280, 'height': 900})
+            page.goto(url.replace('#/console/vm-demo', '#/hosts/host-demo'))
+            page.get_by_role('button', name='Stats', exact=True).click()
+            expect(page.locator('.stats-drawer')).to_be_visible()
+            checks.append('Embedded and popout console realtime stays off by default, renders loading/live/error/retry and stacked charts below the unchanged RFB canvas, fits mobile, and stops polling on collapse/navigation; VM Stats is history-only and host Stats retains realtime')
+            page.goto(url.replace('#/console/', '#/vms/'))
+            page.get_by_role('button', name='Console', exact=True).click()
+            expect(page.locator('.console-screen')).to_have_attribute('data-phase', 'connected')
             # Refresh the mounted console: a page reload would hide the stale-note bug.
             attach = page.get_by_label('Attach ISO', exact=True)
             expect(attach.locator('option:checked')).to_have_text('demo-installer.iso')

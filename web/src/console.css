@@ -66,3 +66,10 @@ section.console:fullscreen .console-screen { flex: 1; height: auto; min-height: 
 .console .console-toolbar-toggle { position: absolute; top: 0; left: 10px; display: grid; place-items: center; width: 32px; height: 24px; min-height: 0; padding: 0; border: 1px solid #aeb6c0; border-top: 0; border-radius: 0 0 5px 5px; background: #f3f4f6; color: #334155; cursor: pointer; }
 .console-toolbar-toggle:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
 .console-toolbar-edge .badge { position: absolute; top: 3px; right: 10px; pointer-events: none; }
+
+/* Keep the display and live charts visible together; long chart lists scroll within the drawer. */
+.vm-console-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.vm-console-panel > section.console { flex: 1 1 auto; min-height: 0; max-height: none; margin-bottom: 0; }
+.vm-console-panel > .stats-realtime { flex: 0 0 auto; max-height: 50%; overflow: auto; background: #fff; }
+.console-page > .vm-console-panel { flex: 1; }
+.vm-console-panel .console-screen { min-height: 0; }
