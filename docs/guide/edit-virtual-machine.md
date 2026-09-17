@@ -36,9 +36,13 @@ disk to other storage and moving a VM to another host are not available in this 
      store, and an installed guest may not boot without repair. The form shows a warning, and
      **Save changes** stays disabled until you tick **I understand the UEFI variable store will
      be deleted**.
-     The CPU selector contains the named models this host can run, plus Host passthrough and
-     Host model; choose a baseline reported by every intended destination before migration.
-     Nex Core checks that named model again before applying the edit.
+     The CPU selector keeps every host-usable named model and the host modes, independently
+     of guest OS. **Pool CPU baseline** applies the currently verified common model and fixed
+     features. An existing explicit definition appears as **Saved fixed CPU baseline** and
+     is preserved even if current discovery is unavailable; the feature summary shows what
+     the VM will receive. Selecting another model clears the saved explicit feature list.
+     Core checks explicit features before applying the stopped edit. Future hosts may not
+     support the saved definition, and this does not certify live migration.
    - **Description**, **Guest operating system** and **Start automatically when the host boots**
      can be changed at any time.
    - **Disks**: select **Add disk** to add one; choose its storage, name, size, bus and
@@ -107,6 +111,13 @@ host could not read it without waiting for another VM operation. Check the fresh
 before relying on the numbers; a stale status does not prove the VM stopped.
 
 ## Troubleshooting
+
+- **Pool CPU baseline unavailable:** current member readiness, reachability, CPU vendor or
+  compatibility could not be verified. Existing settings remain unchanged. Restore member
+  availability, update older Core peers, or explicitly choose a CPU model while stopped.
+- **Explicit CPU features need a Core upgrade:** upgrade Controller first, then Core hosts,
+  before saving the feature-bearing definition. Model-only definitions keep their previous
+  semantics, and Nex does not rewrite an existing VM when membership changes.
 
 - **The Edit button is greyed:** hover it for the reason. The VM's host is not freshly
   connected, the host agent does not report `vm-update-v1` (upgrade Nex Core), or the VM is
@@ -196,6 +207,10 @@ before relying on the numbers; a stale status does not prove the VM stopped.
   report; the mirror follows what the host reports as current.
 
 ## Verification
+
+See [pool CPU baseline evidence](../qa/2026-09-17-cpu-baseline.md) for this unreleased
+CPU-definition change. Native libvirt autostart bypasses the explicit CPU preflight;
+Core-mediated starts use it. No future-host or live-migration certification is claimed.
 
 The [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md) (`0.2.10~gate5`, 2026-09-17,
 disposable nested-KVM lab, headless Chromium) walked the edit steps in the browser on a real host:

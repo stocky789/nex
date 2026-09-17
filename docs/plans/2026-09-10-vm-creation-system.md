@@ -35,7 +35,7 @@ milestone; each item below is either in this slice or listed under follow-ups wi
 | Area | Fields |
 |---|---|
 | Identity | Name, description, guest OS hint |
-| CPU | vCPU count, topology (sockets × cores × threads), CPU model |
+| CPU | vCPU count, topology (sockets × cores × threads), fixed native pool baseline or manual CPU model |
 | Memory | Mode (dedicated or maximum) and size |
 | Disks | Repeatable: storage, name, size, bus, thin/thick, boot order |
 | Networks | Repeatable: network, adapter model, automatic or manual MAC |
@@ -62,10 +62,18 @@ milestone; each item below is either in this slice or listed under follow-ups wi
   The Controller appliance is unaffected: it is built from `DeploySpec` through
   `makeDomain` (`internal/vmhost/engine.go`), a separate path from `VMCreateSpec`.
   Decision: project owner, 2026-09-10.
-- **CPU model defaults to `host-passthrough`**, unchanged from today, with `host-model` selectable.
-  Core reports the named models available from its own libvirt/QEMU in inventory; Controller
-  displays that host-specific list and Core rechecks a named selection before defining the VM.
-  `host-model` and a common named baseline support later migration between non-identical hosts.
+- **CPU default updated for 0.3.1, 2026-09-17:** new drafts use the Core-reported fixed
+  pool baseline when available, saving its named model and explicit feature policies in the
+  existing Core VM records. Core computes and compares the native definition across all
+  current members; unavailable members prevent discovery. Manual dynamically discovered
+  models and host modes remain selectable. On a capable host with no baseline, a new draft
+  needs an explicit manual choice; older hosts retain the previous manual selection behavior.
+  Existing VM definitions never change on discovery or membership refresh. This supersedes
+  the original `host-passthrough` default; there are no guest-release CPU rules.
+  **API impact: changed contract**, including new authenticated Core peer discovery routes;
+  **guide impact: updated** in the creation/edit guides. See the
+  [CPU plan](2026-09-17-cpu-baseline.md) and [checks and limits](../qa/2026-09-17-cpu-baseline.md).
+  This is implemented in the working tree, not deployed or migration-accepted.
 - **Creation still never starts a guest.** `StartAfterCreate` is satisfied by the Controller
   issuing the existing, proven `vm-power` `start` request after creation succeeds — not by adding
   a start path to the managed create engine. This preserves the engine's stated invariant
@@ -138,7 +146,7 @@ type VMCreateSpec struct {
     Name, Description  string
     GuestOS string            // "linux" | "windows" | "other"; recorded for display and guest-tools advice
 
-    CPU     VMCPU             // Count, Sockets, Cores, Threads, Model
+    CPU     VMCPU             // Count, Sockets, Cores, Threads, Model, Features
     Memory  VMMemory          // Mode "dedicated"|"maximum", SizeMiB
     Disks   []VMDisk          // StorageID, Name, SizeGiB, Bus, Thin, BootOrder
     NICs    []VMNIC           // NetworkID, Model, MAC ("" derives from VM UUID + index)

@@ -38,6 +38,14 @@ func validateInventory(v *protocol.Inventory) error {
 			return errors.New("invalid CPU model")
 		}
 	}
+	if b := v.CPUBaseline; b != nil {
+		if len(b.Error) > 4096 || len(b.Model) > 64 || len(b.Machine) > 64 || protocol.ValidateCPUFeatures(b.Model, b.Features) != nil || b.MemberCount < 0 || b.MemberCount > 64 {
+			return errors.New("invalid CPU baseline limits")
+		}
+		if b.Error == "" && (!protocol.ValidCPUModel(b.Model) || len(b.Features) == 0 || protocol.ValidateCPUFeatures(b.Model, b.Features) != nil || b.Generation == 0 || b.MemberCount == 0 || b.ObservedAt.IsZero() || (b.Machine != "q35" && b.Machine != "pc")) {
+			return errors.New("invalid CPU baseline")
+		}
+	}
 	names := map[string]bool{}
 	for _, check := range v.Checks {
 		if !nameValid(check.Name) || names[check.Name] || len(check.Error) > 4096 {
@@ -142,6 +150,9 @@ func mergeInventory(old, incoming *protocol.Inventory) *protocol.Inventory {
 		o, exists := previous[name]
 		return ok && !n.ObservedAt.IsZero() && (!exists || !n.ObservedAt.Equal(o.ObservedAt))
 	}
+	// Independent CPU probe failure must clear its observation even when base inventory stalls.
+	out.CPUModels = incoming.CPUModels
+	out.CPUBaseline = incoming.CPUBaseline
 	out.Managed = incoming.Managed
 	out.VMs = old.VMs
 	if newer("libvirt") {

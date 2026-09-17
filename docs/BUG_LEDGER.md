@@ -2712,3 +2712,12 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: the helper uses plain `apt-get install nex-controller`, which both installs the first package and upgrades later package-managed appliances. The `GET`/`POST /api/v1/updates` contract is unchanged.
 - Regression: `ControllerUpdateHelperRecoveryTests.test_binary_only_appliance_receives_its_first_controller_package` failed before the fix and passes after, simulating an empty initial `dpkg-query` and a successful first install. `python3 -m unittest tests/test_distribution_packaging.py -v` passed 24 tests. Both phase1 workflows run full Python unittest discovery on pushes and pull requests.
 - Avoid: using `--only-upgrade` for a component that can start from a copied binary rather than an installed package.
+
+## BUG-0272 — CPU selection could not preserve a native pool feature baseline
+
+- Date: 2026-09-17. Status: implemented in the working tree; no live deployment or original installer-root-cause claim.
+- Symptom: CPU selection offered only a host's model catalogue or host-dependent modes, without a fixed, explicitly verified common pool definition.
+- Root cause: named-model usability was treated as the entire CPU contract; explicit native feature overrides and a pool-wide baseline had no persisted representation.
+- Fix: Core obtains the native common model/features from all current members, compares the result on every member, and exposes the observation. Selecting it stores the model/features in the existing Core VM definition. Manual dynamically discovered models remain selectable; no OS-specific policy exists.
+- Regression: protocol/controller/agent/vmhost CPU tests and simulated browser acceptance pass; see [scoped evidence](qa/2026-09-17-cpu-baseline.md) for commands, native-runtime results and limits. Both phase1 workflow copies run these existing Go/UI/browser suites on pushes and pull requests. Native hardware and hosted CI acceptance remain separate.
+- Avoid: hardcoded guest-release rules, intersecting CPU model names instead of effective features, silently excluding unavailable members, or rewriting existing CPUs when membership changes.

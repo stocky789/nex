@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useRef, useState, type FormEvent } from "react";
 import type { Host, Media, Network, Storage, VM, VMSpec } from "./managed";
-import { adapterNames, adapterNotes, applyTopology, autoDiskName, busNames, cpuName, describeNetwork, driversDriveReady, effectiveBoot, readyHost, topologyIssue, vmNameIssue, type DiskRow, type NICRow } from "./vm-create";
+import { adapterNames, adapterNotes, applyTopology, autoDiskName, busNames, cpuName, availableBaseline, baselineSupported, baselineUnavailable, fixedCPU, selectCPU, cpuSelectionIssue, cpuMigrationHelp, describeNetwork, driversDriveReady, effectiveBoot, readyHost, topologyIssue, vmNameIssue, type DiskRow, type NICRow } from "./vm-create";
 import { storageUsable } from "./storage";
 
 type API = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
@@ -70,6 +70,9 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
   const hostNetworks = networks.filter(n => n.host_id === vm.host_id && n.status === "succeeded").sort((a, b) => (a.vlan || 0) - (b.vlan || 0) || a.name.localeCompare(b.name));
   const availableMedia = media.filter(m => m.host_id === vm.host_id && m.status === "succeeded");
   const driversReady = driversDriveReady(host);
+  const baseline = availableBaseline(host);
+  const baselineWarning = baselineUnavailable(host);
+  const cpuIssue = cpuSelectionIssue(draft.cpu, host);
   const uefi = draft.boot.firmware === "uefi";
   const maxCPUs = Math.min(host?.inventory?.cpu_count || 64, 64);
   const maxMiB = Math.min(host?.inventory ? Math.floor(host.inventory.memory_bytes / 1024 ** 2) : 262144, 262144);
@@ -81,7 +84,7 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
     : macs.some((m, i) => macs.indexOf(m) !== i) ? "MAC addresses must be unique within this VM." : "";
   const orderIssue = bootIssue(draft);
   const dropsNVRAM = spec.boot.firmware === "uefi" && draft.boot.firmware === "bios";
-  const issue = vmNameIssue(draft.name) || topoIssue || diskIssue || macIssue || orderIssue || firmwareIssue(spec.boot.firmware, draft.boot.firmware, nvramAck);
+  const issue = cpuIssue || vmNameIssue(draft.name) || topoIssue || diskIssue || macIssue || orderIssue || firmwareIssue(spec.boot.firmware, draft.boot.firmware, nvramAck);
   const lock = (title = stopFirst) => running ? { disabled: true, title } : {};
 
   function removeDisk(i: number) {
@@ -137,10 +140,23 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
         <label>Sockets<input type="number" min={1} max={maxCPUs} step={1} value={draft.cpu.sockets || ""} {...lock()} onChange={e => edit({ cpu: applyTopology(draft.cpu, "sockets", e.target.valueAsNumber) })} /></label>
         <label>Cores per socket<input type="number" min={1} max={maxCPUs} step={1} value={draft.cpu.cores || ""} {...lock()} onChange={e => edit({ cpu: applyTopology(draft.cpu, "cores", e.target.valueAsNumber) })} /></label>
         <label>Threads per core<input type="number" min={1} max={maxCPUs} step={1} value={draft.cpu.threads || ""} {...lock()} onChange={e => edit({ cpu: applyTopology(draft.cpu, "threads", e.target.valueAsNumber) })} /></label>
-        <label>CPU model<select value={draft.cpu.model} {...lock()} onChange={e => edit({ cpu: { ...draft.cpu, model: e.target.value } })}><option value="host-passthrough">Host passthrough</option><option value="host-model">Host model</option>{host?.inventory?.cpu_models?.filter(m => m !== "host-passthrough" && m !== "host-model").map(m => <option key={m} value={m}>{cpuName(m)}</option>)}</select></label>
+        <label>CPU model<select required value={fixedCPU(draft.cpu) ? "__saved-baseline" : draft.cpu.model} {...(vm.state !== "shut off" ? { disabled: true, title: stopFirst } : {})} onChange={e => {
+          const selection = e.target.value;
+          edit({ cpu: selectCPU(draft.cpu, selection, host), ...(selection === "__pool-baseline" && baseline ? { boot: { ...draft.boot, machine: baseline.machine } } : {}) });
+        }}>
+          {fixedCPU(draft.cpu) && <option value="__saved-baseline">Saved fixed CPU baseline · {draft.cpu.model}</option>}
+          {baselineSupported(host) && <option value="__pool-baseline" disabled={!baseline}>Pool CPU baseline{baseline ? ` · ${baseline.model}` : " · unavailable"}</option>}
+          <option value="host-passthrough">Host passthrough</option><option value="host-model">Host model</option>
+          {host?.inventory?.cpu_models?.filter(m => m !== "host-passthrough" && m !== "host-model").map(m => <option key={m} value={m}>{cpuName(m)}</option>)}
+          {!fixedCPU(draft.cpu) && !["host-passthrough", "host-model", ...host?.inventory?.cpu_models || []].includes(draft.cpu.model) && <option value={draft.cpu.model} disabled>{cpuName(draft.cpu.model)} · saved model not reported by this host</option>}
+        </select></label>
         <label>Memory mode<select value={draft.memory.mode} {...lock()} onChange={e => edit({ memory: { ...draft.memory, mode: e.target.value } })}><option value="dedicated">Dedicated · lock RAM while running</option><option value="maximum">Maximum · a ceiling only</option></select></label>
         <label>Memory (MiB)<input type="number" required min={512} max={maxMiB} step={1} value={num(draft.memory.size_mib)} {...lock()} onChange={e => edit({ memory: { ...draft.memory, size_mib: e.target.valueAsNumber } })} /></label>
       </div>
+      {fixedCPU(draft.cpu) && <p className="help">Fixed features: {draft.cpu.features?.map(f => `${f.policy} ${f.name}`).join(", ") || "none added"}. Machine: {draft.boot.machine || "q35"}.</p>}
+      {baselineWarning && <p className="warning">{baselineWarning} Existing CPU selections are kept.</p>}
+      {cpuIssue && <p className="task-error" role="alert">{cpuIssue}</p>}
+      <p className="help">{cpuMigrationHelp}</p>
       {draft.memory.mode === "dedicated" && <p className="help">Dedicated mode allocates and locks the full amount in host RAM while running, preventing swap and sharing. Stopping releases RAM but keeps its Nex capacity commitment. A VM defined by an older Nex Core keeps the memory backing it was defined with until it is stopped and saved again; the host refuses a live edit of such a VM and says so.</p>}
       {topoIssue && <p className="task-error">{topoIssue}</p>}
     </fieldset>

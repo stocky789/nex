@@ -69,21 +69,23 @@ export function charts(history: StatsHistory, stacked: boolean): Chart[] {
 }
 
 // Stacked values are running sums per unit; an unknown point stays a gap rather than counting as zero.
-// Percent series are each a share of one vCPU or core, so they are weighted 1/N and the top of the
-// stack reads as total CPU (0–100%) instead of N×100%.
+// Each percent series is one vCPU or core at 0–100%, so the stack of N fully busy ones reads N×100%.
 // A series hidden from the legend stays in the data (uPlot only stops drawing it) but leaves the
 // running sum, collapsing onto the band below, so the visible bands stack on each other.
 export function plotValues(series: StatsSeries[], stacked: boolean, hidden: Set<string> = new Set()): (number | null)[][] {
   if (!stacked) return series.map(s => s.values);
   const sums = new Map<string, number[]>();
-  const percentSeries = series.filter(s => s.unit === "percent").length;
   return series.map(s => {
     const acc = sums.get(s.unit) || [];
     sums.set(s.unit, acc);
-    const weight = s.unit === "percent" ? 1 / percentSeries : 1;
-    const add = hidden.has(s.key) ? 0 : weight;
+    const add = hidden.has(s.key) ? 0 : 1;
     return s.values.map((v, i) => v == null ? null : (acc[i] = (acc[i] || 0) + v * add));
   });
+}
+
+// A stacked percent axis ends at 100% per visible vCPU/core, so four busy vCPUs fill a 400% chart.
+export function stackedPercentMax(series: StatsSeries[], hidden: Set<string> = new Set()): number {
+  return 100 * Math.max(1, series.filter(s => s.unit === "percent" && !hidden.has(s.key)).length);
 }
 
 // uPlot draws no fill for a band whose lower edge is hidden, so each visible series bands onto the
@@ -386,7 +388,8 @@ function StatsChart({ chart, history, syncKey, hidden, plots, height = 220, zoom
       legend: { show: false },
       plugins: [tooltip(raw, color)],
       cursor: { sync: { key: syncKey }, drag: { x: zoom, y: false, setScale: zoom } },
-      scales: Object.fromEntries(units.map(unit => [unit, { range: (_u: uPlot, min: number, max: number): uPlot.Range.MinMax => [unit === "percent" || chart.stacked ? 0 : Math.min(0, min), max > 0 ? max * 1.1 : 1] }])),
+      scales: Object.fromEntries(units.map(unit => [unit, { range: (_u: uPlot, min: number, max: number): uPlot.Range.MinMax =>
+        chart.stacked && unit === "percent" ? [0, stackedPercentMax(raw.current, hidden)] : [unit === "percent" || chart.stacked ? 0 : Math.min(0, min), max > 0 ? max * 1.1 : 1] }])),
       // Compact realtime charts label seconds on one line; uPlot's default two-line date labels overlap at that width.
       axes: [{ stroke: style.getPropertyValue("--muted").trim(), grid: { stroke: "#e3e6ea" }, ...(zoom ? {} : { space: 60, values: (_u: uPlot, ticks: number[]) => ticks.map(t => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })) }) }, // Compact charts drop the right-hand axis: its width left no room for time labels. A second unit
       // (IOPS beside bytes/s) keeps its own scale and is still read from the tooltip.

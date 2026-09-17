@@ -62,7 +62,7 @@ def simulated(lab):
     stopped = threading.Event()
     failures = []
     # control lets a walkthrough change what the simulated host observes and applies.
-    control = {'state': 'shut off'}
+    control = {'state': 'shut off', 'cpu_baseline': {'model': 'SyntheticBaseline', 'features': [{'name': 'sse4.2', 'policy': 'require'}], 'machine': 'q35', 'generation': 1, 'member_count': 1, 'observed_at': datetime.now(timezone.utc).isoformat()}}
     specs = {}
     managed_storage = {}
     managed_outcomes = []
@@ -75,10 +75,10 @@ def simulated(lab):
                 for v in vms:
                     v['state'] = control['state']
                 payload = {'version': 1, 'sequence': sequence,
-                        'capabilities': ['managed-vm-v1', 'vm-update-v1', 'vm-media-v1', 'storage-repositories-v1'],
+                        'capabilities': ['managed-vm-v1', 'vm-update-v1', 'vm-media-v1', 'storage-repositories-v1', 'vm-cpu-baseline-v1'],
                         'results': results,
-                        'inventory': {'observed_at': now, 'hostname': 'simulated-browser-host', 'cpu_count': 8, 'cpu_models': ['qemu64', 'Skylake-Server'],
-                        'memory_bytes': 16 * 1024**3, 'vms': vms,
+                        'inventory': {'observed_at': now, 'hostname': 'simulated-browser-host', 'cpu_count': 8, 'cpu_models': ['qemu64', 'Skylake-Server', 'FutureCPU-v7'],
+                        'memory_bytes': 16 * 1024**3, 'vms': vms, 'cpu_baseline': control['cpu_baseline'],
                         'managed': {'vms': list(specs.values()), 'storage': list(managed_storage.values()),
                                     'outcomes': list(managed_outcomes)},
                         'checks': [{'name': 'libvirt', 'status': 'healthy', 'observed_at': now, 'last_success': now}],
@@ -145,7 +145,7 @@ def acceptance(config, password, iso, evidence, mode):
         checks.append(message)
         print('PASS:', message, flush=True)
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=True, **({'executable_path': os.environ['PLAYWRIGHT_CHROMIUM_EXECUTABLE']} if os.environ.get('PLAYWRIGHT_CHROMIUM_EXECUTABLE') else {}))
         page = browser.new_page(ignore_https_errors=True, viewport={'width': 1440, 'height': 1000})
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
@@ -287,6 +287,52 @@ def acceptance(config, password, iso, evidence, mode):
         # and threads must seed sockets (BUG-0049: blank sockets used to show placeholder
         # "1" while staying 0, so 0×2×2 looked like a calculator bug).
         expect(page.get_by_role('heading', name='Create VM · 2 of 6:', exact=False)).to_be_focused()
+        if mode == 'simulated':
+            # CPU presentation is OS-independent. Native discovery is simulated here; this
+            # verifies fixed selections and unavailable/recovery UI, not hardware compatibility.
+            cpu = page.get_by_label('CPU model')
+            expect(cpu).to_have_value('__saved-baseline')
+            expect(cpu.locator('option:checked')).to_contain_text('SyntheticBaseline')
+            expect(page.get_by_text('Fixed features:', exact=False)).to_contain_text('require sse4.2')
+            assert 'qemu64' in cpu.locator('option').evaluate_all('(options) => options.map(o => o.value)')
+            capture('pool-cpu-baseline')
+            original_baseline = config['control']['cpu_baseline']
+            config['control']['cpu_baseline'] = {'error': 'Simulated member unavailable'}
+            warning = page.get_by_text('Pool CPU baseline unavailable.', exact=False)
+            expect(warning).to_contain_text('Simulated member unavailable', timeout=30000)
+            expect(cpu).to_have_value('__saved-baseline')
+            expect(cpu.locator('option:checked')).to_contain_text('SyntheticBaseline')
+            expect(page.get_by_role('button', name='Next', exact=True)).to_be_enabled()
+            warning.scroll_into_view_if_needed()
+            capture('pool-cpu-saved-unavailable')
+            # A fresh wizard cannot silently fall back from an unknown pool default to a
+            # host-derived CPU. An explicit manual model remains available.
+            page.get_by_role('region', name='Create VM', exact=True).get_by_role('button', name='Close', exact=True).click()
+            page.get_by_role('button', name='Create VM', exact=True).click()
+            page.get_by_label('VM name', exact=True).fill(vm_name)
+            page.get_by_label('Description').fill('Browser acceptance guest')
+            page.get_by_label('Placement host').select_option(config['host_id'])
+            page.get_by_role('button', name='Next', exact=True).click()
+            expect(cpu).to_have_value('')
+            expect(page.get_by_role('button', name='Next', exact=True)).to_be_disabled()
+            page.get_by_role('alert').scroll_into_view_if_needed()
+            capture('pool-cpu-new-unavailable')
+            config['control']['cpu_baseline'] = {**original_baseline, 'model': 'FutureBaseline', 'generation': 2}
+            expect(cpu.locator('option[value="__pool-baseline"]')).to_contain_text('FutureBaseline', timeout=30000)
+            expect(cpu).to_have_value('')
+            cpu.select_option('__pool-baseline')
+            expect(cpu.locator('option:checked')).to_contain_text('FutureBaseline')
+            expect(page.get_by_role('button', name='Next', exact=True)).to_be_enabled()
+            cpu.select_option('qemu64')
+            expect(page.get_by_text('Fixed features:', exact=False)).to_have_count(0)
+            cpu.select_option('FutureCPU-v7')
+            expect(cpu).to_have_value('FutureCPU-v7')
+            config['control']['cpu_baseline'] = original_baseline
+            expect(cpu.locator('option[value="__pool-baseline"]')).to_contain_text('SyntheticBaseline', timeout=30000)
+            expect(cpu).to_have_value('FutureCPU-v7')
+            cpu.scroll_into_view_if_needed()
+            capture('pool-cpu-manual-preserved')
+            passed('Pool CPU baseline freezes native model/features; failed recomputation preserves saved CPU; unknown new default blocks Next until explicit choice; dynamic manual models including qemu64 remain available and survive report changes')
         page.get_by_label('Virtual CPUs', exact=True).fill('4')
         page.get_by_label('Cores per socket', exact=True).fill('2')
         page.get_by_label('Threads per core', exact=True).fill('2')
@@ -301,7 +347,7 @@ def acceptance(config, password, iso, evidence, mode):
         page.get_by_label('Cores per socket', exact=True).fill('1')
         page.get_by_label('Threads per core', exact=True).fill('1')
         expect(page.locator('#vm-topology-issue')).to_have_count(0)
-        assert 'QEMU model · Skylake-Server' in page.get_by_label('CPU model').locator('option').all_text_contents()
+        assert any(label.startswith('QEMU model · Skylake-Server') for label in page.get_by_label('CPU model').locator('option').all_text_contents())
         page.get_by_label('CPU model').select_option('Skylake-Server')
         page.get_by_role('radio', name='Maximum', exact=True).check()
         page.get_by_label('Memory (MiB)', exact=True).fill('512')
@@ -482,7 +528,7 @@ def acceptance(config, password, iso, evidence, mode):
         one_hidden, two_hidden = cpu_chart.locator('canvas').evaluate(fills)
         cpu_chart.scroll_into_view_if_needed()
         capture('stats-stacked-hidden-middle')
-        # Both stacks top out at 10/11 of the plot height, so single-fill coverage matches.
+        # Both stacks top out at 60% of the axis (180 of 300%, then 120 of 200%), so single-fill coverage matches.
         assert one_all > 50 and two_all < 5, (one_all, two_all)
         assert abs(one_hidden - one_all) <= one_all * .1 and two_hidden < 5, ('UH-8 stacked fill with hidden middle series', one_all, two_all, one_hidden, two_hidden)
         page.unroute('**/api/v1/vms/*/stats*')

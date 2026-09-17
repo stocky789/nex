@@ -26,7 +26,7 @@ Known limits:
 - A host records history for at most 256 VMs sampled in the last hour; VMs that stopped earlier no
   longer take those places.
 - With **Stacked** on, a host's CPU chart covers at most its first 64 cores, so on a larger host
-  the top of the stack is not total CPU use.
+  the top of the stack leaves out the remaining cores.
 
 ## Prerequisites
 
@@ -45,8 +45,9 @@ Known limits:
 3. Choose a period in **Range**: **Last 10 minutes**, **Last 24 hours**, **Last 30 days** or
    **Last year**. The two shorter ranges refresh on their own while the tab is visible; use
    **Refresh** for the longer ones.
-4. Turn on **Stacked** to stack per-vCPU (or per-core) CPU, network and disk series. Stacked CPU
-   is scaled so the top of the stack is the total CPU use. Memory is never stacked.
+4. Turn on **Stacked** to stack per-vCPU (or per-core) CPU, network and disk series. Each vCPU
+   or core keeps its own 0–100%, so the stacked CPU axis runs to 100% per vCPU: four fully busy
+   vCPUs fill a 400% chart. Memory is never stacked.
 5. Hover over a chart to read its values at that time in a small tooltip; the other charts show
    the same moment with a crosshair.
 6. Drag across a chart to zoom all charts to that period; double-click to zoom back out.

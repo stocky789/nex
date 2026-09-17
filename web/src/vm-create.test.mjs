@@ -19,7 +19,7 @@ const stubbed = code
   .replace('from "./managed"', 'from "data:text/javascript,"')
   .replace('from "./storage"', 'from "data:text/javascript,export const storageUsable=()=>true;"');
 writeFileSync(file, stubbed);
-const { restoredNICs, autoDiskName, topologyIssue, vmNameIssue, bootKeys, renumber, defaultTPM, defaultDriversMedia, nextDriversMedia, effectiveBoot, secureBootText, tpmText, driversDriveReady } = await import(`file://${file}`);
+const { availableBaseline, baselineUnavailable, fixedCPU, selectCPU, cpuSelectionIssue, restoredNICs, autoDiskName, topologyIssue, vmNameIssue, bootKeys, renumber, defaultTPM, defaultDriversMedia, nextDriversMedia, effectiveBoot, secureBootText, tpmText, driversDriveReady } = await import(`file://${file}`);
 
 // BUG-0196: Windows 11 refuses to install without a TPM 2.0, so a Windows guest is drafted with
 // one and every other guest is not. The wizard applies this to a new draft and whenever the
@@ -124,3 +124,33 @@ assert.doesNotMatch(src, /you will see two tasks/);
 assert.match(src, /as the last step of the creation task/);
 
 console.log("vm-create.test.mjs: ok");
+
+// Pool CPU choices come from Core, independent of guest OS and any model-name list.
+const baselineHost = { ...driversHost, capabilities: [...driversHost.capabilities, "vm-cpu-baseline-v1"], inventory: {
+  cpu_models: ["qemu64", "FutureCPU-v7"], cpu_baseline: { model: "SyntheticCPU-v8", features: [{ name: "avx", policy: "disable" }, { name: "sse4.2", policy: "require" }], machine: "pc-q35-10.0", generation: 2, member_count: 2, observed_at: "2026-01-01T00:00:00Z" },
+} };
+const manualCPU = { count: 2, sockets: 0, cores: 0, threads: 0, model: "qemu64" };
+const savedCPU = selectCPU(manualCPU, "__pool-baseline", baselineHost);
+assert.equal(savedCPU.model, "SyntheticCPU-v8", "native baseline need not be a named model in the catalogue");
+assert.deepEqual(savedCPU.features, baselineHost.inventory.cpu_baseline.features);
+assert.notEqual(savedCPU.features, baselineHost.inventory.cpu_baseline.features, "draft freezes a copy of the explicit CPU contract");
+assert.equal(fixedCPU(savedCPU), true);
+assert.equal(cpuSelectionIssue(savedCPU, baselineHost), "");
+assert.equal(selectCPU(savedCPU, "qemu64", baselineHost).features, undefined, "manual model selection clears baseline features");
+assert.equal(selectCPU(savedCPU, "FutureCPU-v7", baselineHost).model, "FutureCPU-v7", "new model names need no UI allowlist");
+assert.equal(selectCPU(savedCPU, "host-model", baselineHost).features, undefined);
+for (const h of [undefined, driversHost, { ...baselineHost, connection: "stale" }, { ...baselineHost, revoked: true }, { ...baselineHost, inventory: null }, { ...baselineHost, inventory: { cpu_baseline: { ...baselineHost.inventory.cpu_baseline, error: "member unreachable" } } }]) {
+  assert.equal(availableBaseline(h), undefined);
+  assert.equal(selectCPU(manualCPU, "__pool-baseline", h).model, "");
+}
+assert.match(cpuSelectionIssue({ ...manualCPU, model: "" }, baselineHost), /explicitly select/);
+assert.match(cpuSelectionIssue(savedCPU, driversHost), /Upgrade Nex Core/);
+assert.equal(cpuSelectionIssue(manualCPU, driversHost), "", "older Core manual behavior stays valid");
+assert.equal(cpuSelectionIssue({ ...manualCPU, features: [] }, driversHost), "", "empty feature list requires no extension support");
+const unavailableHost = { ...baselineHost, inventory: { cpu_baseline: { error: "member unreachable" } } };
+assert.match(baselineUnavailable(unavailableHost), /member unreachable/);
+assert.equal(cpuSelectionIssue(savedCPU, unavailableHost), "", "unavailable recomputation never replaces or rejects saved CPU; Core revalidates placement");
+assert.equal(savedCPU.model, "SyntheticCPU-v8");
+console.log("vm-create pool CPU baseline check ok");
+
+assert.equal(selectCPU(savedCPU, "__saved-baseline", baselineHost), savedCPU, "reselecting a saved snapshot never sends a UI sentinel as model");

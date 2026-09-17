@@ -14,7 +14,7 @@ buildSync({
   bundle: true, format: "esm", jsx: "automatic", target: "es2022", outfile,
   external: ["react", "react/jsx-runtime"], loader: { ".css": "empty" },
 });
-const { formatValue, formatTicks, byteIncrs, enoughLiveSamples, updatedAgo, REALTIME_LIMIT_MS, isolatedIndices, charts, plotValues, stackBands, timestamps, statsFailure } = await import(`file://${outfile}`);
+const { formatValue, formatTicks, byteIncrs, enoughLiveSamples, updatedAgo, REALTIME_LIMIT_MS, isolatedIndices, charts, plotValues, stackBands, stackedPercentMax, timestamps, statsFailure } = await import(`file://${outfile}`);
 
 const s = (key, group, unit, values) => ({ key, group, label: key, unit, values });
 const history = { object: "vm", id: "vm-1", range: "10m", step_seconds: 5, start: "2026-09-16T00:00:00Z", series: [
@@ -32,10 +32,13 @@ assert.deepEqual(stacked[0].series.map(x => x.key), ["cpu.vcpu.0", "cpu.vcpu.1"]
 assert.equal(stacked[1].stacked, false, "memory never stacks");
 assert.equal(charts(history, false)[0].series.length, 3, "unstacked keeps the total");
 assert.equal(charts({ ...history, object: "host" }, false).at(-1).group, "load");
-assert.deepEqual(plotValues(stacked[0].series, true), [[2, null, 5], [5, 1, 15]], "per-vCPU percent is weighted 1/N so the stack top is total CPU; unknown is a gap, not zero");
+assert.deepEqual(plotValues(stacked[0].series, true), [[4, null, 10], [10, 2, 30]], "per-vCPU percent stacks raw so N busy vCPUs read N×100%; unknown is a gap, not zero");
+assert.equal(stackedPercentMax(stacked[0].series), 200, "two vCPUs give a 200% axis");
+assert.equal(stackedPercentMax(stacked[0].series, new Set(["cpu.vcpu.0"])), 100, "a hidden vCPU leaves the axis");
+assert.equal(stackedPercentMax([s("a", "net", "bytes_per_second", [1])]), 100, "never a zero-height axis");
 // UH-8: a series hidden from the legend leaves the running sum, so the visible bands sit on
 // each other; it collapses onto the band below instead of vanishing, keeping the bands aligned.
-assert.deepEqual(plotValues(stacked[0].series, true, new Set(["cpu.vcpu.0"])), [[0, null, 0], [3, 1, 10]], "hidden vCPU 0 no longer offsets vCPU 1");
+assert.deepEqual(plotValues(stacked[0].series, true, new Set(["cpu.vcpu.0"])), [[0, null, 0], [6, 2, 20]], "hidden vCPU 0 no longer offsets vCPU 1");
 assert.deepEqual(plotValues(stacked[0].series, false, new Set(["cpu.vcpu.0"])), [[4, null, 10], [6, 2, 20]], "unstacked ignores hidden");
 assert.deepEqual(plotValues(stacked[0].series, false), [[4, null, 10], [6, 2, 20]], "unstacked values stay raw");
 // UH-8 bands: uPlot fills nothing for a band whose lower edge is hidden, so each visible series

@@ -92,6 +92,7 @@
         "Storage repositories owned by Nex Core: local directories, existing OpenZFS datasets and single-host iSCSI LUNs stay with the host that owns them, while NFS and SMB3 storage is shared across the pool",
         "Registering shared NFS or SMB3 storage once at pool level, with access, write permission, QEMU access and disk locking verified separately on every member before a VM there can use it",
         "Choosing which host a new VM is placed on, with only the storage, networks and ISOs that host has validated on offer",
+        "A fixed CPU definition discovered from every current pool member and saved with each VM, with manual CPU choices still available — in the pending 0.3.1 release; native runtime and simulated browser checks passed, physical mixed-host testing and live migration remain open",
         "VMs on several hosts writing to the same NFS or SMB3 storage at once, with disk locks refusing a second writer of the same disk — passed in bounded three-host lab tests with no injected faults"
       ],
       open: [
@@ -218,7 +219,7 @@
       <p class="roadmap-description">
         Built in order — no milestone counts as done until it works end to end. No
         dates. Ticked items are in releases up to 0.2.9 unless they say they are in the
-        pending 0.3.0 release.
+        pending 0.3.0 or 0.3.1 release.
       </p>
     </div>
     <dl class="counts">

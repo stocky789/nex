@@ -1108,6 +1108,261 @@
           }
         ]
       }
+    },
+    "/api/v1/pool/cpu/capabilities": {
+      "get": {
+        "operationId": "peerCPUCapabilities",
+        "summary": "Observe a member guest CPU",
+        "description": "Read-only native CPU discovery, bounded to 30 seconds and safe to retry; no durable operation or VM mutation. Pool certificate identity and current membership authorize the caller. Generation must match before and after native work. Baseline gathers every non-ejected ready member (maximum 64 membership records), rejects missing endpoints/unreachable members/mixed vendors, computes a libvirt migratable baseline and compares it on every member. It certifies neither future membership nor live migration. Older peers without these routes make baseline discovery unavailable; upgrade all Core hosts.",
+        "security": [
+          {
+            "PoolMasterCertificate": []
+          }
+        ],
+        "x-introduced-version": "development",
+        "x-audience": "Core peer",
+        "responses": {
+          "200": {
+            "description": "Verified observation; compare echoes the exact input definition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolCPUObservation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid machine/generation or malformed comparison JSON.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Peer certificate or membership authority rejected.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Incorrect method; Allow identifies the accepted method.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Membership unknown/changed, member unavailable, or native CPU compatibility could not be verified.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "machine",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "q35",
+                "pc"
+              ]
+            }
+          },
+          {
+            "name": "generation",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/pool/cpu/compare": {
+      "post": {
+        "operationId": "peerCPUCompare",
+        "summary": "Compare an explicit CPU on a member",
+        "description": "Read-only native CPU discovery, bounded to 30 seconds and safe to retry; no durable operation or VM mutation. Pool certificate identity and current membership authorize the caller. Generation must match before and after native work. Baseline gathers every non-ejected ready member (maximum 64 membership records), rejects missing endpoints/unreachable members/mixed vendors, computes a libvirt migratable baseline and compares it on every member. It certifies neither future membership nor live migration. Older peers without these routes make baseline discovery unavailable; upgrade all Core hosts.",
+        "security": [
+          {
+            "PoolMasterCertificate": []
+          }
+        ],
+        "x-introduced-version": "development",
+        "x-audience": "Core peer",
+        "responses": {
+          "200": {
+            "description": "Verified observation; compare echoes the exact input definition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolCPUComparison"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid machine/generation or malformed comparison JSON.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Peer certificate or membership authority rejected.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Incorrect method; Allow identifies the accepted method.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Membership unknown/changed, member unavailable, or native CPU compatibility could not be verified.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "description": "At most 128 KiB JSON; unknown fields and trailing JSON are rejected. At most 512 unique feature names with require/disable policies.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PoolCPUComparison"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pool/cpu/baseline": {
+      "get": {
+        "operationId": "peerCPUBaseline",
+        "summary": "Observe the current pool CPU baseline",
+        "description": "Read-only native CPU discovery, bounded to 30 seconds and safe to retry; no durable operation or VM mutation. Pool certificate identity and current membership authorize the caller. Generation must match before and after native work. Baseline gathers every non-ejected ready member (maximum 64 membership records), rejects missing endpoints/unreachable members/mixed vendors, computes a libvirt migratable baseline and compares it on every member. It certifies neither future membership nor live migration. Older peers without these routes make baseline discovery unavailable; upgrade all Core hosts.",
+        "security": [
+          {
+            "PoolMemberCertificate": []
+          }
+        ],
+        "x-introduced-version": "development",
+        "x-audience": "Core peer",
+        "responses": {
+          "200": {
+            "description": "Verified observation; compare echoes the exact input definition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CPUBaseline"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid machine/generation or malformed comparison JSON.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Peer certificate or membership authority rejected.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Incorrect method; Allow identifies the accepted method.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Membership unknown/changed, member unavailable, or native CPU compatibility could not be verified.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "machine",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "q35",
+                "pc"
+              ]
+            }
+          },
+          {
+            "name": "generation",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -2598,7 +2853,18 @@
           "model": {
             "type": "string",
             "pattern": "^(host-passthrough|host-model|[A-Za-z0-9][A-Za-z0-9._-]{0,63})$",
-            "description": "host-passthrough (the default) gives the guest the host CPU; host-model describes it for later migration. Any other value must appear in the assigned host's current Inventory.cpu_models (usable named models only) and Core refuses it otherwise; named values use libvirt custom/exact mode with partial feature checking and fallback forbidden."
+            "description": "Host modes follow the current host; named models come from native host capabilities. New wizard drafts choose the current pool CPU baseline when available, storing its exact model/features. Explicit feature-bearing definitions are compared against the actual VM machine and runtime. Baseline compatibility covers current members only, not future hosts or live migration. CPU choices are independent of guest OS."
+          },
+          "features": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/CPUFeature"
+            },
+            "maxItems": 512,
+            "description": "Optional fixed native CPU feature list. Omitted or empty retains model-only behavior. Nonempty requires a named model (not host modes or max) and vm-cpu-baseline-v1. Duplicate feature names are rejected."
           }
         },
         "required": [
@@ -2893,6 +3159,143 @@
           "mount_path"
         ],
         "x-go-type": "protocol.ZFSStorageSource"
+      },
+      "CPUFeature": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          },
+          "policy": {
+            "type": "string",
+            "enum": [
+              "require",
+              "disable"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "policy"
+        ],
+        "x-go-type": "protocol.CPUFeature",
+        "description": "Native CPU feature policy. Names must be unique within one CPU definition; no guest-OS feature policy is inferred."
+      },
+      "CPUBaseline": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "features": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/CPUFeature"
+            },
+            "maxItems": 512,
+            "description": "Optional fixed native CPU feature list. Omitted or empty retains model-only behavior. Nonempty requires a named model (not host modes or max) and vm-cpu-baseline-v1. Duplicate feature names are rejected."
+          },
+          "machine": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "member_count": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 64
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": "string",
+            "x-max-utf8-bytes": 4096
+          }
+        },
+        "required": [
+          "model",
+          "features",
+          "machine",
+          "generation",
+          "member_count",
+          "observed_at"
+        ],
+        "x-go-type": "protocol.CPUBaseline",
+        "description": "Disposable Core-master observation for every current non-ejected ready pool member, including a single-host pool. Native baseline and exact destination comparisons must succeed under unchanged membership. Errors or absent observations are unavailable, never an inferred smaller pool. Saved VM definitions are independent; future members and live migration are not certified."
+      },
+      "PoolCPUObservation": {
+        "type": "object",
+        "properties": {
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "machine": {
+            "type": "string",
+            "enum": [
+              "q35",
+              "pc"
+            ]
+          },
+          "cpu": {
+            "type": "string",
+            "maxLength": 65536,
+            "description": "Native guest CPU XML derived from libvirt host-model capabilities, including feature overrides."
+          }
+        },
+        "required": [
+          "generation",
+          "machine",
+          "cpu"
+        ],
+        "x-go-type": "agent.poolCPUObservation"
+      },
+      "PoolCPUComparison": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "machine": {
+            "type": "string",
+            "enum": [
+              "q35",
+              "pc"
+            ]
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          },
+          "features": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/CPUFeature"
+            },
+            "maxItems": 512,
+            "description": "Optional fixed native CPU feature list. Omitted or empty retains model-only behavior. Nonempty requires a named model (not host modes or max) and vm-cpu-baseline-v1. Duplicate feature names are rejected."
+          }
+        },
+        "required": [
+          "generation",
+          "machine",
+          "model",
+          "features"
+        ],
+        "x-go-type": "agent.poolCPUComparison"
       }
     }
   }

@@ -67,6 +67,7 @@ type State struct {
 }
 
 type Store struct {
+	cpuBaseline       poolCPUCache // transient observation, never authoritative pool state
 	dir               string
 	lock              *os.File
 	poolStorageAccess map[string]map[string]protocol.PoolStorageAccess

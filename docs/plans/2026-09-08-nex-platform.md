@@ -5,6 +5,17 @@ Status: Standalone installer alpha and Phase 1 Controller/agent development foun
 
 Project planning files live in `docs/plans/`.
 
+**CPU baseline reconciliation, 2026-09-17 (0.3.1 working tree):** Core dynamically discovers
+and verifies a common named CPU with explicit features across all current pool members.
+New VM drafts select this fixed definition; manual host-usable models remain available.
+The existing Core VM journal and master `pool-vms` specification own the saved definition,
+recovered unchanged through inventory by a fresh Controller. No guest-OS CPU policy or
+hardcoded model catalogue was added. **API impact: changed contract** with new authenticated
+Core peer routes; **guide impact: updated**. See the [CPU plan](2026-09-17-cpu-baseline.md)
+and [native/runtime, browser and regression evidence](../qa/2026-09-17-cpu-baseline.md).
+This does not close the Phase 2 gate or establish migration/heterogeneous physical-pool
+acceptance. Upgrade Controller before Core; no deployment or publication is claimed.
+
 **Core project priority, 2026-09-09:** project owner confirmed successful installation and
 authorized [the first managed VM creation slice](2026-09-09-first-managed-vm.md):
 host-local storage, existing guest-network registration, ISO upload and VM creation
@@ -797,6 +808,12 @@ reference and runnable negative-path tests plus the operator guide in each imple
 ### 7. Migration and host maintenance
 
 Live migration over shared pool storage is part of the first supported release, not dependent on Ceph or HA. Shared disk access is necessary for this initial migration path, but CPU, networking, firmware, and runtime compatibility must also pass validation.
+
+**CPU prerequisite update, 2026-09-17:** the fixed current-pool CPU baseline is implemented
+for 0.3.1, with [bounded evidence](../qa/2026-09-17-cpu-baseline.md). It does not implement
+migration. Destination compatibility must still be checked against each VM's saved CPU
+contract along with the other requirements below; future members may be incompatible.
+
 
 1. Implement controlled stopped-VM relocation first, with explicit disk transfer when storage is local.
 2. Add live migration for supported shared-storage guests after checking CPU model/features, firmware, machine type, networking, storage access, and version compatibility.

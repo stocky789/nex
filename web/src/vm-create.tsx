@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useRef, useState } from "react";
-import type { Host, Media, Network, Storage } from "./managed";
+import type { Host, Media, Network, Storage, VMCPU } from "./managed";
 import { storageUsable } from "./storage";
 
 export const describeNetwork = (n: Network) => n.kind === "network" ? `libvirt network ${n.source}` : n.uplink ? (n.vlan ? `VLAN ${n.vlan} on ${n.uplink}` : `Untagged on ${n.uplink}`) : `Existing bridge ${n.source}`;
@@ -12,7 +12,7 @@ export type BootRow = { firmware: string; machine: string; media_boot_order: num
 // Draft is the request body itself, so a restored uncertain submission spreads straight back in.
 type Draft = {
   host_id: string; name: string; description: string; guest_os: string;
-  cpu: { count: number; sockets: number; cores: number; threads: number; model: string };
+  cpu: VMCPU;
   memory: { mode: string; size_mib: number };
   disks: DiskRow[];
   nics: NICRow[];
@@ -47,6 +47,31 @@ export const adapterNotes: Record<string, string> = {
 };
 export const cpuNames: Record<string, string> = { "host-passthrough": "Host passthrough", "host-model": "Host model", max: "Maximum host CPU" };
 export const cpuName = (model: string) => cpuNames[model] || `QEMU model · ${model}`;
+export const baselineSupported = (h?: Host) => Boolean(h?.capabilities?.includes("vm-cpu-baseline-v1"));
+export function availableBaseline(h?: Host) {
+  const baseline = h?.inventory?.cpu_baseline;
+  return h && readyHost(h) && baselineSupported(h) && baseline?.model && baseline.machine && !baseline.error ? baseline : undefined;
+}
+export function baselineUnavailable(h?: Host): string {
+  if (!baselineSupported(h)) return "";
+  return availableBaseline(h) ? "" : `Pool CPU baseline unavailable. ${h?.inventory?.cpu_baseline?.error || "Wait for a fresh report from all pool members, or explicitly choose a CPU model."}`;
+}
+export const fixedCPU = (cpu: VMCPU) => cpu.features != null;
+export function selectCPU(cpu: VMCPU, selection: string, h?: Host): VMCPU {
+  if (selection === "__saved-baseline") return cpu;
+  if (selection === "__pool-baseline") {
+    const baseline = availableBaseline(h);
+    return baseline ? { ...cpu, model: baseline.model, features: (baseline.features || []).map(f => ({ ...f })) } : { ...cpu, model: "", features: undefined };
+  }
+  return { ...cpu, model: selection, features: undefined };
+}
+export function cpuSelectionIssue(cpu: VMCPU, h?: Host): string {
+  if (!cpu.model) return "Choose an available pool CPU baseline or explicitly select a CPU model.";
+  if (cpu.features?.length && !baselineSupported(h)) return "This fixed CPU includes explicit features. Upgrade Nex Core before submitting this definition.";
+  return "";
+}
+export const cpuMigrationHelp = "The pool CPU baseline covers the current members' CPU capabilities. Its model and features are saved with this VM and do not change when membership changes. Future hosts may be incompatible; migration also needs compatible runtime, storage and networking. Host CPU modes follow the host.";
+
 
 // A host defines a VM's second CD drive, for a driver disc beside the install media, only when
 // its Core reports this capability; an older Core would ignore the drive and silently create a
@@ -170,10 +195,17 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
   const [step, setStep] = useState(0);
   // The TPM follows the guest OS until the operator sets it themselves; a restored draft that
   // already carries one keeps it.
+  const [cpuChosen, setCPUChosen] = useState(() => Boolean(restored().cpu?.model));
   const [tpmChosen, setTPMChosen] = useState(() => Boolean(restored().boot?.tpm));
   const [draft, setDraft] = useState<Draft>(() => {
     const r = restored();
     const d = { ...blank, ...r, cpu: { ...blank.cpu, ...r.cpu }, memory: { ...blank.memory, ...r.memory }, boot: { ...blank.boot, ...r.boot } };
+    const initialHost = hosts.find(h => h.id === d.host_id);
+    if (!r.cpu?.model && baselineSupported(initialHost)) {
+      d.cpu = selectCPU(d.cpu, "__pool-baseline", initialHost);
+      const baseline = availableBaseline(initialHost);
+      if (baseline) d.boot.machine = baseline.machine;
+    }
     if (!r.boot?.tpm) d.boot = { ...d.boot, tpm: defaultTPM(d.guest_os) };
     // blank.disks is only a shape template (name "system"); a fresh wizard must start from
     // autoDiskName so renameVM can carry the label with the VM name. Restored drafts keep
@@ -197,6 +229,9 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
   const selectedMedia = media.find(m => m.id === draft.media_id);
   const selectedDrivers = media.find(m => m.id === draft.drivers_media_id);
   const driversReady = driversDriveReady(selectedHost);
+  const baseline = availableBaseline(selectedHost);
+  const baselineWarning = baselineUnavailable(selectedHost);
+  const cpuIssue = cpuSelectionIssue(draft.cpu, selectedHost);
   const uefi = draft.boot.firmware === "uefi";
   const boot = effectiveBoot(draft.boot);
   const maxCPUs = Math.min(selectedHost?.inventory?.cpu_count || 64, 64);
@@ -218,9 +253,9 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
   const staleDrivers = Boolean(draft.drivers_media_id) && !hostMedia.some(m => m.id === draft.drivers_media_id);
   const mediaIssue = staleMedia ? "That ISO is no longer available on this host. Choose another or continue without install media."
     : staleDrivers ? "That driver disc is no longer available on this host. Choose another or continue without one." : "";
-  const stepIssue = ["", topoIssue, diskIssue || (staleDisks ? staleText : ""), macIssue || (staleNICs ? staleText : ""), mediaIssue, ""][step];
+  const stepIssue = ["", cpuIssue || topoIssue, diskIssue || (staleDisks ? staleText : ""), macIssue || (staleNICs ? staleText : ""), mediaIssue, ""][step];
   const hostReady = Boolean(selectedHost && readyHost(selectedHost));
-  const blocked = Boolean(vmNameIssue(draft.name)) || !hostReady || staleDisks || staleNICs || staleMedia || staleDrivers || Boolean(topoIssue || diskIssue || macIssue);
+  const blocked = Boolean(vmNameIssue(draft.name)) || !hostReady || staleDisks || staleNICs || staleMedia || staleDrivers || Boolean(cpuIssue || topoIssue || diskIssue || macIssue);
   const setTopo = (field: "sockets" | "cores" | "threads", raw: number) =>
     setDraft(d => renumber({ ...d, cpu: applyTopology(d.cpu, field, raw) }));
 
@@ -228,7 +263,11 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
     const s = storage.filter(x => storageUsable(x, id));
     const n = readyNetworks(id);
     const mediaForHost = media.filter(m => m.host_id === id && m.status === "succeeded");
+    const host = hosts.find(h => h.id === id);
+    const hostBaseline = availableBaseline(host);
+    if (!cpuChosen && hostBaseline) setCPUChosen(true);
     edit({
+      ...(!cpuChosen && baselineSupported(host) ? { cpu: selectCPU(draft.cpu, "__pool-baseline", host), ...(hostBaseline ? { boot: { ...draft.boot, machine: hostBaseline.machine } } : {}) } : {}),
       host_id: id,
       media_id: "",
       drivers_media_id: nextDriversMedia("", draft.guest_os, draft.guest_os, mediaForHost, "", driversDriveReady(hosts.find(h => h.id === id))),
@@ -255,7 +294,7 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
 
   return <section className="panel form-panel vm-wizard" aria-label="Create VM">
     <div className="section-heading"><h2 ref={heading} tabIndex={-1}>Create VM · {step + 1} of 6: {steps[step]}</h2><button disabled={busy} onClick={onClose}>Close</button></div>
-    <form onSubmit={e => { e.preventDefault(); if (step < 5) go(step + 1); else void create({ ...draft, drivers_media_id: driversReady ? draft.drivers_media_id : "", boot, pool_id: poolID }); }}>
+    <form onSubmit={e => { e.preventDefault(); if (stepIssue || busy || unavailable || (step === 5 && blocked)) return; if (step < 5) go(step + 1); else void create({ ...draft, drivers_media_id: driversReady ? draft.drivers_media_id : "", boot, pool_id: poolID }); }}>
       {step === 0 && <>
         <label>VM name<input required maxLength={200} ref={el => { el?.setCustomValidity(vmNameIssue(draft.name)); }} value={draft.name} autoFocus onChange={e => renameVM(e.target.value)} /></label>
         <label>Description<textarea rows={2} maxLength={4096} value={draft.description} onChange={e => edit({ description: e.target.value })} /><small>Optional. At most 4096 characters; stored with the VM definition on the pool master.</small></label>
@@ -280,8 +319,21 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
         </div>
         <p className="help">Leave sockets, cores and threads blank for the default: one socket with {count || "the chosen number of"} cores and one thread per core.</p>
         {topoIssue && <p className="task-error" id="vm-topology-issue">{topoIssue}</p>}
-        <label>CPU model<select value={draft.cpu.model} onChange={e => edit({ cpu: { ...draft.cpu, model: e.target.value } })}><option value="host-passthrough">Host passthrough</option><option value="host-model">Host model</option>{selectedHost?.inventory?.cpu_models?.filter(m => m !== "host-passthrough" && m !== "host-model").map(m => <option key={m} value={m}>{cpuName(m)}</option>)}</select></label>
-        <p className="help">Host passthrough gives the guest this host's exact processor. Host model presents a common processor instead. The remaining choices are models this host's QEMU reports; use a common baseline across hosts for future migration.</p>
+        <label>CPU model<select required value={fixedCPU(draft.cpu) ? "__saved-baseline" : draft.cpu.model} onChange={e => {
+          const selection = e.target.value;
+          setCPUChosen(true);
+          edit({ cpu: selectCPU(draft.cpu, selection, selectedHost), ...(selection === "__pool-baseline" && baseline ? { boot: { ...draft.boot, machine: baseline.machine } } : {}) });
+        }}>
+          {!draft.cpu.model && <option value="" disabled>Select a CPU baseline or model</option>}
+          {fixedCPU(draft.cpu) && <option value="__saved-baseline">Saved fixed CPU baseline · {draft.cpu.model}</option>}
+          {baselineSupported(selectedHost) && <option value="__pool-baseline" disabled={!baseline}>Pool CPU baseline{baseline ? ` · ${baseline.model}` : " · unavailable"}</option>}
+          <option value="host-passthrough">Host passthrough</option><option value="host-model">Host model</option>
+          {selectedHost?.inventory?.cpu_models?.filter(m => m !== "host-passthrough" && m !== "host-model").map(m => <option key={m} value={m}>{cpuName(m)}</option>)}
+          {!fixedCPU(draft.cpu) && draft.cpu.model && !["host-passthrough", "host-model", ...selectedHost?.inventory?.cpu_models || []].includes(draft.cpu.model) && <option value={draft.cpu.model} disabled>{cpuName(draft.cpu.model)} · saved model not reported by this host</option>}
+        </select></label>
+        {fixedCPU(draft.cpu) && <p className="help">Fixed features: {draft.cpu.features?.map(f => `${f.policy} ${f.name}`).join(", ") || "none added"}. Machine: {draft.boot.machine || "q35"}.</p>}
+        {baselineWarning && <p className="warning">{baselineWarning} Existing CPU selections are kept.</p>}
+        <p className="help">{cpuMigrationHelp}</p>
         <fieldset>
           <legend>Memory mode</legend>
           <label className="console-option"><input type="radio" name="vm-memory-mode" value="dedicated" checked={draft.memory.mode === "dedicated"} onChange={() => edit({ memory: { ...draft.memory, mode: "dedicated" } })} /> Dedicated</label>
@@ -391,6 +443,7 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
         <p>Follow the durable task to see validation and creation results. A creation task that does not report a result is uncertain, not failed; check Task history before retrying.</p>
         {(staleDisks || staleNICs || staleMedia) && <p className="warning">{staleText}</p>}
       </>}
+      {cpuIssue && <p className="warning" role="alert">{cpuIssue}</p>}
       {selectedHost && !readyHost(selectedHost) && <p className="warning">The selected host is unavailable or lacks managed-VM support. Reconnect or upgrade the agent before creating the VM.</p>}
       <div className="actions">{step > 0 && <button type="button" disabled={busy} onClick={() => go(step - 1)}>Back</button>}<button className="primary" disabled={busy || unavailable || Boolean(stepIssue) || (step === 5 && blocked)}>{busy ? "Submitting…" : step < 5 ? "Next" : draft.start_after_create ? "Create and start VM" : "Create stopped VM"}</button></div>
     </form>

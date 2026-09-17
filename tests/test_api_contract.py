@@ -112,7 +112,7 @@ class APIContractTests(unittest.TestCase):
                 self.assertEqual(schema['$ref'], '#/components/schemas/' + go_type)
 
         for name, body in structs.items():
-            fields = re.findall(r'\w+\s+([\w.*\[\]]+)\s+`json:"([^"]+)"`', body)
+            fields = re.findall(r'\w+\s+([\w.*\[\]]+)\s+`json:"([^"]+)"[^`]*`', body)
             schema = schemas[name]
             self.assertEqual(set(schema['properties']), {tag.split(',')[0] for _, tag in fields}, name)
             self.assertEqual(set(schema.get('x-go-emitted-fields', schema['required'])), {tag.split(',')[0] for _, tag in fields if 'omitempty' not in tag}, name)
@@ -154,7 +154,7 @@ class APIContractTests(unittest.TestCase):
         source = (ROOT / path).read_text()
         structs = dict(re.findall(r'type (\w+) struct\s*{(.*?)}', source, re.S))
         for name, schema_name in names.items():
-            fields = re.findall(r'\w+\s+([\w.*\[\]]+)\s+`json:"([^"]+)"`', structs[name])
+            fields = re.findall(r'\w+\s+([\w.*\[\]]+)\s+`json:"([^"]+)"[^`]*`', structs[name])
             schema = self.api['components']['schemas'][schema_name]
             self.assertTrue(fields, name)
             self.assertEqual(set(schema['properties']), {tag.split(',')[0] for _, tag in fields}, name)
@@ -271,6 +271,18 @@ class PeerAPIContractTests(APIContractTests):
                     path += '{}'  # Identifier segment; a leading origin variable adds nothing.
             if path.startswith('/api/v1/pool/'):
                 called.add((method.lower(), path))
+        # CPU observations share a bounded request helper and dispatch on literal
+        # operation suffixes. Recover those real routes rather than treating the
+        # whole suffix as an arbitrary resource identifier.
+        cpu_handler = re.search(r'func PoolCPUHandler\(.*?(?=\nfunc |\Z)', source, re.S)
+        if cpu_handler:
+            prefix = consts['poolCPUPath']
+            handled.discard(prefix + '{}')
+            for labels, body in re.findall(r'case ([^:]+):(.*?)(?=\n\t\tcase |\n\t\tdefault:)', cpu_handler[0], re.S):
+                if re.search(r'r.Method != http.Method(Get|Post)', body):
+                    handled.update(prefix + suffix for suffix in re.findall(r'"([a-z]+)"', labels))
+            called.update((method.lower(), prefix + suffix) for method, suffix in
+                          re.findall(r'poolCPURequest\([^\n]+http.Method(Get|Post), "([a-z]+)(?:\?|"|\+)', source))
         documented = {(method, re.sub(r'{\w+}', '{}', path)) for path, methods in self.api['paths'].items()
                       for method in methods}
         self.assertTrue(handled and called, 'No peer routes found: update the coverage adapter if dispatch changes')

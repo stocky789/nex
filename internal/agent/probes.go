@@ -40,6 +40,7 @@ type probeWorker struct {
 	probe    Probe
 	busy     bool
 	deadline time.Time
+	started  time.Time
 	cancel   context.CancelFunc
 	result   ProbeResult
 }
@@ -80,7 +81,12 @@ func (m *Monitor) Tick(ctx context.Context) {
 			continue
 		}
 		w.busy = true
-		w.deadline = now.Add(m.timeout)
+		w.started = now
+		timeout := m.timeout
+		if w.result.Name == "cpu-baseline" {
+			timeout = max(timeout, 30*time.Second)
+		}
+		w.deadline = now.Add(timeout)
 		probeCtx, cancel := context.WithDeadline(ctx, w.deadline)
 		w.cancel = cancel
 		go m.run(probeCtx, w)
@@ -100,7 +106,7 @@ func (m *Monitor) run(ctx context.Context, w *probeWorker) {
 	}
 	// Timestamp sampling start so a pre-command in-flight probe cannot
 	// satisfy a request for fresh post-command inventory.
-	w.result.ObservedAt = w.deadline.Add(-m.timeout)
+	w.result.ObservedAt = w.started
 	if err != nil {
 		w.result.Status, w.result.Message = "failed", probeReason(w.result.Name, err)
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, exec.ErrNotFound) {
@@ -694,6 +700,12 @@ func (m *Monitor) Snapshot() *protocol.Inventory {
 		case []string:
 			if r.Status == "healthy" {
 				out.CPUModels = append([]string(nil), data...)
+			}
+		case protocol.CPUBaseline:
+			if r.Status == "healthy" {
+				copy := data
+				copy.Features = append([]protocol.CPUFeature(nil), data.Features...)
+				out.CPUBaseline = &copy
 			}
 		case []guestObservation:
 			// Retained data from a failed or overdue guest probe is not attached: facts must be current.

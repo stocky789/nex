@@ -836,6 +836,20 @@ func availableCPUModel(inventory *protocol.Inventory, model string) bool {
 	return model == "host-passthrough" || model == "host-model" || slices.Contains(inventory.CPUModels, model)
 }
 
+// Explicit CPU definitions are interpreted by Core, not filtered against model-name
+// inventory: a native common baseline can include required and disabled feature overrides.
+func cpuFeaturesSupported(tx *sql.Tx, spec protocol.VMCreateSpec) error {
+	if len(spec.CPU.Features) == 0 {
+		return nil
+	}
+	var raw string
+	var caps []string
+	if err := tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", spec.HostID).Scan(&raw); err != nil || json.Unmarshal([]byte(raw), &caps) != nil || !slices.Contains(caps, protocol.CPUBaselineCapability) {
+		return fmt.Errorf("the selected host does not support fixed CPU features; upgrade Nex Core")
+	}
+	return nil
+}
+
 func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf string) {
 	var v createVMRequest
 	if !decode(w, r, &v) {
@@ -923,7 +937,11 @@ func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf
 		fail(w, 409, "requested CPU or RAM exceeds observed host capacity")
 		return
 	}
-	if !availableCPUModel(&inv, v.CPU.Model) {
+	if err := cpuFeaturesSupported(tx, v.VMCreateSpec); err != nil {
+		fail(w, 409, err.Error())
+		return
+	}
+	if len(v.CPU.Features) == 0 && !availableCPUModel(&inv, v.CPU.Model) {
 		fail(w, 409, "selected CPU model is not currently available on the host")
 		return
 	}
@@ -1205,7 +1223,11 @@ func (c *Controller) updateVM(w http.ResponseWriter, r *http.Request, user, csrf
 		fail(w, 409, "requested CPU or RAM exceeds observed host capacity")
 		return
 	}
-	if !availableCPUModel(&inv, spec.CPU.Model) {
+	if err := cpuFeaturesSupported(tx, spec); err != nil {
+		fail(w, 409, err.Error())
+		return
+	}
+	if len(spec.CPU.Features) == 0 && !availableCPUModel(&inv, spec.CPU.Model) {
 		fail(w, 409, "selected CPU model is not currently available on the host")
 		return
 	}

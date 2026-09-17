@@ -1,0 +1,40 @@
+{
+  "summary": "Reconcile the native CPU baseline implementation and remaining acceptance limits across project plans and public roadmap; bump the authoritative changelog/build version to 0.3.1 and record CPU and stacked-chart changes. No release publication is claimed.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-10-vm-creation-system.md",
+    "docs/plans/2026-09-10-vm-edit.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "docs/plans/2026-09-17-cpu-baseline.md",
+    "website/src/routes/roadmap/+page.svelte"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Status reconciliation and release notes only; existing creation/edit guides already describe the CPU implementation and remain unchanged."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "This follow-up changes documentation/version metadata only, no handlers or contracts. Plans reference the separately assessed CPU feature/report and peer API additions.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "Record fixed pool CPU definitions as implemented for pending 0.3.1 with native/simulated checks, preserving open physical-pool and migration acceptance and all milestone statuses.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new resource or durable runtime state; descriptions preserve the Core ownership recorded in the CPU change."
+  },
+  "verification": {
+    "method": "Release resolver current and v0.3.1 tag validation both return 0.3.1 0.3.1; 11 release/privacy unit tests pass. Website check has zero errors/warnings and static build passes. Local browser at 1440x1000 and 390x844 opened the multi-host details, verified CPU text and no horizontal overflow; both captures inspected. Documentation/diff gates and independent review performed before handoff. No deployed website, published package or hosted CI is claimed.",
+    "evidence": [
+      "tests/test_release_version.py",
+      "docs/qa/2026-09-17-cpu-baseline.md",
+      "docs/changes/2026-09-17-cpu-baseline.json"
+    ]
+  }
+}

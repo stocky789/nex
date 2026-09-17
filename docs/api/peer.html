@@ -20,6 +20,9 @@
 <li><a href="#peerReportStorageClusterStatus">POST /api/v1/pool/storage-cluster/status</a></li>
 <li><a href="#peerVerifyClusterFence">POST /api/v1/pool/storage-cluster/verify</a></li>
 <li><a href="#peerGetClusterFenceProofs">GET /api/v1/pool/storage-cluster/proof/{repository_id}</a></li>
+<li><a href="#peerCPUCapabilities">GET /api/v1/pool/cpu/capabilities</a></li>
+<li><a href="#peerCPUCompare">POST /api/v1/pool/cpu/compare</a></li>
+<li><a href="#peerCPUBaseline">GET /api/v1/pool/cpu/baseline</a></li>
 </ul></nav>
 <section id="peerJoin"><h2>POST <code>/api/v1/pool/join</code></h2>
 <p>Redeem a pool join offer</p><p>Served by the pool master; the only peer route without a client certificate. Authority is the single-use offer created by the master Core local API: it binds pool, master host, member host ID and CSR SHA-256, and expires after 15 minutes. The master signs the CSR with the pool CA, appends the member as ready, increments the membership generation and persists before replying. A retry of the same offer, host ID and CSR after a lost response returns the same certificate and current membership; a different key or an already-admitted host is refused. The member pins the pool CA and master host ID from the offer, verifies the returned certificate against its pending key, then persists and completes a Core-owned rehome. Body at most 1 MiB.</p>
@@ -1134,6 +1137,264 @@
         &quot;minLength&quot;: 1
       },
       &quot;description&quot;: &quot;Repository ID; must not contain / or \\.&quot;
+    }
+  ]
+}</pre></details></section>
+<section id="peerCPUCapabilities"><h2>GET <code>/api/v1/pool/cpu/capabilities</code></h2>
+<p>Observe a member guest CPU</p><p>Read-only native CPU discovery, bounded to 30 seconds and safe to retry; no durable operation or VM mutation. Pool certificate identity and current membership authorize the caller. Generation must match before and after native work. Baseline gathers every non-ejected ready member (maximum 64 membership records), rejects missing endpoints/unreachable members/mixed vendors, computes a libvirt migratable baseline and compares it on every member. It certifies neither future membership nor live migration. Older peers without these routes make baseline discovery unavailable; upgrade all Core hosts.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerCPUCapabilities&quot;,
+  &quot;summary&quot;: &quot;Observe a member guest CPU&quot;,
+  &quot;description&quot;: &quot;Read-only native CPU discovery, bounded to 30 seconds and safe to retry; no durable operation or VM mutation. Pool certificate identity and current membership authorize the caller. Generation must match before and after native work. Baseline gathers every non-ejected ready member (maximum 64 membership records), rejects missing endpoints/unreachable members/mixed vendors, computes a libvirt migratable baseline and compares it on every member. It certifies neither future membership nor live migration. Older peers without these routes make baseline discovery unavailable; upgrade all Core hosts.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;development&quot;,
+  &quot;x-audience&quot;: &quot;Core peer&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Verified observation; compare echoes the exact input definition.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolCPUObservation&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid machine/generation or malformed comparison JSON.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Peer certificate or membership authority rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Incorrect method; Allow identifies the accepted method.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Membership unknown/changed, member unavailable, or native CPU compatibility could not be verified.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;machine&quot;,
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;enum&quot;: [
+          &quot;q35&quot;,
+          &quot;pc&quot;
+        ]
+      }
+    },
+    {
+      &quot;name&quot;: &quot;generation&quot;,
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;integer&quot;,
+        &quot;minimum&quot;: 0
+      }
+    }
+  ]
+}</pre></details></section>
+<section id="peerCPUCompare"><h2>POST <code>/api/v1/pool/cpu/compare</code></h2>
+<p>Compare an explicit CPU on a member</p><p>Read-only native CPU discovery, bounded to 30 seconds and safe to retry; no durable operation or VM mutation. Pool certificate identity and current membership authorize the caller. Generation must match before and after native work. Baseline gathers every non-ejected ready member (maximum 64 membership records), rejects missing endpoints/unreachable members/mixed vendors, computes a libvirt migratable baseline and compares it on every member. It certifies neither future membership nor live migration. Older peers without these routes make baseline discovery unavailable; upgrade all Core hosts.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerCPUCompare&quot;,
+  &quot;summary&quot;: &quot;Compare an explicit CPU on a member&quot;,
+  &quot;description&quot;: &quot;Read-only native CPU discovery, bounded to 30 seconds and safe to retry; no durable operation or VM mutation. Pool certificate identity and current membership authorize the caller. Generation must match before and after native work. Baseline gathers every non-ejected ready member (maximum 64 membership records), rejects missing endpoints/unreachable members/mixed vendors, computes a libvirt migratable baseline and compares it on every member. It certifies neither future membership nor live migration. Older peers without these routes make baseline discovery unavailable; upgrade all Core hosts.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;development&quot;,
+  &quot;x-audience&quot;: &quot;Core peer&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Verified observation; compare echoes the exact input definition.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolCPUComparison&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid machine/generation or malformed comparison JSON.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Peer certificate or membership authority rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Incorrect method; Allow identifies the accepted method.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Membership unknown/changed, member unavailable, or native CPU compatibility could not be verified.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;description&quot;: &quot;At most 128 KiB JSON; unknown fields and trailing JSON are rejected. At most 512 unique feature names with require/disable policies.&quot;,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolCPUComparison&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="peerCPUBaseline"><h2>GET <code>/api/v1/pool/cpu/baseline</code></h2>
+<p>Observe the current pool CPU baseline</p><p>Read-only native CPU discovery, bounded to 30 seconds and safe to retry; no durable operation or VM mutation. Pool certificate identity and current membership authorize the caller. Generation must match before and after native work. Baseline gathers every non-ejected ready member (maximum 64 membership records), rejects missing endpoints/unreachable members/mixed vendors, computes a libvirt migratable baseline and compares it on every member. It certifies neither future membership nor live migration. Older peers without these routes make baseline discovery unavailable; upgrade all Core hosts.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerCPUBaseline&quot;,
+  &quot;summary&quot;: &quot;Observe the current pool CPU baseline&quot;,
+  &quot;description&quot;: &quot;Read-only native CPU discovery, bounded to 30 seconds and safe to retry; no durable operation or VM mutation. Pool certificate identity and current membership authorize the caller. Generation must match before and after native work. Baseline gathers every non-ejected ready member (maximum 64 membership records), rejects missing endpoints/unreachable members/mixed vendors, computes a libvirt migratable baseline and compares it on every member. It certifies neither future membership nor live migration. Older peers without these routes make baseline discovery unavailable; upgrade all Core hosts.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMemberCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;development&quot;,
+  &quot;x-audience&quot;: &quot;Core peer&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Verified observation; compare echoes the exact input definition.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/CPUBaseline&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid machine/generation or malformed comparison JSON.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Peer certificate or membership authority rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Incorrect method; Allow identifies the accepted method.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Membership unknown/changed, member unavailable, or native CPU compatibility could not be verified.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;machine&quot;,
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;enum&quot;: [
+          &quot;q35&quot;,
+          &quot;pc&quot;
+        ]
+      }
+    },
+    {
+      &quot;name&quot;: &quot;generation&quot;,
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;integer&quot;,
+        &quot;minimum&quot;: 0
+      }
     }
   ]
 }</pre></details></section>
@@ -2624,7 +2885,18 @@
     &quot;model&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;pattern&quot;: &quot;^(host-passthrough|host-model|[A-Za-z0-9][A-Za-z0-9._-]{0,63})$&quot;,
-      &quot;description&quot;: &quot;host-passthrough (the default) gives the guest the host CPU; host-model describes it for later migration. Any other value must appear in the assigned host&#x27;s current Inventory.cpu_models (usable named models only) and Core refuses it otherwise; named values use libvirt custom/exact mode with partial feature checking and fallback forbidden.&quot;
+      &quot;description&quot;: &quot;Host modes follow the current host; named models come from native host capabilities. New wizard drafts choose the current pool CPU baseline when available, storing its exact model/features. Explicit feature-bearing definitions are compared against the actual VM machine and runtime. Baseline compatibility covers current members only, not future hosts or live migration. CPU choices are independent of guest OS.&quot;
+    },
+    &quot;features&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/CPUFeature&quot;
+      },
+      &quot;maxItems&quot;: 512,
+      &quot;description&quot;: &quot;Optional fixed native CPU feature list. Omitted or empty retains model-only behavior. Nonempty requires a named model (not host modes or max) and vm-cpu-baseline-v1. Duplicate feature names are rejected.&quot;
     }
   },
   &quot;required&quot;: [
@@ -2919,5 +3191,142 @@
     &quot;mount_path&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.ZFSStorageSource&quot;
+}</pre></details>
+<details id="CPUFeature"><summary>CPUFeature</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$&quot;
+    },
+    &quot;policy&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;require&quot;,
+        &quot;disable&quot;
+      ]
+    }
+  },
+  &quot;required&quot;: [
+    &quot;name&quot;,
+    &quot;policy&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.CPUFeature&quot;,
+  &quot;description&quot;: &quot;Native CPU feature policy. Names must be unique within one CPU definition; no guest-OS feature policy is inferred.&quot;
+}</pre></details>
+<details id="CPUBaseline"><summary>CPUBaseline</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;model&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;features&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/CPUFeature&quot;
+      },
+      &quot;maxItems&quot;: 512,
+      &quot;description&quot;: &quot;Optional fixed native CPU feature list. Omitted or empty retains model-only behavior. Nonempty requires a named model (not host modes or max) and vm-cpu-baseline-v1. Duplicate feature names are rejected.&quot;
+    },
+    &quot;machine&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;member_count&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;maximum&quot;: 64
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;x-max-utf8-bytes&quot;: 4096
+    }
+  },
+  &quot;required&quot;: [
+    &quot;model&quot;,
+    &quot;features&quot;,
+    &quot;machine&quot;,
+    &quot;generation&quot;,
+    &quot;member_count&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.CPUBaseline&quot;,
+  &quot;description&quot;: &quot;Disposable Core-master observation for every current non-ejected ready pool member, including a single-host pool. Native baseline and exact destination comparisons must succeed under unchanged membership. Errors or absent observations are unavailable, never an inferred smaller pool. Saved VM definitions are independent; future members and live migration are not certified.&quot;
+}</pre></details>
+<details id="PoolCPUObservation"><summary>PoolCPUObservation</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;machine&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;q35&quot;,
+        &quot;pc&quot;
+      ]
+    },
+    &quot;cpu&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 65536,
+      &quot;description&quot;: &quot;Native guest CPU XML derived from libvirt host-model capabilities, including feature overrides.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;generation&quot;,
+    &quot;machine&quot;,
+    &quot;cpu&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;agent.poolCPUObservation&quot;
+}</pre></details>
+<details id="PoolCPUComparison"><summary>PoolCPUComparison</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;properties&quot;: {
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;machine&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;q35&quot;,
+        &quot;pc&quot;
+      ]
+    },
+    &quot;model&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$&quot;
+    },
+    &quot;features&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/CPUFeature&quot;
+      },
+      &quot;maxItems&quot;: 512,
+      &quot;description&quot;: &quot;Optional fixed native CPU feature list. Omitted or empty retains model-only behavior. Nonempty requires a named model (not host modes or max) and vm-cpu-baseline-v1. Duplicate feature names are rejected.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;generation&quot;,
+    &quot;machine&quot;,
+    &quot;model&quot;,
+    &quot;features&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;agent.poolCPUComparison&quot;
 }</pre></details>
 </section></main></html>

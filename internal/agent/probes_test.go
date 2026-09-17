@@ -376,3 +376,32 @@ func TestSnapshotAttachesGuestObservationsToRunningVMsOnly(t *testing.T) {
 		t.Fatalf("stale guest data attached: %+v", vms)
 	}
 }
+
+func TestCPUBaselineProbeDeadlineAndFailedObservation(t *testing.T) {
+	var calls atomic.Int32
+	m := NewMonitor(time.Millisecond, map[string]Probe{"cpu-baseline": func(ctx context.Context) (any, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) < 29*time.Second {
+			return nil, errors.New("CPU discovery received ordinary short probe deadline")
+		}
+		if calls.Add(1) > 1 {
+			return nil, errors.New("discovery failed")
+		}
+		return protocol.CPUBaseline{Model: "FutureCPU-v1", Features: []protocol.CPUFeature{{Name: "feature", Policy: "require"}}}, nil
+	}})
+	m.Tick(context.Background())
+	waitProbe(t, m, "cpu-baseline", "healthy")
+	snapshot := m.Snapshot()
+	if snapshot.CPUBaseline == nil {
+		t.Fatal("baseline missing")
+	}
+	snapshot.CPUBaseline.Features[0].Name = "changed"
+	if m.Snapshot().CPUBaseline.Features[0].Name != "feature" {
+		t.Fatal("snapshot aliases cached feature list")
+	}
+	m.Tick(context.Background())
+	waitProbe(t, m, "cpu-baseline", "failed")
+	if m.Snapshot().CPUBaseline != nil {
+		t.Fatal("failed discovery retained successful baseline")
+	}
+}

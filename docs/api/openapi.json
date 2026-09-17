@@ -1857,7 +1857,7 @@
       "post": {
         "operationId": "createVM",
         "summary": "Create a stopped guest VM",
-        "description": "Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Shared bounds, enforced identically on Controller and Core: 1–8 disks of 1–2048 GiB on virtio, sata or scsi with names unique in the VM; at most 8 NICs on virtio or e1000e with unicast lower-case manual MACs; at least 1 vCPU with sockets × cores × threads equal to the count when a topology is given; at least 512 MiB in memory mode dedicated or maximum; uefi or bios; boot orders unique and positive across disks and install media (gaps are allowed, since ejecting media leaves one), with at least one boot device. Controller additionally caps CPU at 64 and memory at 262144 MiB, assigns the UUID and refuses capacity above the host's observed CPU or memory. The host decides everything its own record answers: VM name and MAC uniqueness against its managed journal and libvirt domains, and dedicated-memory admission against total host memory, are reported as a failed vm-create result with the reason (visible in Task history), not as an HTTP refusal. Storage, network and ISO must have succeeded on this host and pool. The install ISO may be on any verified storage on that host; it need not share a repository with the VM disks. Core journals effects and reconciles per-disk ownership before replay; needs_attention preserves uncertain resources for manual recovery. start_after_create is honoured by the host inside the same creation: once the definition is verified the creation has succeeded, and Core starts the guest once, recording the outcome in the journal entry's start field so a retry never starts it twice. A failed automatic start keeps the VM as a normal stopped managed VM and is reported as a separate failed vm-power outcome (<operation-id>:start, 'VM created but not started: <reason>') in Task history; start it from the Power controls. autostart is a libvirt property set while the stopped VM is defined. No console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64 and machine-type libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint. A non-empty drivers_media_id requires the host to report vm-media-drivers-drive-v1 (409 \"the selected host agent does not support a driver disc drive; upgrade Nex Core\") and a succeeded ISO import on the same host and pool (404 \"the driver disc ISO is not registered and verified on the selected host and pool\"); both are checked after the replay check.",
+        "description": "Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Shared bounds, enforced identically on Controller and Core: 1\u20138 disks of 1\u20132048 GiB on virtio, sata or scsi with names unique in the VM; at most 8 NICs on virtio or e1000e with unicast lower-case manual MACs; at least 1 vCPU with sockets \u00d7 cores \u00d7 threads equal to the count when a topology is given; at least 512 MiB in memory mode dedicated or maximum; uefi or bios; boot orders unique and positive across disks and install media (gaps are allowed, since ejecting media leaves one), with at least one boot device. Controller additionally caps CPU at 64 and memory at 262144 MiB, assigns the UUID and refuses capacity above the host's observed CPU or memory. The host decides everything its own record answers: VM name and MAC uniqueness against its managed journal and libvirt domains, and dedicated-memory admission against total host memory, are reported as a failed vm-create result with the reason (visible in Task history), not as an HTTP refusal. Storage, network and ISO must have succeeded on this host and pool. The install ISO may be on any verified storage on that host; it need not share a repository with the VM disks. Core journals effects and reconciles per-disk ownership before replay; needs_attention preserves uncertain resources for manual recovery. start_after_create is honoured by the host inside the same creation: once the definition is verified the creation has succeeded, and Core starts the guest once, recording the outcome in the journal entry's start field so a retry never starts it twice. A failed automatic start keeps the VM as a normal stopped managed VM and is reported as a separate failed vm-power outcome (<operation-id>:start, 'VM created but not started: <reason>') in Task history; start it from the Power controls. autostart is a libvirt property set while the stopped VM is defined. No console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64 and machine-type libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint. A non-empty drivers_media_id requires the host to report vm-media-drivers-drive-v1 (409 \"the selected host agent does not support a driver disc drive; upgrade Nex Core\") and a succeeded ISO import on the same host and pool (404 \"the driver disc ISO is not registered and verified on the selected host and pool\"); both are checked after the replay check. Nonempty cpu.features requires vm-cpu-baseline-v1 after idempotent replay (409 on older Core). Core validates the explicit named CPU definition with native hypervisor-cpu-compare against the actual machine before creation/stopped edits/Core-mediated starts. Existing model-only definitions retain prior semantics; no guest-OS-specific CPU filtering.",
         "security": [
           {
             "AdminSession": []
@@ -4506,7 +4506,7 @@
       "put": {
         "operationId": "updateVM",
         "summary": "Replace a VM's definition on its assigned host",
-        "description": "Implemented in development product 0.1.0, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different body under the same id is 409. The body is the complete desired definition (the same shape as creation); Controller validates its shape and references like creation, refuses immutable changes (an existing disk's storage, size or provisioning), and, when the VM is observed running, changes that need it stopped (name, CPU, memory, firmware, machine type, any boot order, an existing disk's bus, an existing interface's network, model, MAC or MTU, or adding a SATA disk); interfaces are matched by effective MAC: when the request names any current interface by its effective MAC (as the VM list reports it, and as the bundled editor sends every existing interface), every interface with an empty MAC is new; when it names none, an empty MAC is matched by position and the request is refused with 400 if it removes, reorders or changes an interface at an existing index, while an unchanged interface keeps the current address at its position. Clients that send any existing interface's MAC must send all of them, or an omitted one is replaced by a new interface. Controller freezes every automatic MAC into the definition before its stop-first check, drawing new ones from the VM's derived range at the first index above the highest one the current definition uses that no requested or current interface holds, or the lowest free index when none above is free, so a new interface never takes the address of one removed in the same edit, nor, unless the highest-index interface was removed or index 255 is in use, of one removed in an earlier edit; then it queues a vm-update command at revision current + 1 for the host's next report. Name and MAC uniqueness against other VMs and dedicated-memory admission are checked by the host against its journal and libvirt, as for creation. Core applies live what a running guest can take (adding or removing VirtIO/SCSI disks and interfaces, inserting, swapping or ejecting the ISO, description, guest OS hint and autostart) and redefines a shut-off guest from the regenerated XML; removed disks are detached and their files retained, never deleted. While validating a running guest's edit, before allocating any disk or changing any device, Core compares the live and persistent domains and reports the vm-update operation failed, changing nothing, with \"network interface MAC <mac> is still attached to the running VM; wait for the guest to release it or stop the VM, then save again\" when an added interface's MAC is still on a live interface that the guest has not released, changing nothing. The host reports the new definition as current and Controller refreshes its mirror from that report; poll operations for the result. One vm-update, vm-power or vm-media request per VM may be in flight.",
+        "description": "Implemented in development product 0.1.0, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different body under the same id is 409. The body is the complete desired definition (the same shape as creation); Controller validates its shape and references like creation, refuses immutable changes (an existing disk's storage, size or provisioning), and, when the VM is observed running, changes that need it stopped (name, CPU, memory, firmware, machine type, any boot order, an existing disk's bus, an existing interface's network, model, MAC or MTU, or adding a SATA disk); interfaces are matched by effective MAC: when the request names any current interface by its effective MAC (as the VM list reports it, and as the bundled editor sends every existing interface), every interface with an empty MAC is new; when it names none, an empty MAC is matched by position and the request is refused with 400 if it removes, reorders or changes an interface at an existing index, while an unchanged interface keeps the current address at its position. Clients that send any existing interface's MAC must send all of them, or an omitted one is replaced by a new interface. Controller freezes every automatic MAC into the definition before its stop-first check, drawing new ones from the VM's derived range at the first index above the highest one the current definition uses that no requested or current interface holds, or the lowest free index when none above is free, so a new interface never takes the address of one removed in the same edit, nor, unless the highest-index interface was removed or index 255 is in use, of one removed in an earlier edit; then it queues a vm-update command at revision current + 1 for the host's next report. Name and MAC uniqueness against other VMs and dedicated-memory admission are checked by the host against its journal and libvirt, as for creation. Core applies live what a running guest can take (adding or removing VirtIO/SCSI disks and interfaces, inserting, swapping or ejecting the ISO, description, guest OS hint and autostart) and redefines a shut-off guest from the regenerated XML; removed disks are detached and their files retained, never deleted. While validating a running guest's edit, before allocating any disk or changing any device, Core compares the live and persistent domains and reports the vm-update operation failed, changing nothing, with \"network interface MAC <mac> is still attached to the running VM; wait for the guest to release it or stop the VM, then save again\" when an added interface's MAC is still on a live interface that the guest has not released, changing nothing. The host reports the new definition as current and Controller refreshes its mirror from that report; poll operations for the result. One vm-update, vm-power or vm-media request per VM may be in flight. Nonempty cpu.features requires vm-cpu-baseline-v1 after idempotent replay (409 on older Core). Core validates the explicit named CPU definition with native hypervisor-cpu-compare against the actual machine before creation/stopped edits/Core-mediated starts. Existing model-only definitions retain prior semantics; no guest-OS-specific CPU filtering.",
         "tags": [
           "Client → Controller"
         ],
@@ -5795,6 +5795,17 @@
             },
             "maxItems": 256,
             "description": "At most 256 checks with unique names within a report."
+          },
+          "cpu_baseline": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CPUBaseline"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional Core-master q35 CPU baseline observation. Missing or error means unavailable; never changes saved VM definitions."
           }
         },
         "required": [
@@ -7012,7 +7023,7 @@
               "x-max-utf8-bytes": 100
             },
             "maxItems": 32,
-            "description": "Advertised on every report. managed-vm-v1 enables managed command delivery. storage-cluster-session-monitor-v1 offers the additive clustered session-monitor projection; it must be acknowledged through storage_clusters_support before Core sends that projection. Omission or null disables managed delivery for this report; a newer sequence also replaces stored capabilities."
+            "description": "Advertised on every report. managed-vm-v1 enables managed command delivery. storage-cluster-session-monitor-v1 offers the additive clustered session-monitor projection; it must be acknowledged through storage_clusters_support before Core sends that projection. Omission or null disables managed delivery for this report; a newer sequence also replaces stored capabilities. vm-cpu-baseline-v1 advertises generic fixed CPU feature support and native pool baseline discovery; upgrade Controller before Core for additive fields."
           },
           "storage_discoveries": {
             "type": [
@@ -9693,7 +9704,18 @@
           "model": {
             "type": "string",
             "pattern": "^(host-passthrough|host-model|[A-Za-z0-9][A-Za-z0-9._-]{0,63})$",
-            "description": "host-passthrough (the default) gives the guest the host CPU; host-model describes it for later migration. Any other value must appear in the assigned host's current Inventory.cpu_models (usable named models only) and Core refuses it otherwise; named values use libvirt custom/exact mode with partial feature checking and fallback forbidden."
+            "description": "Host modes follow the current host; named models come from native host capabilities. New wizard drafts choose the current pool CPU baseline when available, storing its exact model/features. Explicit feature-bearing definitions are compared against the actual VM machine and runtime. Baseline compatibility covers current members only, not future hosts or live migration. CPU choices are independent of guest OS."
+          },
+          "features": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/CPUFeature"
+            },
+            "maxItems": 512,
+            "description": "Optional fixed native CPU feature list. Omitted or empty retains model-only behavior. Nonempty requires a named model (not host modes or max) and vm-cpu-baseline-v1. Duplicate feature names are rejected."
           }
         },
         "required": [
@@ -11227,6 +11249,77 @@
         ],
         "x-go-type": "protocol.StatsHistory",
         "description": "Usage history kept on the host in fixed-size round-robin files under the agent state directory. The Controller keeps no copy."
+      },
+      "CPUFeature": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          },
+          "policy": {
+            "type": "string",
+            "enum": [
+              "require",
+              "disable"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "policy"
+        ],
+        "x-go-type": "protocol.CPUFeature",
+        "description": "Native CPU feature policy. Names must be unique within one CPU definition; no guest-OS feature policy is inferred."
+      },
+      "CPUBaseline": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "features": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/CPUFeature"
+            },
+            "maxItems": 512,
+            "description": "Optional fixed native CPU feature list. Omitted or empty retains model-only behavior. Nonempty requires a named model (not host modes or max) and vm-cpu-baseline-v1. Duplicate feature names are rejected."
+          },
+          "machine": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "member_count": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 64
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": "string",
+            "x-max-utf8-bytes": 4096
+          }
+        },
+        "required": [
+          "model",
+          "features",
+          "machine",
+          "generation",
+          "member_count",
+          "observed_at"
+        ],
+        "x-go-type": "protocol.CPUBaseline",
+        "description": "Disposable Core-master observation for every current non-ejected ready pool member, including a single-host pool. Native baseline and exact destination comparisons must succeed under unchanged membership. Errors or absent observations are unavailable, never an inferred smaller pool. Saved VM definitions are independent; future members and live migration are not certified."
       }
     }
   },

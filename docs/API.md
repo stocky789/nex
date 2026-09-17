@@ -461,6 +461,55 @@ connection; other inventory queries retain read-only connections. The command on
 observes capabilities. Failures remain failed checks with unavailable model inventory;
 Core does not substitute guessed models.
 
+### Pool CPU baseline and explicit VM features
+
+**API impact: changed Controller/Core contract and new Core peer contract.**
+`vm-cpu-baseline-v1` advertises OS-independent native CPU baseline support. Guest OS values
+and semantics are unchanged; there is no Windows-specific CPU policy or model filter.
+
+Optional `VMCPU.features` carries at most 512 distinct `{name, policy}` entries. Names use
+the CPU-model identifier syntax; policy is `require` or `disable`. Nonempty features require
+a named model, excluding host modes and `max`. The selected model and features are fixed in
+the existing Core managed journal and master `pool-vms` record `Spec`, and return through
+inventory/adoption after Controller replacement. Omitting features preserves the previous
+model-only semantics; existing definitions are never rewritten. A feature-bearing create or
+update on older Core returns **409** with upgrade guidance after idempotent request replay.
+Upgrade Controller first, then every Core in the pool.
+
+Optional `Inventory.cpu_baseline` contains `model`, `features`, `machine`, membership
+`generation`, `member_count`, `observed_at`, and optional `error`. This is a disposable
+Core-master observation, not Controller-owned policy. The current inventory baseline uses
+q35. Missing/error observations remain unavailable; an unreachable or non-ready member is
+not silently omitted. New wizard drafts choose the fixed pool baseline when available.
+When an updated Core cannot establish it, the operator must explicitly select a model.
+All host-usable named models remain available manually, including `qemu64`.
+
+The master collects native guest CPU definitions from every non-ejected pool member (at
+most 64 membership records), refuses unknown endpoints, unavailable members or mixed CPU
+vendors, asks libvirt for `hypervisor-cpu-baseline --features --migratable`, and compares the
+exact result on every included member. Membership must remain unchanged. Single-host pools
+use the same flow. Core compares explicit VM CPU definitions against the actual VM machine
+before creation, stopped edits and Core-mediated starts. Native libvirt autostart bypasses
+that preflight. CPU changes require a stopped VM. This does not certify guest OS requirements,
+future pool members, or live migration; runtime, storage and networking compatibility still
+matter, and migration is not implemented by this slice.
+
+Core peer endpoints use the existing pool certificate identity and membership checks:
+
+| Endpoint | Caller and result |
+| --- | --- |
+| `GET /api/v1/pool/cpu/capabilities?machine=q35&generation=N` | Master asks a member for `{generation,machine,cpu}`; `cpu` is native guest CPU XML. |
+| `POST /api/v1/pool/cpu/compare` | Master sends `{generation,machine,model,features}` to a member; success echoes the exact verified definition. |
+| `GET /api/v1/pool/cpu/baseline?machine=q35&generation=N` | Admitted member asks its master for the verified baseline observation. |
+
+Machine must be `q35` or `pc`; generation must match current membership. Requests are
+bounded to 30 seconds; comparison JSON is at most 128 KiB and rejects unknown fields or
+trailing JSON. Read-only operations are safe to retry, with no durable job or VM mutation.
+Responses are **200** JSON, **400** malformed input, **401** rejected peer, **405** wrong
+method, or **409** changed/unknown membership or an unverifiable CPU. A failed observation
+never authorizes a new baseline. See the [plan](plans/2026-09-17-cpu-baseline.md) and
+[verification evidence](qa/2026-09-17-cpu-baseline.md).
+
 ### Audit resource IDs for VM requests (`GET /api/v1/audit`)
 
 API impact: **changed contract** — the meaning of `resource_id` in `GET /api/v1/audit` for the
@@ -1185,14 +1234,16 @@ MAC uniqueness and host capacity stay with their owners.
 - **`cpu`.** `count` at least 1; Controller caps it at 64 and at host capacity. `sockets`,
   `cores` and `threads` all `0` select the documented default topology — one socket, `count`
   cores, one thread — instead of libvirt's own default; otherwise each must be at least 1 and
-  sockets × cores × threads must equal `count`. `model` is `host-passthrough` (the default),
+  sockets × cores × threads must equal `count`. For model-only requests, `model` is `host-passthrough`,
   `host-model`, or a model from the assigned host's read-only `Inventory.cpu_models` list. Core
   obtains that list from libvirt domain capabilities (`usable=yes` named models on the
-  host's default q35 machine), rechecks the selected named model immediately before
+  host's default q35 machine), rechecks a model-only selection immediately before
   defining the VM, and writes it as an exact custom model with partial feature checking
   and fallback forbidden (not `check=full`, which refuses usable models under KVM). `max` uses libvirt's
-  maximum CPU mode. Host passthrough is tied to that host's CPU; use a common baseline
-  reported by every destination before planning a migration.
+  maximum CPU mode. Host modes follow the host. New drafts use the reported pool baseline
+  when available, freezing its model and optional `features` in the VM definition. Native
+  feature comparison, rather than model-name membership alone, validates explicit baselines.
+  Current-member compatibility is not a future-host or migration guarantee.
 - **`memory`.** `size_mib` at least 512, capped by Controller at 262144, is the ceiling in both
   modes. `dedicated` reserves it: `<memory>`/`<currentMemory>` at the ceiling, no balloon device,
   and `<memoryBacking>` with `<allocation mode="immediate"/>`, `<locked/>`, `<nosharepages/>`.

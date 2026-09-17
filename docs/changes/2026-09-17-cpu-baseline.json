@@ -1,0 +1,76 @@
+{
+  "summary": "Core dynamically discovers a fixed native pool CPU baseline and preserves explicit feature policies per VM; no OS-specific requirements or hardcoded CPU model catalogue. API impact: changed contract, with new authenticated Core peer routes.",
+  "paths": [
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/api/index.html",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/plans/2026-09-17-cpu-baseline.md",
+    "docs/qa/2026-09-17-cpu-baseline.md",
+    "internal/agent/peer.go",
+    "internal/agent/pool_cpu.go",
+    "internal/agent/pool_cpu_test.go",
+    "internal/agent/probes.go",
+    "internal/agent/probes_test.go",
+    "internal/agent/run.go",
+    "internal/agent/state.go",
+    "internal/controller/cpu_baseline_test.go",
+    "internal/controller/managed.go",
+    "internal/controller/monitor.go",
+    "internal/protocol/managed.go",
+    "internal/protocol/managed_test.go",
+    "internal/protocol/protocol.go",
+    "internal/vmhost/cpu_baseline.go",
+    "internal/vmhost/cpu_baseline_test.go",
+    "internal/vmhost/managed.go",
+    "tests/integration/managed_vm_browser.py",
+    "tests/test_api_contract.py",
+    "web/src/managed.tsx",
+    "web/src/vm-create.test.mjs",
+    "web/src/vm-create.tsx",
+    "web/src/vm-edit.test.mjs",
+    "web/src/vm-edit.tsx"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Creation defaults to the reported fixed baseline; manual models and existing saved definitions remain available, with explicit unavailable-state handling.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/edit-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Add optional VMCPU.features, Inventory.cpu_baseline, vm-cpu-baseline-v1 and authenticated Core peer capabilities/compare/baseline operations. Controller relays definitions; Core computes and validates them.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No published milestone changes or migration implementation; scoped implementation decisions are recorded in the CPU plan.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "CPU model and explicit feature policies belong to the VM and never depend on Controller-only policy. Discovery cache is transient.",
+    "record": "Existing Core managed journal command VM specifications and pool master pool-vms Spec records persist VMCPU.features with its named model. A fresh Controller recovers the unchanged definitions from host managed inventory.",
+    "recovery": "A fresh Controller adopts the existing managed VM definitions through host inventory; no CPU recomputation changes saved definitions."
+  },
+  "verification": {
+    "method": "Focused Go CPU checks, real mTLS peer tests with substituted CPU commands, UI unit/typecheck/build and full simulated browser walkthrough passed. Native Debian13 libvirt11.3/QEMU10 accepted fixed baselines and refused an unsupported instruction. API contract and privacy checks passed. The full Go race suite passed; documentation, generated reference freshness and diff checks passed. Scope and remaining hardware/migration limits are recorded in QA.",
+    "evidence": [
+      "docs/qa/2026-09-17-cpu-baseline.md",
+      "internal/agent/pool_cpu_test.go",
+      "internal/vmhost/cpu_baseline_test.go",
+      "internal/controller/cpu_baseline_test.go",
+      "tests/integration/managed_vm_browser.py"
+    ]
+  }
+}

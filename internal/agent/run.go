@@ -249,13 +249,14 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	// DriversDriveCapability is deliberately absent from the legacy v1 list below: a host
 	// defines the second CD drive either way, but the capability is the Controller's signal
 	// that it may send drive="drivers", and a strict v1 decoder must not be handed v2 names.
-	capabilities := []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.DriversDriveCapability, protocol.UsageHistoryCapability}
+	capabilities := []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.DriversDriveCapability, protocol.UsageHistoryCapability, protocol.CPUBaselineCapability}
 	if s.State.StorageProtocolLegacy {
 		version = protocol.LegacyVersion
 		capabilities = []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.MediaCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.UsageHistoryCapability}
 		// A strict v1 decoder must not see v2 managed storage/receipt fields.
 		legacy := *inv
 		legacy.Managed = nil
+		legacy.CPUBaseline = nil
 		inv = &legacy
 	}
 	if s.State.StorageProtocolReady {
@@ -581,7 +582,9 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	}
 	cfg.history = newUsageHistory(filepath.Join(s.dir, "usage"), s.State.HostID)
 	sampler := newUsageSampler(cfg.history)
-	m := NewMonitor(cfg.ProbeTimeout, NativeProbes(version.Version, sampler))
+	probes := NativeProbes(version.Version, sampler)
+	probes["cpu-baseline"] = PoolCPUProbe(s)
+	m := NewMonitor(cfg.ProbeTimeout, probes)
 	storage := vmhost.NewStorageMonitor(cfg.ProbeTimeout)
 	var poolReconcileRunning atomic.Bool
 	var clusterReconcileRunning atomic.Bool

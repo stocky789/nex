@@ -127,17 +127,30 @@ func (n NIC) Ports(all []NIC) []string {
 	return ports
 }
 
+// CPUBaseline is a Core-master observation of a common CPU definition for current members.
+// A VM stores its selected model/features independently; refresh never changes a VM.
+type CPUBaseline struct {
+	Model       string       `json:"model"`
+	Features    []CPUFeature `json:"features"`
+	Machine     string       `json:"machine"`
+	Generation  uint64       `json:"generation"`
+	MemberCount int          `json:"member_count"`
+	ObservedAt  time.Time    `json:"observed_at"`
+	Error       string       `json:"error,omitempty"`
+}
+
 type Inventory struct {
-	ObservedAt     time.Time `json:"observed_at"`
-	Hostname       string    `json:"hostname"`
-	CPUModel       string    `json:"cpu_model"`
-	CPUModels      []string  `json:"cpu_models"`
-	CPUCount       int       `json:"cpu_count"`
-	MemoryBytes    uint64    `json:"memory_bytes"`
-	Virtualization []string  `json:"virtualization"`
-	OSVersion      string    `json:"os_version"`
-	AgentVersion   string    `json:"agent_version"`
-	NICs           []NIC     `json:"nics"`
+	ObservedAt     time.Time    `json:"observed_at"`
+	Hostname       string       `json:"hostname"`
+	CPUModel       string       `json:"cpu_model"`
+	CPUModels      []string     `json:"cpu_models"`
+	CPUBaseline    *CPUBaseline `json:"cpu_baseline,omitempty"`
+	CPUCount       int          `json:"cpu_count"`
+	MemoryBytes    uint64       `json:"memory_bytes"`
+	Virtualization []string     `json:"virtualization"`
+	OSVersion      string       `json:"os_version"`
+	AgentVersion   string       `json:"agent_version"`
+	NICs           []NIC        `json:"nics"`
 	// Managed is the pool-scoped configuration this host has durably applied, reported from
 	// the Core journal. Controller mirrors it: any entry it does not hold is adopted with the
 	// same identity and name, so a replaced Controller recovers a pool from its master.

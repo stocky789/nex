@@ -160,13 +160,18 @@ Use an explicitly selected disposable lab host.
         equal the vCPU count, and the page states the mismatch in place until it does. Clearing
         any field clears all three. Set a topology only when guest licensing or NUMA-aware
         software needs a particular shape.
-      - **CPU model** — **Host passthrough** (the default) gives the guest this host's exact
-        processor and the best instruction-set coverage. **Host model** presents a common
-        processor instead. The remaining choices are the named QEMU CPU models that Nex Core
-        reports as usable on the selected host (models that cannot run here are omitted).
-        Core checks the choice again before it defines the VM. Use a baseline that every
-        intended destination reports before planning a migration. The choice is part of the
-        definition and can only be changed while the VM is stopped.
+      - **CPU model** — new drafts use **Pool CPU baseline** when Core can verify a common
+        CPU across every current pool member. Selecting it saves its named model, fixed
+        features and machine type with this VM. They do not change when pool membership
+        changes. If the baseline is unavailable, wait for all members to be ready and
+        reachable, or explicitly choose a CPU model. All host-usable named choices remain
+        available, including `qemu64`; the list is independent of the guest OS.
+        **Host passthrough** and **Host model** follow the current host's CPU. They do not
+        establish a common pool baseline. Existing selections are preserved.
+        Core checks an explicit CPU definition against the actual host runtime before
+        defining or starting it. A current pool baseline does not guarantee future-host or
+        live-migration compatibility; migration is not implemented in this slice. Change
+        a VM's CPU only while stopped. See the fixed feature summary beneath the selector.
       - **Memory mode** — **Dedicated** or **Maximum**; see [Memory modes](#memory-modes).
       - **Memory (MiB)** — 512 to 262144, and no more than the host's total memory. The page
         shows the host's reported CPU and memory capacity underneath. This size is the
@@ -333,6 +338,16 @@ failed and uncertain transfers show their own status.
 
 ## Troubleshooting
 
+- **Pool CPU baseline unavailable:** wait for every pool member to be ready and reachable,
+  or select a CPU model explicitly. An offline member is not ignored. Upgrade Controller
+  first and then all Core hosts if an older peer cannot answer CPU discovery requests.
+- **Explicit CPU features need a Core upgrade:** the selected fixed definition needs the
+  newer Core CPU contract. Upgrade Core before submitting it; existing model-only VMs
+  keep their previous settings.
+- **CPU definition is not compatible:** stop the VM and select a CPU definition the host can
+  provide. A supported CPU model is not proof that a particular guest OS can run on it;
+  check the guest vendor's requirements separately.
+
 - **A URL download fails:** use a direct public ISO download link, not a web page or a
   login page. Core rejects non-public addresses even after DNS resolution or redirects,
   permits at most five redirects, and stops a transfer after two hours. Check host DNS,
@@ -475,6 +490,11 @@ failed and uncertain transfers show their own status.
   writable instance. Retain host-local recovery access.
 
 ## Verification
+
+The [pool CPU baseline evidence](../qa/2026-09-17-cpu-baseline.md) separates native platform,
+backend and simulated-browser checks for this unreleased change. It does not certify every
+CPU/guest combination or live migration. Native libvirt host-boot autostart bypasses Nex's
+explicit CPU preflight; Core-mediated starts use it.
 
 Recorded checks and their limits:
 

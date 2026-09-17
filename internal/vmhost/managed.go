@@ -2147,16 +2147,16 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 				return errors.New("predecessor VM operation not found on this host")
 			}
 		}
-		var memory *protocol.VMMemory
+		var spec *protocol.VMCreateSpec
 		if c.Power.Action == "start" {
 			v, currentErr := managedCurrent(js, c.Power.VMID)
 			if currentErr == nil {
-				memory = &v.Command.VM.Memory
+				spec = v.Command.VM
 			}
 			// An unresolved newer definition (for example a memory edit libvirt may already
 			// hold) is what could boot, so check its ceiling rather than the last success.
 			if newest, ok := currentDefinitions(js)[c.Power.VMID]; ok {
-				memory = &newest.Memory
+				spec = &newest
 			}
 			if currentErr == nil && len(v.Disks) > 0 {
 				if err := ensureVMStorage(ctx, js, *v.Command.VM); err != nil {
@@ -2170,7 +2170,7 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 		if err := e.save(*j); err != nil {
 			return err
 		}
-		return powerVM(ctx, *c.Power, memory)
+		return powerVM(ctx, *c.Power, spec)
 	case "vm-media":
 		// changeMedia persists Stage "changing-media" itself, immediately before its virsh
 		// call: an interruption before that point issued nothing, so reconcile re-runs it.
@@ -2473,6 +2473,7 @@ type managedCPU struct {
 	Check    string           `xml:"check,attr,omitempty"`
 	Model    *cpuModelXML     `xml:"model,omitempty"`
 	Topology *managedTopology `xml:"topology,omitempty"`
+	Features []cpuFeatureXML  `xml:"feature"`
 }
 type cpuModelXML struct {
 	Fallback string `xml:"fallback,attr,omitempty"`
@@ -2655,6 +2656,7 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 		// named baseline, so check=full refuses even models libvirt marks usable=yes.
 		d.CPU = managedCPU{Mode: "custom", Match: "exact", Check: "partial", Model: &cpuModelXML{Fallback: "forbid", Value: v.CPU.Model}, Topology: &managedTopology{sockets, cores, threads}}
 	}
+	d.CPU.Features = specCPUFeatures(v.CPU.Features)
 	scsi := false
 	for i, disk := range v.Disks {
 		x := managedDisk{Type: "file", Device: "disk", Driver: driverXML{"qemu", "qcow2"}, Source: &sourceXML{File: disks[i]}, Target: targetXML{Dev: targets[i], Bus: disk.Bus}}
@@ -2807,6 +2809,11 @@ func hostMemory() (available, total uint64, err error) {
 }
 
 func managedCapacity(ctx context.Context, v protocol.VMCreateSpec, js []managedJournal) error {
+	if len(v.CPU.Features) > 0 {
+		if err := NativeCPUCompare(ctx, v.CPU.Model, v.CPU.Features, managedMachine(v)); err != nil {
+			return err
+		}
+	}
 	if runtime.GOARCH != "amd64" || v.CPU.Count > runtime.NumCPU() {
 		return errors.New("requires amd64 with sufficient host CPUs")
 	}
@@ -2828,7 +2835,7 @@ func managedCapacity(ctx context.Context, v protocol.VMCreateSpec, js []managedJ
 	if err != nil {
 		return errors.New("cannot verify KVM capabilities for this machine type")
 	}
-	if v.CPU.Model != "host-passthrough" && v.CPU.Model != "host-model" {
+	if len(v.CPU.Features) == 0 && v.CPU.Model != "host-passthrough" && v.CPU.Model != "host-model" {
 		if models, e := UsableCPUModels(b); e != nil || !slices.Contains(models, v.CPU.Model) {
 			return fmt.Errorf("CPU model %s is not available on this host", v.CPU.Model)
 		}
@@ -3066,7 +3073,7 @@ func (e *ManagedEngine) startCreated(ctx context.Context, j *managedJournal) err
 		return err
 	}
 	j.Start, j.Stage = "started", "started"
-	if err := powerVM(ctx, protocol.VMPowerRequest{VMID: j.Command.VM.ID, Action: "start"}, &j.Command.VM.Memory); err != nil {
+	if err := powerVM(ctx, protocol.VMPowerRequest{VMID: j.Command.VM.ID, Action: "start"}, j.Command.VM); err != nil {
 		// The create journal has historically exposed a stable concise start outcome;
 		// direct vm-power results retain the bounded native diagnostic for recovery.
 		var powerErr powerRequestError
@@ -3336,7 +3343,7 @@ func validateManagedDefinition(b, expected []byte) error {
 	}
 	// libvirt expands a machine alias such as q35 to its versioned form, and injects
 	// check="none" (and migratable) on host-passthrough when the domain omitted check.
-	if got.OS.Type.Arch != want.OS.Type.Arch || got.OS.Type.Value != want.OS.Type.Value || (got.OS.Type.Machine != want.OS.Type.Machine && !strings.HasPrefix(got.OS.Type.Machine, "pc-"+want.OS.Type.Machine+"-")) || got.CPU.Mode != want.CPU.Mode || got.CPU.Match != want.CPU.Match || !sameCPUCheck(got.CPU.Check, want.CPU.Check) || (got.CPU.Model == nil) != (want.CPU.Model == nil) || (got.CPU.Model != nil && *got.CPU.Model != *want.CPU.Model) {
+	if got.OS.Type.Arch != want.OS.Type.Arch || got.OS.Type.Value != want.OS.Type.Value || (got.OS.Type.Machine != want.OS.Type.Machine && !strings.HasPrefix(got.OS.Type.Machine, "pc-"+want.OS.Type.Machine+"-")) || (len(want.CPU.Features) > 0 && !sameCPUFeatures(got.CPU.Features, want.CPU.Features)) || got.CPU.Mode != want.CPU.Mode || got.CPU.Match != want.CPU.Match || !sameCPUCheck(got.CPU.Check, want.CPU.Check) || (got.CPU.Model == nil) != (want.CPU.Model == nil) || (got.CPU.Model != nil && *got.CPU.Model != *want.CPU.Model) {
 		return errors.New("VM CPU or machine changed")
 	}
 	if want.CPU.Topology != nil && (got.CPU.Topology == nil || *got.CPU.Topology != *want.CPU.Topology) {
@@ -4330,9 +4337,9 @@ func wipeManagedDisks(paths []string) error {
 // powerVM issues one libvirt power request. Start and stop requests are idempotent against
 // the observed state; shutdown and reboot are ACPI requests the guest decides how to honor;
 // force-reboot issues virsh reset and requires a running guest. A start that would boot a
-// shut-off guest is refused unless available memory meets memory's ceiling plus the host
-// reserve; memory is nil only when the managed journal holds no definition for the VM.
-func powerVM(ctx context.Context, p protocol.VMPowerRequest, memory *protocol.VMMemory) error {
+// shut-off guest rechecks explicit CPU features and available memory against the recorded
+// spec. The spec is nil only when the managed journal holds no definition for the VM.
+func powerVM(ctx context.Context, p protocol.VMPowerRequest, spec *protocol.VMCreateSpec) error {
 	state, err := managedVirsh(ctx, "domstate", p.VMID)
 	if err != nil {
 		return errors.New("VM not found or its state cannot be established on this host")
@@ -4369,12 +4376,17 @@ func powerVM(ctx context.Context, p protocol.VMPowerRequest, memory *protocol.VM
 	if current != "running" && current != "shut off" {
 		return errors.New("VM is " + current + "; resolve that state before a power request")
 	}
-	if command == "start" && memory != nil {
+	if command == "start" && spec != nil {
+		if len(spec.CPU.Features) > 0 {
+			if err := NativeCPUCompare(ctx, spec.CPU.Model, spec.CPU.Features, managedMachine(*spec)); err != nil {
+				return err
+			}
+		}
 		available, _, err := hostMemory()
 		if err != nil {
 			return err
 		}
-		if !managedMemoryFits(available, *memory) {
+		if !managedMemoryFits(available, spec.Memory) {
 			return errors.New("insufficient available memory to start this VM including 2 GiB host reserve")
 		}
 	}

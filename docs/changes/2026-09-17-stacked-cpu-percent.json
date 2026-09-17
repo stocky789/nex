@@ -1,0 +1,38 @@
+{
+  "summary": "Stacked usage charts now stack per-vCPU/per-core CPU raw, each at 0-100%, on an axis of 100% per visible vCPU, so four fully busy vCPUs fill a 400% chart instead of being scaled down to a 0-100% total. API impact: none; a presentation change over the existing stats history response.",
+  "paths": [
+    "web/src/stats.tsx",
+    "web/src/stats.test.mjs",
+    "tests/integration/managed_vm_browser.py",
+    "docs/guide/usage-history.md",
+    "docs/changes/2026-09-17-stacked-cpu-percent.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The Stacked step now says each vCPU or core keeps its own 0-100% and the axis runs to 100% per vCPU.",
+    "pages": [
+      "docs/guide/usage-history.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Only the browser's stacking arithmetic and axis range changed; the stats history endpoint, its series shape and the Core sampler are untouched.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Presentation fix within the delivered usage-history feature; no roadmap page changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The Stacked toggle is per-page UI state and history stays host-reported; nothing is stored."
+  },
+  "verification": {
+    "method": "Ran: node web/src/stats.test.mjs (passes: raw stacking [4,10]/[10,30], 200% axis for two vCPUs, 100% with one hidden), npm --prefix web run typecheck and build (clean), python3 tests/integration/managed_vm_browser.py --simulated with the phase1 QA venv (exit 0; 'Stacked CPU chart with vCPU 1 hidden' passed with 83 single-fill pixels before and after, 0 overlapping; the inspected capture shows vCPU 0 and vCPU 2 at 60% each stacking to 120% on a 200% axis), python3 scripts/check_docs.py --worktree (passed) and the repository privacy unit test (OK). Simulated agent only; ignored local capture not linked from this public record.",
+    "evidence": [
+      "web/src/stats.test.mjs",
+      "tests/integration/managed_vm_browser.py"
+    ]
+  }
+}

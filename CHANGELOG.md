@@ -6,12 +6,35 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.3.0` →
-> Debian `0.3.0`).
+> development software. Builds use the newest numbered changelog heading (`0.3.1` →
+> Debian `0.3.1`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.3.1] — 2026-09-17
+
+### Minor Feature
+
+- New VMs default to a fixed CPU definition shared by the current pool members, discovered
+  by Nex Core through libvirt. The selected model and features stay with the VM when the
+  pool changes. Manual CPU choices, including `qemu64`, remain available; there are no
+  operating-system-specific CPU rules. Upgrade Controller first, then every Core.
+
+### Bug Fixes
+
+- Explicit CPU feature definitions are checked against the host runtime before creation,
+  stopped edits and Core-mediated starts. Unavailable pool members prevent a new common
+  baseline from being offered; existing VM definitions remain unchanged (BUG-0272).
+- Stacked CPU charts now give each visible vCPU or host core its own 100% share of the axis,
+  so four fully busy CPUs fill a 400% chart.
+
+### Miscellaneous
+
+- Reconcile the platform, VM creation and public roadmap with the native CPU baseline work.
+  Native runtime checks and simulated browser tests pass; heterogeneous physical pools,
+  live migration and the original installer boot-loop diagnosis remain unverified.
 
 ## [0.3.0] — 2026-09-17
 

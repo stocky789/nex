@@ -274,3 +274,30 @@ func TestNeedsStopRefusesRemovingATPM(t *testing.T) {
 		t.Fatalf("an unchanged TPM is not a change: %v %v", stops, err)
 	}
 }
+
+func TestExplicitCPUFeaturesAreGenericBoundedAndRequireStop(t *testing.T) {
+	v := validSpec()
+	v.CPU.Model = "FutureCPU-v7"
+	v.CPU.Features = []CPUFeature{{Name: "future-feature", Policy: "require"}, {Name: "obsolete-feature", Policy: "disable"}}
+	for _, guest := range []string{"linux", "windows", "other", ""} {
+		v.GuestOS = guest
+		if err := ValidateVMSpec(v); err != nil {
+			t.Fatalf("guest %q: %v", guest, err)
+		}
+	}
+	old := v
+	old.CPU.Features = nil
+	if changes, err := NeedsStop(old, v); err != nil || len(changes) == 0 {
+		t.Fatalf("feature change did not require stop: %v %v", changes, err)
+	}
+	for _, features := range [][]CPUFeature{{{Name: "bad/feature", Policy: "require"}}, {{Name: "f", Policy: "optional"}}, {{Name: "f", Policy: "require"}, {Name: "f", Policy: "disable"}}, make([]CPUFeature, 513)} {
+		if ValidateCPUFeatures("FutureCPU-v7", features) == nil {
+			t.Fatalf("invalid features accepted: %+v", features)
+		}
+	}
+	for _, model := range []string{"host-model", "host-passthrough", "max"} {
+		if ValidateCPUFeatures(model, v.CPU.Features) == nil {
+			t.Fatalf("host-derived mode %s accepted frozen features", model)
+		}
+	}
+}

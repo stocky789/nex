@@ -42,3 +42,20 @@ const html = renderToStaticMarkup(createElement(VMEditor, { vm: listed, poolName
 for (const mac of macs) assert.match(html, new RegExp(`value="${mac}"`), `editor carries existing MAC ${mac}`);
 assert.doesNotMatch(html, /Network interface \d · new/, "listed interfaces are existing, not new");
 console.log("vm-edit firmware and interface check ok");
+
+const baselineHost = { id: "h", connection: "fresh", capabilities: ["managed-vm-v1", "vm-update-v1", "vm-cpu-baseline-v1"], inventory: { cpu_count: 4, memory_bytes: 8 * 1024 ** 3, cpu_models: ["qemu64", "FutureCPU-v7"], cpu_baseline: { model: "NewBaseline", features: [{ name: "sse4.2", policy: "require" }], machine: "q35", generation: 2, member_count: 2, observed_at: "2026-01-01T00:00:00Z" } } };
+const savedVM = { ...listed, spec: { ...listed.spec, cpu: { ...listed.spec.cpu, model: "SavedBaseline", features: [{ name: "avx", policy: "disable" }] }, disks: [{ name: "system", storage_id: "s", size_gib: 20, bus: "virtio", thin: true, boot_order: 1 }] } };
+const renderCPU = (vm, host) => renderToStaticMarkup(createElement(VMEditor, { vm, host, poolName: "p", storage: [], networks: [], media: [], api: async () => ({}), reload: async () => {}, unavailable: false, onNotice() {}, onClose() {} }));
+const savedHTML = renderCPU(savedVM, baselineHost);
+assert.match(savedHTML, /value="__saved-baseline" selected="">Saved fixed CPU baseline · SavedBaseline/);
+assert.match(savedHTML, /Pool CPU baseline · NewBaseline/);
+assert.match(savedHTML, /disable avx/, "saved features are displayed without using refreshed report");
+assert.match(savedHTML, /value="qemu64"/, "manual models remain available for every guest OS");
+assert.match(savedHTML, /value="FutureCPU-v7"/);
+const failedHTML = renderCPU(savedVM, { ...baselineHost, inventory: { ...baselineHost.inventory, cpu_baseline: { error: "member unreachable" } } });
+assert.match(failedHTML, /value="__saved-baseline" selected=""/);
+assert.match(failedHTML, /Pool CPU baseline unavailable/);
+assert.doesNotMatch(failedHTML, /disabled="">Save changes/, "unknown recomputed baseline does not block editing an existing fixed CPU");
+for (const state of ["running", "paused", "unknown"]) assert.match(renderCPU({ ...savedVM, state }, baselineHost), /CPU model<select required="" disabled=""/, "CPU/features change only on stopped VM");
+assert.match(renderCPU(savedVM, { ...baselineHost, capabilities: ["managed-vm-v1", "vm-update-v1"] }), /Upgrade Nex Core/);
+console.log("vm-edit pool CPU baseline check ok");

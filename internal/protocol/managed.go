@@ -14,6 +14,7 @@ import (
 )
 
 const ManagedVMCapability = "managed-vm-v1"
+const CPUBaselineCapability = "vm-cpu-baseline-v1"
 
 // Appliance is a Controller appliance VM the host deployed through its local engine, reported
 // from that engine's deploy journal so a replaced Controller re-adopts it as protected.
@@ -86,14 +87,21 @@ type Media struct {
 	Error       string `json:"error,omitempty"`
 }
 
-// VMCPU carries the vCPU count, optional topology and CPU model. A zero topology means the
-// default: one socket, Count cores, one thread.
+// CPUFeature pins a native feature requirement or exclusion in a named CPU definition.
+type CPUFeature struct {
+	Name   string `json:"name" xml:"name,attr"`
+	Policy string `json:"policy" xml:"policy,attr"`
+}
+
+// VMCPU carries the vCPU count, optional topology and fixed CPU definition. A zero topology
+// means one socket, Count cores, one thread.
 type VMCPU struct {
-	Count   int    `json:"count"`
-	Sockets int    `json:"sockets"`
-	Cores   int    `json:"cores"`
-	Threads int    `json:"threads"`
-	Model   string `json:"model"`
+	Count    int          `json:"count"`
+	Sockets  int          `json:"sockets"`
+	Cores    int          `json:"cores"`
+	Threads  int          `json:"threads"`
+	Model    string       `json:"model"`
+	Features []CPUFeature `json:"features,omitempty"`
 }
 
 // VMMemory is the ceiling in both modes: dedicated preallocates and locks it while running;
@@ -232,7 +240,7 @@ func NeedsStop(cur, next VMCreateSpec) ([]VMChange, error) {
 		}
 	}
 	add(cur.Name != next.Name, "the name")
-	add(cur.CPU != next.CPU, "the CPU configuration")
+	add(cur.CPU.Count != next.CPU.Count || cur.CPU.Sockets != next.CPU.Sockets || cur.CPU.Cores != next.CPU.Cores || cur.CPU.Threads != next.CPU.Threads || cur.CPU.Model != next.CPU.Model || !slices.Equal(cur.CPU.Features, next.CPU.Features), "the CPU configuration")
 	add(cur.Memory != next.Memory, "the memory")
 	add(cur.Boot.Firmware != next.Boot.Firmware || cur.Boot.Machine != next.Boot.Machine, "the firmware or machine type")
 	add(cur.Boot.SecureBootEnabled() != next.Boot.SecureBootEnabled(), "Secure Boot")
@@ -313,10 +321,31 @@ func DerivedMAC(vmID string, index int) string {
 	return fmt.Sprintf("52:54:00:%02x:%02x:%02x", h[0], h[1], byte(index))
 }
 
+// ValidateCPUFeatures bounds the explicit native CPU definition, independently of guest OS.
+func ValidateCPUFeatures(model string, features []CPUFeature) error {
+	if len(features) > 512 {
+		return errors.New("CPU feature limit exceeded")
+	}
+	if len(features) > 0 && (model == "host-model" || model == "host-passthrough" || model == "max" || !ValidCPUModel(model)) {
+		return errors.New("explicit CPU features require a named CPU model")
+	}
+	seen := map[string]bool{}
+	for _, f := range features {
+		if !ValidCPUModel(f.Name) || seen[f.Name] || (f.Policy != "require" && f.Policy != "disable") {
+			return errors.New("CPU features must have distinct valid names and require or disable policies")
+		}
+		seen[f.Name] = true
+	}
+	return nil
+}
+
 // ValidateVMSpec checks the bounds Controller and Core enforce identically on a VM
 // specification. Identity, resource references, pool-wide MAC uniqueness and host capacity
 // belong to their owners and are not checked here.
 func ValidateVMSpec(v VMCreateSpec) error {
+	if err := ValidateCPUFeatures(v.CPU.Model, v.CPU.Features); err != nil {
+		return err
+	}
 	if !utf8.ValidString(v.Name) || len(v.Name) > 200 || strings.TrimSpace(v.Name) == "" || strings.ContainsFunc(v.Name, func(r rune) bool {
 		return r == '/' || unicode.IsControl(r) || r == '\ufffe' || r == '\uffff'
 	}) {
