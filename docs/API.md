@@ -1963,8 +1963,9 @@ the JSON `error` field with HTTP 200. While an apply runs, GET also returns `pha
 
 Controller apply writes `pending-update.json` under the state directory and returns
 202; the root `nex-controller-update` path unit runs `/usr/local/lib/nex/apply-update`,
-which runs `apt-get update` then `apt-get install --only-upgrade nex-controller` and
-restarts the service; running outside `nex-controller.service` keeps apt from being killed by
+which runs `apt-get update` then `apt-get install nex-controller` and restarts the service;
+plain install also gives an appliance still running its bundled binary its first Controller
+package. Running outside `nex-controller.service` keeps apt from being killed by
 that restart, and a failed upgrade restarts the service before reporting. If the helper or path unit is missing, apply
 returns **503** instead of scheduling. Core apply starts the same work in the
 background and returns 202; the UI polls GET until `phase` is `done` or `failed`.
@@ -1972,7 +1973,8 @@ Both sides re-read the installed version afterwards and fail the apply if it did
 advance, because apt exits 0 when nothing needed upgrading.
 
 Packaged installs and current appliance images include the update helper so Controller VMs can
-upgrade in place.
+upgrade in place. A published artifact that predates this helper correction is not changed by this
+source behavior; use the documented direct recovery until a rebuilt package is available.
 
 ## Source access and availability
 

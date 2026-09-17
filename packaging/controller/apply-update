@@ -219,7 +219,9 @@ def main():
 
     write_progress('installing', 50, message='Installing package')
     run(['systemctl', 'stop', SERVICE], check=False)
-    result = subprocess.run(APT + ['install', '-y', '--only-upgrade', package],
+    # Appliance Controllers begin with the bundled binary, not this Debian package.
+    # Plain install performs that first package install as well as later upgrades.
+    result = subprocess.run(APT + ['install', '-y', package],
                             env=APT_ENV, check=False, capture_output=True, text=True)
     if result.returncode != 0:
         restart_then_fail('apt failed: ' + ((result.stderr or result.stdout or '')[-2000:]))

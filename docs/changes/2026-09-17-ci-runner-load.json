@@ -1,5 +1,5 @@
 {
-  "summary": "Fix follow-up CI persistence/probe timing regressions and give the race suite an explicit bounded runtime. API impact: none; test and CI changes only.",
+  "summary": "Fix CI timing regressions and record the concurrent workflow cleanup: remove the capability-gated host lane, scheduled run, standalone installer image build and external website homepage check. API impact: none; regression fixtures and CI configuration only.",
   "paths": [
     ".github/workflows/phase1.yml",
     ".gitea/workflows/phase1.yml",
@@ -9,11 +9,15 @@
     "tests/integration/phase1_browser.py",
     "docs/BUG_LEDGER.md",
     "docs/qa/ci/2026-09-17-runner-load.md",
-    "internal/controller/managed_test.go"
+    "internal/controller/managed_test.go",
+    ".github/workflows/installer.yml",
+    ".gitea/workflows/installer.yml",
+    ".github/workflows/website.yml",
+    ".gitea/workflows/website.yml"
   ],
   "guide": {
     "impact": "none",
-    "reason": "Test fixture timing and CI budgets do not change operator workflows.",
+    "reason": "These changes affect contributor CI coverage, not operator workflows. Website publication keeps its local health check, but no longer verifies the external homepage; installer image building remains in the Release workflow. Removed host checks remain uncovered.",
     "pages": []
   },
   "api": {
@@ -31,9 +35,10 @@
     "reason": "No product durable state is added or moved."
   },
   "verification": {
-    "method": "Inspect hosted failures, reproduce delayed failure injection and healthy probe timing, run corrected tests and review independently; actual results and limits recorded in QA.",
+    "method": "Inspect hosted failures, reproduce delayed failure injection and healthy probe timing, run corrected tests and review independently; actual results and limits recorded in QA. Follow-up: reproduced the exact failed commit range missing four installer/website workflow assessments; inspected both forge diffs and corrected this record. Rechecked the same changed/added path sets using the checker against the corrected tree, plus worktree coverage, gate regressions and repository privacy. Removing external homepage verification does not establish that the previously observed HTTP 401 was fixed.",
     "evidence": [
-      "docs/qa/ci/2026-09-17-runner-load.md"
+      "docs/qa/ci/2026-09-17-runner-load.md",
+      "tests/test_check_docs.py"
     ]
   }
 }

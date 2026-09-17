@@ -1,0 +1,41 @@
+{
+  "summary": "Fix the Controller appliance updater so a binary-only appliance installs its first nex-controller Debian package instead of letting apt --only-upgrade succeed without installing it. The local fix is not rebuilt or published.",
+  "paths": [
+    "packaging/controller/apply-update",
+    "tests/test_distribution_packaging.py",
+    "docs/API.md",
+    "docs/guide/software-updates.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-17-controller-first-package-update.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The existing 0.2.9 binary-only appliance has a direct manual recovery, and future helper behavior installs its first package.",
+    "pages": [
+      "docs/guide/software-updates.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "GET and POST /api/v1/updates retain their endpoints, schemas, authorization, asynchronous result flow and errors. The existing apply operation now completes the first package install for a binary-only appliance.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Fixes the existing updater; no milestone or public release status changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable record is added or moved. Existing transient pending-update and progress files retain their current helper behavior."
+  },
+  "verification": {
+    "method": "The simulated binary-only helper regression failed before the fix and passes after it. python3 -m unittest tests/test_distribution_packaging.py -v passed 24 tests. No appliance package rebuild, repository publication, browser workflow, or live target operation was run or claimed.",
+    "evidence": [
+      "tests/test_distribution_packaging.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

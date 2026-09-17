@@ -16,10 +16,9 @@ key and configure the signed APT source, so updates are signature-verified.
   you check or apply, so changing the URL takes effect without reinstalling.
 - The in-product **Check**/**Update** flow *is* `apt`: it runs `apt-get update` and
   installs the selected package, so dependencies resolve and package signatures are verified.
-  Core uses plain `apt-get install nex-core-local` so a binary-only appliance can receive its
-  first package; Controller uses `apt-get install --only-upgrade nex-controller` through its
-  privileged helper. Running the matching command yourself does the same thing.
-- Packaged `nex-controller` or `nex-core-local` installs for apply to succeed.
+  Core and Controller use plain `apt-get install` through their respective privileged paths, so
+  an appliance with only its bundled binary can receive its first package. Running the matching
+  command yourself does the same thing.
 
 ## Steps
 
@@ -45,6 +44,17 @@ Controller host page **Version** field; that package version is the only Nex Cor
   Check `repo_url`, then `apt policy nex-core-local` on the host.
 - "No newer … available" means apt found nothing to upgrade; the installed version is
   already the candidate.
+- **Controller shows Installed 0.2.9, Available 0.3.0, then says no newer package is
+  available:** its appliance still runs the bundled Controller binary, so the 0.2.9 helper's
+  `--only-upgrade` request installs nothing. From the appliance's local root shell, install the
+  published package directly (without `--only-upgrade`), then check again:
+
+  ```sh
+  sudo apt update && sudo apt install nex-controller
+  ```
+
+  This is a recovery for the affected 0.2.9 appliance, not evidence that the local helper fix
+  below has been rebuilt or published.
 - Controller applies updates through a privileged helper; its update path unit must be enabled.
 - **Controller stays on `Update requested…`:** the update helper is not being started. On a
   Controller running 0.2.5 or earlier, one failed update left its request behind and the retries
@@ -88,6 +98,6 @@ Controller host page **Version** field; that package version is the only Nex Cor
 ## Verification
 
 Automated API tests cover check/apply and apt failures; package identity was checked in a
-labeled simulation. A browser walkthrough and an on-host upgrade pulling a new dependency are
-outstanding. See the [single Nex Core version checks](../qa/single-nex-core-version.md).
-
+labeled simulation. The binary-only appliance helper regression is covered in a simulated helper
+test; no rebuilt package, published artifact, browser walkthrough or on-host upgrade is claimed.
+See the [single Nex Core version checks](../qa/single-nex-core-version.md).

@@ -2694,3 +2694,21 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: declare `1 << 62` bytes, matching the existing sibling body-limit regression, while preserving the insufficient-space skip and exact 507 assertion. Production capacity and ISO-body validation are unchanged.
 - Regression: a temporary 32 MiB staging file created before the first snapshot and removed before the handler reproduced the original 400, then passed with the fixed declared length. Removed that temporary injection; focused and full-suite results are recorded in [follow-up evidence](qa/ci/2026-09-17-runner-load.md). Both phase1 workflows run the test on pushes and pull requests via `go test -race -timeout 20m ./...`.
 - Avoid: assuming filesystem free space stays constant between a test and the operation it exercises.
+
+## BUG-0270 — Workflow cleanup was committed without complete documentation assessment
+
+- Date: 2026-09-17. Status: fixed locally; hosted rerun outstanding.
+- Symptom: the Documentation workflow rejected four installer/website workflow paths as missing impact assessment.
+- Root cause: the committed timing-fix record covered its own changes, while concurrent removal of the standalone installer builder-image step and external website homepage check was committed without its separate record.
+- Fix: extend the existing assessment to all four workflow copies and accurately record removed CI coverage. This changes no workflow behavior, service API, operator procedure or durable state; it does not fix or explain the previously observed external HTTP 401.
+- Regression: the documentation checker reproduced the exact failed commit-range error before correction. Its existing `test_missing_impact_record_fails` regression runs in both Documentation workflows on pushes and pull requests. After correction, the checker passes the failed commit's changed/added path sets against the corrected tree and the current worktree gate; no Git history changes or hosted rerun are claimed.
+- Avoid: committing a combined diff with assessments covering only one contributor's subset; run the full worktree documentation gate immediately before committing.
+
+## BUG-0271 — A binary-only Controller appliance could not install its first update
+
+- Date: 2026-09-17. Status: fixed in the working tree; no rebuilt or published package is claimed.
+- Symptom: an appliance running its bundled 0.2.9 Controller binary reported Installed 0.2.9 and Available 0.3.0, but **Update** ended with `no newer nex-controller available`.
+- Root cause: appliance build copies the Controller binary without installing the Debian package. The root helper used `apt-get install --only-upgrade nex-controller`; apt exited successfully without installing an uninstalled package, leaving the before/after `dpkg-query` version empty.
+- Fix: the helper uses plain `apt-get install nex-controller`, which both installs the first package and upgrades later package-managed appliances. The `GET`/`POST /api/v1/updates` contract is unchanged.
+- Regression: `ControllerUpdateHelperRecoveryTests.test_binary_only_appliance_receives_its_first_controller_package` failed before the fix and passes after, simulating an empty initial `dpkg-query` and a successful first install. `python3 -m unittest tests/test_distribution_packaging.py -v` passed 24 tests. Both phase1 workflows run full Python unittest discovery on pushes and pull requests.
+- Avoid: using `--only-upgrade` for a component that can start from a copied binary rather than an installed package.

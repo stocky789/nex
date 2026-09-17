@@ -94,7 +94,8 @@ class AptUpdatePathTests(unittest.TestCase):
 
     def test_controller_helper_uses_apt_and_not_dpkg_install(self):
         helper = (ROOT / "packaging/controller/apply-update").read_text()
-        self.assertIn("'install', '-y', '--only-upgrade'", helper)
+        self.assertIn("'install', '-y', package", helper)
+        self.assertNotIn("'install', '-y', '--only-upgrade'", helper)
         self.assertNotIn("'dpkg', '-i'", helper)
         self.assertNotIn("updates.json", helper)
         # A failed upgrade must not leave the management plane stopped.
@@ -339,6 +340,28 @@ class ControllerUpdateHelperRecoveryTests(unittest.TestCase):
             self.assertIn(code, (None, 0))
             self.assertFalse(helper.APPLYING.exists())
             self.assertFalse(helper.PENDING.exists(), "a request queued during a successful apply re-runs it and reports failure")
+            self.assertEqual(json.loads(helper.PROGRESS.read_text())["phase"], "done")
+
+    def test_binary_only_appliance_receives_its_first_controller_package(self):
+        import json, tempfile, types
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            helper = self.load_helper(state)
+            helper.PENDING.write_text(json.dumps({"package": "nex-controller"}))
+            installed = [""]  # dpkg-query has no package on a fresh appliance.
+
+            def apt(args, **kwargs):
+                if "install" in args and "--only-upgrade" not in args:
+                    installed[0] = "0.3.0"
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            code, _ = self.run_helper_expecting_exit(
+                helper, state,
+                subprocess_run=mock.Mock(side_effect=apt),
+                installed_version=mock.Mock(side_effect=lambda _: installed[0]),
+            )
+            self.assertIn(code, (None, 0))
             self.assertEqual(json.loads(helper.PROGRESS.read_text())["phase"], "done")
 
 
