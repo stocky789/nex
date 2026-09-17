@@ -6,12 +6,37 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.3.1` →
-> Debian `0.3.1`).
+> development software. Builds use the newest numbered changelog heading (`0.3.2` →
+> Debian `0.3.2`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.3.2] — 2026-09-17
+
+### Minor Feature
+
+- The Core ISO now bundles Fedora virtio-win 0.1.302 with its matching Fedora
+  corresponding-source RPM and notices, so a fresh host seeds the Windows driver
+  disc automatically. Earlier releases left that media out on purpose.
+
+### Bug Fixes
+
+- A guest that put itself to sleep (Windows Sleep, for example) no longer locks up its VM
+  and every other VM on the same host. The VM is shown as asleep, **Start** wakes it, Shut
+  down and Reboot wake it first, and Force stop and Force reboot work directly. New and
+  re-saved VM definitions remove ACPI sleep and hibernate from the guest, so guests no longer
+  offer them (BUG-0273).
+
+### Miscellaneous
+
+- Phase 2 (one-host VM management) is closed: create/install/console/reboot/persist and
+  Controller outage recovery proven earlier; MAC hot-plug and admission re-checks on 0.3.1;
+  VirtIO media on this release.
+- Licensing and release checks require the virtio-win source tree whenever the
+  ISO is staged; the old refuse-without-source gate is replaced by that retention
+  check.
 
 ## [0.3.1] — 2026-09-17
 
@@ -37,6 +62,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Reconcile the platform, VM creation and public roadmap with the native CPU baseline work.
   Native runtime checks and simulated browser tests pass; heterogeneous physical pools,
   live migration and the original installer boot-loop diagnosis remain unverified.
+- Public roadmap wording now matches published 0.3.0/0.3.1: usage history, delete retries and
+  the Controller package start fix are marked built. Phase 2 closed later the same day under
+  0.3.2 after the VirtIO ISO and focused lab close-out.
 
 ## [0.3.0] — 2026-09-17
 

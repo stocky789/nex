@@ -1221,10 +1221,31 @@ func ManagedVMState(ctx context.Context, id string) (string, error) {
 		return "", err
 	}
 	state := strings.TrimSpace(string(b))
+	if state == domainAsleep {
+		// The guest put itself to sleep (ACPI S3). Its QEMU process is alive and holds
+		// the disks, so for ownership and inventory it is running; powerVM wakes it.
+		return "running", nil
+	}
 	if state != "running" && state != "shut off" {
 		return "", errors.New("VM state is not confirmable")
 	}
 	return state, nil
+}
+
+// domainAsleep is the virsh domstate of a guest that entered ACPI S3 by itself.
+const domainAsleep = "pmsuspended"
+
+// ManagedVMAsleep reports whether the domain is observed pmsuspended. Callers that admit a
+// start use it to ask the pool master for a wake instead of a second execution.
+func ManagedVMAsleep(ctx context.Context, id string) (bool, error) {
+	if !uuidPattern.MatchString(id) {
+		return false, errors.New("invalid VM identity")
+	}
+	b, err := managedVirsh(ctx, "domstate", id)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(b)) == domainAsleep, nil
 }
 func verifyNetwork(ctx context.Context, n protocol.NetworkRegistration) error {
 	if n.Kind == "vlan" {
@@ -2526,6 +2547,21 @@ type managedNIC struct {
 type mtuXML struct {
 	Size int `xml:"size,attr"`
 }
+
+// managedPM removes ACPI S3 and S4 from the guest's firmware tables, so the guest never
+// offers Sleep or Hibernate. A server VM that sleeps holds its disks and its owner slot
+// while doing nothing, and every guest OS ships a sleep timer that eventually fires
+// (BUG-0273). Hyper-V exposes no S3 at all; the other hypervisors advise disabling guest
+// power management. libvirt notes a guest can still try to circumvent this; powerVM and
+// ManagedVMState handle a domain that nevertheless reports pmsuspended.
+type managedPM struct {
+	Mem  pmStateXML `xml:"suspend-to-mem"`
+	Disk pmStateXML `xml:"suspend-to-disk"`
+}
+type pmStateXML struct {
+	Enabled string `xml:"enabled,attr"`
+}
+
 type managedDomain struct {
 	XMLName       xml.Name              `xml:"domain"`
 	Type          string                `xml:"type,attr"`
@@ -2539,6 +2575,7 @@ type managedDomain struct {
 	Features      managedFeatures       `xml:"features"`
 	CPU           managedCPU            `xml:"cpu"`
 	Clock         *clockXML             `xml:"clock,omitempty"`
+	PM            managedPM             `xml:"pm"`
 	Devices       struct {
 		Disks       []managedDisk       `xml:"disk"`
 		Controllers []managedController `xml:"controller"`
@@ -2630,6 +2667,7 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 		return nil, errors.New("domain devices do not match the requested VM")
 	}
 	d := managedDomain{Type: "kvm", Name: v.Name, UUID: v.ID, Memory: memoryXML{"MiB", v.Memory.SizeMiB}, VCPU: v.CPU.Count, OS: managedOS{Type: osTypeXML{"x86_64", managedMachine(v), "hvm"}}}
+	d.PM = managedPM{Mem: pmStateXML{"no"}, Disk: pmStateXML{"no"}}
 	applyFirmware(&d, v.Boot)
 	applyGuestOSDefaults(&d, v.GuestOS)
 	if v.Boot.TPMEnabled() {
@@ -4345,10 +4383,19 @@ func powerVM(ctx context.Context, p protocol.VMPowerRequest, spec *protocol.VMCr
 		return errors.New("VM not found or its state cannot be established on this host")
 	}
 	current := strings.TrimSpace(string(state))
+	// A guest asleep in ACPI S3 is an active domain that runs nothing: it cannot take an
+	// ACPI request until woken. Start wakes it; shutdown and reboot wake it first and then
+	// ask; the force actions act on the QEMU process and need no guest cooperation.
+	asleep := current == domainAsleep
+	if asleep {
+		current = "running"
+	}
 	command := ""
 	switch p.Action {
 	case "start":
-		if current != "running" {
+		if asleep {
+			command = "dompmwakeup"
+		} else if current != "running" {
 			command = "start"
 		}
 	case "shutdown":
@@ -4375,6 +4422,11 @@ func powerVM(ctx context.Context, p protocol.VMPowerRequest, spec *protocol.VMCr
 	}
 	if current != "running" && current != "shut off" {
 		return errors.New("VM is " + current + "; resolve that state before a power request")
+	}
+	if asleep && (command == "shutdown" || command == "reboot") {
+		if _, err = managedVirsh(ctx, "dompmwakeup", p.VMID); err != nil {
+			return powerRequestError{action: p.Action, cause: err}
+		}
 	}
 	if command == "start" && spec != nil {
 		if len(spec.CPU.Features) > 0 {
@@ -4520,7 +4572,8 @@ func managedRunning(ctx context.Context, id string) (bool, error) {
 	if err != nil {
 		return false, errors.New("VM not found or its state cannot be established on this host")
 	}
-	return strings.TrimSpace(string(state)) == "running", nil
+	observed := strings.TrimSpace(string(state))
+	return observed == "running" || observed == domainAsleep, nil
 }
 
 // dumpManagedDomain reads a domain's definition: the live one while running, otherwise the
@@ -4904,6 +4957,9 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 		return errors.New("VM not found or its state cannot be established on this host")
 	}
 	observed := strings.TrimSpace(string(state))
+	if observed == domainAsleep {
+		return errors.New("VM is asleep; use Start to wake it before editing it")
+	}
 	if observed != "running" && observed != "shut off" {
 		return errors.New("VM is " + observed + "; resolve that state before editing it")
 	}

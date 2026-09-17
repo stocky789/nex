@@ -273,6 +273,15 @@ func TestPoolVMUpdateReservationCommitsOnlyExactJournalEvidence(t *testing.T) {
 	if err := poolVMLocal(s, vm, "force-reboot", nil, false, nil, nil); err != nil {
 		t.Fatalf("owner force-reboot was not admitted: %v", err)
 	}
+	// BUG-0273: waking a guest asleep in ACPI S3 is not a second execution; the running
+	// record keeps its state and epoch, and a stopped record has nothing to wake.
+	epochBefore := mustLoadPoolVMs(t, s).VMs[vm].Epoch
+	if err := poolVMLocal(s, vm, "wake", nil, false, nil, nil); err != nil {
+		t.Fatalf("owner wake was not admitted: %v", err)
+	}
+	if after := mustLoadPoolVMs(t, s).VMs[vm]; after.State != "running" || after.Epoch != epochBefore {
+		t.Fatalf("wake changed the execution record: %+v", after)
+	}
 	if err := poolVMLocal(s, vm, "media", nil, false, nil, nil); err != nil {
 		t.Fatalf("owner media action was not admitted: %v", err)
 	}
@@ -1232,4 +1241,54 @@ func TestSharedVMRewrittenMediaOutcomeConfirmsWithPoolOwner(t *testing.T) {
 			}
 		}
 	})
+}
+
+func mustLoadPoolVMs(t *testing.T, s *Store) poolVMState {
+	t.Helper()
+	state, err := loadPoolVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+// BUG-0273: a shared VM whose guest put itself to sleep (virsh domstate pmsuspended) made
+// every pool VM inventory publication fail, which refused every VM operation on the host.
+// The sleeping domain is now observed as its running owner, and a Start of it is admitted
+// as a wake: no start permit, no epoch change, the master record stays running.
+func TestSharedVMAsleepIsAdmittedAsWake(t *testing.T) {
+	ctx := context.Background()
+	s, vm := sharedMediaVMStore(t)
+	virsh := filepath.Join(strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0], "virsh")
+	if err := os.WriteFile(virsh, []byte("#!/bin/sh\ncase \"$*\" in\n  *domstate*) printf '%s\\n' \"$NEX_TEST_STATE\" ;;\n  *) printf '%s\\n' '"+vm.ID+"' ;;\nesac\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	permit, epoch := "", uint64(0)
+	if err := poolVMLocal(s, vm.ID, "start", &permit, false, nil, &epoch); err != nil {
+		t.Fatal(err)
+	}
+	if err := poolVMLocal(s, vm.ID, "running", nil, false, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NEX_TEST_STATE", "pmsuspended")
+	if err := PublishPoolVMInventory(ctx, s); err != nil {
+		t.Fatalf("a sleeping guest blocked pool inventory: %v", err)
+	}
+	start := protocol.Command{OperationID: "wake-1", Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: vm.ID, PoolID: vm.PoolID, HostID: vm.HostID, Action: "start"}}
+	finish, err := AdmitPoolVMExecution(ctx, s, start)
+	if err != nil || finish == nil {
+		t.Fatalf("start of a sleeping guest was refused: %v", err)
+	}
+	if record := mustLoadPoolVMs(t, s).VMs[vm.ID]; record.State != "running" || record.Epoch != epoch {
+		t.Fatalf("wake changed the durable owner record: %+v", record)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(s.dir, "pool-vm-permits")); len(entries) != 0 {
+		t.Fatal("wake wrote a start permit, which would admit a second execution")
+	}
+	if err := finish(protocol.Result{OperationID: "wake-1", Status: "succeeded"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if record := mustLoadPoolVMs(t, s).VMs[vm.ID]; record.State != "running" || record.Epoch != epoch {
+		t.Fatalf("wake completion changed the durable owner record: %+v", record)
+	}
 }

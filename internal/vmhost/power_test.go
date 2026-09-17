@@ -278,3 +278,69 @@ func TestManagedPowerPostEffectFailureIsUncertain(t *testing.T) {
 		})
 	}
 }
+
+// BUG-0273: a guest that put itself to sleep (ACPI S3, virsh domstate pmsuspended) is an
+// active domain that runs nothing. Before the fix every power request refused it, the
+// console refused it and, because the pool inventory could not observe it, every other VM
+// on the host was blocked too. Start now wakes it, shutdown and reboot wake it first, and
+// the force actions act on the QEMU process directly.
+func TestManagedPowerWakesSleepingGuest(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	log := filepath.Join(t.TempDir(), "virsh.log")
+	fakeCommand(t, "virsh", `echo "$3 $4" >> "$VMHOST_LOG"; case "$3" in domstate) printf '%s\n' "$VMHOST_STATE";; start|shutdown|reboot|destroy|reset|dompmwakeup) [ "$VMHOST_FAIL" = "$3" ] && exit 1; exit 0;; *) exit 2;; esac`)
+	t.Setenv("VMHOST_LOG", log)
+	t.Setenv("VMHOST_STATE", "pmsuspended")
+	e := NewManaged(dir)
+	vm := "11111111-2222-4333-a444-555555555555"
+	command := func(op, action string) protocol.Command {
+		return protocol.Command{OperationID: op, Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: vm, PoolID: "pool1", HostID: "host1", Action: action}}
+	}
+	calls := func() string { b, _ := os.ReadFile(log); os.Remove(log); return string(b) }
+	if state, err := ManagedVMState(context.Background(), vm); err != nil || state != "running" {
+		t.Fatalf("a sleeping domain must be observed as a running owner: %q %v", state, err)
+	}
+	if asleep, err := ManagedVMAsleep(context.Background(), vm); err != nil || !asleep {
+		t.Fatalf("ManagedVMAsleep = %v %v", asleep, err)
+	}
+	calls()
+	for _, tc := range []struct{ action, want string }{
+		{"start", "dompmwakeup"},
+		{"shutdown", "dompmwakeup\nshutdown"},
+		{"reboot", "dompmwakeup\nreboot"},
+		{"force-reboot", "reset"},
+		{"force-stop", "destroy"},
+	} {
+		want := "domstate " + vm + "\n"
+		for _, c := range strings.Split(tc.want, "\n") {
+			want += c + " " + vm + "\n"
+		}
+		if r, err := e.Execute(context.Background(), command("s-"+tc.action, tc.action), nil); err != nil || r.Status != "succeeded" {
+			t.Fatalf("%s of a sleeping guest: %v %+v", tc.action, err, r)
+		}
+		if got := calls(); got != want {
+			t.Fatalf("%s calls %q, want %q", tc.action, got, want)
+		}
+	}
+	t.Setenv("VMHOST_FAIL", "dompmwakeup")
+	if r, _ := e.Execute(context.Background(), command("s-fail", "shutdown"), nil); r.Status != "needs_attention" || !strings.Contains(calls(), "dompmwakeup") || strings.Contains(r.Error, "resolve that state") {
+		t.Fatalf("a failed wake before an ACPI request must stay uncertain, not refused: %+v", r)
+	}
+	t.Setenv("VMHOST_STATE", "running")
+	if r, _ := e.Execute(context.Background(), command("s-awake", "start"), nil); r.Status != "succeeded" || calls() != "domstate "+vm+"\n" {
+		t.Fatalf("start of an awake VM must not wake it: %+v", r)
+	}
+}
+
+// Every Nex definition removes ACPI S3/S4 from the guest firmware tables, so a guest never
+// offers Sleep or Hibernate in the first place.
+func TestManagedDomainXMLDisablesGuestSleep(t *testing.T) {
+	v := managedTestVM()
+	v.NICs = nil
+	b, err := managedDomainXML(v, nil, []string{"/vm/disk-0.qcow2"}, []string{"vda"}, "sda", "", "sdb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `<suspend-to-mem enabled="no">`) || !strings.Contains(string(b), `<suspend-to-disk enabled="no">`) {
+		t.Fatalf("definition does not disable guest sleep:\n%s", b)
+	}
+}

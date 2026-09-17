@@ -2571,7 +2571,7 @@ Append resolved defects with their evidence and the approach to avoid.
 
 ## BUG-0256 — An interface added to a running VM reused the MAC of an interface the guest had not released
 
-- Date: 2026-09-17. Status: fixed in the working tree; regression added; **not lab-verified** (needs a gated rebuild and a rerun of [gate report](qa/2026-09-17-phase2-gate/checks.md) row 11, including probe c2, and the G7 rows). This is Phase 2 gate5 open major defect 1 ([owner triage](qa/2026-09-17-phase2-gate/checks.md#owner-triage-open-defect-1)).
+- Date: 2026-09-17. Status: fixed; regression added; **lab-verified on published 0.3.1** (2026-09-17 disposable nested-KVM fresh install): remove+add then add-only on an OS-less running VM allocated `:02`/`:03` instead of reusing still-live `:00`; `virsh domiflist` had four distinct MACs and no duplicate. Evidence under `.cache/phase2-gate6-evidence-*-retry1/phase2-focused-probes.json`. Cross-VM manual-MAC refusal remains open.
 - Symptom: on gate5 (0.2.10~gate5, disposable nested-KVM lab), a running VM at its firmware had an interface removed; a later add-only save froze the new interface to the removed interface's MAC and hot-plugged it. `virsh domiflist` showed that MAC twice on `br0` while the task reported succeeded and the Controller showed one interface fewer than libvirt.
 - Root cause: `virsh detach-device --persistent` drops the interface from the persistent definition at once, but the live device stays until the guest acknowledges the unplug, which firmware, installer menus and guests without hotplug never do. Core's `applyLive` (`internal/vmhost/managed.go`) read only `dumpxml --inactive` and attached every wanted MAC missing from it; `validateManagedDefinition` also checks only the inactive XML, so the operation succeeded. The Controller's `updateVM` freeze loop (`internal/controller/managed.go`) picked the lowest `protocol.DerivedMAC(id, k)` not in the request or current definition, so a MAC removed in an earlier save was handed out again.
 - Fix: `update` (`internal/vmhost/managed.go`), in its validating stage next to the dedicated-memory refusal and before any disk allocation or device operation, reads the persistent and live domains of a running guest and fails with "network interface MAC <mac> is still attached to the running VM; wait for the guest to release it or stop the VM, then save again" when a requested interface's MAC is live but absent from the persistent definition. Because no allocating or attaching stage was saved, `Execute` records `failed` (not `needs_attention`), background promotion leaves it alone, and the previous revision stays current. An independent review rejected a first version that ran the check inside `applyLive`: that runs after the journal stage becomes `attaching`, so the refusal became `needs_attention` after new disks were already allocated. `updateVM` draws new automatic MACs from the first derived index above the highest one the current definition uses (request MACs do not raise it), skipping taken addresses, and falls back to the lowest free index when none above is free. Known limits: the Controller has no live interface data, so after the highest-index interface is removed, or once index 255 is in use (for example a manual MAC equal to the last derived address), the next automatic MAC can be a recently removed one; Core refuses it while it is live. Not done: extending the create/update cross-VM MAC scans to other running domains' live XML (a manual MAC still live on another VM is not refused).
@@ -2721,3 +2721,31 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: Core obtains the native common model/features from all current members, compares the result on every member, and exposes the observation. Selecting it stores the model/features in the existing Core VM definition. Manual dynamically discovered models remain selectable; no OS-specific policy exists.
 - Regression: protocol/controller/agent/vmhost CPU tests and simulated browser acceptance pass; see [scoped evidence](qa/2026-09-17-cpu-baseline.md) for commands, native-runtime results and limits. Both phase1 workflow copies run these existing Go/UI/browser suites on pushes and pull requests. Native hardware and hosted CI acceptance remain separate.
 - Avoid: hardcoded guest-release rules, intersecting CPU model names instead of effective features, silently excluding unavailable members, or rewriting existing CPUs when membership changes.
+
+## BUG-0273 — A guest that put itself to sleep locked up its VM and blocked every VM on its host
+
+- Date: 2026-09-17. Status: fixed in the working tree; lab wake and browser walkthrough outstanding.
+- Symptom: a Windows 11 VM on SMB storage became unresponsive in Controller: every power
+  request and the console were refused, and a second VM on the same host could not start. Its
+  power and media tasks failed with `managed VM runtime observation is unavailable`.
+- Root cause: the guest entered ACPI S3 (libvirt `pmsuspended`). Nex handled only `running`
+  and `shut off`: the power engine refused every action on any other state including force
+  stop, the console required `running`, and the pool inventory observation errored on the
+  state, so one sleeping guest failed the host's whole inventory publication and with it every
+  admission on that host. Nothing prevented the guest from sleeping in the first place.
+- Fix: every generated domain definition disables ACPI S3/S4 (`<pm>`), following Hyper-V's no-S3
+  model and VMware's guidance to disable guest power management. A domain that still reports
+  `pmsuspended` is observed as a running owner; `start` wakes it (`virsh dompmwakeup`, the
+  libvirt equivalent of Proxmox's Resume), `shutdown`/`reboot` wake it first, force actions act
+  directly; the master admits the wake as a new `wake` execution action with no permit or epoch
+  change; console, edit and delete name Start as the way out; the UI shows "asleep" and offers
+  Start. Raw observed state is passed through unchanged.
+- Regression: `go test ./internal/vmhost -run 'TestManagedPowerWakesSleepingGuest|TestManagedDomainXMLDisablesGuestSleep|TestConsoleSocket'`
+  and `go test ./internal/agent -run 'TestSharedVMAsleepIsAdmittedAsWake|TestPoolVMExecutionRetainsOwnerAcrossStopAndRejectsSecondHost'`
+  fail on the previous engine (refused actions, inventory error) and pass now; `node web/src/managed.test.mjs`
+  covers the toolbar. Full `./internal/vmhost`, `./internal/agent`, `./internal/controller`,
+  `./internal/protocol` suites and the UI typecheck passed. Both phase1 workflow copies run
+  these suites on pushes and pull requests. The originating host has not been woken with the
+  fixed build.
+- Avoid: treating libvirt's state set as `running`/`shut off` only, or letting one VM's
+  unobservable state fail a host-wide inventory publication.

@@ -26,7 +26,7 @@ buildSync({
 // reload path that first showed the stale panel.
 let pending = {};
 globalThis.sessionStorage = { getItem: () => JSON.stringify(pending), setItem() {} };
-const { ManagedVMs, VMDetails, VMDelete, deleteBlocker, formTab, isoNameFromURL, isoTransferNotice, mediaDiscardable, ejectInstallOffer, guestResizeText, sentence, GuestTools, powerActions, powerConfirmText } = await import(`file://${outfile}`);
+const { ManagedVMs, VMDetails, VMDelete, deleteBlocker, formTab, isoNameFromURL, isoTransferNotice, mediaDiscardable, ejectInstallOffer, guestResizeText, sentence, GuestTools, powerActions, powerConfirmText, powerBlocker, stateText } = await import(`file://${outfile}`);
 
 const props = {
   account: "operator", poolID: "pool-1", poolName: "pool", hosts: [], storage: [], networks: [],
@@ -321,3 +321,18 @@ assert.ok(inputRule >= 0 && checkboxRule > inputRule, "checkbox width rule must 
 assert.match(styleSource, /\.tree \.host-link\.vm-unknown \.resource-icon \{ filter: grayscale\(1\)/);
 
 console.log("managed.test.mjs: ok");
+
+// BUG-0273: a guest that put itself to sleep (libvirt pmsuspended) is offered Start (which wakes
+// it) and every running-VM action; it is not a state the operator must resolve on the host.
+{
+  const host = { id: "h", revoked: false, connection: "fresh", capabilities: ["vm-power-v1"] };
+  assert.equal(powerBlocker({ state: "pmsuspended", freshness: "fresh" }, host), "");
+  assert.match(powerBlocker({ state: "paused", freshness: "fresh" }, host), /resolve that state/);
+  for (const action of ["start", "shutdown", "reboot", "force-stop", "force-reboot"]) {
+    assert.ok(powerActions.find(a => a.action === action).when("pmsuspended"), `${action} must be offered while asleep`);
+  }
+  assert.ok(!powerActions.find(a => a.action === "start").when("running"));
+  assert.match(stateText("pmsuspended"), /asleep.*Start wakes it/);
+  assert.equal(stateText("running"), "running");
+  assert.equal(stateText(undefined), "unknown");
+}

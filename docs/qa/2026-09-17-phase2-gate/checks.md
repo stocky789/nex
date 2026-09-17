@@ -3,6 +3,10 @@
 Date: 2026-09-17 UTC (build 00:26Z to 00:36Z, lab run 00:40Z to 02:44Z). All dates and times in
 this report are UTC.
 
+**Phase 2 closed 2026-09-17.** See the [close record](CLOSED.md). This file remains the gate5
+lab report of record. The major defect found here (open defect 1 / BUG-0256) was lab-verified
+fixed on published 0.3.1; VirtIO media shipped on 0.3.2.
+
 **Result of record: the final gate run on `0.2.10~gate5`.** 15 of the 16 checklist rows,
 COVERAGE-1 and both halves of G7 **passed** in a new disposable lab. **Row 11 failed** on its
 running-VM interface probe, although its BUG-0254 checks a–c passed. The gate4 code-review "major" was
@@ -10,23 +14,13 @@ running-VM interface probe, although its BUG-0254 checks a–c passed. The gate4
 and confirmed on a real host**. **But a new major defect was found on gate5:** a network
 interface added to a running VM can reuse the MAC of an interface the guest has not yet released,
 leaving two interfaces with the same MAC on the bridge while the task reports succeeded
-([open defect 1](#open-defects-after-gate5)). Code reading indicates the defect is also present
-in released 0.2.9 (not reproduced in a lab on 0.2.9). gate5 is the last lab cycle of this effort, so the
-defect is **not fixed in the gate5 build**; it was handed to the project owner with the
-[triage below](#owner-triage-open-defect-1). After gate5 it was **fixed in the working tree**
-(BUG-0256: Core refuses the add, the Controller stops refilling removed addresses) with unit
-tests against a simulated libvirt only; it is **not lab-verified**. **The Phase 2 gate
-stays open** until a new gated build reruns row 11 and the G7 rows, and the
-[remaining requirements](#remaining-gate-requirements-outside-this-lab) are met.
+([open defect 1](#open-defects-after-gate5)). That defect was fixed as BUG-0256 and
+**lab-verified on published 0.3.1** ([focused lab](../2026-09-17-phase2-focused-lab.md)).
+Owner decisions and process leftovers were resolved at close ([close record](CLOSED.md)).
 
 G6 external Controller replacement **passed** with the gate5 package binary, but same-host
-appliance redeploy is **blocked by the product** (open owner decision) and backup restore was
-**not exercised**, so G6 stays **partial**. Several phase items are partial because a sub-clause
-was not exercised (see [gate items](#gate-items)). This report has **not had independent
-review**, hosted CI has not run on this tree, and the tree is not committed.
-
-The gate1, gate3 and gate4 runs are kept as [run history](#run-history). gate4 is superseded by
-this run.
+appliance redeploy is **blocked by the product** (accepted as out of Phase 2 at close) and backup
+restore was **not exercised**, so G6 stays **partial** for same-host.
 
 All identifiers are sanitized. Host, pool, VM, operation and site IDs, machine IDs, boot IDs,
 SSH and TLS fingerprints, MAC addresses derived from VM IDs, and lab addresses and ports are
@@ -352,18 +346,11 @@ One **major** and the rest **minor**. None is fixed in the gated build.
    - **Not measured:** the effect on real guest networking (bridge MAC flapping).
    - **Handling:** not fixed in the gate5 build. See the
      [owner triage](#owner-triage-open-defect-1) below.
-   - **Status after gate5: fixed in the tree, not lab-verified** (BUG-0256 in the
-     [bug ledger](../../BUG_LEDGER.md)). Triage F1 without its cross-VM scan, plus F2: while
-     validating a running guest's edit, before allocating disks or attaching anything, Core
-     compares the live and persistent domains and reports the `vm-update` failed, changing
-     nothing, when a requested interface's MAC is still on a live interface ("network interface MAC … is still
-     attached to the running VM; wait for the guest to release it or stop the VM, then save
-     again"); the Controller draws new automatic MACs above the highest index the current definition uses,
-     falling back to the lowest free index. Evidence is
-     fake-virsh and Controller unit tests only. Still required: a gated rebuild and a rerun of
-     row 11 (including probe c2) and the G7 rows. Still open: the cross-VM manual-MAC variant
-     (F1's scan of other running domains) and a pending-unplug indicator (P2-7). The
-     [edit guide](../../guide/edit-virtual-machine.md#troubleshooting) now describes the refusal.
+   - **Status after gate5:** fixed as BUG-0256; **lab-verified on published 0.3.1**
+     ([focused lab](../2026-09-17-phase2-focused-lab.md)); Phase 2 closed
+     ([close record](CLOSED.md)). Cross-VM manual-MAC scan and pending-unplug UI remain
+     follow-ups, not Phase 2 blockers. The
+     [edit guide](../../guide/edit-virtual-machine.md#troubleshooting) describes the refusal.
 2. **The installer step list loses its current step and ticks between backend steps.** On gate5
    the progress panel showed "Preparing the next installation step…" with no current-step bullet
    and no ticks once for about 4 s and once for about **20–24 s** (frames every 4 s), then
@@ -504,46 +491,28 @@ Line references are to the gate5 tree.
 
 ## Open owner decisions
 
-1. **G6 same-host retire:** a same-host Controller appliance redeploy or removal path, and whether
-   G6 is met by external replacement without it and without a backup restore.
-2. **AGENT-1:** fewer `runuser` PAM sessions from a storage access probe cache, versus slower
-   detection of access loss.
-3. **CORE-1 tradeoff:** a guest running spice-vdagent without qemu-guest-agent reads clipboard
-   waiting and resize unavailable.
-4. **Plan item 7:** whether refusing stop-first changes on a running VM, instead of queuing them,
-   meets the edit requirement.
-5. **Plan item 8:** whether typed-name confirmation plus appliance protection counts as "deletion
-   protection".
-6. **Published `nex-controller` packages 0.1.6~alpha1 to 0.2.9 (BUG-0246):** whether to pull or
-   supersede them, and how to tell affected operators to recover.
-7. **Core-side refusal of appliance Start:** the fix is a Controller UI confirmation only. Whether
-   Nex Core should also refuse starting a Controller appliance that another Controller has
-   replaced.
-8. **Release workflow smoke start:** whether the release workflow should start the packaged
-   Controller binary (and check `CGO_ENABLED=1`) before publishing, as the gate builds did by hand.
-9. **Network interface model:** whether to replace the editor's single-interface model so a
-   request can mark interfaces as new (open defect 5), and how open defect 1 should be fixed (see
-   the [owner triage](#owner-triage-open-defect-1)).
+**Resolved at Phase 2 close 2026-09-17** — see [CLOSED.md](CLOSED.md) for the nine resolutions.
+Historical list kept below for audit.
+
+1. **G6 same-host retire:** ~~open~~ → external replacement meets G6 for Phase 2; same-host deferred.
+2. **AGENT-1:** ~~open~~ → keep current behaviour for Phase 2.
+3. **CORE-1 tradeoff:** ~~open~~ → accepted for Phase 2.
+4. **Plan item 7:** ~~open~~ → current edit behaviour accepted.
+5. **Plan item 8:** ~~open~~ → typed-name + appliance protection accepted.
+6. **Published `nex-controller` packages 0.1.6~alpha1 to 0.2.9 (BUG-0246):** ~~open~~ → superseded by 0.3.0+.
+7. **Core-side refusal of appliance Start:** ~~open~~ → Controller UI confirmation enough for Phase 2.
+8. **Release workflow smoke start:** ~~open~~ → deferred as release-workflow work.
+9. **Network interface model:** ~~open~~ → two-step workaround accepted; defect 1 closed by BUG-0256.
 
 ## Remaining gate requirements outside this lab
 
-- **Open major defect 1** fixed with a regression test, a **new gated build**, and a rerun of at
-  least row 11 (including the running-VM remove, add and add-again sequence with a guest that does
-  not release the device) and the G7 provenance rows.
-- **Independent review** of this report, the API impact and `state.owner` decisions, guide accuracy
-  and walkthrough evidence, by a reviewer who did not author the work. Findings must be resolved
-  and verified.
-- **Independent slice reviews** required by the gate plan on the committed tree: VM edit, VM
-  delete, usage history and the Windows 11 batch.
-- **Hosted CI** on both GitHub Actions and Gitea Actions after the owner pushes: phase1 (including
-  the simulated browser jobs and the Controller replacement contract) and documentation, with job
-  logs inspected for skips.
-- **Owner commit** of the gated tree. Its product paths must match the gate5 product-path
-  fingerprint (`43d9e7c0…`, fp method above), or the difference needs its own checks or a new
-  gated build.
-- **Flaky test:** `TestHostConsoleIncrementalUpdateOnlyOnChange` failed once before the gate4
-  build and passed on rerun; it did not fail before gate5. It still needs a fix or a ledger entry
-  before CI can be trusted to stay green.
+**Superseded by the [Phase 2 close](CLOSED.md) on 2026-09-17.** Historical checklist kept for
+audit:
+
+- ~~Open major defect 1~~ — BUG-0256 lab-verified on published 0.3.1.
+- ~~Independent review / slice reviews / hosted CI / owner commit~~ — owner closed on product
+  evidence; Git push/CI remain owner operations and do not reopen Phase 2.
+- Flaky `TestHostConsoleIncrementalUpdateOnlyOnChange` — track separately if it recurs in CI.
 
 ## Run history
 

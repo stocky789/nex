@@ -1,0 +1,36 @@
+{
+  "summary": "Update the public website roadmap against published 0.3.1 evidence. Mark usage history, interrupted-delete retries and the Controller package start fix as built. Keep Phase 2 VirtIO bundling open (still excluded). Rewrite the end-to-end open item so guest install/reboot/data persistence is acknowledged as passed while the hot-plug MAC fix from 0.3.0 still needs a gated lab re-run. Narrow the remaining checks to dedicated-memory/stale-resource admission and empty/queued/failed create residuals (stop-waiting edits are already listed as built). Intro and pool CPU wording now say through 0.3.1 rather than pending.",
+  "paths": [
+    "website/src/routes/roadmap/+page.svelte",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-17-roadmap-0.3.1-status.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Public website status text only; no operator workflow, configuration or behavior changes."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Website roadmap wording only; no Controller/Core or client-facing contract is added or changed."
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "Roadmap items reconciled with CHANGELOG 0.3.0/0.3.1, the Phase 2 gate report, BUG-0256 and the 0.3.1 release verification.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Website and changelog text only; no setting, record or table is added."
+  },
+  "verification": {
+    "method": "Statements compared against docs/qa/2026-09-17-phase2-gate/checks.md, docs/BUG_LEDGER.md BUG-0256, docs/qa/2026-09-17-nex-core-0.3.1-release.md, CHANGELOG.md and docs/LICENSING.md. No new lab walkthrough; nothing newly claimed verified.",
+    "evidence": [
+      "docs/qa/2026-09-17-phase2-gate/checks.md",
+      "docs/qa/2026-09-17-nex-core-0.3.1-release.md",
+      "docs/BUG_LEDGER.md",
+      "CHANGELOG.md"
+    ]
+  }
+}

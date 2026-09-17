@@ -58,7 +58,8 @@ has no disks, so its save is disabled, and the existing-VM save workflow is unpr
 The browser save → Controller → Core upgrade was not exercised as one workflow. No live VM, deployment,
 physical machine, long memory pressure, managed-save, migration or HA. The failure test covers QEMU,
 not a browser failed-start walkthrough. The 2 GiB admission margin is not a measured overhead cap.
-Phase 2 acceptance is open.
+Phase 2 acceptance closed 2026-09-17 ([close record](../2026-09-17-phase2-gate/CLOSED.md)).
+Dedicated-memory admission was re-proven on published 0.3.1 focused lab.
 
 ## Final review and repository gates
 

@@ -1460,6 +1460,25 @@ waits for earlier task completion, not guest shutdown:** an ACPI task can succee
 guest remains running. Check observed state before requesting a subsequent state change.
 Paused or transitional states are refused as task errors. Interrupted requests reconcile
 by observation only, never by blindly issuing another power effect; ambiguous outcomes
+
+**Guest sleep (changed contract, BUG-0273, 2026-09-17).** Every Nex domain definition carries
+`<pm><suspend-to-mem enabled="no"/><suspend-to-disk enabled="no"/></pm>`, which removes ACPI
+S3 and S4 from the guest firmware tables so the guest offers no Sleep or Hibernate (the
+Hyper-V approach; VMware's guidance is to disable guest power management). Existing VMs pick
+this up when their definition is next written (an edit) and it takes effect at the next boot.
+A domain that nevertheless reports `pmsuspended` (a guest that slept before this change, or
+one that circumvented the tables) is an active execution: `ManagedVMState` observes it as
+`running` for pool inventory and ownership, so one sleeping guest no longer fails the host's
+inventory publication and blocks every other VM on the host. Power requests on it: `start`
+issues `virsh dompmwakeup` instead of `start`; `shutdown` and `reboot` wake it first and then
+send the ACPI request (a failed wake is `needs_attention`, as for any effect that crossed into
+libvirt); `force-stop` and `force-reboot` act on the process directly. The console, VM edits
+and deletion refuse a sleeping VM with a message naming Start as the way out. The private
+Core-to-master execution admission gains a `wake` action beside `reboot`: it requires the
+owner's `running` record, issues no start permit and changes no state or epoch, so a wake can
+never admit a second execution; an older master rejects it as unsupported (fail-closed).
+`GET /api/v1/vms` still passes the raw observed state `pmsuspended` through unchanged; the UI
+names it "asleep" and offers Start.
 remain `needs_attention`, including after `force-reboot` when observation cannot confirm the
 reset completed (same interrupt ambiguity as reboot). A libvirt power-call error or timeout after the request could have
 taken effect is also uncertain, including when resuming a command before its first effect.

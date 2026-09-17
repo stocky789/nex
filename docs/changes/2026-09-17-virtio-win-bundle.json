@@ -1,0 +1,55 @@
+{
+  "summary": "Bundle Fedora virtio-win 0.1.302 on the Core ISO with matching Fedora corresponding-source RPM and notices. Lab-verified BUG-0256 and storage/memory admission on 0.3.1. 0.3.2 ISO built with virtio media evidence.",
+  "paths": [
+    "installer/build.sh",
+    "installer/Dockerfile",
+    "installer/check.sh",
+    "scripts/build-source-bundle.py",
+    "tests/test_distribution_packaging.py",
+    "tests/test_source_bundle.py",
+    "tests/integration/phase2_focused_probes.py",
+    "internal/vmhost/bundled_media.go",
+    "docs/LICENSING.md",
+    "docs/guide/create-virtual-machine.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-17-virtio-win-bundle.json",
+    "docs/qa/2026-09-17-phase2-focused-lab.md",
+    "docs/qa/iso/2026-09-17-core-0.3.2-build.md",
+    "docs/BUG_LEDGER.md",
+    "website/src/routes/roadmap/+page.svelte",
+    "docs/changes/2026-09-17-roadmap-0.3.1-status.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Windows VirtIO driver media is now seeded from the Core ISO instead of requiring a manual import on current media.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Existing iso-import / bundled-media seed and drivers_media_id contract; installer media delivery only."
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "One-host milestone VirtIO bundling shipped on 0.3.2 media with retained Fedora corresponding source.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Bundled media is installed on the host and seeded as a normal iso-import journal entry on the pool master.",
+    "record": "Host file /usr/share/nex/media/virtio-win.iso; after enroll, a succeeded iso-import journal entry adopted by the Controller from host inventory."
+  },
+  "verification": {
+    "method": "installer/check.sh passed. Phase 2 focused probes passed on 0.3.1 nested lab. 0.3.2 ISO rebuilt; xorriso listed /nex/media/virtio-win.iso (877373440 bytes, SHA-256 303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d) and third-party tree; source bundle retains provided-sources/third-party/virtio-win and perl-exact-source.",
+    "evidence": [
+      "installer/check.sh",
+      "docs/qa/2026-09-17-phase2-focused-lab.md",
+      "docs/qa/iso/2026-09-17-core-0.3.2-build.md",
+      "dist/nex-core-0.3.2-amd64.iso.sha256",
+      "dist/nex-core-0.3.2-compliance-manifest.json"
+    ]
+  }
+}

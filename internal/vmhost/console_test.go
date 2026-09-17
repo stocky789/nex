@@ -23,6 +23,7 @@ func TestConsoleSocketRequiresRunningLocalVNCSocket(t *testing.T) {
 	for _, tc := range []struct{ name, state, xml, want string }{
 		{"running local socket", "running", local, ""},
 		{"stopped", "shut off", local, "not running"},
+		{"asleep", "pmsuspended", local, "asleep; use Start to wake it"},
 		{"network display", "running", strings.Replace(local, "type='socket' socket='"+socket+"'", "type='address' address='0.0.0.0'", 1), "not a local VNC socket"},
 		{"missing socket file", "running", strings.Replace(local, socket, socket+".gone", 1), "unavailable"},
 		{"no display", "running", `<domain><devices/></domain>`, "no single console display"},

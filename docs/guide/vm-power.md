@@ -6,7 +6,9 @@ This development workflow starts, shuts down, reboots, force-reboots and force-s
 virtual machine from Nex Controller. Each request becomes a durable task for the VM's
 assigned host; the host's next report shows the resulting state. Shut down and Reboot are
 ACPI requests that a guest without ACPI support, such as a firmware boot menu, ignores.
-Force reboot is a hard guest reset, not ACPI. It also covers the offer to eject install
+Force reboot is a hard guest reset, not ACPI. Nex VMs are defined without ACPI sleep or
+hibernate, so a guest never offers them; a guest that slept anyway is shown as asleep and
+**Start** wakes it. It also covers the offer to eject install
 media once a guest is installed, so later starts no longer boot the ISO first. Editing a VM is covered in
 [Edit a virtual machine](edit-virtual-machine.md); deletion is covered in
 [Delete a virtual machine](delete-virtual-machine.md).
@@ -26,7 +28,9 @@ media once a guest is installed, so later starts no longer boot the ISO first. E
    when power requests are unavailable. The toolbar's **Start**, **Shut down**, **Reboot**,
    **Force reboot** and **Force stop** buttons act on this VM; only the ones that fit the
    observed state are enabled, and hovering a greyed button shows the same reason.
-2. Select **Start** for a stopped VM. The request is submitted immediately and the notice
+2. Select **Start** for a stopped VM, or for a VM observed `asleep (the guest suspended
+   itself; Start wakes it)`: the same button wakes a sleeping guest instead of starting a
+   second copy. The request is submitted immediately and the notice
    says it was queued. If an earlier task is still working on this VM, the host runs
    the power task after it finishes; you do not need to keep pressing Start.
 3. For a running VM, select **Shut down**, **Reboot**, **Force reboot** or **Force stop**.
@@ -82,6 +86,13 @@ place, so the firmware skips it and boots the disk, and inserting an ISO again n
   not establish that the host has saved it.
 - **A prerequisite task failed or needs attention:** the queued power task fails without
   issuing power. Resolve the earlier task, then submit a new power request.
+- **The VM is observed asleep and its console is black:** the guest put itself to sleep
+  (Windows Sleep, for example) on a definition written before Nex disabled guest sleep. Select
+  **Start** to wake it. **Shut down** and **Reboot** wake the guest first and then send the
+  ACPI request; **Force stop** and **Force reboot** work as usual. Editing or deleting the VM
+  is refused until it is awake or stopped. Once the guest is up, **Edit** and save the VM so
+  its definition is rewritten without sleep support; the change applies at its next boot.
+  Other VMs on the host are not affected by a sleeping guest.
 - **Task reports `failed`:** read its error. Common causes are a VM in a paused or
   transitional state, or a prerequisite that failed before the power request was issued.
   Inspect the VM on its host before retrying.
@@ -113,6 +124,16 @@ place, so the firmware skips it and boots the disk, and inserting an ISO again n
   request, not a second change.
 
 ## Verification
+
+Guest sleep handling (2026-09-17) is covered by runnable checks only: the Core power engine
+test wakes a `pmsuspended` domain for Start, wakes then requests for Shut down and Reboot,
+and destroys or resets it directly; the pool admission test proves a sleeping shared VM no
+longer blocks inventory and is admitted as a wake without a start permit; the UI check proves
+the toolbar offers Start and the running-VM actions while asleep. The originating lab case (a
+Windows 11 guest asleep on SMB storage, every power request and console refused, the host's
+other VM unable to start) was diagnosed through the Controller and host-local APIs but the fix
+has not yet been run against that host; a browser walkthrough of the wake is outstanding.
+
 
 The [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md) (`0.2.10~gate5`, 2026-09-17,
 disposable nested-KVM lab, headless Chromium) walked steps 1–4 in the browser from the toolbar on

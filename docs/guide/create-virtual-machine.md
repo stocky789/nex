@@ -60,9 +60,9 @@ Use an explicitly selected disposable lab host.
   Upgrade Controller before Core; an older Controller rejects the new Core report fields.
 - For a Windows guest on a **VirtIO** or **SCSI** disk bus or a **VirtIO** network adapter:
   the virtio-win driver ISO on the same host, attached as the VM's **Driver disc**, because
-  Windows Setup cannot see those devices without it. The public 0.2.9 ISO does not include that
-  media: import a matching virtio-win ISO into the placement host's ISO library before creating
-  the VM, then select it as **Driver disc**. Choosing **SATA** and **Intel e1000e** avoids that
+  Windows Setup cannot see those devices without it. Current Core media seed Fedora virtio-win
+  into the host ISO library on enroll; select it as **Driver disc**. On an older host without
+  that seed, import matching media first. Choosing **SATA** and **Intel e1000e** avoids that
   at some cost in performance.
 - For **Windows 11**: UEFI firmware, **Secure Boot** on and a **TPM 2.0**. Setup refuses every
   non-IoT edition without them, with only *This PC doesn't currently meet Windows 11 system
@@ -144,7 +144,9 @@ Use an explicitly selected disposable lab host.
         stops it following the guest OS). It also gives a **Windows** VM the two device
         settings Windows expects: the emulated clock keeps **local time** in the RTC rather
         than UTC, and the guest is offered the Hyper-V enlightenments (relaxed timing, virtual
-        APIC and spinlock hints) that let Windows run efficiently under KVM. Nex never installs
+        APIC and spinlock hints) that let Windows run efficiently under KVM. Every VM, whatever
+        its guest OS, is defined without ACPI sleep or hibernate, so the guest offers neither: a
+        server VM that sleeps holds its disks while doing nothing. Nex never installs
         or configures a guest.
       - **Placement host** — the host this VM is assigned to. Hosts that are not freshly
         connected or lack managed-VM support are listed but cannot be chosen; the entry says
@@ -539,9 +541,8 @@ the non-IoT requirements decision because optical-prompt timing and the manual S
 the harness.
 See [final ISO and Controller acceptance](../qa/2026-09-16-final-iso-controller-acceptance.md).
 
-The second driver-disc workflow was exercised with manually imported virtio-win media. The public
-0.2.9 ISO excludes bundled virtio-win while its GPL/LGPL corresponding-source and delivery-path
-closure is unresolved; import matching media before using VirtIO with Windows. A simulated browser
+The second driver-disc workflow uses the bundled Fedora virtio-win media when the host was
+installed from current Core media; older releases required a manual import. A simulated browser
 run checked that **Driver disc** stays empty and disabled on a host without the second CD drive.
 
 A Debian guest installation on UEFI was verified in the Phase 2 gate run on `0.2.10~gate5`; Windows installation

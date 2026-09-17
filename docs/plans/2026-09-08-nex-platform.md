@@ -1,7 +1,7 @@
 # Nex Controller and Nex Core implementation plan
 
 Date: 2026-09-08  
-Status: Standalone installer alpha and Phase 1 Controller/agent development foundation have lab evidence; Phase 2 creation, power, console, guest-tools, VM editing and deletion with disk retention are implemented, and the Phase 2 acceptance gate is open: on the final gate run, build 0.2.10~gate5 in a disposable nested-KVM lab (2026-09-17 UTC, [gate report](../qa/2026-09-17-phase2-gate/checks.md)), 15 of 16 checklist rows passed, but row 11 found a major defect (a network interface hot-plugged into a running VM can reuse the MAC of an interface the guest has not released). That defect is fixed in the post-gate code as BUG-0256 with unit tests against a simulated libvirt only, **not lab-verified**; it needs a new gated build and a rerun of row 11 and the G7 rows. The fixes from this gate effort (BUG-0219 to BUG-0254 and BUG-0256; BUG-0255 is separate usage-history work) are included in the 0.3.1 website/APT release; publication does not close phase acceptance or the project owner's gate review. Owner decisions, independent review and hosted CI also remain (see the [VM creation system plan](2026-09-10-vm-creation-system.md)); remaining delivery gates are tracked below.
+Status: Standalone installer alpha and Phase 1 Controller/agent development foundation have lab evidence. **Phase 2 closed 2026-09-17** by project owner decision: gate5 functional clauses plus BUG-0256 / admission lab on published 0.3.1 and VirtIO media on 0.3.2; see [Phase 2 close](../qa/2026-09-17-phase2-gate/CLOSED.md). Remaining delivery gates are tracked below.
 
 Project planning files live in `docs/plans/`.
 
@@ -13,8 +13,9 @@ recovered unchanged through inventory by a fresh Controller. No guest-OS CPU pol
 hardcoded model catalogue was added. **API impact: changed contract** with new authenticated
 Core peer routes; **guide impact: updated**. See the [CPU plan](2026-09-17-cpu-baseline.md)
 and [native/runtime, browser and regression evidence](../qa/2026-09-17-cpu-baseline.md).
-This does not close the Phase 2 gate or establish migration/heterogeneous physical-pool
-acceptance. Upgrade Controller before Core. The [0.3.1 release report](../qa/2026-09-17-nex-core-0.3.1-release.md)
+Phase 2 is closed separately ([close record](../qa/2026-09-17-phase2-gate/CLOSED.md)); this
+CPU note does not establish migration/heterogeneous physical-pool acceptance. Upgrade
+Controller before Core. The [0.3.1 release report](../qa/2026-09-17-nex-core-0.3.1-release.md)
 records website/APT publication; no upgrade of existing operator hosts is claimed.
 
 **Core project priority, 2026-09-09:** project owner confirmed successful installation and
@@ -483,29 +484,31 @@ browsable reference and agent protocol documentation; later phases extend them. 
 8. Provide a scoped inventory table, VM summary, visible task history, fresh/stale status, and basic CPU/RAM/disk usage. Add deletion protection and keep force-stop visually separate from graceful shutdown. The detailed UI sequence is in the companion review.
    **Usage observation, 2026-09-16:** each active VM is sampled with `virsh domstats --raw --nowait`; Core reports CPU, memory and disk on host inventory, Controller passes them through on `GET /api/v1/vms`, and **VM details** renders the nullable values (fresh/stale on the panel heading; no separate sample-age row). `--nowait` is required, not an optimisation: a probe that takes the domain's job stalls behind a long shutdown on the very VM being watched. Disposable-host and real-browser verification passed for both a running VM's measurements and a shut-off VM's absent sample. See the [VM foundation debts](2026-09-14-production-readiness-handoff.md#vm-foundation-added-2026-09-16).
    **Usage history, 2026-09-17:** Core now also records VM and host history on each host (5 s, 1 min, 1 h and 1 day tiers, up to a year) and serves it, with an on-demand 1-second realtime view under a host-owned lease, through an outbound stats channel; the **Stats** tab charts it. State owner: Core; a replacement Controller shows the same history. Implemented in the working tree with simulated-host evidence; remaining checks are in the [usage history plan](2026-09-16-usage-history.md#remaining-work).
-   **VirtIO driver media, 2026-09-17:** the second driver disc is complete, and the recorded lab
-   installed Windows from manually imported virtio-win media. The public 0.2.9 ISO excludes
-   bundled virtio-win because complete corresponding source and a tested delivery path for its
-   GPL/LGPL contents are not retained. Operators import matching media into the host library;
-   automatic installer staging, seeding and wizard pre-selection remain blocked pending that
-   source/legal closure. API impact: existing contract; no schema change.
+   **VirtIO driver media, 2026-09-17:** the second driver disc is complete. **0.3.2** ships
+   Fedora virtio-win 0.1.302 on the Core ISO with retained Fedora corresponding source
+   ([ISO build](../qa/iso/2026-09-17-core-0.3.2-build.md)); hosts seed `/usr/share/nex/media/virtio-win.iso`
+   and the create wizard can use it. API impact: existing contract; no schema change.
 
 **UX acceptance for Phases 1–2:** follow the [phase-fit criteria](2026-09-08-feature-and-ux-review.md#ux-opportunity-and-phase-fit) for enrollment, useful pool health, staged VM creation, safe homelab defaults, ISO drag/drop with a file-picker alternative, and read-only observed network relationships. Review real desktop/narrow-screen and keyboard operation, including empty, unauthorized, stale, failed, and interrupted states. Prepare semantic theme tokens while retaining the approved light default; a dark theme remains a follow-on candidate.
 
 **Gate:** create and install a guest entirely through Nex Controller, use its console, reboot it, and verify persisted data. Controller outage leaves the VM running; reconnect refreshes inventory and resolves unfinished tasks.
 
-**Phase 2 status, 2026-09-17 (final gate run, build 0.2.10~gate5, 2026-09-17 UTC, disposable nested-KVM lab, virtual hardware only; [gate report](../qa/2026-09-17-phase2-gate/checks.md)):**
+**Phase 2 status — CLOSED 2026-09-17** (project owner). Gate5 functional evidence
+(`[gate report](../qa/2026-09-17-phase2-gate/checks.md)`), BUG-0256 + admission on published
+0.3.1 (`[focused lab](../qa/2026-09-17-phase2-focused-lab.md)`), VirtIO on 0.3.2
+(`[ISO build](../qa/iso/2026-09-17-core-0.3.2-build.md)`). Owner decisions and accepted
+residuals: `[close record](../qa/2026-09-17-phase2-gate/CLOSED.md)`.
 
-- [x] Item 1: host-local storage registered and adopted with host accessibility (row 2).
-- [x] Item 2: pool network mapped to the existing bridge, management connectivity unchanged (row 2). Limit: no real-switch VLAN test.
-- [ ] Item 3: ISO upload validation and VM creation with selected shape (rows 3, 4). Open because the report marks P2-3 partial: the host-side ISO free-space refusal was not reached (Controller staging refused first), and drag and drop used a synthetic DOM event with a real file.
-- [ ] Item 4: list/details, power and retain/wipe delete proven (rows 15, 16, COVERAGE-1; the held needs_attention variant is a recorded limit). Open: row 11 failed on major [open defect 1](../qa/2026-09-17-phase2-gate/checks.md#owner-triage-open-defect-1) (a network interface hot-plugged into a running VM can reuse a MAC still attached to the live domain; fixed in the working tree after gate5 as BUG-0256, not lab-verified), P2-4b is partial, single-interface model replacement returns 400 (open defect 5), and plan item 7 (refusing versus queuing stop-first changes) is an owner decision.
-- [x] Item 5: ticketed browser console, no network VNC/SPICE listener (row 5).
-- [ ] Item 6: open; dedicated-memory admission and stale/unverified resource refusals were not induced in the lab.
-- [ ] Item 7: open; the pending-versus-current hardware indicator was not reviewed, and the CORE-1 guest-tools tradeoff is an owner decision (3).
-- [ ] Item 8: open; whether typed-name confirmation plus appliance protection counts as deletion protection is an owner decision (5). The stale tree icon defect is fixed (BUG-0253).
-- [ ] UX acceptance: open; pool-level empty states not captured, and the queued and failed create page residuals (open defect 3), the console attach delay (open defect 4) and the VM header lag are open.
-- [ ] Gate: functional clauses passed (rows 3, 4, 6, 8, 9, 10, 14), but the gate closes only after the fix for major [open defect 1](../qa/2026-09-17-phase2-gate/checks.md#owner-triage-open-defect-1) (BUG-0256, in the working tree with unit regression tests, not lab-verified; its cross-VM manual-MAC variant and a pending-unplug indicator remain open) is proven on a new gated build that reruns at least row 11, including probe c2, and the G7 provenance rows (gate5 was the last lab cycle of this effort), the report and slice reviews pass independent review, hosted CI on both workflows is green after the owner pushes, the owner commits the gated tree, and the [owner decisions](../qa/2026-09-17-phase2-gate/checks.md#open-owner-decisions) are resolved. G6 is partial: external replacement passed with the gate5 package binary, but same-host appliance redeploy is blocked by the product and no backup restore was run. Next steps: the project owner's code review and refactor of the working tree, then the owner commit (a product-path change after gate5 needs its own checks or a new gated build), the gated rebuild and rerun, and the owner decisions, including G6 same-host retire and the published `nex-controller` packages 0.1.6~alpha1 to 0.2.9 that cannot start (BUG-0246).
+- [x] Item 1: host-local storage registered and adopted with host accessibility (gate5 row 2).
+- [x] Item 2: pool network mapped to the existing bridge, management connectivity unchanged (gate5 row 2). Limit: no real-switch VLAN test.
+- [x] Item 3: ISO upload and VM creation with selected shape (gate5 rows 3, 4). Limits: host-side ISO free-space refusal not reached (Controller staging refused first); drag-and-drop used a synthetic DOM event with a real file.
+- [x] Item 4: list/details, power, retain/wipe delete, and running-VM NIC edits (gate5 rows 11/15/16 plus 0.3.1 focused lab for BUG-0256). Limits: needs_attention variant not induced; single-interface model replacement still 400 (accepted residual); stop-first refuse-vs-queue accepted as implemented.
+- [x] Item 5: ticketed browser console, no network VNC/SPICE listener (gate5 row 5).
+- [x] Item 6: dedicated-memory and free-storage admission refusals proven on published 0.3.1 focused lab.
+- [x] Item 7: guest-tools reporting shown in gate5; pending-unplug indicator deferred; CORE-1 tradeoff accepted for Phase 2.
+- [x] Item 8: typed-name confirmation plus appliance protection accepted as deletion protection for Phase 2 (BUG-0253 fixed).
+- [x] UX acceptance: Phase 2 closed with accepted residuals (empty-pool captures, queued/failed create polish, console attach lag) recorded in the close record — not blockers.
+- [x] Gate: closed. Functional clauses on gate5; BUG-0256 lab-verified on 0.3.1; VirtIO on 0.3.2. G6 external replacement accepted for Phase 2; same-host redeploy deferred.
 
 ### 3. Nex Core packaging and installer ISO
 

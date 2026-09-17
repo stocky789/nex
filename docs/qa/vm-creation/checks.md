@@ -60,28 +60,17 @@ Neither runs `go vet` or `git diff --check`. The VM journal round-trip runs only
 
 ## OUTSTANDING
 
-None of this was executed in this slice's own checks. **Update 2026-09-17:** the final Phase 2 gate
-run on build 0.2.10~gate5 (2026-09-17 UTC) covers the first two items in a disposable nested-KVM
-lab; see the [gate report](../2026-09-17-phase2-gate/checks.md). Both stay open there: row 11 failed on a major defect (a network
-interface hot-plugged into a running VM can reuse the MAC of an interface the guest has not
-released; [open defect 1](../2026-09-17-phase2-gate/checks.md#open-defects-after-gate5)). That defect has since been fixed in the
-uncommitted working tree as BUG-0256 with unit regression tests only; it is not lab-verified and
-needs a new gated build and rerun. The project owner's code review, refactor and commit, independent
-review, hosted CI and owner decisions are outstanding.
+**Phase 2 closed 2026-09-17** ([close record](../2026-09-17-phase2-gate/CLOSED.md)).
 
-- Phase 2 acceptance gate: ISO guest install through Nex, guest/host reboot data check, Controller
-  outage, reconnect/task resolution. Functional clauses passed on virtual hardware in the gate5
-  report (rows 3, 4, 6, 8, 9, 10, 14); gate not closed.
-- Browser walkthrough of the six-step wizard: walked in a real headless browser in the gate report
-  (rows 4, 13); the queued-create page residuals (open defect 3) are open and the simulated `managed_vm_browser.py`
-  job still needs a green hosted CI run.
-  `docs/qa/managed-vm/browser-simulated-results.json` records the old four-step flow.
-- Lab integration (`managed_vm.py`, `controller_replacement.py --vm`, `fresh_install_browser.py`,
-  `console_lab.py`, `console_features_lab.py`, `vlan_lab.py`, all updated but not run): real per-disk
-  allocation, `falloc`, live ownership, free space, `virsh autostart`, `freePageReporting` reclaim,
-  real follow-on start and journal round-trip. The gate5 run passed the repository
-  `controller_replacement_debian.sh --vm` locally (gate report row 12); hosted CI has not run it.
-- Hosted CI, Windows guests, physical hardware, migration and restore.
+Historical note: gate5 row 11 found BUG-0256; that fix is lab-verified on published 0.3.1.
+Queued-create polish and related residuals are accepted Phase 2 polish limits, not open gates.
+
+- ~~Phase 2 acceptance gate~~ closed (gate5 functional clauses + 0.3.1 focused lab + 0.3.2 VirtIO).
+- Browser walkthrough: walked on gate5; queued-create residuals accepted at close.
+- Lab integration covered by gate5 / focused lab where applicable (`managed_vm.py`,
+  `controller_replacement.py --vm`, `fresh_install_browser.py`, and related labs). Hosted CI after
+  owner push remains an owner Git operation and does not reopen Phase 2.
+- Follow-ups outside Phase 2: Windows guests on physical hardware, migration and restore.
 
 ## Independent review round — 2026-09-10
 

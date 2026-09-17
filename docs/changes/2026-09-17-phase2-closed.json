@@ -1,0 +1,46 @@
+{
+  "summary": "Close Phase 2 (one-host VM management) on project owner decision: gate5 functional evidence, BUG-0256 and admission lab on 0.3.1, VirtIO on 0.3.2; resolve owner decisions and accept UX polish residuals.",
+  "paths": [
+    "docs/qa/2026-09-17-phase2-gate/CLOSED.md",
+    "docs/qa/2026-09-17-phase2-gate/checks.md",
+    "docs/qa/2026-09-17-phase2-focused-lab.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-10-vm-creation-system.md",
+    "docs/plans/2026-09-10-vm-edit.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "website/src/routes/roadmap/+page.svelte",
+    "CHANGELOG.md",
+    "docs/plans/2026-09-09-first-managed-vm.md",
+    "docs/qa/dedicated-memory/checks.md",
+    "docs/qa/vm-creation/checks.md",
+    "docs/changes/2026-09-17-phase2-closed.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator workflows unchanged; this closes the Phase 2 acceptance record and roadmap status only."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Documentation and roadmap status only; no Controller/Core contract change."
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "One-host milestone marked shipped; Phase 2 open items cleared.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Acceptance and roadmap status only; no new durable pool or Controller state."
+  },
+  "verification": {
+    "method": "Reticked plans against existing gate5 report, 0.3.1 focused lab, and 0.3.2 ISO evidence. Owner decisions recorded in docs/qa/2026-09-17-phase2-gate/CLOSED.md. Independent review unavailable in-session (disclosed); owner closed on product evidence.",
+    "evidence": [
+      "docs/qa/2026-09-17-phase2-gate/CLOSED.md",
+      "docs/qa/2026-09-17-phase2-gate/checks.md",
+      "docs/qa/2026-09-17-phase2-focused-lab.md",
+      "docs/qa/iso/2026-09-17-core-0.3.2-build.md"
+    ]
+  }
+}

@@ -157,14 +157,16 @@ reconfirms the scoped OVMF package result and does not close any whole-ISO distr
 
 ## virtio-win guest driver ISO — 2026-09-16
 
-The 0.2.9 public Core installer deliberately does not stage a virtio-win ISO. Operators may
-import their own driver disc through the normal ISO-library workflow, and Nex retains the second
-CD-drive and media-selection support needed to use it. Automatic bundling remains blocked until
-complete corresponding source and notices are retained and covered by the release manifest.
-
-The candidate previously considered for bundling was Fedora's public virtio-win `0.1.302` ISO
+The public Core installer stages Fedora's virtio-win `0.1.302` ISO
 (`virtio-win-0.1.302-1`, SHA-256
-`303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d`, 877373440 bytes).
+`303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d`, 877373440 bytes)
+together with the matching Fedora source RPM
+(`virtio-win-0.1.302-1.src.rpm`, SHA-256
+`25561bba120e67bfae842429d5e25764c38e74b92f78d9ef90c20ec41d2ad75d`). Late-install
+copies the ISO to `/usr/share/nex/media/virtio-win.iso` and the notices/source tree
+under `/usr/share/doc/nex-core/third-party/virtio-win/`. The release source bundle
+must retain that tree; `scripts/build-source-bundle.py` refuses a staged virtio-win
+ISO without it.
 
 This is the public Fedora build (attestation/test-signed), not RHEL WHQL, redistributed
 unmodified. It is not only BSD driver code. A listing of that exact ISO (checksum verified) on
@@ -172,21 +174,12 @@ unmodified. It is not only BSD driver code. A listing of that exact ISO (checksu
 
 | Content on the ISO | License evidence |
 | --- | --- |
-| Windows VirtIO drivers and driver utilities (Balloon, NetKVM, viostor, vioscsi, vioserial, viorng, vioinput, viofs, viosock and others) | BSD-3-Clause: `virtio-win_license.txt` and `debug/LICENSE` on the ISO; source [kvm-guest-drivers-windows](https://github.com/virtio-win/kvm-guest-drivers-windows) |
-| `guest-agent/qemu-ga-i386.msi`, `guest-agent/qemu-ga-x86_64.msi` (MSI version 110.2.3) | QEMU guest agent `qemu-ga`, GPL-2.0-or-later, plus bundled GLib, libintl and iconv (LGPL), PCRE2 and MinGW runtime DLLs under their own terms. No license text inside the MSI. |
-| `virtio-win-guest-tools.exe` | Installer bundle embedding the driver MSIs, the qemu-ga MSIs, the SPICE guest agent (vdagent-win 0.10.5) and SPICE QXL display driver (0.21.2.0) MSIs. SPICE components are GPL-licensed upstream; the bundle's `license.rtf` lists MS-RL (installer runtime), GPL-2.0 and Apache-2.0. |
+| Windows VirtIO drivers and driver utilities (Balloon, NetKVM, viostor, vioscsi, vioserial, viorng, vioinput, viofs, viosock and others) | BSD-3-Clause: `virtio-win_license.txt` and `debug/LICENSE` on the ISO; source retained as `virtio-win-prewhql-0.1-302-sources.zip` from the Fedora source RPM |
+| `guest-agent/qemu-ga-i386.msi`, `guest-agent/qemu-ga-x86_64.msi` (MSI version 110.2.3) | QEMU guest agent `qemu-ga`, GPL-2.0-or-later, plus bundled GLib, libintl and iconv (LGPL), PCRE2 and MinGW runtime DLLs under their own terms. Corresponding source retained as `mingw-qemu-ga-win-110.2.3-2.el10.src.rpm` |
+| `virtio-win-guest-tools.exe` | Installer bundle embedding the driver MSIs, the qemu-ga MSIs, the SPICE guest agent and SPICE QXL display driver MSIs. SPICE sources retained as `spice-vdagent-win-0.10.0-5-sources.zip`, `spice-qxl-wddm-dod-0.21-2-sources.zip` and `qxl-win-unsigned-0.1-24-sources.zip`; installer as `virtio-win-guest-tools-installer-0.1.302.tar.gz`; WinFSP/MS-RL runtime as `winfsp-master-sources.zip` |
 | `virtio-win-gt-x64.msi`, `virtio-win-gt-x86.msi` | Driver installer MSIs |
 
 The staged notice records this inventory. Retain it with redistributed copies.
-
-The investigated media did not have retained corresponding source for the GPL/LGPL binaries
-(qemu-ga and its LGPL libraries, SPICE agent and driver) or the MS-RL installer runtime. Fedora
-publishes `virtio-win-0.1.302-1.src.rpm` in the same
-[download directory](https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/), but it
-has not been inspected or shown to be complete corresponding source for those binaries. Either
-retain exact matching source (for example the QEMU and SPICE releases those MSIs were built
-from) with a tested delivery path, or keep the ISO out of Nex release media. The 0.2.9 build uses
-the latter choice. The exact upstream license version of each SPICE component was not inspected.
 
 ## VM storage client dependencies — 2026-09-11
 

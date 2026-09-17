@@ -1,7 +1,7 @@
 # First managed VM creation
 
 Date: 2026-09-09
-Status: Bounded creation workflow implemented and verified in a disposable nested-KVM lab; full Phase 2 remains open.
+Status: Bounded creation workflow implemented and verified in a disposable nested-KVM lab; full Phase 2 closed 2026-09-17 ([close record](../qa/2026-09-17-phase2-gate/CLOSED.md)).
 
 ## Scope and decisions
 

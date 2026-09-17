@@ -17,8 +17,9 @@ import (
 
 // Bundled VirtIO Windows drivers ISO, staged by the Core installer under
 // /usr/share/nex/media and published into the host ISO library on first enroll.
-// Fedora's public virtio-win build is BSD-licensed and redistribution-friendly;
-// pin version and digest in the ISO builder and docs/LICENSING.md together.
+// Fedora's public virtio-win build ships BSD drivers plus GPL/LGPL guest tools;
+// pin version, digest and retained corresponding source in the ISO builder and
+// docs/LICENSING.md together.
 const (
 	BundledVirtIOWinPath    = "/usr/share/nex/media/virtio-win.iso"
 	BundledVirtIOWinName    = "virtio-win.iso"

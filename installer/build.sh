@@ -72,6 +72,130 @@ build_matched_dlm() {
     printf '%s\n' "$deb"
 }
 
+ensure_perl_exact_source() {
+    # Base installer / appliance still ship perl 5.40.1-6 while newer snapshot
+    # indices prefer 5.40.1-6+deb13u1. apt-get source then substitutes and the
+    # retained-source gate fails. Pin the exact dsc and tarballs from the
+    # snapshot where 5.40.1-6 last appeared.
+    local dest=$cache/perl-exact-source
+    local dsc_base=https://snapshot.debian.org/archive/debian/20250729T023717Z/pool/main/p/perl
+    local orig_base=https://snapshot.debian.org/archive/debian/20250119T203702Z/pool/main/p/perl
+    mkdir -p "$dest"
+    [[ -f $dest/perl_5.40.1-6.dsc ]] || curl -fL --retry 3 -o "$dest/perl_5.40.1-6.dsc" "$dsc_base/perl_5.40.1-6.dsc"
+    [[ -f $dest/perl_5.40.1-6.debian.tar.xz ]] || curl -fL --retry 3 -o "$dest/perl_5.40.1-6.debian.tar.xz" "$dsc_base/perl_5.40.1-6.debian.tar.xz"
+    [[ -f $dest/perl_5.40.1.orig.tar.xz ]] || curl -fL --retry 3 -o "$dest/perl_5.40.1.orig.tar.xz" "$orig_base/perl_5.40.1.orig.tar.xz"
+    [[ -f $dest/perl_5.40.1.orig-regen-configure.tar.xz ]] || curl -fL --retry 3 -o "$dest/perl_5.40.1.orig-regen-configure.tar.xz" "$orig_base/perl_5.40.1.orig-regen-configure.tar.xz"
+    python3 - <<'PY' "$dest"
+import hashlib, sys
+from pathlib import Path
+dest = Path(sys.argv[1])
+dsc = (dest / 'perl_5.40.1-6.dsc').read_text(errors='replace')
+fields, key = {}, None
+for line in dsc.splitlines():
+    if line == '-----BEGIN PGP SIGNATURE-----':
+        break
+    if line[:1].isspace() and key:
+        fields[key] += '\n' + line.strip()
+    elif ':' in line:
+        key, value = line.split(':', 1)
+        fields[key] = value.lstrip()
+assert fields.get('Source') == 'perl' and fields.get('Version') == '5.40.1-6', fields
+for row in fields['Checksums-Sha256'].splitlines():
+    if not row.strip():
+        continue
+    expected, size, name = row.split(maxsplit=2)
+    artifact = dest / name
+    assert artifact.is_file() and artifact.stat().st_size == int(size), name
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    assert digest == expected, (name, digest, expected)
+print('perl exact source ok', dest)
+PY
+}
+
+stage_virtio_win() {
+    # Fedora virtio-win 0.1.302: BSD VirtIO drivers plus GPL/LGPL guest-agent and
+    # SPICE tooling. Stage the unmodified ISO only with the matching Fedora
+    # corresponding-source RPM retained under third-party/virtio-win.
+    local version=0.1.302
+    local release=1
+    local iso_name=virtio-win-${version}.iso
+    local iso_sha256=303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d
+    local iso_bytes=877373440
+    local src_rpm=virtio-win-${version}-${release}.src.rpm
+    local src_sha256=25561bba120e67bfae842429d5e25764c38e74b92f78d9ef90c20ec41d2ad75d
+    local base=https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-${version}-${release}
+    local fetch=$cache/virtio-win
+    local third_party=$stage/nex/third-party/virtio-win
+    mkdir -p "$fetch" "$stage/nex/media" "$third_party/source"
+    if [[ ! -f $fetch/$iso_name ]] || ! printf '%s  %s\n' "$iso_sha256" "$fetch/$iso_name" | sha256sum --check --status; then
+        curl -fL --retry 3 -o "$fetch/$iso_name.partial" "$base/$iso_name"
+        mv "$fetch/$iso_name.partial" "$fetch/$iso_name"
+    fi
+    printf '%s  %s\n' "$iso_sha256" "$fetch/$iso_name" | sha256sum --check
+    [[ $(stat -c%s "$fetch/$iso_name") -eq $iso_bytes ]]
+    if [[ ! -f $fetch/$src_rpm ]] || ! printf '%s  %s\n' "$src_sha256" "$fetch/$src_rpm" | sha256sum --check --status; then
+        curl -fL --retry 3 -o "$fetch/$src_rpm.partial" "$base/$src_rpm"
+        mv "$fetch/$src_rpm.partial" "$fetch/$src_rpm"
+    fi
+    printf '%s  %s\n' "$src_sha256" "$fetch/$src_rpm" | sha256sum --check
+    cp "$fetch/$iso_name" "$stage/nex/media/virtio-win.iso"
+    cp "$fetch/$src_rpm" "$third_party/source/"
+    bsdtar -xf "$fetch/$src_rpm" -C "$third_party/source"
+    # Nested QEMU guest-agent source RPM: retain its payloads as well.
+    mkdir -p "$third_party/source/mingw-qemu-ga-win"
+    bsdtar -xf "$third_party/source/mingw-qemu-ga-win-110.2.3-2.el10.src.rpm" -C "$third_party/source/mingw-qemu-ga-win"
+    for required in \
+        virtio-win-prewhql-0.1-302-sources.zip \
+        mingw-qemu-ga-win-110.2.3-2.el10.src.rpm \
+        spice-vdagent-win-0.10.0-5-sources.zip \
+        spice-qxl-wddm-dod-0.21-2-sources.zip \
+        qxl-win-unsigned-0.1-24-sources.zip \
+        virtio-win-guest-tools-installer-0.1.302.tar.gz \
+        winfsp-master-sources.zip \
+        virtio-win.spec; do
+        test -f "$third_party/source/$required"
+    done
+    test -d "$third_party/source/mingw-qemu-ga-win"
+    cat > "$third_party/NOTICE" <<'NOTICE'
+virtio-win 0.1.302 (Fedora virtio-win-0.1.302-1)
+
+Unmodified Fedora public build redistributed with Nex Core. The ISO is not only
+BSD driver code. Component inventory of the checksum-verified ISO:
+
+- Windows VirtIO drivers (Balloon, NetKVM, viostor, vioscsi, vioserial, viorng,
+  vioinput, viofs, viosock and others): BSD-3-Clause. Source retained as
+  virtio-win-prewhql-0.1-302-sources.zip from the matching Fedora source RPM.
+- guest-agent/qemu-ga-*.msi (MSI 110.2.3): QEMU guest agent, GPL-2.0-or-later,
+  plus LGPL libraries. Corresponding source retained as
+  mingw-qemu-ga-win-110.2.3-2.el10.src.rpm (and its nested payloads).
+- virtio-win-guest-tools.exe and virtio-win-gt-*.msi: installer bundle embedding
+  the driver MSIs, qemu-ga, SPICE vdagent and QXL. Installer sources retained as
+  virtio-win-guest-tools-installer-0.1.302.tar.gz; SPICE as
+  spice-vdagent-win-0.10.0-5-sources.zip, spice-qxl-wddm-dod-0.21-2-sources.zip
+  and qxl-win-unsigned-0.1-24-sources.zip; WinFSP/MS-RL runtime as
+  winfsp-master-sources.zip.
+
+Exact matching corresponding source is the Fedora source RPM
+virtio-win-0.1.302-1.src.rpm (SHA-256 pinned in installer/build.sh), retained
+under this directory and in the release source bundle. See docs/LICENSING.md.
+NOTICE
+    cat > "$third_party/manifest.tsv" <<MANIFEST
+component	version	binary	binary_sha256	license	source_retained
+virtio-win-iso	$version	virtio-win.iso	$iso_sha256	mixed (see NOTICE)	yes
+virtio-win-drivers	$version	(on ISO)	$iso_sha256	BSD-3-Clause	yes
+qemu-ga-win	110.2.3	guest-agent/qemu-ga-*.msi	$iso_sha256	GPL-2.0-or-later + LGPL deps	yes
+spice-vdagent-win	0.10.0-5	(in guest-tools)	$iso_sha256	GPL-2.0	yes
+spice-qxl-wddm-dod	0.21-2	(in guest-tools)	$iso_sha256	GPL-2.0	yes
+virtio-win-guest-tools	$version	virtio-win-guest-tools.exe	$iso_sha256	mixed (see NOTICE)	yes
+winfsp	master	(installer runtime)	$iso_sha256	MS-RL	yes
+MANIFEST
+    (
+        cd "$third_party"
+        sha256sum NOTICE manifest.tsv source/"$src_rpm" source/virtio-win.spec > checksums.sha256
+        find source -type f ! -name "$src_rpm" -print0 | sort -z | xargs -0 sha256sum >> checksums.sha256
+    )
+}
+
 stage_ovmf_generic() {
     # OVMF's 2023 Microsoft certificates are not available in trixie. Keep sid
     # isolated to this exact signed package and its matching edk2 source; it is
@@ -284,6 +408,7 @@ apt-get -y --download-only --no-install-recommends \
     -o Dir::Cache::archives="$cache/debs" install "${apt_packages[@]}"
 cp "$cache/debs/"*.deb "$stage/nex/repo/"
 stage_ovmf_generic
+stage_virtio_win
 # Keep only the DLM rebuilt against this media's Pacemaker fencing ABI.
 rm -f "$stage/nex/repo"/dlm-controld_*.deb
 cp -f "$matched_dlm_deb" "$stage/nex/repo/"
@@ -314,6 +439,7 @@ Base: $base/$iso
 Base SHA256: $expected
 Debian signing fingerprint: $fingerprint
 APT sources: Debian trixie, trixie-updates, trixie-security; isolated Debian sid for ovmf-generic 2026.05-2 only
+Bundled media: Fedora virtio-win 0.1.302 with matching Fedora corresponding-source RPM
 Build UTC: $(date -u +%FT%TZ)
 Nex package version: ${NEX_ISO_VERSION:-unknown}
 Nex source: AGPL-3.0-only; upstream packages retain their own licenses.
@@ -352,10 +478,14 @@ deb-src https://snapshot.debian.org/archive/debian/20260711T235959Z/ trixie main
 deb-src https://snapshot.debian.org/archive/debian/20260711T235959Z/ trixie-updates main contrib non-free non-free-firmware
 deb-src https://snapshot.debian.org/archive/debian-security/20260711T235959Z/ trixie-security main contrib non-free non-free-firmware
 SOURCES
+# Perl 5.40.1-6 remains on the media while newer snapshot indices prefer
+# 5.40.1-6+deb13u1; retain the exact dsc/tarballs so the source bundle stays complete.
+ensure_perl_exact_source
 python3 /work/scripts/build-source-bundle.py \
     --version "$version" --iso "$cache/$iso" --tree "$stage" --repository "$stage/nex/repo" \
     --apt-sources "$cache/source-sources.list" \
     --source-input "$stage/nex/third-party" --source-input "$stage/nex/nex-source.tar.gz" \
+    --source-input "$cache/perl-exact-source" \
     --output "/work/dist/nex-core-${version}-source.tar.gz"
 cp installer/assets/boot-splash.png "$stage/isolinux/splash.png"
 cat > "$stage/isolinux/isolinux.cfg" <<'BIOS'
@@ -442,10 +572,23 @@ GRUB
 # Recompute media checksums without the boot catalog (regenerated by xorriso).
 (cd "$stage" && find . -type f ! -name md5sum.txt ! -path './isolinux/boot.cat' ! -path './isolinux/isolinux.bin' -print0 | sort -z | xargs -0 md5sum > md5sum.txt)
 rm -f "$output"
-if [[ -e $stage/nex/media/virtio-win.iso ]]; then
-    echo 'refusing to publish virtio-win.iso without complete corresponding-source and legal accounting' >&2
+# virtio-win ships only with retained Fedora corresponding source and notices.
+[[ -f $stage/nex/media/virtio-win.iso ]] || {
+    echo 'virtio-win.iso missing from staged media' >&2
     exit 1
-fi
+}
+[[ -f $stage/nex/third-party/virtio-win/NOTICE && -f $stage/nex/third-party/virtio-win/manifest.tsv ]] || {
+    echo 'virtio-win third-party notice/manifest missing' >&2
+    exit 1
+}
+[[ -f $stage/nex/third-party/virtio-win/source/virtio-win-0.1.302-1.src.rpm ]] || {
+    echo 'virtio-win corresponding source RPM missing' >&2
+    exit 1
+}
+grep -Fq $'\tsource_retained' "$stage/nex/third-party/virtio-win/manifest.tsv"
+grep -Fq $'\tyes' "$stage/nex/third-party/virtio-win/manifest.tsv"
+printf '%s  %s\n' 303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d \
+    "$stage/nex/media/virtio-win.iso" | sha256sum --check
 # Replay original hybrid BIOS/UEFI boot structure and signed EFI binaries.
 xorriso -indev "$cache/$iso" -outdev "$output" \
     -boot_image any replay -update_r "$stage" / -volid NEX_CORE -commit -end

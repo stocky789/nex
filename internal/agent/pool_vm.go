@@ -778,8 +778,10 @@ func PoolVMHandler(s *Store) http.Handler {
 			record.State = "stopped"
 			state.VMs[id] = record
 			err = savePoolVMs(s, state)
-		case "reboot", "force-reboot", "media":
-			if !ok || record.PendingUpdate != nil || record.HostID != member.HostID || ((req.Action == "reboot" || req.Action == "force-reboot") && record.State != "running") {
+		case "reboot", "force-reboot", "wake", "media":
+			// wake resumes a guest that put itself to sleep (ACPI S3): the domain is
+			// still this owner's running execution, so the record keeps state and epoch.
+			if !ok || record.PendingUpdate != nil || record.HostID != member.HostID || (req.Action != "media" && record.State != "running") {
 				http.Error(w, "VM execution is not eligible for this action", http.StatusConflict)
 				return
 			}
@@ -888,6 +890,18 @@ func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (
 	}
 	if cmd.Kind == "vm-power" && (action == "shutdown" || action == "force-stop") {
 		action = "stop"
+	}
+	if action == "start" {
+		// The engine wakes a guest asleep in ACPI S3 instead of starting it. The master
+		// already records that execution as running, so it is asked for a wake, which
+		// needs no permit; a second start permit would claim a second execution.
+		asleep, err := vmhost.ManagedVMAsleep(ctx, v.ID)
+		if err != nil {
+			return nil, errors.New("managed VM runtime observation is unavailable")
+		}
+		if asleep {
+			action = "wake"
+		}
 	}
 	permit := ""
 	epoch := uint64(0)
@@ -1150,8 +1164,8 @@ func poolVMLocal(s *Store, id, action string, permit *string, create bool, vm *p
 			return errors.New("VM execution owner mismatch")
 		}
 		r.State = "stopped"
-	case "reboot", "force-reboot", "media":
-		if !ok || r.PendingUpdate != nil || r.HostID != s.State.HostID || ((action == "reboot" || action == "force-reboot") && r.State != "running") {
+	case "reboot", "force-reboot", "wake", "media":
+		if !ok || r.PendingUpdate != nil || r.HostID != s.State.HostID || (action != "media" && r.State != "running") {
 			return errors.New("VM execution is not eligible for this action")
 		}
 	default:

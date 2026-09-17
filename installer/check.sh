@@ -71,8 +71,13 @@ assert 'appliance/build.py' in build, 'ISO builds must rebuild the Controller ap
 assert 'assert_iso_artifacts_current' in build, 'ISO builds must verify Core/Controller source freshness'
 assert 'stage_ovmf_generic' in build and 'local version=2026.05-2' in build and 'ovmf-generic=$version' in build
 assert '0f2d4de080ebeaf0972c5e212253c28dd2d90aa641542f42f37c6d6ecd4c67eb' in build
-assert 'stage_virtio_win' not in build
-assert 'refusing to publish virtio-win.iso without complete corresponding-source and legal accounting' in build
+assert 'stage_virtio_win' in build and 'virtio-win-0.1.302-1.src.rpm' in build
+assert 'ensure_perl_exact_source' in build and 'perl-exact-source' in build
+assert '303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d' in build
+assert '25561bba120e67bfae842429d5e25764c38e74b92f78d9ef90c20ec41d2ad75d' in build
+assert 'third-party/virtio-win' in build and 'source_retained' in build
+assert 'refusing to publish virtio-win.iso without complete corresponding-source and legal accounting' not in build
+assert 'virtio-win corresponding source RPM missing' in build
 assert 'Dir::Etc::sourceparts=-' in build and 'sid main' in build
 assert "grep -aFq 'Microsoft UEFI CA 2023'" in build
 assert "grep -aFq 'Windows UEFI CA 2023'" in build
@@ -97,6 +102,8 @@ assert 'dpkg-divert --local --add --rename --divert /etc/os-release.debian /etc/
 assert 'ID=nex-core\nID_LIKE=debian\n' in post and "dpkg-query -W -f='${Version}' nex-core-local" in post
 assert 'systemd.ssh_auto=no' in post
 assert '0.1.0-alpha1' not in build + late and 'test "$ID" = nex-core' in late, 'One Nex Core version: the package'
+assert 'if [ -d /cdrom/nex/third-party/virtio-win ]' in late
+assert 'install -m644 /cdrom/nex/media/virtio-win.iso /target/usr/share/nex/media/virtio-win.iso' in late
 assert '> /usr/lib/os-release' not in late, 'Preserve upstream release metadata'
 assert 'third-party/ovmf-generic' in late
 print('PASS: shell syntax, interactive disk/account/network contract, package inputs, offline APT scope')

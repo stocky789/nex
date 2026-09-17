@@ -21,7 +21,9 @@ func vncSocket(ctx context.Context, virsh func(context.Context, ...string) ([]by
 	if err != nil {
 		return "", errors.New("cannot establish VM execution state")
 	}
-	if strings.TrimSpace(string(state)) != "running" {
+	if observed := strings.TrimSpace(string(state)); observed == domainAsleep {
+		return "", errors.New("VM is asleep; use Start to wake it before opening its console")
+	} else if observed != "running" {
 		return "", errors.New("VM is not running; start it before opening its console")
 	}
 	b, err := virsh(ctx, "dumpxml", id)

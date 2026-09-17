@@ -161,6 +161,10 @@ Leaving the console leaves the VM running. While a reconnect is pending the badg
   Use **Start VM** on the console toolbar, **Start** in the page toolbar, or start it on its
   host; the Console tab connects on its own once a fresh report shows the VM running.
   Controller never starts a VM as a side effect of opening its console.
+- **The VM is observed asleep and the console shows nothing or refuses to open:** the guest
+  put itself to sleep (for example Windows Sleep) on a definition written before Nex disabled
+  guest sleep. Select **Start** in the toolbar to wake it, wait for the next host report, then
+  connect; see [Control VM power](vm-power.md#troubleshooting).
 - **The boot prompt is gone, or the guest stops at "No bootable option or device was found":**
   the *Press any key to boot from CD or DVD* prompt waits about five seconds, which a console
   opened after the start usually misses; the same happens when Setup reboots by itself. Shut

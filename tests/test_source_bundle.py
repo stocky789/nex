@@ -90,6 +90,33 @@ class SourceBundleTests(unittest.TestCase):
                 self.assertTrue(all((m.uid, m.gid, m.uname, m.gname) == (0, 0, '', '')
                                     for m in retained.getmembers()))
 
+    def test_staged_virtio_win_requires_retained_fedora_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, tree = root / 'repo', root / 'tree'
+            repo.mkdir()
+            media = tree / 'nex' / 'media'
+            media.mkdir(parents=True)
+            (media / 'virtio-win.iso').write_bytes(b'iso')
+            (tree / 'nex' / 'repo').mkdir(parents=True)
+            control = root / 'control'
+            (control / 'DEBIAN').mkdir(parents=True)
+            (control / 'DEBIAN' / 'control').write_text(
+                'Package: sample\nVersion: 1\nArchitecture: all\nMaintainer: test\nDescription: test\n')
+            subprocess.run(['dpkg-deb', '--build', str(control), str(repo / 'sample_1_all.deb')],
+                           check=True, stdout=subprocess.DEVNULL)
+            iso = root / 'base.iso'
+            iso.write_bytes(b'base')
+            out = root / 'source.tar.gz'
+            with mock.patch.object(source_bundle, 'update_sources'), \
+                    mock.patch.object(source_bundle, 'fetch_sources'), \
+                    mock.patch.object(source_bundle, 'retained_dsc', return_value=root / 'fake.dsc'):
+                with self.assertRaisesRegex(RuntimeError, 'without retained Fedora corresponding source'):
+                    source_bundle.main([
+                        '--version', '0.3.2', '--iso', str(iso), '--tree', str(tree),
+                        '--repository', str(repo), '--output', str(out),
+                    ])
+
     def test_iso_build_exports_complete_release_evidence(self):
         build = (ROOT / 'installer/build.sh').read_text()
         self.assertIn('snapshot.debian.org/archive/debian/', build)
@@ -97,8 +124,10 @@ class SourceBundleTests(unittest.TestCase):
         self.assertIn('nex-core-${version}-source.tar.gz', build)
         self.assertIn('nex-core-${version}-compliance-manifest.json', build)
         self.assertIn('ARTWORK-LICENSE.md', build)
-        self.assertNotIn('stage_virtio_win', build)
-        self.assertIn('refusing to publish virtio-win.iso without complete corresponding-source and legal accounting', build)
+        self.assertIn('stage_virtio_win', build)
+        self.assertIn('virtio-win-0.1.302-1.src.rpm', build)
+        self.assertIn('virtio-win corresponding source RPM missing', build)
+        self.assertNotIn('refusing to publish virtio-win.iso without complete corresponding-source and legal accounting', build)
         for package in ('dahdi-firmware-nonfree', 'atmel-firmware', 'bluez-firmware',
                         'firmware-sof-signed', 'firmware-b43-installer',
                         'firmware-b43legacy-installer'):

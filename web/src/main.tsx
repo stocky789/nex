@@ -8,7 +8,7 @@ import {
 } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
-import { HostISOs, ManagedVMs, VMDetails, VMPower, VMDelete, powerActions, powerBlocker, powerConfirmText, deleteBlocker, sentence, type VM, type Storage, type Network, type Media } from "./managed";
+import { HostISOs, ManagedVMs, VMDetails, VMPower, VMDelete, powerActions, powerBlocker, powerConfirmText, deleteBlocker, sentence, stateText, type VM, type Storage, type Network, type Media } from "./managed";
 import { Console } from "./console";
 import { Stats, RealtimeStats } from "./stats";
 import { Icon } from "./icons";
@@ -755,7 +755,7 @@ function App() {
     setCreateVM(true);
     location.hash = `/pools/${pool.id}`;
   }
-  const powerStatus = vm && `Observed ${vm.state || "unknown"} · ${vm.freshness || "unknown"}. ${powerBlocker(vm, data.hosts.find(h => h.id === vm.host_id)) || "Use the toolbar to start, shut down, reboot, force stop or force reboot this VM."}`;
+  const powerStatus = vm && `Observed ${stateText(vm.state)} · ${vm.freshness || "unknown"}. ${powerBlocker(vm, data.hosts.find(h => h.id === vm.host_id)) || "Use the toolbar to start, shut down, reboot, force stop or force reboot this VM."}`;
   const submitName = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const name = String(new FormData(e.currentTarget).get("name")).trim();
@@ -1726,7 +1726,7 @@ function consoleBlocker(vm: VM, host?: Host): string {
   if (!host || host.revoked || host.connection !== "fresh") return "The VM's host is not freshly connected. Its console cannot be opened until the host reports again.";
   if (!host.capabilities?.includes("console-v1")) return "The host agent does not support browser consoles. Upgrade Nex Core on this host.";
   if (vm.freshness !== "fresh") return "Current VM state is unknown; wait for a fresh host report before opening the console.";
-  if (vm.state !== "running") return `The VM is observed ${vm.state || "unknown"}. Use Start in the toolbar, wait for the next host report, then connect.`;
+  if (vm.state !== "running") return `The VM is observed ${stateText(vm.state)}. Use Start in the toolbar, wait for the next host report, then connect.`;
   return "";
 }
 function hostConsoleBlocker(host: Host): string {

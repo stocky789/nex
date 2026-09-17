@@ -31,10 +31,10 @@
       open: []
     },
     {
-      status: "testing",
+      status: "shipped",
       title: "One host, managed from a browser",
       summary:
-        "A Controller that enrolls a host, and everything needed to run a VM on it.",
+        "A Controller that enrolls a host, and everything needed to run a VM on it. Phase 2 closed 2026-09-17.",
       done: [
         "Administrator login, sites, and automatic pools — each enrolled host becomes the master of its own pool",
         "Host enrollment by short-lived token, or by address and root password after you confirm the host's fingerprint; revoke and re-enroll without losing identity",
@@ -48,15 +48,12 @@
         "A browser console for VMs and for hosts, with key combinations, display scaling, clipboard both ways, typing into installers, screenshots and CD/DVD insert and eject",
         "Guest tools reporting: agent state, operating system, hostname, addresses and clipboard readiness, with install advice when no agent answers",
         "Per-VM CPU, memory and disk usage from the host, shown on VM details with honest unknown values rather than zeros",
-        "VM and host usage history kept on each host for up to a year, with charts, stacking, zoom and an on-demand 1-second realtime view — in the pending 0.3.0 release",
-        "Windows-ready firmware choices: Secure Boot, an optional TPM 2.0, and a second CD drive for an operator-imported Windows driver ISO",
-        "Deleting a stopped VM after typing its name to confirm, with a separate choice about keeping or removing its disks, and completion if Nex Core is interrupted part-way; fixes for retrying an interrupted delete are in the pending 0.3.0 release"
+        "VM and host usage history kept on each host for up to a year, with charts, stacking, zoom and an on-demand 1-second realtime view — shipped in 0.3.0",
+        "Windows-ready firmware choices: Secure Boot, an optional TPM 2.0, and a second CD drive that seeds Fedora virtio-win 0.1.302 from Core media — shipped in 0.3.2 with retained Fedora corresponding source",
+        "Deleting a stopped VM after typing its name to confirm, with a separate choice about keeping or removing its disks, and completion if Nex Core is interrupted part-way — including retries after an interrupted delete, shipped in 0.3.0",
+        "Phase 2 gate closed on 2026-09-17: create/install/console/reboot/persist and Controller outage recovery on gate5; BUG-0256 and admission re-checks on 0.3.1; VirtIO media on 0.3.2"
       ],
-      open: [
-        "Bundle a Windows VirtIO driver ISO after its complete corresponding source and notices are retained; published releases deliberately exclude it, so you import it yourself",
-        "The end-to-end check for this milestone: install a real guest operating system from an uploaded ISO through the browser console, reboot it, and confirm the data it wrote is still there. It passed on a test build in a virtual lab, but that run found a network interface added to a running VM could reuse an address still in use; the fix is in the pending 0.3.0 release and still needs a new test build and a re-run",
-        "The rest of this milestone's checks: refusing a VM the host cannot fit, showing which edits wait for a stop, and a few empty, queued and failed screens"
-      ]
+      open: []
     },
     {
       status: "testing",
@@ -71,10 +68,10 @@
         "Deploying the Controller as a virtual appliance from that local interface, which then creates the first site, enrolls the host and adopts the appliance on its own",
         "A signed Nex package repository, with update checks and updates through the ordinary package manager",
         "Releases made by tagging: the ISO and both packages are built and published together, and the build refuses to run if the tag and the changelog disagree",
-        "A documented export of the Controller's database and identity, and a restore onto a replacement appliance"
+        "A documented export of the Controller's database and identity, and a restore onto a replacement appliance",
+        "A Controller package that starts: packages up to 0.2.9 were built without their database driver and stopped at launch; fixed from 0.3.0 and confirmed starting in the published 0.3.1 package"
       ],
       open: [
-        "A Controller package that starts: packages up to 0.2.9 were built without their database driver and stop at launch. Controller appliances are not affected; the fix is in the pending 0.3.0 release",
         "Secure Boot installation of the host — UEFI installation has so far passed only in an emulated virtual machine",
         "Real Intel and AMD hardware — every installation so far has been a disposable virtual machine",
         "Machines with several disks, and the safety of that choice",
@@ -92,7 +89,7 @@
         "Storage repositories owned by Nex Core: local directories, existing OpenZFS datasets and single-host iSCSI LUNs stay with the host that owns them, while NFS and SMB3 storage is shared across the pool",
         "Registering shared NFS or SMB3 storage once at pool level, with access, write permission, QEMU access and disk locking verified separately on every member before a VM there can use it",
         "Choosing which host a new VM is placed on, with only the storage, networks and ISOs that host has validated on offer",
-        "A fixed CPU definition discovered from every current pool member and saved with each VM, with manual CPU choices still available — in the pending 0.3.1 release; native runtime and simulated browser checks passed, physical mixed-host testing and live migration remain open",
+        "A fixed CPU definition discovered from every current pool member and saved with each VM, with manual CPU choices still available — shipped in 0.3.1; native runtime and simulated browser checks passed, physical mixed-host testing and live migration remain open",
         "VMs on several hosts writing to the same NFS or SMB3 storage at once, with disk locks refusing a second writer of the same disk — passed in bounded three-host lab tests with no injected faults"
       ],
       open: [
@@ -218,8 +215,8 @@
       <h1 id="roadmap-title">Roadmap.</h1>
       <p class="roadmap-description">
         Built in order — no milestone counts as done until it works end to end. No
-        dates. Ticked items are in releases up to 0.2.9 unless they say they are in the
-        pending 0.3.0 or 0.3.1 release.
+        dates. Ticked items are in published releases through 0.3.1 unless a note says
+        otherwise.
       </p>
     </div>
     <dl class="counts">

@@ -1,0 +1,55 @@
+{
+  "summary": "Handle guests that put themselves to sleep (BUG-0273). Every generated domain definition disables ACPI S3/S4 so guests offer no Sleep or Hibernate. A domain that still reports pmsuspended is observed as a running owner instead of failing the host's pool inventory; Start wakes it with virsh dompmwakeup, Shut down and Reboot wake it first, Force stop and Force reboot act directly, and console, edit and delete refuse it with a message naming Start. The pool master gains a private wake admission action beside reboot that issues no permit and changes no state. The UI names the state asleep and offers Start.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/console.go",
+    "internal/vmhost/power_test.go",
+    "internal/vmhost/console_test.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_test.go",
+    "web/src/managed.tsx",
+    "web/src/main.tsx",
+    "web/src/managed.test.mjs",
+    "docs/API.md",
+    "docs/guide/vm-power.md",
+    "docs/guide/vm-console.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-17-guest-sleep.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators see a new observed state, Start now wakes a sleeping guest, and new definitions remove guest sleep.",
+    "pages": [
+      "docs/guide/vm-power.md",
+      "docs/guide/vm-console.md",
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "API impact: changed contract. vm-power semantics on a pmsuspended domain (start wakes, shutdown/reboot wake first, force actions allowed), ManagedVMState observes it as running for Inventory.managed.vms, the private Core-to-master execution admission adds the wake action, and generated definitions carry <pm>. GET /api/v1/vms state pass-through, POST /api/v1/vms/{id}/power request and response shapes, and capabilities are unchanged; an older master rejects wake as unsupported (fail-closed).",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fix within the existing VM power capability; no milestone status changes."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The sleep policy lives in each VM's libvirt domain definition on its host, rewritten from the master's pool-vms Spec; the wake admission acts on the master's existing pool-vms execution record without adding fields. A fresh Controller re-adopts the VM and its observed state from host inventory as before; nothing is stored in Controller.",
+    "record": "libvirt domain definition (<pm>) on the owning host; master pool-vms.json execution record (unchanged shape)"
+  },
+  "verification": {
+    "method": "Runnable checks: go test ./internal/vmhost ./internal/agent ./internal/controller ./internal/protocol (all pass, including the new TestManagedPowerWakesSleepingGuest, TestManagedDomainXMLDisablesGuestSleep, TestConsoleSocket asleep case and TestSharedVMAsleepIsAdmittedAsWake, which fail on the previous engine); npm run typecheck and node src/managed.test.mjs in web/. The originating case was diagnosed live through the Controller API (GET /api/v1/vms state pmsuspended, failed operations) and the host-local API (same libvirt state). The fixed build has not been deployed to that host and no browser walkthrough of the wake has been run; recorded as outstanding in the guide.",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "internal/vmhost/power_test.go",
+      "internal/agent/pool_vm_test.go",
+      "web/src/managed.test.mjs"
+    ]
+  }
+}
