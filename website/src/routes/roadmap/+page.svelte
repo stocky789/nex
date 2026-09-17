@@ -48,14 +48,14 @@
         "A browser console for VMs and for hosts, with key combinations, display scaling, clipboard both ways, typing into installers, screenshots and CD/DVD insert and eject",
         "Guest tools reporting: agent state, operating system, hostname, addresses and clipboard readiness, with install advice when no agent answers",
         "Per-VM CPU, memory and disk usage from the host, shown on VM details with honest unknown values rather than zeros",
-        "VM and host usage history kept on each host for up to a year, with charts, stacking, zoom and an on-demand 1-second realtime view",
+        "VM and host usage history kept on each host for up to a year, with charts, stacking, zoom and an on-demand 1-second realtime view — in the pending 0.3.0 release",
         "Windows-ready firmware choices: Secure Boot, an optional TPM 2.0, and a second CD drive for an operator-imported Windows driver ISO",
-        "Deleting a stopped VM after typing its name to confirm, with a separate choice about keeping or removing its disks, and completion if Nex Core is interrupted part-way"
+        "Deleting a stopped VM after typing its name to confirm, with a separate choice about keeping or removing its disks, and completion if Nex Core is interrupted part-way; fixes for retrying an interrupted delete are in the pending 0.3.0 release"
       ],
       open: [
-        "Bundle a Windows VirtIO driver ISO after its complete corresponding source and notices are retained; Nex Core 0.2.9 deliberately excludes it",
-        "NFS, local OpenZFS datasets, SMB3 and exclusive-host iSCSI repositories: implemented for one host, with native VM data and failure-recovery testing in progress",
-        "The end-to-end check for this milestone: install a real guest operating system from an uploaded ISO through the browser console, reboot it, and confirm the data it wrote is still there. It passed on a test build in a virtual lab, but that run found a network interface added to a running VM could reuse an address still in use; the fix is written and waits for review, a new test build and a re-run"
+        "Bundle a Windows VirtIO driver ISO after its complete corresponding source and notices are retained; published releases deliberately exclude it, so you import it yourself",
+        "The end-to-end check for this milestone: install a real guest operating system from an uploaded ISO through the browser console, reboot it, and confirm the data it wrote is still there. It passed on a test build in a virtual lab, but that run found a network interface added to a running VM could reuse an address still in use; the fix is in the pending 0.3.0 release and still needs a new test build and a re-run",
+        "The rest of this milestone's checks: refusing a VM the host cannot fit, showing which edits wait for a stop, and a few empty, queued and failed screens"
       ]
     },
     {
@@ -74,27 +74,35 @@
         "A documented export of the Controller's database and identity, and a restore onto a replacement appliance"
       ],
       open: [
+        "A Controller package that starts: packages up to 0.2.9 were built without their database driver and stop at launch. Controller appliances are not affected; the fix is in the pending 0.3.0 release",
         "Secure Boot installation of the host — UEFI installation has so far passed only in an emulated virtual machine",
         "Real Intel and AMD hardware — every installation so far has been a disposable virtual machine",
         "Machines with several disks, and the safety of that choice",
         "Connecting a host to an existing Controller from the host's own interface; today the Controller reaches out and adds the host",
-        "Replacing the Controller appliance on the same host that runs it; today a replacement Controller runs on another machine and takes the pool back from its hosts"
+        "Replacing the Controller appliance on the same host that runs it, which is still being decided; today a replacement Controller runs on another machine and takes the pool back from its hosts"
       ]
     },
     {
-      status: "next",
+      status: "testing",
       title: "More than one host, and shared storage",
       summary:
         "A pool that spans hosts, with storage they can all reach and honest placement rules.",
-      done: [],
+      done: [
+        "Joining another host to an existing pool as a member under its master; the master keeps the membership, and a join with a lost reply is safe to retry",
+        "Storage repositories owned by Nex Core: local directories, existing OpenZFS datasets and single-host iSCSI LUNs stay with the host that owns them, while NFS and SMB3 storage is shared across the pool",
+        "Registering shared NFS or SMB3 storage once at pool level, with access, write permission, QEMU access and disk locking verified separately on every member before a VM there can use it",
+        "Choosing which host a new VM is placed on, with only the storage, networks and ISOs that host has validated on offer",
+        "VMs on several hosts writing to the same NFS or SMB3 storage at once, with disk locks refusing a second writer of the same disk — passed in bounded three-host lab tests with no injected faults"
+      ],
       open: [
-        "Joining a second host to an existing pool as a member under its master, changing which host is the master, and ejecting a member — one authority handover design with its own safety checks",
+        "A Controller screen for joining a host to a pool; today the join runs through each host's local interface",
+        "Changing which host is the master, and ejecting a member — one authority handover design with its own safety checks",
         "Every member keeps a signed, versioned copy of the master's pool records, so a surviving member can become master without losing VM ownership, membership or storage settings",
         "Automatic master succession when the master is lost: only with a majority of the pool and proof the old master is powered off, never from a missed heartbeat; two-host pools promote manually",
         "The master, not the Controller, approves which host a VM is placed on",
-        "Registering external NFS storage at pool level, with access, permissions and capacity verified separately on every host",
-        "Showing plainly which storage is local and which is shared, and never starting a second writer just because a host stopped reporting",
-        "Mapping logical networks to host bridges and VLANs with compatibility checks, applying remote network changes in stages, and rolling them back automatically if management access is lost",
+        "Clustered iSCSI storage shared by several hosts with fencing: built for development and not yet for real use",
+        "Fault testing that proves a host which stopped reporting never leads to a second writer: failed fencing, network partitions, lost quorum, larger pools, long-running load and physical storage",
+        "Copying pool networks to member hosts, mapping them to host bridges and VLANs with compatibility checks, applying remote network changes in stages, and rolling them back automatically if management access is lost",
         "Maintenance mode, which blocks new placements and reports what is still running on the host"
       ]
     },
@@ -133,14 +141,16 @@
       status: "next",
       title: "A release we would support",
       summary: "Upgrades, roles and recovery procedures that have actually been rehearsed.",
-      done: [],
+      done: [
+        "Checksums, release notes, a matching source bundle and a component manifest, published with each release since 0.2.9"
+      ],
       open: [
         "Upgrading hosts that already have VMs on them, with schema migrations and a stated Controller and host compatibility window",
         "Operator and viewer roles, scoped across sites and pools, with host enrollment and credentials kept to administrators",
         "Written and rehearsed procedures for host replacement, Controller loss, storage loss and certificate recovery",
         "Rehearsing replacement-Core VM recovery separately on NFS, SMB and supported exclusive-handover iSCSI targets, including stale old-host return and refusal when safe ownership cannot be proven",
         "Surfacing the things that matter: failed tasks, ageing backups, low capacity, degraded storage, lost hosts and expiring certificates, plus diagnostic bundles with secrets stripped out",
-        "A published hardware list, checksums, package manifests and release notes"
+        "A published hardware list and a stated range of supported versions"
       ]
     },
     {
@@ -206,8 +216,9 @@
       <p class="eyebrow"><span class="small-line"></span> Where the project stands</p>
       <h1 id="roadmap-title">Roadmap.</h1>
       <p class="roadmap-description">
-        Built in order — each milestone works end to end before the next one starts.
-        No dates.
+        Built in order — no milestone counts as done until it works end to end. No
+        dates. Ticked items are in releases up to 0.2.9 unless they say they are in the
+        pending 0.3.0 release.
       </p>
     </div>
     <dl class="counts">
@@ -232,7 +243,7 @@
       </div>
       <div>
         <dt><span class="mark next" aria-hidden="true">○</span> Next</dt>
-        <dd>Specified, no code yet</dd>
+        <dd>Specified, not yet built</dd>
       </div>
     </dl>
     <p class="legend-note">Bars count the items listed here — not effort or time.</p>
