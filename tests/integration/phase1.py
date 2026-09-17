@@ -178,13 +178,17 @@ def acceptance(lab, args):
     mode = lab.path / 'probe-mode'
     mode.write_text('healthy')
     # A read-only fake libvirt command is the only simulated service in this lab.
+    # Successful fork/exec can exceed 150ms on a loaded runner. Keep that latency
+    # in the fixture so health/restart checks cannot depend on a subsecond deadline.
     (shim / 'virsh').write_text('#!/bin/sh\ncase "$(cat "$NEX_QA_MODE")" in\n'
+        'healthy) sleep 0.25;;\n'
         'failed) echo "simulated libvirt unavailable" >&2; exit 1;;\n'
         'stalled) exec sleep 60;;\nesac\nexit 0\n')
     (shim / 'virsh').chmod(0o700)
     env = {**os.environ, 'PATH': str(shim) + os.pathsep + os.environ['PATH'], 'NEX_QA_MODE': str(mode)}
+    # Retain the production probe deadline; only reporting/polling cadence is accelerated.
     agent_args = [agent, 'run', '--state-dir', state_dir, '--heartbeat', '250ms',
-                  '--probe-interval', '250ms', '--probe-timeout', '150ms']
+                  '--probe-interval', '250ms']
     ap = lab.start('agent', *agent_args, env=env)
 
     def check_status(name, status):

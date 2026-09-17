@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -156,9 +157,9 @@ func TestJournalReplayAndFreshInventory(t *testing.T) {
 
 func TestRunStopsOnJournalPersistenceFailure(t *testing.T) {
 	s := testStore(t)
-	calls := 0
+	var calls atomic.Int32
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
+		calls.Add(1)
 		path := filepath.Join(s.dir, "state.json")
 		if err := os.Remove(path); err != nil {
 			t.Error(err)
@@ -178,15 +179,17 @@ func TestRunStopsOnJournalPersistenceFailure(t *testing.T) {
 	s.State.TrustPEM = certPEM
 	s.State.CertificatePEM = certPEM
 	s.State.KeyPEM = string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	// Bound a broken run without cancelling normal startup before the server can
+	// inject the persistence failure on a loaded race-enabled CI runner.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	err = Run(ctx, s, RunConfig{Heartbeat: 100 * time.Millisecond, ProbeInterval: 100 * time.Millisecond, ProbeTimeout: 20 * time.Millisecond})
 	var persistence persistenceError
 	if !errors.As(err, &persistence) {
 		t.Fatalf("want fatal persistence failure, got %v", err)
 	}
-	if calls != 1 {
-		t.Fatalf("reported %d times after persistence failure", calls)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("reported %d times after persistence failure", got)
 	}
 }
 

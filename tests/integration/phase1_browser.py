@@ -9,6 +9,7 @@ from copy import deepcopy
 
 from web_security import browser_security, peer_throttle
 from pathlib import Path
+from phase1 import eventually
 
 
 def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
@@ -453,20 +454,27 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         refresh_route('pools/' + pool_id)
         lab.passed('browser host and pool health summaries: compact healthy, current degraded/failed reasons, multiple affected checks, stale/unknown observations and revoked host')
         refresh_route('hosts/' + host_id)
+        def wait_probe(status):
+            eventually(lambda: any(
+                check['name'] == 'libvirt' and check['status'] == status
+                for host in lab.api('/api/v1/hosts') if host['id'] == host_id
+                for check in (host.get('inventory') or {}).get('checks', [])
+            ), f'browser libvirt probe becomes {status}')
+
         probe_mode('failed')
-        page.wait_for_timeout(700)
+        wait_probe('failed')
         page.reload()
         libvirt = page.locator('.check').filter(has=page.get_by_text('libvirt', exact=True))
         expect(libvirt.locator('.badge.failed')).to_be_visible()
         expect(page.locator('.badge.fresh')).to_be_visible()
         capture('libvirt-failed-desktop')
         probe_mode('stalled')
-        page.wait_for_timeout(700)
+        wait_probe('unknown')
         page.reload()
         expect(libvirt).to_contain_text('probe deadline exceeded')
         capture('probe-timeout-desktop')
         probe_mode('healthy')
-        page.wait_for_timeout(700)
+        wait_probe('healthy')
         page.reload()
         expect(libvirt.locator('.badge.healthy')).to_be_visible()
         lab.passed('browser pool aggregate healthy enum, failed libvirt and timed-out probe distinct from fresh heartbeat; recovered checks')

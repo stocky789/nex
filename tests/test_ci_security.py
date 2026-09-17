@@ -29,14 +29,13 @@ def credentials_script(provider):
 
 
 class BrowserArtifactTests(unittest.TestCase):
-    def test_both_runners_build_local_browser_binary(self):
-        for provider in ('.github', '.gitea'):
+    def test_go_race_suite_has_an_explicit_bounded_ci_budget(self):
+        # Full-strength password hashing under race instrumentation exceeded Go's
+        # default ten-minute package budget on the shared runner.
+        for provider in PROVIDERS:
             with self.subTest(provider=provider):
                 workflow = (ROOT / provider / 'workflows/phase1.yml').read_text()
-                build = workflow.find('go build -o dist/nex-core-local ./cmd/nex-core-local')
-                browser = workflow.find('python tests/integration/localcore_browser.py')
-                self.assertGreaterEqual(build, 0, 'local browser default binary must be built')
-                self.assertGreater(browser, build, 'build must run before local browser QA')
+                self.assertIn('run: go test -race -timeout 20m ./...', workflow)
 
     def test_phase1_runs_independent_lanes_in_parallel(self):
         """Serial phase1 hid storage UI failures behind ~15 minutes of unrelated work."""
@@ -46,7 +45,6 @@ class BrowserArtifactTests(unittest.TestCase):
             'web:',
             'controller-browser:',
             'website:',
-            'host:',
             'phase1:',
             'iso_url_browser.py',
             'storage_repositories_browser.py',
@@ -60,6 +58,9 @@ class BrowserArtifactTests(unittest.TestCase):
                 gallery = workflow.index('website_controller_captures.py')
                 self.assertLess(smoke, gallery, 'storage UI smoke must run before gallery in the browser lane')
                 self.assertIn('cancel-in-progress: true', workflow)
+                # The runner cannot unshare or bind-mount, so a host lane only ever skipped.
+                self.assertNotIn('  host:', workflow)
+                self.assertNotIn('schedule:', workflow)
 
 
 class ReleaseDeployCredentialTests(unittest.TestCase):

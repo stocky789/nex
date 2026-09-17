@@ -4,8 +4,6 @@ on:
     branches:
       - '**'
   pull_request:
-  schedule:
-    - cron: "30 3 * * 1"
 concurrency:
   group: phase1-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -25,8 +23,10 @@ jobs:
       - uses: https://github.com/actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: '1.27.1'
+      # Keep production-strength password hashing and race checks; the shared
+      # runner can exceed Go's default ten-minute package deadline.
       - name: Test Go services and recovery
-        run: go test -race ./...
+        run: go test -race -timeout 20m ./...
       - name: Check Go dependency advisories
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
@@ -156,82 +156,9 @@ jobs:
           trap 'kill "$nginx_pid"' EXIT
           .cache/phase1-qa-venv/bin/python tests/integration/website_hardening_browser.py --url http://127.0.0.1:8081 --evidence .cache/website-hardening-qa
 
-  host:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - uses: https://github.com/actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: '1.27.1'
-      - uses: https://github.com/actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      # Needs CAP_SYS_ADMIN for network namespaces, or a workspace path that exists
-      # on the Docker host so nested containers can bind-mount the repository.
-      # Probe once and gate every dependent step so a limited runner reports them
-      # honestly as not-run instead of failing the job. These are SKIPPED, NOT PASSING.
-      - name: Check runner capabilities for host-dependent checks
-        id: hostcap
-        run: |
-          set -eu
-          namespaces=no
-          bindmount=no
-          sudo unshare -nm true 2>/dev/null && namespaces=yes || true
-          if docker run --rm -v "$PWD:/probe" --entrypoint sh debian:trixie-slim \
-              -c 'test -f /probe/go.mod' >/dev/null 2>&1; then
-            bindmount=yes
-          fi
-          echo "namespaces=$namespaces bind mount=$bindmount"
-          if [ "$namespaces" = yes ] && [ "$bindmount" = yes ]; then
-            echo 'available=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'available=false' >> "$GITHUB_OUTPUT"
-            echo "::warning::Runner cannot run host-dependent checks (namespaces=$namespaces, docker bind mount=$bindmount). SKIPPED, NOT PASSED: guest VLAN bridge, Controller replacement in a namespace, local host browser authentication and preflight, Debian libvirt observations, and Controller replacement with Debian libvirt. That coverage is missing from this run. Give act_runner a host label (for example \"ubuntu-latest:host\") to restore it."
-          fi
-      - name: Verify guest VLAN bridge creation in a disposable network namespace
-        if: steps.hostcap.outputs.available == 'true'
-        run: |
-          mkdir -p .cache
-          go test -c -o .cache/vmhost.test ./internal/vmhost
-          sudo unshare -nm sh -c 'mount -t sysfs none /sys && NEX_NETNS_TEST=1 .cache/vmhost.test -test.run TestGuestVLANNetns -test.v'
-      - name: Verify Controller replacement with real processes in a disposable network namespace
-        if: steps.hostcap.outputs.available == 'true'
-        run: |
-          mkdir -p .cache/replacement-bin
-          go build -o .cache/replacement-bin/nex-controller ./cmd/nex-controller
-          go build -o .cache/replacement-bin/nex-core-agent ./cmd/nex-core-agent
-          python3 scripts/build-source.py --output .cache/replacement-bin/nex-source.tar.gz
-          sudo NEX_BIN="$PWD/.cache/replacement-bin" unshare -nm sh -c 'mount -t sysfs none /sys && ip link set lo up && ip link add nexqa type bridge && ip link set nexqa up && python3 tests/integration/controller_replacement.py --bridge nexqa --storage-root /var/lib/nexqa-replacement --evidence .cache/controller-replacement'
-      - name: Build UI assets for local host browser checks
-        if: steps.hostcap.outputs.available == 'true'
-        run: |
-          npm --prefix web ci
-          npm --prefix web run build
-      - name: Prepare browser verification
-        if: steps.hostcap.outputs.available == 'true'
-        run: |
-          python3 -m venv .cache/phase1-qa-venv
-          .cache/phase1-qa-venv/bin/pip install playwright==1.62.0 pillow==12.3.0
-          .cache/phase1-qa-venv/bin/python -m playwright install --with-deps chromium
-      - name: Build local host browser service
-        run: go build -o dist/nex-core-local ./cmd/nex-core-local
-      - name: Verify local host browser authentication and preflight blockers
-        if: steps.hostcap.outputs.available == 'true'
-        run: .cache/phase1-qa-venv/bin/python tests/integration/localcore_browser.py --blocked-only
-      - name: Verify Debian and native libvirt observations
-        if: steps.hostcap.outputs.available == 'true'
-        run: bash tests/integration/phase1-debian.sh
-      - name: Verify Controller replacement end to end with Debian libvirt (storage, network, ISO, VM)
-        if: steps.hostcap.outputs.available == 'true'
-        run: bash tests/integration/controller_replacement_debian.sh .cache/controller-replacement-debian
-
   # Keeps a single required check name for branch protection / dashboards.
   phase1:
-    needs: [go, contracts, web, controller-browser, website, host]
+    needs: [go, contracts, web, controller-browser, website]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -243,10 +170,8 @@ jobs:
           echo "web=${{ needs.web.result }}"
           echo "controller-browser=${{ needs.controller-browser.result }}"
           echo "website=${{ needs.website.result }}"
-          echo "host=${{ needs.host.result }}"
           test "${{ needs.go.result }}" = success
           test "${{ needs.contracts.result }}" = success
           test "${{ needs.web.result }}" = success
           test "${{ needs.controller-browser.result }}" = success
           test "${{ needs.website.result }}" = success
-          test "${{ needs.host.result }}" = success

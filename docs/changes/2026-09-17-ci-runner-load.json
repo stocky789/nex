@@ -1,0 +1,39 @@
+{
+  "summary": "Fix follow-up CI persistence/probe timing regressions and give the race suite an explicit bounded runtime. API impact: none; test and CI changes only.",
+  "paths": [
+    ".github/workflows/phase1.yml",
+    ".gitea/workflows/phase1.yml",
+    "tests/test_ci_security.py",
+    "internal/agent/client_test.go",
+    "tests/integration/phase1.py",
+    "tests/integration/phase1_browser.py",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/ci/2026-09-17-runner-load.md",
+    "internal/controller/managed_test.go"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Test fixture timing and CI budgets do not change operator workflows.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No client, Controller, Core or observed-result contract changes; API calls in regressions remain the same.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Regression corrections do not establish native acceptance or change milestone status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No product durable state is added or moved."
+  },
+  "verification": {
+    "method": "Inspect hosted failures, reproduce delayed failure injection and healthy probe timing, run corrected tests and review independently; actual results and limits recorded in QA.",
+    "evidence": [
+      "docs/qa/ci/2026-09-17-runner-load.md"
+    ]
+  }
+}

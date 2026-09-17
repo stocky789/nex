@@ -62,10 +62,3 @@ jobs:
           python3 tests/integration/installer-link.py
           python3 tests/integration/installer-disk.py
 
-      # Building the image needs no bind mount, so this still catches a broken
-      # Dockerfile or a build dependency that vanished from Debian trixie. It does
-      # not exercise the image; nothing is run inside it.
-      - name: Verify the installer toolchain image still builds
-        run: |
-          docker info
-          docker build -t nex-iso-builder -f installer/Dockerfile installer

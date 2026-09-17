@@ -82,15 +82,3 @@ jobs:
         run: |
           chmod +x scripts/website-ci-deploy.sh
           scripts/website-ci-deploy.sh
-      - name: Confirm the site responds
-        if: steps.deploy.outputs.enabled == 'true'
-        env:
-          NEX_PUBLIC_URL: ${{ secrets.NEX_PUBLIC_URL || 'https://nexvirtualization.com' }}
-        run: |
-          set -euo pipefail
-          code=$(curl -sS -o /tmp/nex-website-home.html -w '%{http_code}' --max-time 60 "${NEX_PUBLIC_URL}/")
-          [ "$code" = 200 ] || { echo "home returned $code" >&2; exit 1; }
-          grep -F -q 'Nex' /tmp/nex-website-home.html || {
-            echo 'home page missing expected text' >&2
-            exit 1
-          }

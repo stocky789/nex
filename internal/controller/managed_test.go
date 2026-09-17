@@ -167,7 +167,8 @@ func TestManagedWorkflowScopeRetryAndMedia(t *testing.T) {
 		t.Skipf("media staging needs over %d bytes free", mediaStagingReserve+32774)
 	}
 	oversized := httptest.NewRequest("POST", "https://nex.test"+uploadPath, nil)
-	oversized.ContentLength = budget + 1
+	// Free space can grow between Statfs calls when another test cleans up.
+	oversized.ContentLength = 1 << 62
 	oversized.AddCookie(a.cookie)
 	oversized.Header.Set("X-CSRF-Token", a.csrf)
 	oversizedResponse := httptest.NewRecorder()

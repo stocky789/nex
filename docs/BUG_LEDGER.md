@@ -542,6 +542,7 @@ Append resolved defects with their evidence and the approach to avoid.
 - Root cause: `act_runner` v1.0.6 runs jobs in an unprivileged container: no `CAP_SYS_ADMIN` for namespaces, and `docker run -v "$PWD:/work"` names a job-container path that mounts empty on the host. Masked because the privileged step ran sixth. Second cause: this Gitea instance executes `.github/workflows/`, not `.gitea/workflows/`, so two pushes editing `.gitea/workflows/installer.yml` changed nothing, and `.gitea/workflows/release.yml` had no `.github` copy.
 - Fix: unprivileged `phase1` steps run first; a single `hostcap` step probes namespace creation and a Docker bind mount, gating all five host-dependent steps (namespace, `localcore_browser.py` which failed with `cc1: fatal error: .../nex-root-auth.c: No such file`, two libvirt/KVM steps) with a `::warning::`. Gitea `installer.yml` (project owner decision, 2026-09-10) runs `installer/check.sh`, seven installer regressions and `docker build` in the job container; **four checks were deleted, not fixed** (native bridge, DHCP preview, ISO build/initramfs completeness, wizard review/disk confirmation/progress), and every run warns that no bootable ISO is established. GitHub `installer.yml` keeps the full matrix. Both installer files now identical, `release.yml` exists in both, each with a header naming the executed directory.
 - Regression: none automated (a workflow file is not coverage). `bash installer/check.sh`, the seven `tests/integration/installer-*.py` and the `installer-network.c` compile-and-run passed outside any container; workflows parse, gating confirmed. After the third pass every ungated step passed; the five gated steps report as skipped.
+- Update 2026-09-17: the `host` lane and its `hostcap` gate were removed from both `phase1` workflows because every gated step skipped on this runner, and `installer.yml` no longer builds the builder image (`release.yml` builds it). The five host-dependent checks remain uncovered in CI; restore them as a job only with a privileged or host-label runner.
 - Avoid: a host-privileged step ahead of cheap unconditional checks; reading the resulting green as full coverage (skipped is not passing); assuming which workflow directory a forge executes without checking step names in a real run.
 
 ## BUG-0044 — Website hosting test asserted against 404s instead of the serving policy
@@ -2657,3 +2658,39 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: retain a bounded ten-second deadlock guard and always cancel/join the worker, preserving identity rejection and absence-of-journal-effects assertions. No production command handling changes.
 - Regression: 100 original local race repetitions passed; a temporary 1.5-second worker-start delay reproduced the original one-second failure and passed after correction. Removed that simulated delay; 100 final race repetitions passed. Rejection, slow-command reporting/cancellation and nonblocking seed tests passed together with `-race -count=10` (14.837 s). Both phase1 workflows run `go test -race ./...` on pushes and pull requests.
 - Avoid: making security assertions incidental startup benchmarks or letting fatal assertions race fixture cleanup.
+
+## BUG-0266 — Persistence failure regression cancelled before observing the injected error
+
+- Date: 2026-09-17. Status: fixed; existing regression corrected.
+- Symptom: `TestRunStopsOnJournalPersistenceFailure` expected a fatal persistence error but received `nil` in hosted CI.
+- Root cause: its one-second context included native agent initialization and the first TLS report that injects the disk failure; cancellation normally returns `nil`. The log does not establish the exact hosted delay or a production persistence defect.
+- Fix: allow a bounded thirty-second test watchdog and count HTTP reports atomically; still require a typed `persistenceError` and exactly one report.
+- Regression: temporary 1.5-second server latency reproduced the original nil-error failure (1.51 s) and passed after correction (2.579 s). Removed the temporary delay; 100 focused race repetitions passed, as did twenty repetitions with journal replay and worker identity checks. Independent review ran ten focused repetitions successfully. Both phase1 workflows run the regression on pushes and pull requests via `go test -race -timeout 20m ./...`.
+- Avoid: cancelling the test before its fault injection can be observed, or accepting cancellation as proof that persistence errors stop the agent.
+
+## BUG-0267 — Race suite exceeded Go's default package timeout on the shared runner
+
+- Date: 2026-09-17. Status: workflow budget corrected; hosted rerun outstanding.
+- Symptom: the Controller package panicked after 600.246 seconds, while the currently active test had run only three seconds.
+- Root cause: the suite exhausted its cumulative ten-minute package budget. The sampled active work was full-strength PBKDF2 login under race instrumentation, not a blocked lock; the trace does not measure cumulative hashing cost.
+- Fix: both phase1 workflows explicitly allow twenty minutes per package while retaining race detection, the full package suite and unchanged production hashing.
+- Regression: `test_go_race_suite_has_an_explicit_bounded_ci_budget` failed against both original workflow copies and passes with the corrected command. Both forge contracts lanes discover this check on pushes and pull requests. Actual full-suite results and hosted limits are in [follow-up evidence](qa/ci/2026-09-17-runner-load.md).
+- Avoid: weakening authentication hashing, dropping race detection or skipping test packages to satisfy an unsuitable CI runtime budget.
+
+## BUG-0268 — Acceptance fixture used a subsecond libvirt deadline and fixed browser sleeps
+
+- Date: 2026-09-17. Status: fixed; regression added to existing acceptance fixture.
+- Symptom: hosted process/browser acceptance failed waiting for healthy libvirt after Controller and agent restarts.
+- Root cause: the fixture forced a 150 ms probe deadline instead of production's three seconds, making a slow successful subprocess report unknown; related browser checks slept 700 ms rather than waiting for observed state. Hosted logs omitted the final inventory, so exact runner timing remains unproven.
+- Fix: use the production probe deadline, retain a 250 ms successful simulated virsh reply to catch the original configuration, and wait for API-observed failed/unknown/healthy probe states before checking the UI.
+- Regression: the delayed healthy shim fails with the original 150 ms override and passes after correction. Full `phase1.py --browser` passed, including restart recovery, durable refresh, stalled-probe isolation and re-enrollment; independent review inspected logs and local captures. Both phase1 workflows execute the fixture on pushes and pull requests. Simulated virsh is not native libvirt evidence; captures with local inventory remain unpublished.
+- Avoid: imposing a test-only probe deadline too short for normal fork/exec under CI load, or substituting a longer fixed UI sleep for an observed-state wait.
+
+## BUG-0269 — Media capacity regression raced changing filesystem free space
+
+- Date: 2026-09-17. Status: fixed; existing regression corrected.
+- Symptom: the local full race-suite rerun failed `TestManagedWorkflowScopeRetryAndMedia`: expected 507 for an oversized declared upload, received 400 for its empty invalid ISO body.
+- Root cause: the test declared only one byte more than its own free-space snapshot; the handler's later snapshot could see more space after an unrelated file was removed and proceed to body validation.
+- Fix: declare `1 << 62` bytes, matching the existing sibling body-limit regression, while preserving the insufficient-space skip and exact 507 assertion. Production capacity and ISO-body validation are unchanged.
+- Regression: a temporary 32 MiB staging file created before the first snapshot and removed before the handler reproduced the original 400, then passed with the fixed declared length. Removed that temporary injection; focused and full-suite results are recorded in [follow-up evidence](qa/ci/2026-09-17-runner-load.md). Both phase1 workflows run the test on pushes and pull requests via `go test -race -timeout 20m ./...`.
+- Avoid: assuming filesystem free space stays constant between a test and the operation it exercises.
