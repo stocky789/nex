@@ -73,7 +73,8 @@ milestone; each item below is either in this slice or listed under follow-ups wi
   **API impact: changed contract**, including new authenticated Core peer discovery routes;
   **guide impact: updated** in the creation/edit guides. See the
   [CPU plan](2026-09-17-cpu-baseline.md) and [checks and limits](../qa/2026-09-17-cpu-baseline.md).
-  This is implemented in the working tree, not deployed or migration-accepted.
+  This is included in the [0.3.1 website/APT release](../qa/2026-09-17-nex-core-0.3.1-release.md);
+  existing operator hosts were not upgraded, and migration acceptance remains open.
 - **Creation still never starts a guest.** `StartAfterCreate` is satisfied by the Controller
   issuing the existing, proven `vm-power` `start` request after creation succeeds — not by adding
   a start path to the managed create engine. This preserves the engine's stated invariant

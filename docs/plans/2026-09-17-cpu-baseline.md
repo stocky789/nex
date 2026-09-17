@@ -1,8 +1,9 @@
 # Native pool CPU baseline
 
 Date: 2026-09-17  
-Status: Implemented in the 0.3.1 working tree, not deployed or released; acceptance evidence and limits are recorded in
-[the scoped QA report](../qa/2026-09-17-cpu-baseline.md). No migration acceptance is claimed.
+Status: Published in the 0.3.1 website/APT release; feature acceptance evidence and limits are recorded in
+[the scoped QA report](../qa/2026-09-17-cpu-baseline.md). No migration acceptance is claimed. Publication checks are recorded in the
+[release report](../qa/2026-09-17-nex-core-0.3.1-release.md).
 
 ## Scope and decision
 

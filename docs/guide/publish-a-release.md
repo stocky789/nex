@@ -135,3 +135,8 @@ For 0.2.9, the exact final-artifact hashes, final-media inspection, boot/install
 website downloads, signed APT metadata and package payloads are recorded in the
 [release QA evidence](../qa/2026-09-16-nex-core-0.2.9-release.md). Hosted CI remains pending.
 Do not substitute an earlier image, a staging tree, or a successful unit test for those checks.
+
+For 0.3.1, see the [exact-artifact release report](../qa/2026-09-17-nex-core-0.3.1-release.md)
+for rebuilt packages, matching sources/notices, BIOS installation and reboot, both firmware
+boot menus, signed APT and public delivery checks. This was direct website/APT publication;
+no Git-forge release or hosted CI completion is implied.

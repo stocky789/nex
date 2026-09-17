@@ -1,11 +1,11 @@
 # Nex Controller and Nex Core implementation plan
 
 Date: 2026-09-08  
-Status: Standalone installer alpha and Phase 1 Controller/agent development foundation have lab evidence; Phase 2 creation, power, console, guest-tools, VM editing and deletion with disk retention are implemented, and the Phase 2 acceptance gate is open: on the final gate run, build 0.2.10~gate5 in a disposable nested-KVM lab (2026-09-17 UTC, [gate report](../qa/2026-09-17-phase2-gate/checks.md)), 15 of 16 checklist rows passed, but row 11 found a major defect (a network interface hot-plugged into a running VM can reuse the MAC of an interface the guest has not released). That defect is fixed in the uncommitted working tree as BUG-0256 with unit tests against a simulated libvirt only, **not lab-verified**; it needs a new gated build and a rerun of row 11 and the G7 rows. The fixes from this gate effort (BUG-0219 to BUG-0254 and BUG-0256; BUG-0255 is separate usage-history work) are implemented in that tree and await the project owner's code review, refactor and commit; they are not released or accepted. Owner decisions, independent review and hosted CI also remain (see the [VM creation system plan](2026-09-10-vm-creation-system.md)); remaining delivery gates are tracked below.
+Status: Standalone installer alpha and Phase 1 Controller/agent development foundation have lab evidence; Phase 2 creation, power, console, guest-tools, VM editing and deletion with disk retention are implemented, and the Phase 2 acceptance gate is open: on the final gate run, build 0.2.10~gate5 in a disposable nested-KVM lab (2026-09-17 UTC, [gate report](../qa/2026-09-17-phase2-gate/checks.md)), 15 of 16 checklist rows passed, but row 11 found a major defect (a network interface hot-plugged into a running VM can reuse the MAC of an interface the guest has not released). That defect is fixed in the post-gate code as BUG-0256 with unit tests against a simulated libvirt only, **not lab-verified**; it needs a new gated build and a rerun of row 11 and the G7 rows. The fixes from this gate effort (BUG-0219 to BUG-0254 and BUG-0256; BUG-0255 is separate usage-history work) are included in the 0.3.1 website/APT release; publication does not close phase acceptance or the project owner's gate review. Owner decisions, independent review and hosted CI also remain (see the [VM creation system plan](2026-09-10-vm-creation-system.md)); remaining delivery gates are tracked below.
 
 Project planning files live in `docs/plans/`.
 
-**CPU baseline reconciliation, 2026-09-17 (0.3.1 working tree):** Core dynamically discovers
+**CPU baseline reconciliation, 2026-09-17 (0.3.1 website/APT release):** Core dynamically discovers
 and verifies a common named CPU with explicit features across all current pool members.
 New VM drafts select this fixed definition; manual host-usable models remain available.
 The existing Core VM journal and master `pool-vms` specification own the saved definition,
@@ -14,7 +14,8 @@ hardcoded model catalogue was added. **API impact: changed contract** with new a
 Core peer routes; **guide impact: updated**. See the [CPU plan](2026-09-17-cpu-baseline.md)
 and [native/runtime, browser and regression evidence](../qa/2026-09-17-cpu-baseline.md).
 This does not close the Phase 2 gate or establish migration/heterogeneous physical-pool
-acceptance. Upgrade Controller before Core; no deployment or publication is claimed.
+acceptance. Upgrade Controller before Core. The [0.3.1 release report](../qa/2026-09-17-nex-core-0.3.1-release.md)
+records website/APT publication; no upgrade of existing operator hosts is claimed.
 
 **Core project priority, 2026-09-09:** project owner confirmed successful installation and
 authorized [the first managed VM creation slice](2026-09-09-first-managed-vm.md):
