@@ -1,0 +1,37 @@
+{
+  "summary": "Correct cancellation and browser input-dispatch regression fixtures after CI failures. API impact: none; test-only changes.",
+  "paths": [
+    "internal/agent/managed_test.go",
+    "tests/integration/cluster_storage_browser.py",
+    "tests/test_cluster_browser_timeouts.py",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Acceptance fixtures only; no operator behavior or instructions change.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Tests retain existing Controller/Core reports and storage discovery contracts; no client-facing API, agent command, authorization or observed-state behavior changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "CI regression repairs do not complete or expand any product milestone.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Test-only timing and process fixtures add no durable product state."
+  },
+  "verification": {
+    "method": "Hosted failed-job logs inspected. Actual local regression commands, results and limitations are recorded in BUG-0285 and BUG-0286; both existing push/PR phase1 workflows execute the affected Go, Python and browser suites. No hosted rerun or native host acceptance claimed.",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "internal/agent/managed_test.go",
+      "tests/test_cluster_browser_timeouts.py",
+      "tests/integration/cluster_storage_browser.py"
+    ]
+  }
+}

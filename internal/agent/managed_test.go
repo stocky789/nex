@@ -203,7 +203,9 @@ func TestStorageClusterRequiresThisCoreHostAndPool(t *testing.T) {
 func TestManagedSlowCommandKeepsReportingAndCancels(t *testing.T) {
 	bin := t.TempDir()
 	started := filepath.Join(bin, "started")
-	script := "#!/bin/sh\ncase \"$*\" in\n *net-list*) touch \"$NEX_TEST_STARTED\"; sleep 2; echo default ;;\n *) exit 1 ;;\nesac\n"
+	// Replace the shell so cancellation kills the blocking process itself, without
+	// an orphan child holding stdout open; it cannot finish during the run budget.
+	script := "#!/bin/sh\ncase \"$*\" in\n *net-list*) : > \"$NEX_TEST_STARTED\"; exec sleep 30 ;;\n *) exit 1 ;;\nesac\n"
 	if err := os.WriteFile(filepath.Join(bin, "virsh"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -226,6 +228,11 @@ func TestManagedSlowCommandKeepsReportingAndCancels(t *testing.T) {
 		}
 		count := reports.Add(1)
 		if _, err := os.Stat(started); err == nil {
+			for _, result := range req.Results {
+				if result.OperationID == "slow-network" {
+					t.Errorf("slow command completed before cancellation: %+v", result)
+				}
+			}
 			if whileRunning.Add(1) >= 3 {
 				cancelledAt.CompareAndSwap(0, time.Now().UnixNano())
 				cancel()
@@ -249,10 +256,10 @@ func TestManagedSlowCommandKeepsReportingAndCancels(t *testing.T) {
 	if whileRunning.Load() < 3 {
 		t.Fatalf("heartbeat blocked during command: %d reports", whileRunning.Load())
 	}
-	// Measured from the cancellation, not from the run: how long the worker takes to
-	// let go is the claim, and how long a loaded runner took to get there is not.
-	if since := time.Since(time.Unix(0, cancelledAt.Load())); since > 3*time.Second {
-		t.Fatalf("worker did not cancel promptly: %v", since)
+	// Run joins the worker and native probes. Allow scheduler/probe cleanup, but
+	// return well before the uncancelled 20-second virsh deadline or 30-second sleep.
+	if since := time.Since(time.Unix(0, cancelledAt.Load())); since > 10*time.Second {
+		t.Fatalf("agent did not stop after cancellation: %v", since)
 	}
 	if s.State.Journal["slow-network"].Status == "succeeded" {
 		t.Fatal("cancelled command was incorrectly completed")

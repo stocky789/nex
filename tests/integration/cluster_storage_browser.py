@@ -93,10 +93,8 @@ def main():
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1440, "height": 1000})
-            page.set_default_timeout(3000)
-            # Cold CI asset loading gets Playwright's normal navigation budget;
-            # individual controls must still respond within the shorter action limit.
-            page.set_default_navigation_timeout(30000)
+            # Keep Playwright's normal 30s action/navigation budgets for shared CI;
+            # UI assertions retain their separate, bounded 5s expectation deadline.
             # Match the returning signed-in browser whose session the API fixture supplies.
             page.add_init_script("localStorage.setItem('nex-signed-in', '1')")
             page.on("pageerror", lambda error: errors.append(str(error)))
@@ -111,6 +109,14 @@ def main():
             registration.get_by_label("Repository type").select_option("nfs")
             registration.get_by_label("NFS server", exact=True).fill("nfs.example.test")
             mode["browser_deferred"] = True
+            # Simulate one renderer stall during input dispatch (not slow discovery).
+            # Shared CI runners can pause after actionability checks have passed.
+            registration.get_by_role("button", name="Browse exports", exact=True).evaluate("""button => {
+                button.addEventListener('pointerdown', () => {
+                    const end = performance.now() + 3500;
+                    while (performance.now() < end) {}
+                }, { once: true });
+            }""")
             registration.get_by_role("button", name="Browse exports", exact=True).click()
             browser_dialog = page.get_by_role("dialog", name="Browse exports", exact=True)
             expect(browser_dialog).to_be_visible()

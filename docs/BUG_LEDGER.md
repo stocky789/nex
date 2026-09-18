@@ -2968,3 +2968,44 @@ Append resolved defects with their evidence and the approach to avoid.
   was not rerun and native end-to-end acceptance remains outstanding.
 - Avoid: invoking simulator fault controls in native execution or removing simulated
   rejection coverage to make the native harness work.
+
+## BUG-0285 — Cancellation regression confused agent shutdown with worker latency
+
+- Date: 2026-09-18. Status: fixed locally; hosted rerun outstanding.
+- Symptom: the Go race lane rejected a 3.23s shutdown against a three-second limit.
+- Root cause: the assertion times all of `Run` teardown, including native probes, while
+  claiming to measure only the worker. Its fake shell left a sleeping child holding output
+  pipes; the two-second command could also finish naturally before the cancellation limit.
+  The exact source of the hosted shutdown delay was not captured.
+- Fix: use `exec sleep 30`, require three heartbeats without a terminal command result,
+  and bound whole-agent teardown at ten seconds, below the uncancelled command's twenty-second
+  query deadline. Production cancellation and deadlines are unchanged.
+- Regression: `go test -race -timeout 20m ./internal/agent -count=1` passed;
+  `go test -race -run '^TestManagedSlowCommandKeepsReportingAndCancels$' -count=50
+  ./internal/agent` passed. A temporary mutation removing cancellation from the slow command
+  failed at 19.81s after cancellation; it was restored before final checks. Both providers'
+  existing push/PR Go suites run this regression. The full `go test -race -timeout 20m ./...`
+  run also passed; independent review passed the final focused regression three times.
+- Avoid: timing complete agent shutdown as an isolated worker benchmark, or letting a
+  cancellation fixture finish naturally before its failure threshold.
+
+## BUG-0286 — Storage browser input dispatch inherited a short action deadline
+
+- Date: 2026-09-18. Status: fixed locally; hosted rerun outstanding.
+- Symptom: the clustered-storage browser lane timed out clicking Browse exports after
+  actionability checks had passed, during input dispatch.
+- Root cause: the fixture imposed a three-second action deadline on shared CI. The previous
+  navigation-only correction did not cover clicks. The hosted renderer slowdown is unproven.
+- Fix: restore Playwright's normal bounded thirty-second action/navigation defaults;
+  retain five-second UI assertions and all discovery cancellation and safety checks.
+- Regression: a one-shot simulated 3.5s renderer stall on pointerdown reproduced the original
+  click timeout. With the fix, the complete `tests/integration/cluster_storage_browser.py`
+  suite passed using the local Playwright environment and freshly built UI; the confirmation
+  capture was visually inspected. `python3 -m unittest discover -s tests -p
+  'test_cluster_browser_timeouts.py'` failed before and passed after the fix. Both providers'
+  existing push/PR workflows run the unit check and browser scenario, including the stall.
+- Limits: broader local Python discovery ran 314 tests but reported one failure and two
+  errors because nginx is absent; the hosted contracts lane passed. Simulated API replies
+  and input delays do not prove native storage or reproduce the actual runner slowdown.
+- Avoid: using short action deadlines as functional assertions, retries that conceal failed
+  input dispatch, or claiming the hosted root scheduling cause from a simulated delay.

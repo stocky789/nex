@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Keep browser navigation independent of the clustered-storage action deadline."""
+"""Keep standard browser deadlines for clustered-storage CI actions and navigation."""
 import ast
 from pathlib import Path
 import unittest
 
 
 class ClusterBrowserTimeoutTests(unittest.TestCase):
-    def test_navigation_keeps_full_load_budget_before_first_visit(self):
+    def test_actions_and_navigation_keep_standard_budget_before_first_visit(self):
         source = Path(__file__).parent / 'integration/cluster_storage_browser.py'
         tree = ast.parse(source.read_text())
         calls = sorted(
@@ -25,7 +25,7 @@ class ClusterBrowserTimeoutTests(unittest.TestCase):
                 # Navigation inherits the action timeout unless explicitly separated.
                 effective = navigation_timeout if navigation_timeout is not None else action_timeout
                 self.assertEqual(effective, 30000, 'Slow initial asset loading needs the normal navigation budget')
-                self.assertEqual(action_timeout, 3000, 'Keep interactive failure detection bounded')
+                self.assertEqual(action_timeout, 30000, 'Input dispatch needs the normal action budget on shared CI')
                 return
         self.fail('No initial page navigation found')
 
