@@ -12,6 +12,10 @@ Nex Core is a distribution, not a package set added to Debian: `nex-core-local` 
 install on a system the installer did not create (recorded as `/etc/nex/core-release`).
 Later updates come from the signed Nex APT archive; see [software updates](software-updates.md).
 
+The installer includes the complete Windows guest-driver media in compressed form
+and restores it locally during installation. No extra download or operator step is
+required, and the installed driver ISO is unchanged.
+
 ## Prerequisites
 
 - A locally built ISO and its matching SHA256 sidecar; see [build instructions](../../installer/README.md).
@@ -150,6 +154,10 @@ to configured Debian repositories. No Nex package repository is configured yet.
 
 ## Troubleshooting
 
+- **Windows driver media fails decompression or its checksum:** installation stops
+  rather than exposing a partial driver ISO. Verify the installation ISO's checksum
+  and retry using intact media; no network download is required to restore it.
+
 - **GUI is blank or unusable:** reboot and select **Minimal install - Nex Core (text)**.
   If disk writing has already begun, do not assume reboot undoes it; inspect the target
   and retry only on the disposable disk.
@@ -183,6 +191,9 @@ to configured Debian repositories. No Nex package repository is configured yet.
   There is no Nex undo for an accepted disk overwrite.
 
 ## Verification
+
+The packaging efficiency checks and disposable offline-installation results are
+tracked in [packaging verification](../qa/2026-09-18-iso-packaging-efficiency.md).
 
 The [0.3.2 local artifact lab](../qa/2026-09-18-release-artifact-lab.md) verified
 its recorded ISO with BIOS/KVM and UEFI/TCG menu review, an automated offline

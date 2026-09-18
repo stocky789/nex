@@ -162,11 +162,16 @@ The public Core installer stages Fedora's virtio-win `0.1.302` ISO
 `303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d`, 877373440 bytes)
 together with the matching Fedora source RPM
 (`virtio-win-0.1.302-1.src.rpm`, SHA-256
-`25561bba120e67bfae842429d5e25764c38e74b92f78d9ef90c20ec41d2ad75d`). Late-install
-copies the ISO to `/usr/share/nex/media/virtio-win.iso` and the notices/source tree
-under `/usr/share/doc/nex-core/third-party/virtio-win/`. The release source bundle
-must retain that tree; `scripts/build-source-bundle.py` refuses a staged virtio-win
-ISO without it.
+`25561bba120e67bfae842429d5e25764c38e74b92f78d9ef90c20ec41d2ad75d`). The installation
+media carries the complete driver ISO as gzip-compressed transport. Late-install
+restores and verifies the original bytes at `/usr/share/nex/media/virtio-win.iso`
+before making them available. It copies the notices and intact source RPM under
+`/usr/share/doc/nex-core/third-party/virtio-win/`; redundant extracted RPM contents
+are kept outside the installation-media tree. The separately distributed release
+source bundle retains the complete extracted source inputs as well as the RPM.
+`scripts/build-source-bundle.py` checks compressed media too and refuses it without
+the matching source inputs and notice. No drivers, source inputs or notices are
+dropped from the release's retained materials.
 
 This is the public Fedora build (attestation/test-signed), not RHEL WHQL, redistributed
 unmodified. It is not only BSD driver code. A listing of that exact ISO (checksum verified) on

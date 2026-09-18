@@ -34,7 +34,9 @@ install -m644 packaging/core-local/nex-core-local.service "$pkg/usr/lib/systemd/
 install -m755 packaging/core-local/preinst packaging/core-local/postinst packaging/core-local/prerm "$pkg/DEBIAN/"
 cp -a web/dist/. "$pkg/usr/share/nex/core-local/web/"
 cp web/dist/local.html "$pkg/usr/share/nex/core-local/web/index.html"
-cp /input/nex-source.tar.gz "$pkg/usr/share/nex/core-local/"
+# The appliance source is verified equal to this build input before Docker starts.
+# Keep one archive in the package while preserving the Core source-serving path.
+ln -s ../appliance/nex-source.tar.gz "$pkg/usr/share/nex/core-local/nex-source.tar.gz"
 cp -a docs/api "$pkg/usr/share/nex/core-local/"
 cp LICENSE NOTICE ARTWORK-LICENSE.md docs/LICENSING.md "$pkg/usr/share/doc/nex-core-local/"
 install -m644 /usr/local/go/LICENSE "$pkg/usr/share/doc/nex-core-local/go-LICENSE"

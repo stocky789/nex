@@ -76,6 +76,8 @@ assert 'ensure_perl_exact_source' in build and 'perl-exact-source' in build
 assert '303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d' in build
 assert '25561bba120e67bfae842429d5e25764c38e74b92f78d9ef90c20ec41d2ad75d' in build
 assert 'third-party/virtio-win' in build and 'source_retained' in build
+assert 'BusyBox\'s gunzip applet' in build
+assert 'grep -Fx gunzip' in build
 assert 'refusing to publish virtio-win.iso without complete corresponding-source and legal accounting' not in build
 assert 'virtio-win corresponding source RPM missing' in build
 assert 'Dir::Etc::sourceparts=-' in build and 'sid main' in build
@@ -103,7 +105,10 @@ assert 'ID=nex-core\nID_LIKE=debian\n' in post and "dpkg-query -W -f='${Version}
 assert 'systemd.ssh_auto=no' in post
 assert '0.1.0-alpha1' not in build + late and 'test "$ID" = nex-core' in late, 'One Nex Core version: the package'
 assert 'if [ -d /cdrom/nex/third-party/virtio-win ]' in late
-assert 'install -m644 /cdrom/nex/media/virtio-win.iso /target/usr/share/nex/media/virtio-win.iso' in late
+assert '/cdrom/nex/media/virtio-win.iso.gz' in late
+assert '/cdrom/nex/media/virtio-win.iso.sha256' in late
+assert 'gunzip -c /cdrom/nex/media/virtio-win.iso.gz > "$virtio_iso"' in late
+assert "trap 'rm -f \"$virtio_iso\"' 0 1 2 15" in late
 assert '> /usr/lib/os-release' not in late, 'Preserve upstream release metadata'
 assert 'third-party/ovmf-generic' in late
 print('PASS: shell syntax, interactive disk/account/network contract, package inputs, offline APT scope')

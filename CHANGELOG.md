@@ -24,6 +24,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
+- Installation media now compresses the complete Windows driver ISO and avoids
+  redundant source payloads and stale cached packages; offline installation and
+  installed drivers remain unchanged (BUG-0289, BUG-0290).
 - Gitea releases are published only after every asset finishes uploading and passes its
   reported-size check; handled upload failures remove the incomplete draft (BUG-0281).
 - Browser acceptance checks allow normal page loading and inventory refresh times

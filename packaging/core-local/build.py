@@ -31,6 +31,11 @@ def main():
     for name in ['controller.qcow2', 'manifest.json', 'manifest.sig', 'nex-source.tar.gz', 'components.tsv', 'LICENSE', 'NOTICE', 'ARTWORK-LICENSE.md', 'build-inputs.json']:
         if not (args.bundle / name).is_file():
             parser.error('missing appliance artifact: ' + name)
+    if not args.source.is_file():
+        parser.error('missing Nex source archive')
+    with args.source.open('rb') as source, (args.bundle / 'nex-source.tar.gz').open('rb') as appliance_source:
+        if hashlib.file_digest(source, 'sha256').digest() != hashlib.file_digest(appliance_source, 'sha256').digest():
+            parser.error('Nex source archive does not match appliance bundle source')
     args.output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='nex-local-input-') as temporary:
         stage = Path(temporary)

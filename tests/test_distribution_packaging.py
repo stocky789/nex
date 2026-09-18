@@ -164,7 +164,8 @@ class VirtioWinReleaseInclusionTests(unittest.TestCase):
             build,
         )
         late = (ROOT / "installer/late-install.sh").read_text()
-        self.assertIn("/cdrom/nex/media/virtio-win.iso", late)
+        self.assertIn("/cdrom/nex/media/virtio-win.iso.gz", late)
+        self.assertIn("gunzip -c /cdrom/nex/media/virtio-win.iso.gz", late)
         self.assertIn("third-party/virtio-win", late)
 
 

@@ -259,15 +259,18 @@ def main(argv=None):
             'Distribute this exact archive beside the ISO. Verify SHA256SUMS before use.\n'
             'The Debian source directory retains exact source inputs for every binary and udeb on the media;\n'
             'component notices and the recorded firmware/artwork review accompany the release.\n'
-            'When nex/media/virtio-win.iso is on the media, provided-sources/third-party/virtio-win\n'
-            'retains the matching Fedora virtio-win source RPM and nested corresponding source.\n')
-        virtio_iso = extracted / 'nex' / 'media' / 'virtio-win.iso'
-        if virtio_iso.is_file():
-            virtio_src = provided / 'third-party' / 'virtio-win' / 'source' / 'virtio-win-0.1.302-1.src.rpm'
-            virtio_notice = provided / 'third-party' / 'virtio-win' / 'NOTICE'
+            'When compressed nex/media/virtio-win.iso.gz is on the media, provided sources retain\n'
+            'the matching Fedora virtio-win source RPM and nested corresponding source.\n')
+        virtio_media = extracted / 'nex' / 'media'
+        if (virtio_media / 'virtio-win.iso.gz').is_file() or (virtio_media / 'virtio-win.iso').is_file():
+            virtio_stage = provided / 'third-party' / 'virtio-win'
+            virtio_root = provided / 'virtio-win-retained-source'
+            virtio_src = virtio_stage / 'source' / 'virtio-win-0.1.302-1.src.rpm'
+            virtio_notice = virtio_stage / 'NOTICE'
             if not virtio_src.is_file() or not virtio_notice.is_file():
                 raise RuntimeError(
                     'virtio-win.iso is staged without retained Fedora corresponding source and NOTICE')
+            virtio_source = virtio_root / 'source' if virtio_root.is_dir() else virtio_stage / 'source'
             for required in (
                     'virtio-win-prewhql-0.1-302-sources.zip',
                     'mingw-qemu-ga-win-110.2.3-2.el10.src.rpm',
@@ -275,8 +278,10 @@ def main(argv=None):
                     'spice-qxl-wddm-dod-0.21-2-sources.zip',
                     'virtio-win-guest-tools-installer-0.1.302.tar.gz',
                     'winfsp-master-sources.zip'):
-                if not (provided / 'third-party' / 'virtio-win' / 'source' / required).is_file():
+                if not (virtio_source / required).is_file():
                     raise RuntimeError(f'virtio-win corresponding source missing {required}')
+            if not (virtio_source / 'mingw-qemu-ga-win').is_dir():
+                raise RuntimeError('virtio-win nested qemu-ga source missing')
         checksums = ''.join(f'{digest(path)}  {path.relative_to(bundle)}\n' for path in sorted(bundle.rglob('*')) if path.is_file())
         (bundle / 'SHA256SUMS').write_text(checksums)
         args.output.parent.mkdir(parents=True, exist_ok=True)

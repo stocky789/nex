@@ -141,6 +141,7 @@ jobs:
           controller="dist/controller/nex-controller_${NEX_VERSION}_amd64.deb"
           for artifact in "$iso" "$source" "$manifest" "$core" "$controller"; do
             [ -f "$artifact" ] || { echo "missing artifact: $artifact" >&2; exit 1; }
+            stat --printf='%n: %s bytes\n' "$artifact"
           done
           # A matching filename is not proof of a matching package version.
           for deb in "$core" "$controller"; do

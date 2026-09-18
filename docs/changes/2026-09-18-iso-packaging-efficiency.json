@@ -1,0 +1,58 @@
+{
+  "summary": "Reduce ISO and Core package transport overhead while preserving every driver, offline install capability, source archive and installed path. API impact: none.",
+  "paths": [
+    ".gitea/workflows/installer.yml",
+    ".gitea/workflows/release.yml",
+    ".github/workflows/installer.yml",
+    ".github/workflows/release.yml",
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "docs/LICENSING.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/publish-a-release.md",
+    "docs/plans/2026-09-18-iso-packaging-efficiency.md",
+    "docs/qa/2026-09-18-iso-packaging-efficiency.md",
+    "installer/README.md",
+    "installer/build.sh",
+    "installer/check.sh",
+    "installer/late-install.sh",
+    "packaging/core-local/build-inside.sh",
+    "packaging/core-local/build.py",
+    "scripts/build-source-bundle.py",
+    "tests/integration/iso-smoke.py",
+    "tests/test_core_local_package.py",
+    "tests/test_distribution_packaging.py",
+    "tests/test_iso_payload_efficiency.py",
+    "tests/test_source_bundle.py"
+  ],
+  "guide": {
+    "impact": "updated",
+    "pages": [
+      "docs/guide/install-nex-core.md",
+      "docs/guide/publish-a-release.md"
+    ],
+    "reason": "Explain unchanged offline driver availability, checksum failures, artifact size reporting and verification evidence."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Build and installer transport only; installed source-serving/media paths, Controller/Core requests, commands, authentication, results and adoption contracts remain unchanged."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Packaging efficiency changes no product feature scope or phase acceptance."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable product setting or resource record changes; installed files retain their existing content and paths."
+  },
+  "verification": {
+    "method": "65 focused Python checks, installer shell/source checks, bundled-media Go tests, real package extraction and isolated old-builder mismatch reproduction passed. Full ISO build produced 2399469568 bytes; sidecars and final source/ISO manifest bindings matched. Final ISO compressed media restores original pinned SHA256. BIOS/UEFI menu captures inspected; networkless disposable BIOS installation, installed payload hashes, source paths, first boot, nested KVM and reboot passed. Documentation/privacy/whitespace checks and independent review passed. Full commands, exact hashes and limits in QA; no hosted CI, live deployment or publication.",
+    "evidence": [
+      "docs/qa/2026-09-18-iso-packaging-efficiency.md",
+      "docs/BUG_LEDGER.md",
+      "tests/test_iso_payload_efficiency.py",
+      "tests/test_core_local_package.py",
+      "tests/integration/iso-smoke.py"
+    ]
+  }
+}

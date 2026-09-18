@@ -165,6 +165,7 @@ class CoreLocalPackageTests(unittest.TestCase):
             with tarfile.open(stage / 'source.tar.gz', 'w:gz') as archive:
                 for name in ['Dockerfile', 'build-inside.sh']:
                     archive.add(ROOT / 'packaging/core-local' / name, arcname='nex-source/packaging/core-local/' + name)
+            shutil.copyfile(stage / 'source.tar.gz', stage / 'nex-source.tar.gz')
             docker = stage / 'docker-check'
             docker.write_text('#!/usr/bin/python3\nimport sys\nfrom pathlib import Path\n'
                               'if sys.argv[1] == "run":\n'
@@ -176,6 +177,51 @@ class CoreLocalPackageTests(unittest.TestCase):
                                      '--trusted-key', str(stage / 'public.raw'), '--output', str(stage / 'output'),
                                      '--docker', str(docker)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_package_rejects_source_mismatch_before_docker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stage = Path(directory)
+            subprocess.run(['openssl', 'genpkey', '-algorithm', 'ED25519', '-out', str(stage / 'private.pem')], check=True)
+            public = subprocess.check_output(['openssl', 'pkey', '-in', str(stage / 'private.pem'), '-pubout', '-outform', 'DER'])
+            (stage / 'public.raw').write_bytes(public[-32:])
+            (stage / 'controller.qcow2').write_bytes(b'image')
+            (stage / 'manifest.json').write_text(json.dumps({'image_sha256': hashlib.sha256(b'image').hexdigest()}))
+            subprocess.run(['openssl', 'pkeyutl', '-sign', '-inkey', str(stage / 'private.pem'), '-rawin',
+                            '-in', str(stage / 'manifest.json'), '-out', str(stage / 'manifest.sig')], check=True)
+            (stage / 'source.tar.gz').write_bytes(b'core source')
+            (stage / 'nex-source.tar.gz').write_bytes(b'appliance source')
+            for name in ['components.tsv', 'LICENSE', 'NOTICE', 'ARTWORK-LICENSE.md', 'build-inputs.json']:
+                (stage / name).write_bytes(b'present')
+            result = subprocess.run([sys.executable, str(ROOT / 'packaging/core-local/build.py'),
+                                     '--source', str(stage / 'source.tar.gz'), '--bundle', str(stage),
+                                     '--trusted-key', str(stage / 'public.raw'), '--output', str(stage / 'output'),
+                                     '--docker', '/must-not-execute-docker'], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('does not match appliance bundle source', result.stderr)
+            self.assertNotIn('must-not-execute-docker', result.stderr)
+
+    def test_package_source_path_reuses_verified_appliance_archive(self):
+        build = (ROOT / 'packaging/core-local/build-inside.sh').read_text()
+        self.assertIn('ln -s ../appliance/nex-source.tar.gz "$pkg/usr/share/nex/core-local/nex-source.tar.gz"', build)
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory) / 'package'
+            appliance_source = package / 'usr/share/nex/appliance/nex-source.tar.gz'
+            core_source = package / 'usr/share/nex/core-local/nex-source.tar.gz'
+            appliance_source.parent.mkdir(parents=True)
+            core_source.parent.mkdir(parents=True)
+            appliance_source.write_bytes(b'matching source')
+            core_source.symlink_to('../appliance/nex-source.tar.gz')
+            control = package / 'DEBIAN/control'
+            control.parent.mkdir()
+            control.write_text('Package: nex-test\nVersion: 1\nArchitecture: all\nDescription: test\n')
+            deb = Path(directory) / 'nex-test.deb'
+            subprocess.run(['dpkg-deb', '--root-owner-group', '--build', str(package), str(deb)], check=True, capture_output=True)
+            extracted = Path(directory) / 'extracted'
+            subprocess.run(['dpkg-deb', '-x', str(deb), str(extracted)], check=True, capture_output=True)
+            source = extracted / 'usr/share/nex/core-local/nex-source.tar.gz'
+            self.assertTrue(source.is_symlink())
+            self.assertEqual(source.readlink(), Path('../appliance/nex-source.tar.gz'))
+            self.assertEqual(source.read_bytes(), b'matching source')
 
 
     def test_postinst_owns_release_identity_from_package_version(self):

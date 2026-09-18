@@ -126,6 +126,9 @@ stage_virtio_win() {
     local base=https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-${version}-${release}
     local fetch=$cache/virtio-win
     local third_party=$stage/nex/third-party/virtio-win
+    # The complete source tree is needed for the separately distributed source
+    # bundle, but the installation media needs only the source RPM itself.
+    local retained_source=$cache/virtio-win-retained-source
     mkdir -p "$fetch" "$stage/nex/media" "$third_party/source"
     if [[ ! -f $fetch/$iso_name ]] || ! printf '%s  %s\n' "$iso_sha256" "$fetch/$iso_name" | sha256sum --check --status; then
         curl -fL --retry 3 -o "$fetch/$iso_name.partial" "$base/$iso_name"
@@ -138,12 +141,15 @@ stage_virtio_win() {
         mv "$fetch/$src_rpm.partial" "$fetch/$src_rpm"
     fi
     printf '%s  %s\n' "$src_sha256" "$fetch/$src_rpm" | sha256sum --check
-    cp "$fetch/$iso_name" "$stage/nex/media/virtio-win.iso"
-    cp "$fetch/$src_rpm" "$third_party/source/"
-    bsdtar -xf "$fetch/$src_rpm" -C "$third_party/source"
+    gzip -9n -c "$fetch/$iso_name" > "$stage/nex/media/virtio-win.iso.gz"
+    printf '%s  virtio-win.iso\n' "$iso_sha256" > "$stage/nex/media/virtio-win.iso.sha256"
+    rm -rf "$retained_source"
+    mkdir -p "$retained_source/source"
+    cp "$fetch/$src_rpm" "$retained_source/source/"
+    bsdtar -xf "$retained_source/source/$src_rpm" -C "$retained_source/source"
     # Nested QEMU guest-agent source RPM: retain its payloads as well.
-    mkdir -p "$third_party/source/mingw-qemu-ga-win"
-    bsdtar -xf "$third_party/source/mingw-qemu-ga-win-110.2.3-2.el10.src.rpm" -C "$third_party/source/mingw-qemu-ga-win"
+    mkdir -p "$retained_source/source/mingw-qemu-ga-win"
+    bsdtar -xf "$retained_source/source/mingw-qemu-ga-win-110.2.3-2.el10.src.rpm" -C "$retained_source/source/mingw-qemu-ga-win"
     for required in \
         virtio-win-prewhql-0.1-302-sources.zip \
         mingw-qemu-ga-win-110.2.3-2.el10.src.rpm \
@@ -153,9 +159,10 @@ stage_virtio_win() {
         virtio-win-guest-tools-installer-0.1.302.tar.gz \
         winfsp-master-sources.zip \
         virtio-win.spec; do
-        test -f "$third_party/source/$required"
+        test -f "$retained_source/source/$required"
     done
-    test -d "$third_party/source/mingw-qemu-ga-win"
+    test -d "$retained_source/source/mingw-qemu-ga-win"
+    cp "$retained_source/source/$src_rpm" "$third_party/source/"
     cat > "$third_party/NOTICE" <<'NOTICE'
 virtio-win 0.1.302 (Fedora virtio-win-0.1.302-1)
 
@@ -179,6 +186,7 @@ Exact matching corresponding source is the Fedora source RPM
 virtio-win-0.1.302-1.src.rpm (SHA-256 pinned in installer/build.sh), retained
 under this directory and in the release source bundle. See docs/LICENSING.md.
 NOTICE
+    cp "$third_party/NOTICE" "$retained_source/NOTICE"
     cat > "$third_party/manifest.tsv" <<MANIFEST
 component	version	binary	binary_sha256	license	source_retained
 virtio-win-iso	$version	virtio-win.iso	$iso_sha256	mixed (see NOTICE)	yes
@@ -191,8 +199,7 @@ winfsp	master	(installer runtime)	$iso_sha256	MS-RL	yes
 MANIFEST
     (
         cd "$third_party"
-        sha256sum NOTICE manifest.tsv source/"$src_rpm" source/virtio-win.spec > checksums.sha256
-        find source -type f ! -name "$src_rpm" -print0 | sort -z | xargs -0 sha256sum >> checksums.sha256
+        sha256sum NOTICE manifest.tsv source/"$src_rpm" > checksums.sha256
     )
 }
 
@@ -376,6 +383,14 @@ python3 scripts/prune-iso-packages.py --tree "$stage" \
 for image in install.amd/vmlinuz install.amd/initrd.gz install.amd/gtk/initrd.gz; do
     test -s "$stage/$image"
 done
+# Late install restores the compressed VirtIO ISO before APT installs anything.
+# Both installer frontends must therefore provide BusyBox's gunzip applet.
+for initrd in install.amd/initrd.gz install.amd/gtk/initrd.gz; do
+    initrd_root=$(mktemp -d)
+    (cd "$initrd_root" && gzip -dc "$stage/$initrd" | cpio -id --quiet usr/bin/busybox)
+    "$initrd_root/usr/bin/busybox" --list | grep -Fx gunzip
+    rm -rf "$initrd_root"
+done
 printf '%s\n' "Nex Core $version amd64 development installer — derived from Debian 13" > "$stage/.disk/info"
 cat > "$stage/README-NEX.txt" <<MEDIA
 Nex Core $version — development installation media
@@ -397,7 +412,8 @@ cp installer/late-install.sh installer/root-account.sh installer/packages.txt "$
 # already installed in this build container. Real installer base may differ.
 apt-get update
 : > "$cache/empty-status"
-mkdir -p "$cache/debs/partial"
+deb_cache=$(mktemp -d "$cache/debs.XXXXXX")
+mkdir -p "$deb_cache/partial"
 mapfile -t packages < installer/packages.txt
 apt_packages=()
 for package in "${packages[@]}"; do
@@ -405,8 +421,13 @@ for package in "${packages[@]}"; do
 done
 apt-get -y --download-only --no-install-recommends \
     -o Dir::State::status="$cache/empty-status" \
-    -o Dir::Cache::archives="$cache/debs" install "${apt_packages[@]}"
-cp "$cache/debs/"*.deb "$stage/nex/repo/"
+    -o Dir::Cache::archives="$deb_cache" install "${apt_packages[@]}"
+mapfile -t downloaded_debs < <(find "$deb_cache" -maxdepth 1 -type f -name '*.deb' -printf '%f\n' | sort)
+((${#downloaded_debs[@]})) || { echo 'APT did not download the requested offline package closure' >&2; exit 1; }
+for deb in "${downloaded_debs[@]}"; do
+    cp "$deb_cache/$deb" "$stage/nex/repo/"
+done
+rm -rf "$deb_cache"
 stage_ovmf_generic
 stage_virtio_win
 # Keep only the DLM rebuilt against this media's Pacemaker fencing ABI.
@@ -484,7 +505,7 @@ ensure_perl_exact_source
 python3 /work/scripts/build-source-bundle.py \
     --version "$version" --iso "$cache/$iso" --tree "$stage" --repository "$stage/nex/repo" \
     --apt-sources "$cache/source-sources.list" \
-    --source-input "$stage/nex/third-party" --source-input "$stage/nex/nex-source.tar.gz" \
+    --source-input "$cache/virtio-win-retained-source" --source-input "$stage/nex/third-party" --source-input "$stage/nex/nex-source.tar.gz" \
     --source-input "$cache/perl-exact-source" \
     --output "/work/dist/nex-core-${version}-source.tar.gz"
 cp installer/assets/boot-splash.png "$stage/isolinux/splash.png"
@@ -572,9 +593,9 @@ GRUB
 # Recompute media checksums without the boot catalog (regenerated by xorriso).
 (cd "$stage" && find . -type f ! -name md5sum.txt ! -path './isolinux/boot.cat' ! -path './isolinux/isolinux.bin' -print0 | sort -z | xargs -0 md5sum > md5sum.txt)
 rm -f "$output"
-# virtio-win ships only with retained Fedora corresponding source and notices.
-[[ -f $stage/nex/media/virtio-win.iso ]] || {
-    echo 'virtio-win.iso missing from staged media' >&2
+# virtio-win is compressed for transport and restored byte-for-byte during install.
+[[ -f $stage/nex/media/virtio-win.iso.gz && -f $stage/nex/media/virtio-win.iso.sha256 ]] || {
+    echo 'compressed virtio-win media or checksum missing from staged media' >&2
     exit 1
 }
 [[ -f $stage/nex/third-party/virtio-win/NOTICE && -f $stage/nex/third-party/virtio-win/manifest.tsv ]] || {
@@ -587,8 +608,7 @@ rm -f "$output"
 }
 grep -Fq $'\tsource_retained' "$stage/nex/third-party/virtio-win/manifest.tsv"
 grep -Fq $'\tyes' "$stage/nex/third-party/virtio-win/manifest.tsv"
-printf '%s  %s\n' 303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d \
-    "$stage/nex/media/virtio-win.iso" | sha256sum --check
+[[ $(gzip -dc "$stage/nex/media/virtio-win.iso.gz" | sha256sum | awk '{print $1}') == 303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d ]]
 # Replay original hybrid BIOS/UEFI boot structure and signed EFI binaries.
 xorriso -indev "$cache/$iso" -outdev "$output" \
     -boot_image any replay -update_r "$stage" / -volid NEX_CORE -commit -end

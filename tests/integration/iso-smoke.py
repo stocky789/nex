@@ -93,6 +93,12 @@ grep -Fq /usr/share/OVMF/OVMF_CODE_4M.ms.fd /usr/share/qemu/firmware/40-edk2-x86
 grep -Fq /usr/share/OVMF/OVMF_VARS_4M.ms.fd /usr/share/qemu/firmware/40-edk2-x86_64-secure-enrolled.json
 test -f /usr/share/OVMF/OVMF_CODE_4M.ms.fd
 test -f /usr/share/OVMF/OVMF_VARS_4M.ms.fd
+# Transport compression must preserve the entire signed Windows driver media.
+echo '303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d  /usr/share/nex/media/virtio-win.iso' | sha256sum -c -
+echo '25561bba120e67bfae842429d5e25764c38e74b92f78d9ef90c20ec41d2ad75d  /usr/share/doc/nex-core/third-party/virtio-win/source/virtio-win-0.1.302-1.src.rpm' | sha256sum -c -
+test -s /usr/share/nex/core-local/nex-source.tar.gz
+cmp /usr/share/nex/core-local/nex-source.tar.gz /usr/share/nex/appliance/nex-source.tar.gz
+echo NEX_SMOKE_PACKAGING_PAYLOADS_PASS
 cert_dir=$(mktemp -d)
 trap 'rm -rf "$cert_dir"; echo NEX_SMOKE_FAILED; systemctl poweroff' EXIT
 (

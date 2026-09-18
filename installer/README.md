@@ -42,6 +42,15 @@ cannot accidentally be omitted. The host-local UI package is copied into the off
 repository and installed with the hypervisor packages. Installation uses only the
 bundled local repository.
 
+Windows guest-driver media is carried as gzip-compressed transport and restored
+to its original checksum-verified ISO during installation, without network access.
+The installation media retains the intact matching source RPM and notices; its
+redundant extracted contents are retained in the separate release source bundle.
+The Core package shares one identical Nex source archive between its Core and
+appliance paths. Packaging regression checks run in both CI providers; measured
+size and disposable installation evidence belong in the
+[packaging QA report](../docs/qa/2026-09-18-iso-packaging-efficiency.md).
+
 Output: `dist/nex-core-<version>-amd64.iso` (version = the `nex-core-local` package it installs), its SHA256 file, package manifest,
 and build record. Cache/extracted media: `.cache/nex-iso/`. Exact Nex recipe source,
 license notices and source checksum are included on the ISO and installed host.

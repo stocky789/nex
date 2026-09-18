@@ -18,10 +18,16 @@ if [ -d /cdrom/nex/third-party/virtio-win ]; then
     mkdir -p /target/usr/share/doc/nex-core/third-party
     cp -a /cdrom/nex/third-party/virtio-win /target/usr/share/doc/nex-core/third-party/
 fi
-if [ -f /cdrom/nex/media/virtio-win.iso ]; then
-    install -d -m755 /target/usr/share/nex/media
-    install -m644 /cdrom/nex/media/virtio-win.iso /target/usr/share/nex/media/virtio-win.iso
-fi
+[ -f /cdrom/nex/media/virtio-win.iso.gz ] && [ -f /cdrom/nex/media/virtio-win.iso.sha256 ] || {
+    echo 'compressed virtio-win media or checksum missing from installation media' >&2
+    exit 1
+}
+install -d -m755 /target/usr/share/nex/media
+virtio_iso=/target/usr/share/nex/media/virtio-win.iso
+trap 'rm -f "$virtio_iso"' 0 1 2 15
+gunzip -c /cdrom/nex/media/virtio-win.iso.gz > "$virtio_iso"
+(cd /target/usr/share/nex/media && sha256sum -c /cdrom/nex/media/virtio-win.iso.sha256)
+trap - 0 1 2 15
 mkdir -p /target/var/cache/nex-install
 cp -a /cdrom/nex/repo /target/var/cache/nex-install/
 cp /cdrom/nex/packages.txt /target/var/cache/nex-install/

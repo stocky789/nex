@@ -44,7 +44,7 @@ jobs:
       - name: Install source-check dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends gcc pkg-config libglib2.0-dev python3
+          sudo apt-get install --yes --no-install-recommends gcc pkg-config libglib2.0-dev python3 gzip dpkg-dev
 
       - name: Check installer source contract
         run: bash installer/check.sh
@@ -52,6 +52,7 @@ jobs:
       - name: Run installer regressions
         run: |
           set -eu
+          python3 -m unittest discover -s tests -p 'test_iso_payload_efficiency.py' -v
           python3 tests/integration/installer-shell.py
           cc -Wall -Wextra -Werror tests/integration/installer-network.c installer/gui/nex-network.c $(pkg-config --cflags --libs glib-2.0) -o /tmp/nex-network-test
           /tmp/nex-network-test

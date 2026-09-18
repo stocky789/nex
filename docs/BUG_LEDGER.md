@@ -3051,3 +3051,38 @@ Append resolved defects with their evidence and the approach to avoid.
   [workflow evidence](qa/2026-09-18-storage-dialog-workflow.md).
 - Avoid: increasing timeouts for a modal lifecycle race, checking only a dialog's
   accessible name, or letting a previous opening's close event clear current content.
+
+## BUG-0289 — ISO staged redundant payloads and historical cached packages
+
+- Date: 2026-09-18. Status: local packaging correction; full artifact checks recorded
+  in [packaging verification](qa/2026-09-18-iso-packaging-efficiency.md).
+- Symptom: the driver addition grew local media from roughly 2.06 GB to 3.54 GB.
+- Root cause: the media carried an uncompressed complete driver ISO plus both the
+  source RPM and its extracted payloads. APT staging copied every cached package,
+  including versions unrelated to the current dependency resolution.
+- Fix: gzip the complete driver ISO for transport, verify its restored bytes before
+  use, retain the intact source RPM on media and the complete extracted release
+  source tree separately, and stage packages from a fresh APT archive directory.
+- Regression: `test_iso_payload_efficiency.py`, `test_source_bundle.py` and
+  `test_distribution_packaging.py` cover transport/source/staging contracts;
+  `installer/check.sh` checks both installer decoder paths. Both providers run the
+  Python suites on push/PR; the installer workflows also run the payload regression
+  explicitly. Actual command results, sizes and native-install limits are in QA.
+- Avoid: removing driver architectures or required source to reduce size, accepting
+  unrelated notices as source evidence, or copying a persistent download cache
+  wholesale onto release media.
+
+## BUG-0290 — Core package repeated the identical Nex source archive
+
+- Date: 2026-09-18. Status: fixed locally.
+- Symptom/root cause: independent Core and appliance copies stored the same roughly
+  120 MiB archive twice, without requiring those two build inputs to match.
+- Fix: require matching source hashes before starting the builder and preserve the
+  Core source-serving path as a relative symlink to the appliance archive.
+- Regression: `python3 -m unittest discover -s tests -p 'test_core_local_package.py'`
+  passed 17 tests, including an actual package build/extract and differing-source
+  refusal. An isolated original builder accepted the mismatched fixture (exit 0);
+  the corrected builder rejected it before Docker (exit 2). Both providers' push/PR
+  foundation workflows discover this suite. The appliance suite passed 12 tests.
+- Avoid: removing source-serving paths, linking to files outside the installed
+  package, or sharing archives without first proving the inputs identical.

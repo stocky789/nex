@@ -117,6 +117,44 @@ class SourceBundleTests(unittest.TestCase):
                         '--repository', str(repo), '--output', str(out),
                     ])
 
+    def test_compressed_virtio_win_uses_external_complete_source_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, tree, retained = root / 'repo', root / 'tree', root / 'virtio-win-retained-source'
+            repo.mkdir(); (tree / 'nex' / 'repo').mkdir(parents=True)
+            media = tree / 'nex' / 'media'; media.mkdir(parents=True)
+            (media / 'virtio-win.iso.gz').write_bytes(b'compressed')
+            third_party = tree / 'nex' / 'third-party' / 'virtio-win' / 'source'
+            third_party.mkdir(parents=True)
+            (third_party / 'virtio-win-0.1.302-1.src.rpm').write_bytes(b'rpm')
+            (third_party.parent / 'NOTICE').write_text('notice')
+            source = retained / 'source'; source.mkdir(parents=True)
+            for name in ('virtio-win-prewhql-0.1-302-sources.zip',
+                         'mingw-qemu-ga-win-110.2.3-2.el10.src.rpm',
+                         'spice-vdagent-win-0.10.0-5-sources.zip',
+                         'spice-qxl-wddm-dod-0.21-2-sources.zip',
+                         'virtio-win-guest-tools-installer-0.1.302.tar.gz',
+                         'winfsp-master-sources.zip'):
+                (source / name).write_bytes(name.encode())
+            (source / 'mingw-qemu-ga-win').mkdir()
+            control = root / 'control'; (control / 'DEBIAN').mkdir(parents=True)
+            (control / 'DEBIAN' / 'control').write_text(
+                'Package: sample\nVersion: 1\nArchitecture: all\nMaintainer: test\nDescription: test\n')
+            subprocess.run(['dpkg-deb', '--build', str(control), str(repo / 'sample_1_all.deb')],
+                           check=True, stdout=subprocess.DEVNULL)
+            iso, out = root / 'base.iso', root / 'source.tar.gz'; iso.write_bytes(b'base')
+            with mock.patch.object(source_bundle, 'update_sources'), \
+                    mock.patch.object(source_bundle, 'fetch_sources'), \
+                    mock.patch.object(source_bundle, 'retained_dsc', return_value=root / 'fake.dsc'):
+                source_bundle.main([
+                    '--version', '0.3.2', '--iso', str(iso), '--tree', str(tree),
+                    '--repository', str(repo), '--source-input', str(retained),
+                    '--source-input', str(tree / 'nex' / 'third-party'), '--output', str(out),
+                ])
+            with source_bundle.tarfile.open(out) as archive:
+                self.assertIn('nex-iso-source/provided-sources/virtio-win-retained-source/source/winfsp-master-sources.zip',
+                              archive.getnames())
+
     def test_iso_build_exports_complete_release_evidence(self):
         build = (ROOT / 'installer/build.sh').read_text()
         self.assertIn('snapshot.debian.org/archive/debian/', build)
@@ -127,6 +165,7 @@ class SourceBundleTests(unittest.TestCase):
         self.assertIn('stage_virtio_win', build)
         self.assertIn('virtio-win-0.1.302-1.src.rpm', build)
         self.assertIn('virtio-win corresponding source RPM missing', build)
+        self.assertIn('virtio-win.iso.gz', build)
         self.assertNotIn('refusing to publish virtio-win.iso without complete corresponding-source and legal accounting', build)
         for package in ('dahdi-firmware-nonfree', 'atmel-firmware', 'bluez-firmware',
                         'firmware-sof-signed', 'firmware-b43-installer',

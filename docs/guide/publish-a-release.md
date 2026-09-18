@@ -72,6 +72,9 @@ workflow on pushes that change `website/`; see [operate the website](operate-web
    appliance, both packages and the ISO, checks each artifact declares the released version,
    then creates the release. A second push at the same version runs again and replaces the
    release; a newer push cancels a release build still in progress.
+   The artifact verification step prints each output's byte size so packaging growth
+   is visible before publication. Transfer compression of bundled Windows media
+   changes neither the restored driver ISO nor the release's eight-asset layout.
 
 ## Expected result
 
@@ -130,7 +133,9 @@ the package index does not list the released version.
   ended before the upload completed; this message alone does not identify which server or proxy
   closed it. Check their logs, request-body limits and timeouts. Gitea's release limit is
   `[repository.release] FILE_MAX_SIZE`, not `[attachment] MAX_SIZE`; its documented default is
-  2048 MB, below a 3.5 GB ISO. See the [Gitea configuration reference](https://docs.gitea.com/administration/config-cheat-sheet/#repository---release-repositoryrelease).
+  2048 MB, still below the optimized ISO and matching source bundle measured in
+  [packaging verification](../qa/2026-09-18-iso-packaging-efficiency.md).
+  See the [Gitea configuration reference](https://docs.gitea.com/administration/config-cheat-sheet/#repository---release-repositoryrelease).
   Confirm the actual configured limit and upload route before retrying; more retries cannot
   bypass a fixed size limit.
 - **A throwaway signing key warning** — set the `NEX_APPLIANCE_SIGNING_KEY` secret so every
@@ -140,7 +145,7 @@ the package index does not list the released version.
 - **Nothing published and no error** — check the runner can reach the website host; the host
   is on a private address and the runner must be on a network with a route to it.
 - **Disk pressure on the website host** — the APT archive keeps every package version and each
-  `nex-core-local` is roughly 740 MB because it embeds the Controller appliance image. Only
+  `nex-core-local` embeds the Controller appliance image; the packaging check records its actual size. Only
   ISOs are pruned. Check `du -sh /srv/nex-apt /srv/nex-downloads` before large release runs.
 
 ## Verification
