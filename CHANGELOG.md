@@ -6,12 +6,31 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.3.3` →
-> Debian `0.3.3`).
+> development software. Builds use the newest numbered changelog heading (`0.3.4` →
+> Debian `0.3.4`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.3.4] — 2026-09-18
+
+### Bug Fixes
+
+- Installation media now compresses the complete Windows driver ISO and avoids
+  redundant source payloads and stale cached packages; offline installation and
+  installed drivers remain unchanged (BUG-0289, BUG-0290).
+- Core packages share one identical Nex source archive between the host and bundled
+  Controller appliance, preserving both installed source-access paths.
+
+### Miscellaneous
+
+- Local development ISO measurements fell from 3.54 GB to 2.40 GB (32% smaller).
+  These measurements compare the recorded 0.3.2 and optimized 0.3.3 builds;
+  a 0.3.4 artifact has not yet been built or published.
+- GitHub and Gitea installer checks cover compressed driver restoration and source
+  retention; release workflows report artifact sizes. Offline installation, first
+  boot, nested KVM and reboot passed in a disposable VM with no network interface.
 
 ## [0.3.3] — 2026-09-18
 
@@ -24,9 +43,6 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
-- Installation media now compresses the complete Windows driver ISO and avoids
-  redundant source payloads and stale cached packages; offline installation and
-  installed drivers remain unchanged (BUG-0289, BUG-0290).
 - Gitea releases are published only after every asset finishes uploading and passes its
   reported-size check; handled upload failures remove the incomplete draft (BUG-0281).
 - Browser acceptance checks allow normal page loading and inventory refresh times

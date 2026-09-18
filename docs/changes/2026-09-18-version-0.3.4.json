@@ -1,0 +1,30 @@
+{
+  "summary": "Bump the changelog-derived project version from 0.3.3 to 0.3.4 and move ISO efficiency notes into the new release. API impact: none; release metadata only.",
+  "paths": [
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Version metadata and release notes only; existing packaging guide updates remain applicable."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No client-facing or Controller/Core operation, command, result or contract changes."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No phase status or acceptance gate changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable product setting or resource is introduced."
+  },
+  "verification": {
+    "method": "Current and v0.3.4 tag resolution returned 0.3.4 and emitted the new release notes. All 10 existing release-version tests, documentation gate (25 changed paths), privacy test and diff check passed. Both release workflows already derive version and notes from the changelog. Prior build measurements remain explicitly labeled 0.3.2/0.3.3; no 0.3.4 build or publication is claimed.",
+    "evidence": [
+      "scripts/release-version.py",
+      "tests/test_release_version.py",
+      "docs/qa/2026-09-18-iso-packaging-efficiency.md"
+    ]
+  }
+}
