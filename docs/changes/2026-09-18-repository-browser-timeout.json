@@ -1,0 +1,35 @@
+{
+  "summary": "Restore normal repository-browser action and navigation deadlines. API impact: none; test fixtures only.",
+  "paths": [
+    "tests/integration/storage_repositories_browser.py",
+    "tests/test_cluster_browser_timeouts.py",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No operator workflow changes; only browser acceptance timing changes.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Existing storage discovery and lifecycle API requests, Core commands and observed results are unchanged; no client or Controller/Core contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Regression repair does not change milestone scope or acceptance status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Test timeout setup adds no durable product records."
+  },
+  "verification": {
+    "method": "Extended unit regression failed before and passed after; full repository browser suite passed and NFS picker capture inspected. Delayed-script Chromium experiment reproduced old timeout and passed with defaults. BUG-0287 records commands and simulation/hosted limits.",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "tests/test_cluster_browser_timeouts.py",
+      "tests/integration/storage_repositories_browser.py"
+    ]
+  }
+}

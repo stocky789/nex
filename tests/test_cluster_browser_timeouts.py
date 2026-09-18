@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Keep standard browser deadlines for clustered-storage CI actions and navigation."""
+"""Keep standard browser deadlines for storage CI actions and navigation."""
 import ast
 from pathlib import Path
 import unittest
@@ -7,7 +7,11 @@ import unittest
 
 class ClusterBrowserTimeoutTests(unittest.TestCase):
     def test_actions_and_navigation_keep_standard_budget_before_first_visit(self):
-        source = Path(__file__).parent / 'integration/cluster_storage_browser.py'
+        for name in ('cluster_storage_browser.py', 'storage_repositories_browser.py'):
+            with self.subTest(harness=name):
+                self.check_browser_budgets(Path(__file__).parent / 'integration' / name)
+
+    def check_browser_budgets(self, source):
         tree = ast.parse(source.read_text())
         calls = sorted(
             (node for node in ast.walk(tree)

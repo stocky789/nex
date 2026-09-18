@@ -3009,3 +3009,25 @@ Append resolved defects with their evidence and the approach to avoid.
   and input delays do not prove native storage or reproduce the actual runner slowdown.
 - Avoid: using short action deadlines as functional assertions, retries that conceal failed
   input dispatch, or claiming the hosted root scheduling cause from a simulated delay.
+
+## BUG-0287 — Repository browser retained a short inherited navigation deadline
+
+- Date: 2026-09-18. Status: fixed locally; hosted rerun outstanding.
+- Symptom: the repository browser fixture failed its initial `page.goto` after 2500ms.
+- Root cause: this sibling of the clustered-storage fixture still overrode the global
+  Playwright action timeout, which navigation inherits. Earlier fixes covered only the
+  clustered-storage fixture. The precise hosted asset-loading delay remains unknown.
+- Fix: remove the last global short timeout override in the browser harnesses, restoring
+  standard thirty-second action/navigation budgets while retaining five-second assertions.
+- Regression: extend `test_cluster_browser_timeouts.py` to both storage fixtures.
+  `python3 -m unittest discover -s tests -p 'test_cluster_browser_timeouts.py'` failed
+  against the original repository fixture and passed after correction. A real Chromium
+  experiment with a simulated 3.2s script response failed at 2.50s with the old setting
+  and loaded at 3.21s with defaults. The full repository browser suite passed using
+  `.cache/phase1-qa-venv/bin/python tests/integration/storage_repositories_browser.py
+  --evidence .cache/storage-browser-timeout-fix`; its NFS picker capture was inspected.
+  Both providers' existing push/PR workflows run the unit regression and browser suite.
+- Limits: API replies and the delayed asset are simulations, not native storage or proof
+  of the actual hosted slowdown. No production API, state or operator behavior changed.
+- Avoid: correcting only one sibling fixture or coupling page-load deadlines to short
+  interactive-action budgets.

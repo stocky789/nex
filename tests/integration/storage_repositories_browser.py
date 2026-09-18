@@ -129,7 +129,7 @@ def main():
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1440, "height": 1000})
-            page.set_default_timeout(2500)
+            # Keep standard 30s action/navigation budgets; UI assertions remain 5s.
             # The UI probes the session only for a browser that signed in before (BUG-0208).
             page.add_init_script("localStorage.setItem('nex-signed-in', '1')")
             page.on("pageerror", lambda error: errors.append(str(error)))
