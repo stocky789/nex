@@ -2908,3 +2908,63 @@ Append resolved defects with their evidence and the approach to avoid.
   `phase1` workflows run the Go suite with `go test -race -timeout 20m ./...`.
 - Avoid: using first-match filesystem-root ownership where nested repositories are valid, or
   retaining an ambiguity after a more-specific root has made it irrelevant.
+
+
+## BUG-0281 — Failed release uploads exposed incomplete releases
+
+- Date: 2026-09-18. Status: fixed in the PR; documentation assessment added locally.
+- Symptom/root cause: the publisher created a public release before uploading its assets,
+  so an exhausted retry or rejected upload left incomplete downloads visible.
+- Fix: create a draft, publish only after all size checks pass, and delete the draft on
+  handled upload failure. Replacement still removes the old release first; this is not
+  an atomic rollback. A killed runner or failed cleanup can leave a draft.
+- Regression: `python3 -m unittest discover -s tests -p 'test_gitea_release.py'` passed
+  all six checks against a simulated HTTP forge. The updated checks fail three cases
+  against the previous publisher, including rejected and truncated upload cleanup.
+  Both providers' push/PR workflows discover this suite. Hosted publication remains untested.
+- Avoid: making the release public before verifying all assets, or claiming a local forge
+  simulation proves real release delivery.
+
+## BUG-0282 — Storage browser navigation inherited a short control deadline
+
+- Date: 2026-09-18. Status: fixed locally.
+- Symptom: hosted clustered-storage acceptance timed out on its initial page load at 3s.
+- Root cause: Playwright's default action timeout also sets navigation's deadline unless
+  navigation is configured separately. The harness shortened both while intending quick
+  control failures. The precise cause of hosted asset-loading delay was not established.
+- Fix: keep 3s controls and explicitly restore the normal 30s navigation budget.
+- Regression: `test_cluster_browser_timeouts.py` failed before and passed after the fix.
+  A real Chromium experiment with a 4s delayed asset failed at 3.00s with the original
+  setup and loaded in 4.02s with the fix. The full clustered-storage browser suite passed.
+  Both providers' push/PR workflows run the unit regression and browser suite.
+- Avoid: blind navigation retries or widening every control assertion.
+
+## BUG-0283 — Freshness assertion expired before the next inventory poll
+
+- Date: 2026-09-18. Status: fixed locally.
+- Symptom: hosted enrollment browser acceptance saw a stale host on its initial visit
+  and failed before the next refresh. The exact hosted agent-report delay is unknown.
+- Root cause: the fixture permits only 2s before staleness, while the UI refreshes every
+  10s and the assertion waited only 5s. One stale sample could therefore fail healthy recovery.
+- Fix: allow that freshness assertion 15s; retain the fixture's staleness threshold and
+  other deadlines. Inject one stale observation, then restore real API responses to prove
+  automatic refresh recovery deterministically.
+- Regression: the injected observation failed with the original 5s assertion and passed
+  with 15s. Both providers' existing push/PR `phase1.py --browser` steps run this regression.
+  The injection simulates stale inventory; it does not prove host scheduling under contention.
+- Avoid: disabling stale-state checks or changing production freshness thresholds to pass CI.
+
+
+## BUG-0284 — Native VM browser lab accessed simulator-only controls
+
+- Date: 2026-09-18. Status: fixed in the PR; regression added locally.
+- Symptom/root cause: placement fault scenarios accessed `config['control']` in native
+  mode, whose configuration has no simulator control dictionary.
+- Fix: run those injected capability/rejection scenarios only in simulated mode; keep
+  common VM creation and UI checks in both modes.
+- Regression: `test_managed_vm_browser_modes.py` passes against the corrected harness
+  and rejects four unguarded accesses in the original. Both providers' existing push/PR
+  unittest discovery runs it. This is a structural guard check; the full native lab
+  was not rerun and native end-to-end acceptance remains outstanding.
+- Avoid: invoking simulator fault controls in native execution or removing simulated
+  rejection coverage to make the native harness work.

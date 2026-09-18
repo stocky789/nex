@@ -95,12 +95,21 @@ def publish(repo, tag, target, name, notes, assets):
     tag_info = repo.request("GET", f"/tags/{tag}")
     if tag_info and tag_info["commit"]["sha"] != target:
         repo.request("DELETE", f"/tags/{tag}")
+    # Keep the release private until every asset has survived server-side size
+    # verification. A terminal upload failure can then leave only a draft, not a
+    # public release serving a known-truncated artifact.
     release = repo.json("POST", "/releases", {
         "tag_name": tag, "target_commitish": target, "name": name, "body": notes,
-        "draft": False, "prerelease": "-" in tag})
-    for asset in assets:
-        upload(repo, release["id"], asset)
-    return release
+        "draft": True, "prerelease": "-" in tag})
+    try:
+        for asset in assets:
+            upload(repo, release["id"], asset)
+        return repo.json("PATCH", f"/releases/{release['id']}", {"draft": False})
+    except (OSError, http.client.HTTPException, GiteaError):
+        # Do not retain a failed draft either: older forges have exposed draft
+        # attachments through direct download URLs.
+        repo.request("DELETE", f"/releases/{release['id']}")
+        raise
 
 
 def main(argv=None):

@@ -485,30 +485,30 @@ def acceptance(config, password, iso, evidence, mode):
         # An automatic MAC is listed as its effective derived address.
         assert re.fullmatch(r'52:54:00:[0-9a-f]{2}:[0-9a-f]{2}:00', spec['nics'][0]['mac']) and spec['nics'][1]['mac'] == '52:54:00:ab:cd:ef', spec
         capture('created-desktop')
-        # A Core that predates master-owned placement is rejected synchronously; no task is
-        # created because the Controller cannot safely dispatch it. A current Core may still
-        # reject the same shape asynchronously, which must leave an actionable task route.
-        request = {**bodies[0], 'name': 'Placement browser failure ' + suffix}
-        request['request_id'] = 'placement-browser-capability-' + suffix
-        config['control']['capabilities'] = [cap for cap in config['control']['capabilities'] if cap != 'pool-vm-placement-v1']
-        eventually(lambda: 'pool-vm-placement-v1' not in next(h for h in page.request.get(config['url'] + '/api/v1/hosts').json() if h['id'] == config['host_id'])['capabilities'], 'simulated Core without placement capability')
-        rejected = page.request.post(config['url'] + '/api/v1/vms', data=request, headers={'X-CSRF-Token': csrf})
-        assert rejected.status == 409 and 'master-owned VM placement; upgrade Nex Core' in rejected.text(), rejected.text()
-        config['control']['capabilities'].append('pool-vm-placement-v1')
-        eventually(lambda: 'pool-vm-placement-v1' in next(h for h in page.request.get(config['url'] + '/api/v1/hosts').json() if h['id'] == config['host_id'])['capabilities'], 'simulated Core placement capability restored')
-        request['request_id'] = 'placement-browser-rejected-' + suffix
-        config['control']['reject_placement'] = True
-        rejected = page.request.post(config['url'] + '/api/v1/vms', data=request, headers={'X-CSRF-Token': csrf})
-        assert rejected.status == 202, rejected.text()
-        rejected_create = rejected.json()
-        page.goto(config['url'] + f"/#/vms/{rejected_create['vm_id']}/{rejected_create['operation']['id']}")
-        creation = page.get_by_role('region', name='Creation task', exact=True)
-        expect(creation).to_contain_text('Creation failed', timeout=30000)
-        expect(creation).to_contain_text('pool master rejected placement', timeout=30000)
-        expect(creation.get_by_role('link', name='Task history', exact=True)).to_have_attribute('href', '#/tasks')
-        capture('core-rejected-placement')
-        page.goto(config['url'] + f"/#/vms/{created_vm['id']}")
-        passed('A Core without master-owned placement is rejected before dispatch; a simulated Core placement rejection shows its Task history route, while the earlier interrupted-request retry succeeds')
+        # Simulator-only fault controls prove that an old Core is rejected synchronously and
+        # a current Core's asynchronous placement rejection leaves an actionable task route.
+        if mode == 'simulated':
+            request = {**bodies[0], 'name': 'Placement browser failure ' + suffix}
+            request['request_id'] = 'placement-browser-capability-' + suffix
+            config['control']['capabilities'] = [cap for cap in config['control']['capabilities'] if cap != 'pool-vm-placement-v1']
+            eventually(lambda: 'pool-vm-placement-v1' not in next(h for h in page.request.get(config['url'] + '/api/v1/hosts').json() if h['id'] == config['host_id'])['capabilities'], 'simulated Core without placement capability')
+            rejected = page.request.post(config['url'] + '/api/v1/vms', data=request, headers={'X-CSRF-Token': csrf})
+            assert rejected.status == 409 and 'master-owned VM placement; upgrade Nex Core' in rejected.text(), rejected.text()
+            config['control']['capabilities'].append('pool-vm-placement-v1')
+            eventually(lambda: 'pool-vm-placement-v1' in next(h for h in page.request.get(config['url'] + '/api/v1/hosts').json() if h['id'] == config['host_id'])['capabilities'], 'simulated Core placement capability restored')
+            request['request_id'] = 'placement-browser-rejected-' + suffix
+            config['control']['reject_placement'] = True
+            rejected = page.request.post(config['url'] + '/api/v1/vms', data=request, headers={'X-CSRF-Token': csrf})
+            assert rejected.status == 202, rejected.text()
+            rejected_create = rejected.json()
+            page.goto(config['url'] + f"/#/vms/{rejected_create['vm_id']}/{rejected_create['operation']['id']}")
+            creation = page.get_by_role('region', name='Creation task', exact=True)
+            expect(creation).to_contain_text('Creation failed', timeout=30000)
+            expect(creation).to_contain_text('pool master rejected placement', timeout=30000)
+            expect(creation.get_by_role('link', name='Task history', exact=True)).to_have_attribute('href', '#/tasks')
+            capture('core-rejected-placement')
+            page.goto(config['url'] + f"/#/vms/{created_vm['id']}")
+            passed('A Core without master-owned placement is rejected before dispatch; a simulated Core placement rejection shows its Task history route, while the earlier interrupted-request retry succeeds')
         page.set_viewport_size({'width': 360, 'height': 800})
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'details narrow page overflow'
         capture('created-360')

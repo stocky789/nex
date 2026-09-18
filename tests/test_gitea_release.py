@@ -25,6 +25,7 @@ class FakeGitea(BaseHTTPRequestHandler):
     stored_size = None
     reject_uploads = False
     uploads = 0
+    release_payload = None
 
     def reply(self, status, payload=None):
         body = json.dumps(payload).encode() if payload is not None else b""
@@ -46,7 +47,9 @@ class FakeGitea(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         self.calls.append(("DELETE", self.path))
-        if "/releases/" in self.path:
+        if "/assets/" in self.path:
+            pass
+        elif "/releases/" in self.path:
             self.state["release"] = None
         else:
             self.state["tag_sha"] = None
@@ -65,12 +68,31 @@ class FakeGitea(BaseHTTPRequestHandler):
         if self.path.endswith("/releases"):
             payload = json.loads(body)
             self.assertion = payload
-            self.state["tag_sha"] = payload["target_commitish"]
-            return self.reply(201, {"id": 9, "html_url": "https://example/releases/tag/v1.0.0-rc1"})
+            FakeGitea.release_payload = payload
+            self.state["release"] = {"id": 9, **payload}
+            return self.reply(201, {"id": 9, "html_url": "https://example/releases/tag/v1.0.0-rc1", **payload})
         if self.reject_uploads:
             return self.reply(422, {"message": "asset rejected"})
         size = len(body) if self.stored_size is None else self.stored_size
         self.reply(201, {"id": 100, "size": size})
+
+    def do_PATCH(self):
+        if not self.path.endswith("/releases/9"):
+            self.calls.append(("PATCH", self.path))
+            return self.reply(404, {})
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        self.calls.append(("PATCH", self.path, body, self.headers.get("Content-Type")))
+        payload = json.loads(body)
+        release_payload = FakeGitea.release_payload or {}
+        release_payload.update(payload)
+        FakeGitea.release_payload = release_payload
+        release_state = self.state["release"]
+        assert isinstance(release_state, dict)
+        release_state.update(payload)
+        if payload.get("draft") is False:
+            self.state["tag_sha"] = release_payload["target_commitish"]
+        self.reply(200, {"id": 9, "html_url": "https://example/releases/tag/v1.0.0-rc1",
+                         **release_payload})
 
     def log_message(self, *args):
         pass
@@ -82,10 +104,12 @@ class PublishTests(unittest.TestCase):
         FakeGitea.state = {"release": {"id": 5}, "tag_sha": "old"}
         FakeGitea.drop_uploads, FakeGitea.stored_size, FakeGitea.uploads = (), None, 0
         FakeGitea.reject_uploads = False
+        FakeGitea.release_payload = None
         previous, gitea.RETRY_SECONDS = gitea.RETRY_SECONDS, 0
         self.addCleanup(setattr, gitea, "RETRY_SECONDS", previous)
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), FakeGitea)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
         self.repo = gitea.Repo(f"http://127.0.0.1:{self.server.server_port}/api/v1", "o/r", "t")
 
@@ -102,12 +126,17 @@ class PublishTests(unittest.TestCase):
             ("DELETE", "/api/v1/repos/o/r/tags/v1.0.0-rc1"),
             ("POST", "/api/v1/repos/o/r/releases"),
             ("POST", "/api/v1/repos/o/r/releases/9/assets?name=nex-core-1.0.0~rc1-amd64.iso"),
+            ("PATCH", "/api/v1/repos/o/r/releases/9"),
         ])
         created = json.loads(FakeGitea.calls[4][2])
         self.assertEqual(created["target_commitish"], "new")
         self.assertTrue(created["prerelease"])
+        self.assertTrue(created["draft"])
         self.assertEqual(FakeGitea.calls[5][2], b"\x00\xffiso-bytes" * 1000)
         self.assertEqual(FakeGitea.calls[5][3], "application/octet-stream")
+        self.assertEqual(json.loads(FakeGitea.calls[6][2]), {"draft": False})
+        self.assertFalse(release["draft"])
+        self.assertEqual(FakeGitea.state["tag_sha"], "new")
 
     def test_same_commit_keeps_the_tag(self):
         FakeGitea.state = {"release": None, "tag_sha": "same"}
@@ -136,6 +165,11 @@ class PublishTests(unittest.TestCase):
             with self.assertRaises(gitea.GiteaError):
                 gitea.publish(self.repo, "v1.0.0-rc1", "new", "Nex Core", "", [iso])
         self.assertEqual(FakeGitea.uploads, gitea.UPLOAD_ATTEMPTS)
+        self.assertIsNone(FakeGitea.state["release"])
+        self.assertIsNone(FakeGitea.state["tag_sha"])
+        self.assertNotIn("PATCH", [call[0] for call in FakeGitea.calls])
+        self.assertIn(("DELETE", "/api/v1/repos/o/r/releases/9"),
+                      [call[:2] for call in FakeGitea.calls])
 
     def test_a_rejected_upload_is_not_retried(self):
         FakeGitea.reject_uploads = True
@@ -143,8 +177,9 @@ class PublishTests(unittest.TestCase):
             bad = Path(temporary) / "x.deb"
             bad.write_bytes(b"deb")
             with self.assertRaises(gitea.GiteaError):
-                gitea.upload(self.repo, 9, bad)
+                gitea.publish(self.repo, "v1.0.0-rc1", "new", "Nex Core", "", [bad])
         self.assertEqual(FakeGitea.uploads, 1)
+        self.assertIsNone(FakeGitea.state["release"])
 
     def test_api_failure_is_reported_not_swallowed(self):
         FakeGitea.state = {"release": None, "tag_sha": None}

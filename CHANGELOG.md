@@ -24,6 +24,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
+- Gitea releases are published only after every asset finishes uploading and passes its
+  reported-size check; handled upload failures remove the incomplete draft (BUG-0281).
+- Browser acceptance checks allow normal page loading and inventory refresh times
+  on busy runners without lengthening ordinary control checks (BUG-0282, BUG-0283).
+
 - Retrying a completed storage registration returns the original repository and
   task instead of incorrectly reporting changed input (BUG-0279).
 - VM startup checks the most specific matching storage repository and rejects

@@ -176,9 +176,25 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         capture('invalid-object-desktop')
         page.get_by_role('link', name='Return to overview', exact=True).click()
         expect(page.get_by_role('heading', name='Your workspace', exact=True)).to_be_visible()
+        # A single stale sample must recover on the next normal inventory poll.
+        # The fixture's 2s freshness window can expire during runner contention;
+        # inject that sample deterministically, then restore the live agent API.
+        def stale_sample(route):
+            response = route.fetch()
+            hosts = response.json()
+            for host in hosts:
+                if host['id'] == host_id:
+                    host['connection'] = 'stale'
+            route.fulfill(response=response, json=hosts)
+
+        page.route('**/api/v1/hosts', stale_sample)
         refresh_route('hosts/' + host_id)
         expect(page.get_by_role('heading', name='Health checks', exact=True)).to_be_visible()
-        expect(page.locator('.badge.fresh')).to_be_visible()
+        expect(page.locator('.badge.stale').first).to_be_visible()
+        page.unroute('**/api/v1/hosts', stale_sample)
+        # The default 5s assertion expires before the UI's 10s inventory poll.
+        expect(page.locator('.badge.fresh')).to_be_visible(timeout=15000)
+        lab.passed('browser injected stale connection recovers from live inventory on the next automatic poll')
         host = next(h for h in lab.api('/api/v1/hosts') if h['id'] == host_id)
         pool = next(p for p in lab.api('/api/v1/pools') if p['id'] == pool_id)
         site = next(s for s in lab.api('/api/v1/sites') if s['id'] == pool['site_id'])
