@@ -1,0 +1,34 @@
+{
+  "summary": "Fix deferred-route synchronization in clustered storage browser CI and retain a dispatch-delay regression. API impact: none; test harness only.",
+  "paths": [
+    "tests/integration/cluster_storage_browser.py",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Only test synchronization and release notes change; operator workflows and UI behavior remain identical."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The existing storage/credentials and storage/discover fixtures and stale-owner update guards remain unchanged; no client or Controller/Core contract changes."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Fixing a simulated browser check does not close a native-storage or phase acceptance gate."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Test-local deferred route queues create no durable product state."
+  },
+  "verification": {
+    "method": "A one-shot 1-second credential request dispatch delay reproduced the original assertion; the corrected full Playwright scenario passed against freshly built UI. Existing browser timeout unit check passed. Both providers already run the changed browser regression on push and pull request. Evidence and simulated-environment limits recorded in BUG-0291.",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "tests/integration/cluster_storage_browser.py",
+      "tests/test_cluster_browser_timeouts.py",
+      ".github/workflows/phase1.yml",
+      ".gitea/workflows/phase1.yml"
+    ]
+  }
+}

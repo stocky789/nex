@@ -3086,3 +3086,28 @@ Append resolved defects with their evidence and the approach to avoid.
   foundation workflows discover this suite. The appliance suite passed 12 tests.
 - Avoid: removing source-serving paths, linking to files outside the installed
   package, or sharing archives without first proving the inputs identical.
+
+## BUG-0291 — Storage browser check races SMB credential request dispatch
+
+- Date: 2026-09-18. Status: fixed locally; hosted rerun outstanding.
+- Symptom: clustered storage browser CI reports `SMB credential handoff was not requested`
+  immediately after the update form displays its disabled submitting button.
+- Root cause: the browser harness equated React's busy/dialog rendering with the Python
+  route callback having captured the outgoing request. These are separate events.
+  The exact scheduling delay on the hosted runner is not established.
+- Fix: a shared bounded wait pumps Playwright events until the deferred route is captured,
+  before disconnecting the simulated Core or cancelling discovery. Apply it to SMB
+  credentials, NFS export browsing and iSCSI target discovery. Product code is unchanged.
+- Regression: inject a one-shot 1-second credential fetch dispatch delay in
+  `tests/integration/cluster_storage_browser.py`. With that delay and the original
+  immediate assertion, the full browser run reproduced the exact assertion failure.
+  With the fix, `.cache/phase1-qa-venv/bin/python tests/integration/cluster_storage_browser.py`
+  passed against freshly built UI (`npm --prefix web run build`), including the stale-Core
+  rejection, unused-credential warning and absence of an SMB update after disconnection.
+  `python3 -m unittest discover -s tests -p 'test_cluster_browser_timeouts.py'` passed.
+  Both `.github/workflows/phase1.yml` and `.gitea/workflows/phase1.yml` already run this
+  browser scenario on pushes and pull requests, including the new delay regression.
+- Limits: simulated API replies and dispatch delay; no real SMB server, native storage,
+  hosted CI rerun or publication exercised.
+- Avoid: assuming a visible busy state proves network dispatch, sleeping for a fixed
+  period before asserting, retrying the entire test, or weakening the stale-owner guard.

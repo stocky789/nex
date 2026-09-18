@@ -17,6 +17,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
+- Storage browser checks wait for the actual credential or discovery request before
+  testing delayed replies, avoiding false CI failures on busy runners (BUG-0291).
 - Installation media now compresses the complete Windows driver ISO and avoids
   redundant source payloads and stale cached packages; offline installation and
   installed drivers remain unchanged (BUG-0289, BUG-0290).

@@ -6,10 +6,21 @@ from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import threading
+from time import monotonic
 
 from playwright.sync_api import expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def take_deferred(page, pending, description):
+    # UI busy/dialog state can render before the route callback runs. Pump
+    # Playwright events until the actual request arrives, within its normal budget.
+    deadline = monotonic() + 30
+    while not pending and monotonic() < deadline:
+        page.wait_for_timeout(25)
+    assert pending, f"{description} was not requested within 30s"
+    return pending.pop()[0]
 
 
 def main():
@@ -120,16 +131,18 @@ def main():
             registration.get_by_role("button", name="Browse exports", exact=True).click()
             browser_dialog = page.get_by_role("dialog", name="Browse exports", exact=True)
             expect(browser_dialog).to_be_visible()
+            pending_browser = take_deferred(page, deferred_browser, "NFS export discovery")
             browser_dialog.get_by_role("button", name="Cancel", exact=True).click()
             expect(browser_dialog).to_be_hidden()
-            deferred_browser.pop()[0].fulfill(json={"status": "succeeded", "candidates": [{"kind": "nfs", "source": {"nfs": {"server": "nfs.example.test", "export": "/exports/late"}}, "path": "/exports/late", "browsable": True}]})
+            pending_browser.fulfill(json={"status": "succeeded", "candidates": [{"kind": "nfs", "source": {"nfs": {"server": "nfs.example.test", "export": "/exports/late"}}, "path": "/exports/late", "browsable": True}]})
             expect(browser_dialog).to_be_hidden()
             expect(page.get_by_role("button", name="Open /exports/late", exact=True)).to_have_count(0)
             registration.get_by_role("button", name="Browse exports", exact=True).click()
             expect(browser_dialog).to_be_visible()
+            pending_browser = take_deferred(page, deferred_browser, "NFS export discovery")
             page.keyboard.press("Escape")
             expect(browser_dialog).to_be_hidden()
-            deferred_browser.pop()[0].fulfill(json={"status": "succeeded", "candidates": [{"kind": "nfs", "source": {"nfs": {"server": "nfs.example.test", "export": "/exports/late"}}, "path": "/exports/late", "browsable": True}]})
+            pending_browser.fulfill(json={"status": "succeeded", "candidates": [{"kind": "nfs", "source": {"nfs": {"server": "nfs.example.test", "export": "/exports/late"}}, "path": "/exports/late", "browsable": True}]})
             expect(browser_dialog).to_be_hidden()
             expect(page.get_by_role("button", name="Open /exports/late", exact=True)).to_have_count(0)
             mode["browser_deferred"] = False
@@ -254,15 +267,17 @@ def main():
             mode["discovery"] = "deferred"
             setup.get_by_role("button", name="Discover targets", exact=True).click()
             expect(setup.get_by_role("button", name="Discovering targets…", exact=True)).to_be_disabled()
+            pending_discovery = take_deferred(page, deferred_discovery, "iSCSI target discovery")
             setup.get_by_role("button", name="Cancel discovery", exact=True).click()
             expect(setup.get_by_label("Target IQN", exact=True)).to_have_value("")
-            deferred_discovery.pop()[0].fulfill(json={"status": "succeeded", "candidates": [{"kind": "iscsi", "source": {"iscsi": {"portal": "storage.example.test:3260", "target_iqn": "iqn.2026-01.example.test:late"}}}]})
+            pending_discovery.fulfill(json={"status": "succeeded", "candidates": [{"kind": "iscsi", "source": {"iscsi": {"portal": "storage.example.test:3260", "target_iqn": "iqn.2026-01.example.test:late"}}}]})
             expect(setup.get_by_role("button", name="Use iqn.2026-01.example.test:late", exact=True)).to_have_count(0)
             # Returning to the original portal must not revive its aborted request.
             setup.get_by_role("button", name="Discover targets", exact=True).click()
+            pending_discovery = take_deferred(page, deferred_discovery, "iSCSI target discovery")
             setup.get_by_label("Target portal", exact=True).fill("other-storage.example.test:3260")
             setup.get_by_label("Target portal", exact=True).fill("storage.example.test:3260")
-            deferred_discovery.pop()[0].fulfill(json={"status": "succeeded", "candidates": [{"kind": "iscsi", "source": {"iscsi": {"portal": "storage.example.test:3260", "target_iqn": "iqn.2026-01.example.test:aborted-a"}}}]})
+            pending_discovery.fulfill(json={"status": "succeeded", "candidates": [{"kind": "iscsi", "source": {"iscsi": {"portal": "storage.example.test:3260", "target_iqn": "iqn.2026-01.example.test:aborted-a"}}}]})
             expect(setup.get_by_role("button", name="Use iqn.2026-01.example.test:aborted-a", exact=True)).to_have_count(0)
             mode["discovery"] = "stale"
             setup.get_by_role("button", name="Discover targets", exact=True).click()
@@ -403,14 +418,26 @@ def main():
             smb_update.get_by_label("Account", exact=True).fill("nex-vm")
             smb_update.get_by_label("Password", exact=True).fill("not-for-display-race-secret")
             mode["credential_deferred"] = True
+            # Reproduce request dispatch lag after React renders its busy state.
+            # Only this fixture request is delayed; the actual UI stays unchanged.
+            page.evaluate("""() => {
+                const originalFetch = window.fetch;
+                window.fetch = async (...args) => {
+                    if (String(args[0]).endsWith('/api/v1/storage/credentials')) {
+                        window.fetch = originalFetch;
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                    }
+                    return originalFetch(...args);
+                };
+            }""")
             race_start = len(requests)
             smb_update.locator("form").evaluate("form => form.requestSubmit()")
             expect(smb_update.get_by_role("button", name="Submitting…", exact=True)).to_be_disabled()
-            assert deferred_credentials, "SMB credential handoff was not requested"
+            pending_credentials = take_deferred(page, deferred_credentials, "SMB credential handoff")
             hosts[0]["connection"] = "stale"
             page.get_by_role("button", name="Refresh view", exact=True).click()
             expect(cached_smb.get_by_text("last report", exact=True)).to_be_visible()
-            deferred_credentials.pop()[0].fulfill(json={"receipt": "core-only-race-receipt"})
+            pending_credentials.fulfill(json={"receipt": "core-only-race-receipt"})
             expect(page.get_by_role("alert")).to_contain_text(stale_reason)
             expect(page.get_by_role("alert")).to_contain_text("Credential delivery may now be unused; use Unused storage credentials after reconnecting.")
             assert not any("storage/cached-smb/update" in request for request in requests[race_start:]), requests[race_start:]
