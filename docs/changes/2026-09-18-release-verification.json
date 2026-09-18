@@ -1,0 +1,37 @@
+{
+  "summary": "Fix final release reachability and package-index verification without rebuilding or republishing. API impact: none; release tooling only.",
+  "paths": [
+    ".github/workflows/release.yml",
+    ".gitea/workflows/release.yml",
+    "tests/test_release_reachability.py",
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "docs/guide/publish-a-release.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Explain final401 diagnosis using existing artifacts and header-only reachability limits.",
+    "pages": [
+      "docs/guide/publish-a-release.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No client-facing or Controller/Core contract changes; only public release HTTP checks change."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No product milestone or acceptance status changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Read-only release verification creates no durable product state."
+  },
+  "verification": {
+    "method": "Regression executes both workflow blocks: source GET timeout simulation and index broken-pipe failures reproduced before corrections; success, 401, and missing-version cases pass after. Corrected final block passed on already published 0.3.4 at the documented public site. Hosted 401 configured URL remains unresolved; no rebuild or republish performed.",
+    "evidence": [
+      "tests/test_release_reachability.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

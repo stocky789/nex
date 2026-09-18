@@ -17,6 +17,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
+- Final release verification checks download headers without transferring the entire
+  source archive and avoids a false missing-version error from an early-closing
+  package-index check (BUG-0294).
+
 - Clustered storage browser fixtures use controlled time so a slow runner cannot
   expire their healthy report; an explicit expiry check still verifies that stale
   storage is excluded from VM placement (BUG-0293).

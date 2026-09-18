@@ -3166,3 +3166,30 @@ Append resolved defects with their evidence and the approach to avoid.
 - Avoid: refreshing fake observation timestamps on every read, extending the real
   freshness limit, placing observations in the future, or relying on fast machines
   to finish the test before its fixtures expire.
+
+## BUG-0294 — Final release verification transfers huge files and closes its index pipe early
+
+- Date: 2026-09-18. Status: corrected locally; hosted correction not run.
+- Symptom/root cause: reachability used GET with a 60-second deadline on the entire
+  source archive. Separately, `grep -q` stopped reading the package index as soon as
+  the version matched; under `pipefail`, curl's resulting write failure reported a
+  missing version even when it existed.
+- Fix: use HEAD for reachability and consume the complete small Packages response
+  with `grep -x` while discarding matching output. Keep non-200 and missing-version
+  checks in both providers' workflows.
+- Regression: `python3 -m unittest discover -s tests -p 'test_release_reachability.py'`
+  executes both actual workflow shell blocks against a disposable HTTP server.
+  Full-archive GET returns a simulated timeout response; a large matching index
+  reproduced curl exit 23. Both failed before their fixes and pass after. Six cases
+  cover success, HTTP 401 and missing version across both providers. Both push/PR
+  foundation jobs discover this test automatically.
+- Live evidence: the existing published 0.3.4 ISO/source/manifest and APT paths
+  returned 200; both package names had version 0.3.4. The ISO checksum sidecar matched
+  the manifest. Executing the corrected final workflow block against the documented
+  public site passed without rebuilding or republishing. This did not hash the full
+  remote payloads. The hosted failure was an earlier 401 at InRelease, not either
+  newly reproduced bug; its configured URL/routing remains unresolved.
+- API impact: none; release verification only. No product or pool state changes.
+- Avoid: rebuilding published artifacts to test URL routing, ignoring auth failures,
+  downloading gigabytes for a reachability check, or using an early-exit consumer
+  in a pipe whose producer must complete successfully.

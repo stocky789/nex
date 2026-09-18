@@ -108,6 +108,15 @@ the package index does not list the released version.
 
 ## Troubleshooting
 
+- **Publication succeeds but the final check returns 401** — the configured public
+  URL requires authentication from the runner. Verify `NEX_PUBLIC_URL` points to
+  the intended public download/APT site, and check that site's proxy/authentication
+  routing. Do not rerun the full build just to diagnose it: inspect the already
+  published `/apt/dists/nex/InRelease`, package index and versioned downloads.
+  The final workflow check uses HEAD for reachability, then reads the small package
+  index to verify the version. It does not download the multi-gigabyte source archive
+  or establish a complete downloaded-artifact integrity check.
+
 - **"CHANGELOG.md has no version headings"** — the changelog lost its `## [X.Y.Z]` headings;
   restore the newest version's section.
 - **"declares <version>, expected <version>"** — a package was built at a different version
