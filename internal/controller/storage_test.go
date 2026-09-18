@@ -35,6 +35,11 @@ func TestStorageRepositoryIsCoreAllocatedAndAdopted(t *testing.T) {
 	// the allocated repository ID to the pending Controller operation.
 	repository := protocol.StorageRegistration{ID: "repository-1", Name: "NFS", Path: "/var/lib/nex-storage/repository-1", Kind: protocol.StorageKindNFS, Source: req.Source, Identity: protocol.StorageIdentity{NFS: &protocol.NFSStorageIdentity{Server: "nfs.example.test", Export: "/vms"}}, Generation: 1, Capabilities: protocol.StorageCapabilities{VMDisk: true, ISO: true}, Access: protocol.StorageAccess{Status: "ready", Readable: true, Writable: true}}
 	report(3, []protocol.StorageRegistration{repository}, []protocol.ManagedOutcome{{OperationID: pending.OperationID, Kind: "storage-register", ID: repository.ID, Name: repository.Name, Status: "succeeded"}}, protocol.Result{OperationID: pending.OperationID, Status: "succeeded"})
+	var replay protocol.StorageRegistration
+	read(t, a.call("POST", "/api/v1/storage", req, nil, http.StatusOK), &replay)
+	if replay.ID != repository.ID || replay.OperationID != pending.OperationID {
+		t.Fatalf("original registration did not replay after adoption: %+v", replay)
+	}
 	var repositories []protocol.StorageRegistration
 	read(t, a.call("GET", "/api/v1/storage", nil, nil, http.StatusOK), &repositories)
 	if len(repositories) != 1 || repositories[0].ID != repository.ID || repositories[0].Path != repository.Path || repositories[0].Generation != 1 || repositories[0].Identity.NFS == nil || !repositories[0].Access.Writable {

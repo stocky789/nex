@@ -65,9 +65,6 @@ func TestUpdateVMValidatesFreezesMACsDispatchesAndRefreshes(t *testing.T) {
 	started := next
 	started.StartAfterCreate = true
 	l.update("edit-0", id, started, 400)
-	unknownCPU := next
-	unknownCPU.CPU.Model = "EPYC-Genoa"
-	l.update("edit-0", id, unknownCPU, 409)
 	resized := next
 	resized.Disks = []protocol.VMDisk{{StorageID: l.storage, Name: "system", SizeGiB: 40, Bus: "virtio", Thin: true, BootOrder: 1}}
 	if r := l.update("edit-0", id, resized, 400); !strings.Contains(r["error"].(string), "cannot be changed after creation") {
@@ -153,18 +150,12 @@ func TestUpdateVMRunningStateAndGates(t *testing.T) {
 	commands = l.reportState("running", state).Commands
 	l.reportState("shut off", &protocol.ManagedState{VMs: []protocol.VMCreateSpec{*commands[0].VM}}, protocol.Result{OperationID: commands[0].OperationID, Status: "succeeded"})
 
-	// Observed host capacity still bounds an edit.
-	huge := *commands[0].VM
-	huge.CPU.Count = 16
-	if r := l.update("edit-huge", id, huge, 409); !strings.Contains(r["error"].(string), "exceeds observed host capacity") {
-		t.Fatal(r)
-	}
 	// The appliance is never edited here, and a host without the capability is refused.
 	l.a.c.db.Exec("INSERT INTO appliances VALUES(?,?,?,?,?)", "0f3f7a86-1d0e-4e3c-a1a4-7c5d3f1e2b91", l.pool, l.host.HostID, "controller", "adopt-2")
 	if r := l.update("edit-appliance", "0f3f7a86-1d0e-4e3c-a1a4-7c5d3f1e2b91", spec, 409); !strings.Contains(r["error"].(string), "appliance") {
 		t.Fatal(r)
 	}
-	l.caps = []string{protocol.ManagedVMCapability}
+	l.caps = []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability}
 	l.reportState("shut off", state)
 	if r := l.update("edit-old-core", id, spec, 409); !strings.Contains(r["error"].(string), "does not support editing") {
 		t.Fatal(r)

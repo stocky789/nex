@@ -26,6 +26,35 @@ func poolVMTestSpec(id, host string) *protocol.VMCreateSpec {
 	}
 }
 
+// placementPeer supplies the selected member's authenticated native-preflight
+// endpoint for owner-record tests. The endpoint echoes only the exact request;
+// native validation itself is covered by placement_test and vmhost tests.
+func placementPeer(t *testing.T, master, member *Store) {
+	t.Helper()
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := AuthenticatePoolMaster(member, r); err != nil {
+			http.Error(w, "master rejected", http.StatusUnauthorized)
+			return
+		}
+		var request poolPlacementRequest
+		if json.NewDecoder(r.Body).Decode(&request) != nil || request.Command.VM == nil {
+			http.Error(w, "bad placement", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(poolPlacementReply{Generation: request.Generation, OperationID: request.OperationID, VMID: request.Command.VM.ID, VM: *request.Command.VM, Accepted: true})
+	}))
+	config, err := PoolPeerTLSConfig(member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.TLS = config
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	if err = AdvertisePoolPeerOrigin(context.Background(), member, server.URL); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestManagedVMChecksReady(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -476,9 +505,10 @@ func TestPoolVMRecoveryPeerRejectsChangedDurableSpec(t *testing.T) {
 	if err = JoinPoolPeer(context.Background(), member, server.URL, ca, offer); err != nil {
 		t.Fatalf("join peer: %v", err)
 	}
+	placementPeer(t, master, member)
 	const vm = "11111111-1111-4111-8111-111111111111"
 	spec := poolVMTestSpec(vm, member.State.HostID)
-	if err = poolVMRequestPeer(context.Background(), member, vm, "define", nil, true, spec, nil); err != nil {
+	if err = poolVMDefineRequestPeer(context.Background(), member, *spec, "create-recovery-peer"); err != nil {
 		t.Fatal(err)
 	}
 	if err = poolVMRequestPeer(context.Background(), member, vm, "define", nil, false, spec, nil); err != nil {
@@ -516,9 +546,10 @@ func TestPoolVMUpdatePeerTransitionRequiresExactJournalEvidence(t *testing.T) {
 	if err = JoinPoolPeer(context.Background(), member, server.URL, ca, offer); err != nil {
 		t.Fatal(err)
 	}
+	placementPeer(t, master, member)
 	const vm = "11111111-1111-4111-8111-111111111111"
 	previous := poolVMTestSpec(vm, member.State.HostID)
-	if err = poolVMRequestPeer(context.Background(), member, vm, "define", nil, true, previous, nil); err != nil {
+	if err = poolVMDefineRequestPeer(context.Background(), member, *previous, "create-update-peer"); err != nil {
 		t.Fatal(err)
 	}
 	next := *previous
@@ -591,6 +622,7 @@ func TestPoolVMFirstLocalToSharedUpdateSeedsOnlyExactMemberInventory(t *testing.
 	if err = JoinPoolPeer(context.Background(), member, server.URL, ca, offer); err != nil {
 		t.Fatal(err)
 	}
+	placementPeer(t, master, member)
 	membership, err := Membership(master)
 	if err != nil {
 		t.Fatal(err)
@@ -670,9 +702,10 @@ func TestPoolVMUpdatePeerRejectsEmptyMasterAcknowledgement(t *testing.T) {
 	if err = JoinPoolPeer(context.Background(), member, server.URL, ca, offer); err != nil {
 		t.Fatal(err)
 	}
+	placementPeer(t, master, member)
 	const vm = "11111111-1111-4111-8111-111111111111"
 	previous := poolVMTestSpec(vm, member.State.HostID)
-	if err = poolVMRequestPeer(context.Background(), member, vm, "define", nil, true, previous, nil); err != nil {
+	if err = poolVMDefineRequestPeer(context.Background(), member, *previous, "create-ack-peer"); err != nil {
 		t.Fatal(err)
 	}
 	handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -728,13 +761,13 @@ func TestPoolVMRecoveryPeerRefusesOldMasterWithoutSpecAck(t *testing.T) {
 	}
 }
 
-func TestSingleHostSharedVMStillUsesDurableOwnerAndPermit(t *testing.T) {
+func TestSingleHostPoolVMLocalFenceUsesDurableOwnerAndPermit(t *testing.T) {
 	s := peerStore(t, "host-a", "pool-1")
 	if err := EnsurePoolMembership(s); err != nil {
 		t.Fatal(err)
 	}
 	const vm = "11111111-1111-4111-8111-111111111111"
-	if err := poolVMRequestPeer(context.Background(), s, vm, "define", nil, true, poolVMTestSpec(vm, "host-a"), nil); err != nil {
+	if err := poolVMLocal(s, vm, "define", nil, true, poolVMTestSpec(vm, "host-a"), nil); err != nil {
 		t.Fatal(err)
 	}
 	permit := ""
@@ -755,7 +788,7 @@ func TestSingleHostSharedVMStillUsesDurableOwnerAndPermit(t *testing.T) {
 	}
 }
 
-func TestSharedVMCreateAcceptsRealHealthyManagedObservations(t *testing.T) {
+func TestSharedVMCreateRejectsUnmountedNativeStoragePreflight(t *testing.T) {
 	s := peerStore(t, "host-a", "pool-1")
 	if err := EnsurePoolMembership(s); err != nil {
 		t.Fatal(err)
@@ -778,8 +811,8 @@ func TestSharedVMCreateAcceptsRealHealthyManagedObservations(t *testing.T) {
 	if !managedVMChecksReady(checks) || len(managed.Storage) != 1 {
 		t.Fatalf("real managed observations are not ready: storage=%#v checks=%#v", managed.Storage, checks)
 	}
-	if _, err = AdmitPoolVMExecution(context.Background(), s, protocol.Command{OperationID: "create-1", Kind: "vm-create", VM: vm}); err != nil {
-		t.Fatalf("shared VM create rejected healthy observations: %v", err)
+	if _, err = AdmitPoolVMExecution(context.Background(), s, protocol.Command{OperationID: "create-1", Kind: "vm-create", VM: vm}); err == nil || !strings.Contains(err.Error(), "storage") {
+		t.Fatalf("unmounted shared storage passed native placement preflight: %v", err)
 	}
 }
 
@@ -962,15 +995,37 @@ func TestSharedVMMediaChangeBecomesDurableDefinitionUpdate(t *testing.T) {
 	if stops, err := protocol.NeedsStop(*vm, *update.VM); err != nil || len(stops) != 0 {
 		t.Fatalf("eject of a running shared VM classified stop-first: %v %v", stops, err)
 	}
-	finish, err := AdmitPoolVMExecution(context.Background(), s, update)
-	if err != nil || finish == nil {
-		t.Fatalf("durable media transition refused: %v", err)
-	}
+	// This fixture intentionally has no mountable NFS export. Model the exact
+	// interrupted update replay so native placement does not retry a side effect;
+	// the master must retain the matching durable reservation.
 	state, err := loadPoolVMs(s)
 	if err != nil {
 		t.Fatal(err)
 	}
 	record := state.VMs[vm.ID]
+	if err = reservePoolVMUpdate(&record, s.State.HostID, command.OperationID, *update.VM); err != nil {
+		t.Fatal(err)
+	}
+	state.VMs[vm.ID] = record
+	if err = savePoolVMs(s, state); err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(map[string]any{"command": update, "result": protocol.Result{OperationID: update.OperationID, Status: "needs_attention"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(s.dir, "managed-vms", update.OperationID+".json"), b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	finish, err := AdmitPoolVMExecution(context.Background(), s, update)
+	if err != nil || finish == nil {
+		t.Fatalf("durable media transition refused: %v", err)
+	}
+	state, err = loadPoolVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = state.VMs[vm.ID]
 	if record.PendingUpdate == nil || record.PendingUpdate.OperationID != command.OperationID || !reflect.DeepEqual(record.PendingUpdate.Next, *update.VM) {
 		t.Fatalf("master did not reserve the media revision: %+v", record.PendingUpdate)
 	}
@@ -1022,6 +1077,10 @@ func TestSharedVMMediaRedeliveryReusesJournaledCommand(t *testing.T) {
 	again := PoolVMMediaCommand(context.Background(), s, command)
 	if again.Kind != "vm-update" || again.VM == nil || !reflect.DeepEqual(*again.VM, applied) {
 		t.Fatalf("redelivered media operation was not reused as journaled: %+v", again.VM)
+	}
+	changed := sharedMediaCommand(vm, "media-1", "insert", "media-1")
+	if got := PoolVMMediaCommand(context.Background(), s, changed); !reflect.DeepEqual(got, changed) {
+		t.Fatalf("changed media payload reused a different journaled transition: %+v", got)
 	}
 }
 

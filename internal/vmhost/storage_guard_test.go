@@ -59,6 +59,62 @@ func TestStorageStartupGuardRefusesUnavailableAndForeignDisks(t *testing.T) {
 	}
 }
 
+func TestStorageStartupGuardUsesMostSpecificRepository(t *testing.T) {
+	const vm = "11111111-1111-4111-8111-111111111111"
+	parent := protocol.StorageRegistration{ID: "parent", Kind: "local", Path: "/var/lib/libvirt/images", Generation: 1}
+	nested := protocol.StorageRegistration{ID: "nested", Kind: "local", Path: "/var/lib/libvirt/images/placement-lab", Generation: 1}
+	js := []managedJournal{
+		{Command: protocol.Command{Kind: "storage-register", Storage: &parent}, Result: protocol.Result{Status: "succeeded"}},
+		{Command: protocol.Command{Kind: "storage-register", Storage: &nested}, Result: protocol.Result{Status: "succeeded"}},
+	}
+	path := "/var/lib/libvirt/images/placement-lab/nex-vms/" + vm + "/disk-0.qcow2"
+	repository, err := storageStartupRepository(path, storageProjection(js))
+	if err != nil || repository.ID != nested.ID {
+		t.Fatalf("nested repository = %#v, %v", repository, err)
+	}
+	if repository, err = storageStartupRepository("/var/lib/libvirt/images/nex-vms/"+vm+"/disk-0.qcow2", storageProjection(js)); err != nil || repository.ID != parent.ID {
+		t.Fatalf("parent repository = %#v, %v", repository, err)
+	}
+	if repository, err = storageStartupRepository(path, map[string]protocol.StorageRegistration{
+		"parent-one": {ID: "parent-one", Path: parent.Path},
+		"parent-two": {ID: "parent-two", Path: parent.Path},
+		"nested":     nested,
+	}); err != nil || repository.ID != nested.ID {
+		t.Fatalf("nested repository with ambiguous parent = %#v, %v", repository, err)
+	}
+	if _, err = storageStartupRepository(path, map[string]protocol.StorageRegistration{
+		"one": {ID: "one", Path: nested.Path},
+		"two": {ID: "two", Path: nested.Path},
+	}); err == nil {
+		t.Fatal("ambiguous equal repository roots admitted")
+	}
+
+	var d domainXML
+	if err = xml.Unmarshal([]byte(`<domain><uuid>`+vm+`</uuid><devices><disk type="file" device="disk"><source file="`+path+`"/></disk></devices></domain>`), &d); err != nil {
+		t.Fatal(err)
+	}
+	verified := []string{}
+	if err = checkStorageStartup(context.Background(), d, js, func(_ context.Context, got protocol.StorageRegistration) error {
+		verified = append(verified, got.ID)
+		return nil
+	}); err != nil || len(verified) != 1 || verified[0] != nested.ID {
+		t.Fatalf("nested startup = %v, verified %v", err, verified)
+	}
+	d.UUID = "22222222-2222-4222-8222-222222222222"
+	if err = checkStorageStartup(context.Background(), d, js, func(context.Context, protocol.StorageRegistration) error { return nil }); err == nil {
+		t.Fatal("nested repository admitted another VM disk")
+	}
+	d.UUID = vm
+	if err = checkStorageStartup(context.Background(), d, js, func(_ context.Context, got protocol.StorageRegistration) error {
+		if got.ID != nested.ID {
+			t.Fatalf("unavailable check used parent repository %q", got.ID)
+		}
+		return errors.New("nested repository unavailable")
+	}); err == nil {
+		t.Fatal("unavailable nested repository admitted through its parent")
+	}
+}
+
 func TestStorageStartupDiskRefusesAliases(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "disk.qcow2")
 	if err := os.WriteFile(path, []byte("disk"), 0600); err != nil {

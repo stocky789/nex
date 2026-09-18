@@ -1181,7 +1181,7 @@ func managedStorageByID(ctx context.Context, js []managedJournal, id string, req
 	if err != nil {
 		return protocol.StorageRegistration{}, storageAccess{}, err
 	}
-	a, err := managedStorageReady(ctx, s, required)
+	a, err := managedStorageReadyFn(ctx, s, required)
 	return s, a, err
 }
 

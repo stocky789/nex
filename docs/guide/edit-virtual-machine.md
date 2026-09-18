@@ -16,10 +16,9 @@ disk to other storage and moving a VM to another host are not available in this 
 - Administrator access to [Nex Controller](manage-controller.md) and a VM
   [created through Controller](create-virtual-machine.md) whose creation task succeeded. The
   Controller appliance is not edited here; it is managed from its host's local page.
-- The VM's host freshly connected, running Nex Core components that report the
-  `vm-update-v1` capability, with a fresh observation of the VM's state.
-- Any storage, network or ISO the change refers to already registered and verified on the
-  VM's host, as for creation.
+- The VM's host and pool master freshly connected, running Core components that report
+  `vm-update-v1` and master-owned VM placement. Core validates the current storage, network,
+  ISO, capacity and runtime state; a Controller mirror is not placement authority.
 
 ## Steps
 
@@ -87,9 +86,9 @@ disk to other storage and moving a VM to another host are not available in this 
      the first time it is saved: with the VM stopped the drive is there at the next start, and
      a running VM gets the drive added to its definition (SATA cannot be hot-plugged, so the
      guest sees it after its next stop and start).
-3. Select **Save changes**. Controller checks the definition against the host and pool the
-   same way creation does and queues a `vm-update` task for the host. Select **Cancel** to
-   discard the form.
+3. Select **Save changes**. Controller validates the request shape and queues a `vm-update`
+   task. Core asks the pool master to approve the exact definition, then rechecks it before
+   applying it. Select **Cancel** to discard the form.
 4. Follow the task under **Recent tasks** or **Task history**. The details update with the
    host's next report once the task has succeeded.
 
@@ -120,8 +119,9 @@ before relying on the numbers; a stale status does not prove the VM stopped.
   semantics, and Nex does not rewrite an existing VM when membership changes.
 
 - **The Edit button is greyed:** hover it for the reason. The VM's host is not freshly
-  connected, the host agent does not report `vm-update-v1` (upgrade Nex Core), or the VM is
-  the protected Controller appliance.
+  connected, does not report `vm-update-v1`, or the VM is the protected Controller appliance.
+  **Save changes** is refused if the selected host or pool master lacks master-owned placement;
+  upgrade Controller, then Core on those two hosts.
 - **A field is greyed with "Stop the VM to change this":** that change needs a stopped guest.
   Shut the VM down with its [Power controls](vm-power.md), then edit.
 - **"stop the VM first to change …":** the VM was running when the request arrived and the
@@ -157,9 +157,10 @@ before relying on the numbers; a stale status does not prove the VM stopped.
   instead, or plan a replacement VM; disk resize is not yet available.
 - **"a change or power request for this VM is still pending":** one request per VM is in
   flight at a time. Wait for its task, then submit again.
-- **Task reports `failed`:** read its error. Common causes are a storage target without free
-  space for a new disk, or libvirt refusing the change on the host. Correct the cause and submit
-  the edit again. A running guest that has not released a removed device does **not** make the
+- **Task reports `failed`:** read its error. Core can reject a queued edit because current
+  storage, network, media, CPU, memory or runtime state changed after Controller displayed it.
+  Correct the reported condition and submit a new edit; do not treat request acceptance as
+  success. A running guest that has not released a removed device does **not** make the
   task fail: the task reports `succeeded` while the device stays attached to the running VM until
   the guest releases it or the VM stops. Adding an interface with that device's MAC fails until
   then (see below).
@@ -207,6 +208,10 @@ before relying on the numbers; a stale status does not prove the VM stopped.
   report; the mirror follows what the host reports as current.
 
 ## Verification
+
+See [master placement evidence](../qa/2026-09-18-master-vm-placement.md) for the
+unreleased admission change. Browser checks use simulated Core responses; native
+multi-host outage and recovery acceptance remains open.
 
 See [pool CPU baseline evidence](../qa/2026-09-17-cpu-baseline.md) for this unreleased
 CPU-definition change. Native libvirt autostart bypasses the explicit CPU preflight;

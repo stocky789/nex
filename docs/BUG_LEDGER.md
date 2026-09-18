@@ -2480,12 +2480,12 @@ Append resolved defects with their evidence and the approach to avoid.
 
 ## BUG-0246 — Every nex-controller package from 0.1.6~alpha1 to 0.2.9 shipped a Controller that cannot start
 
-- Date: 2026-09-17. Status: fixed; regression added; release smoke-start outstanding.
+- Date: 2026-09-17. Status: fixed; package smoke-start gate added 2026-09-18; hosted execution outstanding.
 - Symptom: in the Phase 2 gate3 lab run on 0.2.10~gate3, the `nex-controller` deb binary exited at start with "Binary was compiled with CGO_ENABLED=0, go-sqlite3 requires cgo to work. This is a stub". `go version -m` on the packaged binaries reports `CGO_ENABLED=0` for 0.1.6~alpha1, 0.2.2, 0.2.5, 0.2.6, 0.2.7, 0.2.9 and 0.2.10~gate3, so every Controller package from 0.1.6~alpha1 through 0.2.9 is affected. A Controller installed from the package, including one upgraded through apt, gets a binary that cannot open its database, and the service keeps restarting; recovery needs a shell. Appliances built from the image keep their own working binary.
 - Root cause: `packaging/controller/Dockerfile` installed no C toolchain (`gcc`, `libc6-dev`) and neither `packaging/controller/build-inside.sh` nor `appliance/build-inside.sh` set `CGO_ENABLED`, so `go build` silently fell back to `CGO_ENABLED=0` and linked the go-sqlite3 stub.
 - Fix: the controller builder image installs `gcc` and `libc6-dev`, and both build scripts `export CGO_ENABLED=1` before `go build`, so a builder without a compiler fails the build instead of producing the stub.
 - Regression: `python3 -m unittest tests.test_distribution_packaging.ControllerCgoBuildTests` failed before the fix (1 failure, 2 errors) and passes after; the full module ran 23 tests OK. Artifact check: a throwaway `0.2.10~cgocheck` package built with `packaging/controller/build.py` reports `CGO_ENABLED=1` in `go version -m`, and its binary started on 127.0.0.1 with an empty data directory, created `controller.db` and answered HTTPS 200. CI: step "Check contracts and contributor tools" (`unittest discover -s tests -p 'test_*.py'`) in job `contracts` in both `phase1` workflows.
-- Follow-up (release-workflow owner): the release workflow checks only the package version and never extracts or smoke-starts the packaged Controller binary, so a runtime-broken package can still be published; add a `go version -m` cgo check or a start-with-empty-data-dir check to artifact verification. Withdrawing or superseding the published broken packages and operator recovery guidance remain an owner decision.
+- Follow-up (2026-09-18): both release workflows now extract and smoke-start the exact Controller package in the Debian 13 builder before creating/uploading a release. The gate requires a fresh SQLite database, packaged UI/source and an authenticated session. `python3 tests/integration/controller_package_smoke.py` passed locally: a real CGO-enabled Controller in a disposable package passed and a real CGO-disabled one failed with the original SQLite stub diagnostic. Both `phase1` workflows run this regression on pushes and pull requests; the later [exact 0.3.2 artifact lab](qa/2026-09-18-release-artifact-lab.md) passed real-package startup and installed service restart/crash/reinstall/reboot checks. Green hosted execution for the final source remains outstanding. See [package-gate evidence](qa/2026-09-18-controller-package-smoke.md). The [Phase 2 close](qa/2026-09-17-phase2-gate/CLOSED.md) records the owner decision to supersede the broken historical packages with 0.3.0+; this change does not remove published artifacts.
 - Avoid: relying on Go's implicit cgo default in a builder image with no C compiler; it builds without error and fails only at runtime.
 
 ## BUG-0247 — A resumed interrupted delete briefly published needs_attention while it was still running
@@ -2808,7 +2808,8 @@ Append resolved defects with their evidence and the approach to avoid.
   (including `go test -race ./...`), and the wait discarded the Controller's own log, so a
   slow start and a crashed start produced the same message.
 - Fix: `Lab.started()` in `tests/integration/phase1.py` waits 60 seconds and prints the
-  process log when it gives up; all four Controller startup waits call it.
+  process log when it gives up; all eight Controller startup waits across the integration
+  harnesses call it, not only the lane that failed.
 - Regression: no automated check asserts a timeout, so regression coverage is outstanding;
   both paths were exercised by hand against the built Controller — a healthy start returned,
   and a Controller started without its source archive failed with
@@ -2845,3 +2846,65 @@ Append resolved defects with their evidence and the approach to avoid.
   timing on demand; the `go` lane in both workflow copies is the standing check.
 - Avoid: asserting a wall-clock number that a busy build machine controls, or letting one
   assertion report two different failures.
+
+## BUG-0278 — Default-resource test depended on the development host's libvirt directory
+
+- Date: 2026-09-18
+- Symptom: `TestRegisterDefaultsIsIdempotentAndRespectsExistingEntries` expected one
+  network journal but found an additional storage attempt on workstations where
+  `/var/lib/libvirt/images` exists; the native `runuser` check then failed without root.
+- Root cause: the test assumed the default storage path did not exist rather than
+  selecting an absent temporary path. The BUG-0277 note described the resulting
+  permission error; running the test as root is not its actual requirement.
+- Fix: point this test at an absent child of its temporary directory and restore the
+  package default afterward. Production resource registration is unchanged.
+- Regression: reproduced the original failure with the existing libvirt directory;
+  `go test ./internal/vmhost -count=1` and focused placement/default-resource
+  race checks passed after the repair. Both push/PR workflow copies run
+  the test through `go test -race -timeout 20m ./...`.
+- Avoid: depending on whether optional virtualization directories happen to exist on
+  the machine running a unit test, or modifying real host directories to make it pass.
+
+## BUG-0279 — Storage projection broke idempotent registration replay
+
+- Date: 2026-09-18. Status: fixed in the working tree; native retry reproduced before the fix.
+- Symptom: in the native standalone-Core lab, `POST /api/v1/storage` with the exact local
+  registration payload and `request_id` `lab-local-0` returned 201 initially. After Core
+  reported the completed repository, retrying that unchanged payload returned 409
+  `request_id already used with another payload`.
+- Root cause: `mirrorStorageProjection` rewrote an existing `managed_resources` row's
+  `payload` with its synthetic adoption request and Core-resolved repository fields.
+  `replayResource` correctly compares the saved input byte-for-byte, so the Controller
+  subsequently compared the operator's original request with its own replacement payload.
+- Fix: refresh only the Controller's disposable storage command projection, pool/host and
+  name. The original request payload remains the idempotent replay record. Newly adopted
+  repositories still receive their synthetic adoption payload because they have no original
+  Controller request to replay.
+- Regression: `TestStorageRepositoryIsCoreAllocatedAndAdopted` first failed with the exact
+  409 after Core adoption, then passed after the fix by replaying the original request and
+  requiring the same Core-allocated repository ID and operation. `go test ./internal/controller
+  -run 'Storage' -count=1` passed. Both existing push/PR `phase1` workflows run the Go suite
+  with `go test -race -timeout 20m ./...`.
+- Avoid: updating a request payload while refreshing an observed resource mirror; payload is
+  immutable replay input, while command is the current host-reported projection.
+
+## BUG-0280 — VM startup could check a nested repository through its parent
+
+- Date: 2026-09-18. Status: fixed in the working tree.
+- Symptom: a managed VM disk beneath a nested local repository could be assigned to its
+  broader parent registration at startup because repository selection stopped at the first
+  matching path. Map iteration made that choice unstable, allowing the wrong repository's
+  availability and identity check to decide whether the VM could start.
+- Root cause: the startup guard used the first prefix match instead of resolving ownership by
+  the longest registered storage root. It also needed to discard an equal-root ambiguity from
+  a broader root once a more-specific root was found.
+- Fix: select the longest matching root, reject equally specific roots with different IDs as
+  ambiguous, and reset the ambiguity state whenever a longer root supersedes the prior choice.
+  The disk remains required to be beneath that selected repository's `nex-vms/<vm-id>/` path.
+- Regression: `TestStorageStartupGuardUsesMostSpecificRepository` covers parent and nested
+  roots, an ambiguous parent superseded by an unambiguous nested root, equal-root refusal, the
+  selected repository verification, foreign-VM refusal and unavailable nested storage. The
+  focused guard regression and full vmhost test run passed locally. Both existing push/PR
+  `phase1` workflows run the Go suite with `go test -race -timeout 20m ./...`.
+- Avoid: using first-match filesystem-root ownership where nested repositories are valid, or
+  retaining an ambiguity after a more-specific root has made it irrelevant.

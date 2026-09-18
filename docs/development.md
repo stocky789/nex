@@ -77,6 +77,25 @@ does not prove a service starts or that libvirt access works under the sandbox.
 
 ## Controller appliance and host-local package
 
+Before publication, both release workflows run `scripts/check-controller-package.py`
+against the exact Controller `.deb` inside the existing Debian 13 Controller builder.
+The check extracts without installing, uses temporary credentials/state and loopback
+HTTPS, and requires SQLite startup, the packaged UI, matching source download, and an
+authenticated administrator session. A startup failure or timeout blocks publication
+and prints the Controller log. This does not test package maintainer scripts or systemd.
+
+Run its regression locally with Go, a C compiler, dpkg-deb, OpenSSL and Python:
+
+```sh
+python3 tests/integration/controller_package_smoke.py
+```
+
+This builds temporary test packages from real CGO-enabled and CGO-disabled Controller
+binaries, requiring the first to pass and the second to fail for the SQLite stub error.
+Both `phase1` workflows run it on pushes and pull requests. See the
+[package-gate evidence](qa/2026-09-18-controller-package-smoke.md) for executed checks
+and release-environment limits.
+
 The appliance is a prepared Debian 13 amd64 qcow2, delivered with a separate
 `nex-core-local` Debian package. See the [appliance builder](../appliance/README.md)
 for base-image provenance, signing-key handling and the build command. Debian

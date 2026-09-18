@@ -14,6 +14,10 @@ import (
 )
 
 const ManagedVMCapability = "managed-vm-v1"
+
+// PoolVMPlacementCapability means Core requires the pool master to approve every
+// VM definition placement using a fresh authenticated target-host preflight.
+const PoolVMPlacementCapability = "pool-vm-placement-v1"
 const CPUBaselineCapability = "vm-cpu-baseline-v1"
 
 // Appliance is a Controller appliance VM the host deployed through its local engine, reported

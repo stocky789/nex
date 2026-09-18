@@ -203,6 +203,10 @@ func PoolPeerHandler(s *Store) http.Handler {
 			PoolCPUHandler(s).ServeHTTP(w, r)
 			return
 		}
+		if r.URL.Path == poolPlacementPath {
+			PoolPlacementHandler(s).ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path == poolStorageClusterPath || strings.HasPrefix(r.URL.Path, poolStorageClusterPath+"/") {
 			PoolStorageClusterHandler(s).ServeHTTP(w, r)
 			return

@@ -40,6 +40,26 @@ func (c *Controller) managedHost(tx *sql.Tx, pool, host string) error {
 	}
 	return nil
 }
+
+// placementHost only verifies that both Core peers understand the master-owned
+// placement protocol. Resource availability and VM admission are Core's decision.
+func (c *Controller) placementHost(tx *sql.Tx, pool, host string) error {
+	if err := c.managedHost(tx, pool, host); err != nil {
+		return err
+	}
+	var raw, masterRaw, master string
+	if err := tx.QueryRow("SELECT coalesce(c.capabilities,'[]'),p.master_host_id,coalesce(mc.capabilities,'[]') FROM pools p LEFT JOIN host_capabilities c ON c.host_id=? LEFT JOIN host_capabilities mc ON mc.host_id=p.master_host_id WHERE p.id=?", host, pool).Scan(&raw, &master, &masterRaw); err != nil {
+		return fmt.Errorf("selected pool not found")
+	}
+	var caps, masterCaps []string
+	if json.Unmarshal([]byte(raw), &caps) != nil || !slices.Contains(caps, protocol.PoolVMPlacementCapability) {
+		return fmt.Errorf("the selected host does not support master-owned VM placement; upgrade Nex Core")
+	}
+	if json.Unmarshal([]byte(masterRaw), &masterCaps) != nil || !slices.Contains(masterCaps, protocol.PoolVMPlacementCapability) {
+		return fmt.Errorf("the pool master does not support master-owned VM placement; upgrade Nex Core")
+	}
+	return nil
+}
 func (c *Controller) saveResource(tx *sql.Tx, user, requestID, pool, host, name, id string, cmd protocol.Command, payload any) (protocol.Operation, error) {
 	return c.saveResourceStatus(tx, user, requestID, pool, host, name, id, "queued", cmd, payload)
 }
@@ -876,43 +896,13 @@ func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf
 	if c.replayResource(w, tx, v.RequestID, "vm-create", v) {
 		return
 	}
-	if err = c.managedHost(tx, v.PoolID, v.HostID); err != nil {
+	if err = c.placementHost(tx, v.PoolID, v.HostID); err != nil {
 		fail(w, 409, err.Error())
 		return
 	}
-	// Every reference must name a registration this host has verified in this pool.
-	resolve := func(id, kind, what string) (protocol.Command, bool) {
-		var cmd protocol.Command
-		var e error
-		if kind == "storage-register" {
-			cmd, e = c.readyStorageForHost(tx, id, v.PoolID, v.HostID)
-		} else {
-			cmd, e = readyResource(tx, id, kind, v.PoolID, v.HostID)
-		}
-		if e != nil {
-			fail(w, 404, what+" is not registered and verified on the selected host and pool")
-		}
-		return cmd, e == nil
-	}
-	for _, d := range v.Disks {
-		cmd, ok := resolve(d.StorageID, "storage-register", "the disk storage target")
-		if !ok {
-			return
-		}
-		if err := storageReadyForWrite(cmd); err != nil {
-			fail(w, 409, err.Error())
-			return
-		}
-	}
-	for _, nic := range v.NICs {
-		if _, ok := resolve(nic.NetworkID, "network-register", "the selected network"); !ok {
-			return
-		}
-	}
-	if v.MediaID != "" {
-		if _, ok := resolve(v.MediaID, "iso-import", "the install ISO"); !ok {
-			return
-		}
+	if err := cpuFeaturesSupported(tx, v.VMCreateSpec); err != nil {
+		fail(w, 409, err.Error())
+		return
 	}
 	if v.DriversMediaID != "" {
 		var raw string
@@ -923,31 +913,9 @@ func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf
 			fail(w, 409, "the selected host agent does not support a driver disc drive; upgrade Nex Core")
 			return
 		}
-		if _, ok := resolve(v.DriversMediaID, "iso-import", "the driver disc ISO"); !ok {
-			return
-		}
 	}
-	inv, err := hostInventory(tx, v.HostID)
-	if err != nil {
-		fail(w, 500, "inventory unavailable")
-		return
-	}
-	// The memory ceiling is what the host must be able to meet, in both memory modes.
-	if v.CPU.Count > inv.CPUCount || uint64(v.Memory.SizeMiB)*1024*1024 > inv.MemoryBytes {
-		fail(w, 409, "requested CPU or RAM exceeds observed host capacity")
-		return
-	}
-	if err := cpuFeaturesSupported(tx, v.VMCreateSpec); err != nil {
-		fail(w, 409, err.Error())
-		return
-	}
-	if len(v.CPU.Features) == 0 && !availableCPUModel(&inv, v.CPU.Model) {
-		fail(w, 409, "selected CPU model is not currently available on the host")
-		return
-	}
-	// Name and MAC uniqueness, dedicated-memory admission and start_after_create are the
-	// host's: Core checks them against its journal and libvirt and reports a failed or
-	// needs_attention result the operator reads in Task history.
+	// Core validates resources, capacity, CPU compatibility, identity and admission from
+	// its master-owned state. Controller mirrors are presentation only.
 	spec := v.VMCreateSpec
 	b := random()[:32]
 	spec.ID = fmt.Sprintf("%s-%s-4%s-a%s-%s", b[:8], b[8:12], b[13:16], b[17:20], b[20:])
@@ -1139,7 +1107,7 @@ func (c *Controller) updateVM(w http.ResponseWriter, r *http.Request, user, csrf
 		fail(w, 400, err.Error())
 		return
 	}
-	if err = c.managedHost(tx, cur.PoolID, cur.HostID); err != nil {
+	if err = c.placementHost(tx, cur.PoolID, cur.HostID); err != nil {
 		fail(w, 409, err.Error())
 		return
 	}
@@ -1172,63 +1140,12 @@ func (c *Controller) updateVM(w http.ResponseWriter, r *http.Request, user, csrf
 			return
 		}
 	}
-	resolve := func(id, kind, what string) (protocol.Command, bool) {
-		var cmd protocol.Command
-		var e error
-		if kind == "storage-register" {
-			cmd, e = c.readyStorageForHost(tx, id, cur.PoolID, cur.HostID)
-		} else {
-			cmd, e = readyResource(tx, id, kind, cur.PoolID, cur.HostID)
-		}
-		if e != nil {
-			fail(w, 404, what+" is not registered and verified on the VM's host and pool")
-		}
-		return cmd, e == nil
-	}
-	for _, d := range spec.Disks {
-		cmd, ok := resolve(d.StorageID, "storage-register", "the disk storage target")
-		if !ok {
-			return
-		}
-		if err := storageReadyForWrite(cmd); err != nil {
-			fail(w, 409, err.Error())
-			return
-		}
-	}
-	for _, nic := range spec.NICs {
-		if _, ok := resolve(nic.NetworkID, "network-register", "the selected network"); !ok {
-			return
-		}
-	}
-	if spec.MediaID != "" {
-		if _, ok := resolve(spec.MediaID, "iso-import", "the install ISO"); !ok {
-			return
-		}
-	}
-	if spec.DriversMediaID != "" {
-		if !slices.Contains(caps, protocol.DriversDriveCapability) {
-			fail(w, 409, "the VM's host agent does not support a driver disc drive; upgrade Nex Core")
-			return
-		}
-		if _, ok := resolve(spec.DriversMediaID, "iso-import", "the driver disc ISO"); !ok {
-			return
-		}
-	}
-	inv, err := hostInventory(tx, cur.HostID)
-	if err != nil {
-		fail(w, 500, "inventory unavailable")
-		return
-	}
-	if spec.CPU.Count > inv.CPUCount || uint64(spec.Memory.SizeMiB)*1024*1024 > inv.MemoryBytes {
-		fail(w, 409, "requested CPU or RAM exceeds observed host capacity")
-		return
-	}
 	if err := cpuFeaturesSupported(tx, spec); err != nil {
 		fail(w, 409, err.Error())
 		return
 	}
-	if len(spec.CPU.Features) == 0 && !availableCPUModel(&inv, spec.CPU.Model) {
-		fail(w, 409, "selected CPU model is not currently available on the host")
+	if spec.DriversMediaID != "" && !slices.Contains(caps, protocol.DriversDriveCapability) {
+		fail(w, 409, "the VM's host agent does not support a driver disc drive; upgrade Nex Core")
 		return
 	}
 	cmd := protocol.Command{OperationID: random(), Kind: "vm-update", VM: &spec}

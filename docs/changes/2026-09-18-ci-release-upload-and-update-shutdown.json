@@ -16,14 +16,20 @@
     "tests/integration/managed_vm.py",
     "tests/integration/vm_edit_lab.py",
     "tests/integration/usage_history_lab.py",
+    "docs/guide/publish-a-release.md",
+    "docs/guide/software-updates.md",
     "docs/API.md",
     "CHANGELOG.md",
     "docs/BUG_LEDGER.md",
     "docs/changes/2026-09-18-ci-release-upload-and-update-shutdown.json"
   ],
   "guide": {
-    "impact": "none",
-    "reason": "No documented step or recovery changes. docs/guide/software-updates.md already describes watching refresh, install and restart, and its stuck-phase recovery (a phase clearing itself once installed matches available) still applies: that repair is only suppressed while the same process is the one applying, which is the progression the page already documents."
+    "impact": "updated",
+    "pages": [
+      "docs/guide/publish-a-release.md",
+      "docs/guide/software-updates.md"
+    ],
+    "reason": "Two operator-visible behaviours changed. Publishing a release now resends an asset the forge drops part-way through and fails a short upload instead of publishing it, with new messages an operator reads in the run; the release page records both, in the expected result and in troubleshooting. On Core, the Updates page keeps showing the real step while the same host is applying, and stopping Core during an apply waits for apt rather than interrupting it, so a stop that takes minutes is expected and not a fault. The existing stuck-phase recovery is unchanged and still documented."
   },
   "api": {
     "impact": "existing contract",
@@ -41,9 +47,11 @@
     "reason": "No new or changed durable record. The host-side update progress file the apply writes already exists and keeps its format and location; the fix only stops a writer outliving the shutdown that owns its directory."
   },
   "verification": {
-    "method": "go test -race ./internal/localcore ./internal/nexupdate passed. TestCloseWaitsForTheBackgroundUpdate fails with the wait removed ('Close returned while the apply was still writing to the state directory', race detected) and passes with it; TestMergeProgressLeavesARunningApplyAlone reports done with the guard removed. python3 -m unittest discover -s tests -p 'test_gitea_release.py' passed 6 tests; the dropped-upload test fails with UPLOAD_ATTEMPTS = 1. Controller startup measured at 0.10s from a fresh data directory, and Lab.started() was exercised by hand on a healthy start and on a Controller missing its source archive, which printed its log. Failing CI evidence read from the forge: run 4064 (release asset upload), run 4063 go lane (TempDir cleanup), run 4067 controller-browser (gallery startup). internal/agent timing checks passed -count=4 with all 16 cores saturated. Full go test -race ./... passed except internal/vmhost TestRegisterDefaultsIsIdempotentAndRespectsExistingEntries, which needs root for runuser locally and is green in CI. 310 tests/test_*.py ran: only test_website_hosting failed, needing nginx, which CI installs. python3 scripts/check_docs.py --worktree, scripts/generate_api.py --check and the repository privacy test passed.",
+    "method": "go test -race ./internal/localcore ./internal/nexupdate passed. TestCloseWaitsForTheBackgroundUpdate fails with the wait removed ('Close returned while the apply was still writing to the state directory', race detected) and passes with it; TestMergeProgressLeavesARunningApplyAlone reports done with the guard removed. python3 -m unittest discover -s tests -p 'test_gitea_release.py' passed 6 tests; the dropped-upload test fails with UPLOAD_ATTEMPTS = 1. Controller startup measured at 0.10s from a fresh data directory, and Lab.started() was exercised by hand on a healthy start and on a Controller missing its source archive, which printed its log. Failing CI evidence read from the forge: run 4064 (release asset upload), run 4063 go lane (TempDir cleanup), run 4067 controller-browser (gallery startup). internal/agent timing checks passed -count=4 with all 16 cores saturated. Full go test -race ./... passed except internal/vmhost TestRegisterDefaultsIsIdempotentAndRespectsExistingEntries, which needs root for runuser locally and is green in CI. 310 tests/test_*.py ran: only test_website_hosting failed, needing nginx, which CI installs. python3 scripts/check_docs.py --worktree, scripts/generate_api.py --check and the repository privacy test passed. Guide walkthrough: the documented Core behaviour is the behaviour the new checks assert (TestCloseWaitsForTheBackgroundUpdate for the waiting stop, TestMergeProgressLeavesARunningApplyAlone for the reported step); the release-page text matches the implemented retry and size check in scripts/gitea-release.py and its tests, but no release run has been published since, so the forge-side walkthrough is outstanding and the next release run is that evidence.",
     "evidence": [
       "docs/BUG_LEDGER.md",
+      "docs/guide/publish-a-release.md",
+      "docs/guide/software-updates.md",
       "internal/localcore/updates_test.go",
       "internal/nexupdate/nexupdate_test.go",
       "tests/test_gitea_release.py"

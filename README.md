@@ -11,8 +11,10 @@ Nex is a community-driven virtualization project built on Debian, KVM/QEMU and l
 Nex is in early development. Current builds provide the Core installer, Controller
 appliance deployment, administrator login, host enrollment by address and root password,
 inventory and health reporting.
-General VM management, backups, migration, HA and managed Docker applications remain
-planned work. Docker services will run inside Nex-managed VMs.
+Phase 2 one-host VM management is closed. Phase 3 host installation and Controller
+bootstrap, and Phase 4 multi-host and shared-storage work, are in testing. Backups,
+migration, HA and managed Docker applications remain planned work. Docker services will
+run inside Nex-managed VMs.
 
 Use disposable environments for evaluation. These are development builds, not a
 production release; validation and redistribution gates remain open. The

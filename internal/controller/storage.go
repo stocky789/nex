@@ -337,13 +337,11 @@ func (c *Controller) mirrorStorageProjection(tx *sql.Tx, pool, host string, stor
 	}
 	if err == nil {
 		storage.OperationID, storage.Status, storage.Error = opID, "succeeded", ""
-		cmd, payload := protocol.Command{OperationID: opID, Kind: "storage-register", Storage: &storage}, storageRegisterRequest{RequestID: "adopt-storage:" + host + ":" + storage.ID, PoolID: pool, HostID: host, Name: storage.Name, Path: storage.Path, Kind: storage.Kind, Source: storage.Source}
-		command, commandErr := json.Marshal(cmd)
-		payloadJSON, payloadErr := json.Marshal(payload)
-		if commandErr != nil || payloadErr != nil {
+		command, commandErr := json.Marshal(protocol.Command{OperationID: opID, Kind: "storage-register", Storage: &storage})
+		if commandErr != nil {
 			return fmt.Errorf("storage projection encoding failed")
 		}
-		_, err = tx.Exec("UPDATE managed_resources SET pool_id=?,host_id=?,name=?,payload=?,command=? WHERE id=? AND kind='storage-register'", pool, host, storage.Name, string(payloadJSON), string(command), storage.ID)
+		_, err = tx.Exec("UPDATE managed_resources SET pool_id=?,host_id=?,name=?,command=? WHERE id=? AND kind='storage-register'", pool, host, storage.Name, string(command), storage.ID)
 		return err
 	}
 	if err != sql.ErrNoRows {

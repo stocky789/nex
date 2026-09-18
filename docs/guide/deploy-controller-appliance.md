@@ -302,6 +302,12 @@ original exclusion.
 
 ## Verification
 
+The [0.3.2 local artifact lab](../qa/2026-09-18-release-artifact-lab.md) booted
+the exact bundled appliance separately in a disposable VM and verified DHCP,
+pinned TLS, bootstrap login and secret cleanup. It did not repeat this guide's
+host-local deployment, enrollment or adoption workflow on the new ISO; that
+integrated acceptance remains open.
+
 Recorded checks and their limits:
 
 - [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md) — `0.2.10~gate5`, 2026-09-17,

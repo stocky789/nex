@@ -87,7 +87,9 @@ marked prerelease. The changelog section supplies the notes and the release has 
 
 The tag points at the commit that built the release. Pushing the same version again deletes
 the previous release, moves the tag to the new commit and uploads fresh assets, so a version
-has exactly one release and it always matches the newest build.
+has exactly one release and it always matches the newest build. Each asset is checked against
+its size on disk as it is attached, and an upload the forge drops part-way through is resent
+rather than failing the run, so a release never carries a file that arrived short.
 
 With deploy secrets set, `https://<site>/apt/` also serves the new packages in the signed
 `Release`/`Packages` index, so enrolled hosts see the update under **Updates**. The publisher
@@ -113,6 +115,14 @@ the package index does not list the released version.
   the workflow points `TMPDIR` there for that reason.
 - **"gitea-release: ... HTTP 409"** — the tag is protected or another release still holds it.
   Remove the protection or the stray release and re-run.
+- **"gitea-release: <asset> attempt N failed: ..."** — the connection to the forge dropped while
+  that asset was uploading, which a multi-gigabyte ISO invites. The workflow deletes whatever the
+  attempt registered and resends the whole file, up to three attempts; the run only fails if all
+  three do. If it does fail, nothing was published: fix the path to the forge and push the same
+  version again.
+- **"<asset>: stored N of M bytes"** — the forge accepted the upload but kept a short file. The
+  release is failed on purpose rather than published with a download that cannot be installed.
+  Check the forge's upload size limit and any proxy in front of it.
 - **A throwaway signing key warning** — set the `NEX_APPLIANCE_SIGNING_KEY` secret so every
   release is signed with the operator key.
 - **Deploy secrets are not set** — the workflow says so and publishes to Gitea only. Add the

@@ -525,13 +525,54 @@ residuals: `[close record](../qa/2026-09-17-phase2-gate/CLOSED.md)`.
 
 Preseed supports package/repository and installation configuration. Offline operation still requires all necessary content on the media. [Debian preseed](https://www.debian.org/releases/trixie/amd64/apbs04.en.html), [Debian Live installer options](https://live-team.pages.debian.net/live-manual/html/live-manual/customizing-installer.en.html)
 
+#### Artifact lab sign-off — 2026-09-18
+
+The [0.3.2 artifact lab](../qa/2026-09-18-release-artifact-lab.md) signs off these
+bounded Phase 3 checks for its recorded source/archive hashes, excluding later
+storage edits. This is an unpublished local build, not full phase acceptance.
+
+- [x] Real package/appliance/ISO builds, matching embedded source and package
+  identity, signed appliance manifest and ISO/source-manifest hash binding.
+- [x] Controller package installation, authenticated startup, service restart,
+  crash recovery, same-version reinstall and reboot with preserved site identity.
+- [x] Core package guard and service lifecycle with simulated installer preparation;
+  separate exact-ISO offline BIOS/KVM installation, first boot and reboot.
+- [x] Standalone bundled appliance boot, DHCP, pinned TLS, authentication and
+  bootstrap-secret cleanup in a disposable VM.
+- [x] BIOS/KVM and UEFI/TCG boot-menu review; nested KVM execution and persisted
+  host marker/domain definition; Core service restart on the installed ISO host
+  with explicitly configured loopback management in the NIC-less lab.
+- [ ] Full Phase 3: exact ISO → local appliance deployment or external enrollment
+  → first managed VM, multi-disk safety, interrupted installation/bootstrap and
+  recovery, real management networking, representative Intel/AMD hardware and
+  host Secure Boot. Current-build UEFI installation remains untested.
+- [ ] Package removal preserving guest disks, cross-version upgrades and green
+  hosted release checks are not established by this lab.
+
+Phase 0 gains bounded nested-KVM evidence, not new guest networking/data-recovery
+acceptance. Phase 8 remains open: same-version reinstall is not a populated-host
+upgrade or a compatibility/recovery rehearsal. Existing Phase 2 closure and
+Phase 4's separate acceptance remain unchanged.
+
+API impact: **none** — evidence/status updates only; no client-facing or
+Controller/Core operation, command, stream or result contract changes.
+Guide impact: **updated**, verification evidence only. State owner: **none**.
+
 #### Host-local UI and Controller appliance bootstrap
 
-**Agreed 2026-09-08; planned Phase 3 work.** Every installed Nex Core host serves
+**Agreed 2026-09-08; Phase 3 requirements.** The bounded appliance/package,
+local UI and separate-host recovery slice is implemented and lab-accepted in the
+[appliance plan](2026-09-08-controller-appliance.md#acceptance-evidence). Exact current
+ISO installation/service checks are signed off above; integrated bootstrap/enrollment
+and the full Phase 3 gate remain open; see the
+[prioritized handoff](2026-09-14-production-readiness-handoff.md#recommended-next-work).
+The requirements below remain the acceptance target, not evidence that every path ran.
+
+Every installed Nex Core host serves
 a small local web interface for setup, host/VM status, basic local control and
 recovery. A first-time operator needs one physical server and a browser, without
-an existing VM or external Controller. A host-served deployment workflow is the
-design intent here, not inspected Nex behavior.
+an existing VM or external Controller. The appliance acceptance record identifies
+which host-served deployment and recovery paths were exercised and their limits.
 
 Deliver after Phase 2 proves local VM provisioning, power operations and console
 authorization, and alongside Phase 3 packages/first-boot integration. Reuse those
@@ -571,8 +612,9 @@ host restart or retry cannot create duplicate appliances or memberships.
 authorized consoles, and supported start/graceful-shutdown/explicit force-stop
 actions through the same agent-side validation, operation journal and locks as
 central requests. Record the local actor and reconcile local results and observed
-state with Controller after reconnect; retain Controller ownership of desired
-configuration. Local credentials and console recovery must work during an outage.
+state with Controller after reconnect; Core retains ownership of durable VM
+configuration and Controller presents host-reported state. Local credentials and
+console recovery must work during an outage.
 Verify TLS identity from the local console, use per-installation authentication
 without a shared default password, and scope the local HTTPS API to the management
 interface with authorization, CSRF protection and short-lived console sessions.
@@ -640,7 +682,8 @@ existing-host reconnection without duplicate control. Review desktop/360px and
 keyboard flows, empty/loading/error/stale states and disruptive confirmations.
 Include runnable API/failure checks, updated guide/reference, retained matching
 appliance source/notices under the existing licensing gate, and independent review.
-All these gates remain outstanding until implemented and executed.
+Full integrated acceptance remains open. The appliance plan and artifact lab
+record bounded checks already passed; they do not close the remaining gates above.
 
 ### 4. Multi-host pools and shared storage
 
@@ -686,13 +729,17 @@ master change, member eject, manual promotion after permanent master loss
   promotion. Succession does not restart VMs; automatic restart keeps the Phase 9 HA gates.
 - **Health after promotion.** A new master re-collects fresh member access observations before
   reporting health (member access is memory-only, BUG-0158); the replica is never health evidence.
-- **Placement approval moves to the master.** Controller relays the operator's chosen host; the
-  master Core validates and approves placement from its own records. Gap to close: Controller
-  currently validates placement from its mirror of host reports.
+- **Placement approval is on the master.** Controller relays the operator's chosen host; the
+  master Core validates and approves placement from its own records and fresh target-host
+  preflight. Controller mirrors are presentation only. See
+  [master-owned placement](2026-09-18-master-vm-placement.md); its native multi-host acceptance
+  remains open.
 
 **Planned API impact: new contracts** — Core peer replica push/ack; promotion, planned-transfer
-and eject operations; succession election messages; master placement approval; Controller-facing
-observed replica generation and transfer status. Define authentication, generation/epoch checks,
+and eject operations; succession election messages; Controller-facing
+observed replica generation and transfer status. Master placement admission is now
+implemented in the [placement slice](2026-09-18-master-vm-placement.md); its native
+acceptance remains open. For the remaining contracts define authentication, generation/epoch checks,
 safe retries, reconnect and version compatibility on both sides when implementing.
 **State owner: core** — the durable record is the member replica on each Core; a fresh Controller
 reads the active master's inventory.

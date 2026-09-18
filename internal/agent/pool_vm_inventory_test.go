@@ -91,6 +91,33 @@ func TestPoolVMInventoryAcceptsRealHealthyManagedObservations(t *testing.T) {
 	}
 }
 
+func TestPoolVMInventoryKeepsPausedLocalDefinitionWithoutBlockingPool(t *testing.T) {
+	s := peerStore(t, "host-a", "pool-1")
+	storage := protocol.StorageRegistration{ID: "local-repo", PoolID: "pool-1", HostID: "host-a", Name: "local", Path: "/var/lib/nex-storage/local", Kind: protocol.StorageKindLocal}
+	journal := map[string]any{"command": protocol.Command{OperationID: "register-local", Kind: "storage-register", Storage: &storage}, "result": protocol.Result{OperationID: "register-local", Status: "succeeded"}, "applied_storage": storage}
+	b, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(s.dir, "managed-vms")
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "register-local.json"), b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	vm := poolVMTestSpec("11111111-1111-4111-8111-111111111111", "host-a")
+	vm.Disks[0].StorageID = storage.ID
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-a", Generation: 1, Members: []protocol.PoolMember{{HostID: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
+	state := poolVMState{VMs: map[string]poolVMRecord{}, Inventory: map[string]poolVMInventory{"host-a": {HostID: "host-a", Generation: 1, VMs: []protocol.VMCreateSpec{*vm}, Observed: map[string]string{vm.ID: "paused"}}}}
+	if err = seedPoolVMOwners(s, membership, &state, "host-a"); err != nil {
+		t.Fatalf("paused local definition blocked pool inventory: %v", err)
+	}
+	if record := state.VMs[vm.ID]; !poolVMRecordMatchesSpec(record, *vm) || record.State != "defined" {
+		t.Fatalf("paused local definition = %#v", record)
+	}
+}
+
 func TestPoolVMInventoryAdvancesOnlyWithExactSuccessfulUpdateEvidence(t *testing.T) {
 	previous := poolVMTestSpec("11111111-1111-4111-8111-111111111111", "host-a")
 	next := *previous

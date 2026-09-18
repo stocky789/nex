@@ -1,0 +1,82 @@
+{
+  "summary": "Move VM create/update placement admission from Controller resource mirrors to the pool master, including local-storage definitions. API impact: new contract for authenticated Core placement preflight; changed definition acknowledgements and capability negotiation; public request shapes remain unchanged.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/api/index.html",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/guide/vm-console.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "docs/plans/2026-09-18-master-vm-placement.md",
+    "docs/qa/2026-09-18-master-vm-placement.md",
+    "internal/agent/managed.go",
+    "internal/agent/peer.go",
+    "internal/agent/placement.go",
+    "internal/agent/placement_test.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_inventory.go",
+    "internal/agent/pool_vm_inventory_test.go",
+    "internal/agent/pool_vm_test.go",
+    "internal/agent/run.go",
+    "internal/controller/managed.go",
+    "internal/controller/managed_test.go",
+    "internal/controller/update_test.go",
+    "internal/controller/vmmedia.go",
+    "internal/controller/vmmedia_test.go",
+    "internal/protocol/managed.go",
+    "internal/vmhost/defaults_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/placement.go",
+    "internal/vmhost/placement_test.go",
+    "tests/integration/managed_vm_browser.py",
+    "tests/integration/website_controller_captures.py",
+    "website/src/routes/roadmap/+page.svelte"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Creation, editing and media definition changes require upgraded selected Core and master, with asynchronous native validation and safe retry guidance.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/edit-virtual-machine.md",
+      "docs/guide/vm-console.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "Documents master-to-member placement preflight, exact command and generation binding, explicit master acknowledgement, capability/version behavior and failure/retry results.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/api/index.html",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "Master placement is implemented for development while native multi-host fault/recovery acceptance stays open; no phase is closed.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The master approves and durably records VM ownership and definition revisions; Controller retains no placement authority.",
+    "record": "Existing pool master pool-vms.json VM owner/specification and pending update records, plus selected Core managed VM journals. A replacement Controller recovers the same IDs, names and definitions through existing authenticated managed inventory from the hosts; fresh observations establish readiness."
+  },
+  "verification": {
+    "method": "Full go test -race -timeout 20m ./... passed; final agent-only replay safety corrections passed a fresh go test -race ./internal/agent -count=1. API generation and 29 contract checks, two simulated-Core browser harnesses with inspected captures, worktree documentation/privacy gates and diff checks passed. Native local-master and multi-host lab acceptance remain open; see QA for precise coverage and review. Final handoff removed the nonportable late namespace fixture and added portable strict-admission coverage, independently reviewed; go test -race -timeout 5m ./internal/agent ./internal/vmhost and API/docs/privacy/diff gates passed again.",
+    "evidence": [
+      "docs/qa/2026-09-18-master-vm-placement.md",
+      "internal/agent/placement_test.go",
+      "internal/vmhost/placement_test.go",
+      "tests/integration/managed_vm_browser.py"
+    ]
+  }
+}

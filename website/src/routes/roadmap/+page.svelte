@@ -62,17 +62,20 @@
         "One empty server, one ISO, a browser — and a working Controller at the end of it.",
       done: [
         "A Nex Core ISO with our own graphical installer: welcome, host identity, per-interface networking with VLAN and static or DHCP addressing, an explicit disk choice, and a review page whose erase confirmation names the disk",
-        "Installation with no internet connection at all",
+        "Installation with no internet connection at all; the local development 0.3.2 snapshot passed offline BIOS installation, first boot and reboot in a disposable VM",
         "Nex Core's own version and identity, which survive base-package updates",
         "A small web interface on every installed host for setup, host and VM status, consoles and recovery",
         "Deploying the Controller as a virtual appliance from that local interface, which then creates the first site, enrolls the host and adopts the appliance on its own",
         "A signed Nex package repository, with update checks and updates through the ordinary package manager",
-        "Releases made by tagging: the ISO and both packages are built and published together, and the build refuses to run if the tag and the changelog disagree",
+        "One changelog version for the ISO and both Debian packages, built together for release with their declared versions checked before publication",
         "A documented export of the Controller's database and identity, and a restore onto a replacement appliance",
-        "A Controller package that starts: packages up to 0.2.9 were built without their database driver and stopped at launch; fixed from 0.3.0 and confirmed starting in the published 0.3.1 package"
+        "A Controller package that starts: fixed from 0.3.0 and checked in published 0.3.1; the local development 0.3.2 snapshot also passed installation, crash recovery, same-version reinstall and reboot with saved site identity",
+        "Local development 0.3.2 snapshot: matching package/ISO source verified, Core service restart/reboot checked, and the bundled appliance booted separately with DHCP, verified TLS and bootstrap-secret cleanup"
       ],
       open: [
-        "Secure Boot installation of the host — UEFI installation has so far passed only in an emulated virtual machine",
+        "The complete release-candidate ISO to Controller deployment or enrollment and first managed VM, including interrupted installation/bootstrap and recovery; separate package and appliance tests do not close this chain",
+        "Green hosted checks and release verification for the final source; the local development lab excludes later storage edits",
+        "Secure Boot installation of the host — earlier UEFI installation passed in emulation; the local 0.3.2 snapshot has UEFI menu coverage only",
         "Real Intel and AMD hardware — every installation so far has been a disposable virtual machine",
         "Machines with several disks, and the safety of that choice",
         "Connecting a host to an existing Controller from the host's own interface; today the Controller reaches out and adds the host",
@@ -97,7 +100,7 @@
         "Changing which host is the master, and ejecting a member — one authority handover design with its own safety checks",
         "Every member keeps a signed, versioned copy of the master's pool records, so a surviving member can become master without losing VM ownership, membership or storage settings",
         "Automatic master succession when the master is lost: only with a majority of the pool and proof the old master is powered off, never from a missed heartbeat; two-host pools promote manually",
-        "The master, not the Controller, approves which host a VM is placed on",
+        "Master approval of VM placement: implemented for development; native multi-host fault and recovery acceptance remains open",
         "Clustered iSCSI storage shared by several hosts with fencing: built for development and not yet for real use",
         "Fault testing that proves a host which stopped reporting never leads to a second writer: failed fencing, network partitions, lost quorum, larger pools, long-running load and physical storage",
         "Copying pool networks to member hosts, mapping them to host bridges and VLANs with compatibility checks, applying remote network changes in stages, and rolling them back automatically if management access is lost",

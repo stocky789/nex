@@ -1,0 +1,12 @@
+{
+  "summary": "Bump the changelog-derived release version from 0.3.2 to 0.3.3 and summarize staged placement, storage safety, package validation and documentation changes without relabeling historical lab artifacts.",
+  "paths": ["CHANGELOG.md"],
+  "guide": {"impact": "none", "reason": "Release metadata and notes only; staged behavior already has its own guide updates and assessment records."},
+  "api": {"impact": "none", "reason": "API impact: none for this version bump. It changes no client or Controller/Core contract; the staged placement contract is documented and assessed separately."},
+  "roadmap": {"impact": "none", "reason": "No phase or milestone changes status and no new artifact or hosted acceptance is claimed."},
+  "state": {"owner": "none", "reason": "Release metadata introduces no durable product resource or setting."},
+  "verification": {
+    "method": "release-version.py --current --format both resolves 0.3.3 for tag and Debian versions; --tag v0.3.3 --notes emits the new staged-scope notes. All 10 existing release-version tests passed. Historical 0.3.2 and older sections match HEAD exactly; original staged additions were moved into 0.3.3. Existing 0.3.2 lab artifacts remain labeled 0.3.2; no 0.3.3 build or publication is claimed.",
+    "evidence": ["CHANGELOG.md", "tests/test_release_version.py", "scripts/release-version.py"]
+  }
+}

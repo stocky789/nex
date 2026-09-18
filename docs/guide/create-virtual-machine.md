@@ -8,11 +8,14 @@ installation media, and creates a VM through Nex Controller with a six-page wiza
 One VM can have up to eight disks and up to eight network interfaces, either
 [memory mode](#memory-modes), UEFI or BIOS firmware with a **Secure Boot** and **TPM** choice,
 an install ISO and an optional **driver disc** in a second CD drive, an explicit boot order and
-optional autostart. The VM belongs to a pool with a separate assignment to one host. Storage and
-network access are checked on that host; a pool registration does not make a local disk shared.
+optional autostart. The VM belongs to a pool with a separate assignment to one host. Nex Core
+checks storage and network access from the pool master using a fresh observation of that host; a
+pool registration does not make a local disk shared.
 
 The VM is created stopped. **Start after creation** makes the host start it once, as the last
 step of the same creation task, after it has verified the definition.
+For a VM on local storage, ordinary local power control remains available through its host when
+the pool master is unavailable; this placement check does not add a power dependency.
 
 After creation the VM can be changed in place; see [Edit a virtual machine](edit-virtual-machine.md).
 An existing disk's storage, size and provisioning cannot be changed. To remove a stopped VM, see
@@ -28,8 +31,10 @@ Use an explicitly selected disposable lab host.
 - Administrator access to [Nex Controller](manage-controller.md), with a site and an
   enrolled host. Enrollment creates the host's pool automatically with that host as pool master. Use matching Controller, Core and web assets from this development build;
   an older agent cannot execute these operations.
-- A freshly connected, active host with working KVM/QEMU and system libvirt, enough CPU
-  and memory for the guest, and local recovery access.
+- A freshly connected, active placement host and reachable pool master with working KVM/QEMU
+  and system libvirt. Both must report the current master-owned VM placement capability; upgrade
+  Controller, then Core on the selected host and pool master if the wizard says an upgrade is
+  required.
 - One or more repositories registered and healthy on the placement host. The default
   **Local storage** registration at `/var/lib/libvirt/images` is a local directory created on
   install and can hold both uploaded ISOs and guest disks. A host that first connected to an
@@ -154,7 +159,7 @@ Use an explicitly selected disposable lab host.
         storage, network and ISO choices to what that host has validated, so choose the
         host first.
    2. **CPU and memory**
-      - **Virtual CPUs** — 1 to 64, and no more than the host reports. This is the number of
+      - **Virtual CPUs** — 1 to 64. This is the number of
         vCPUs the guest sees.
       - **Sockets**, **Cores per socket**, **Threads per core** — leave all three blank for
         the default of **one socket, as many cores as vCPUs, and one thread per core**. If you
@@ -175,9 +180,9 @@ Use an explicitly selected disposable lab host.
         live-migration compatibility; migration is not implemented in this slice. Change
         a VM's CPU only while stopped. See the fixed feature summary beneath the selector.
       - **Memory mode** — **Dedicated** or **Maximum**; see [Memory modes](#memory-modes).
-      - **Memory (MiB)** — 512 to 262144, and no more than the host's total memory. The page
-        shows the host's reported CPU and memory capacity underneath. This size is the
-        ceiling in both modes, and the host must be able to meet it at creation time.
+      - **Memory (MiB)** — 512 to 262144. The page shows the host's reported CPU and memory
+        capacity underneath as observation, not an admission decision. This size is the ceiling
+        in both modes; Core checks current capacity at admission and again before execution.
    3. **Disks** — one to eight disks, each its own **Disk 1**, **Disk 2**, … block.
       - **Storage** — a storage repository that is healthy and validated on the selected host.
         Different disks may use different storage targets. If the host has none, use
@@ -276,8 +281,9 @@ Use an explicitly selected disposable lab host.
 6. Select **Create stopped VM** (or **Create and start VM**, when start after creation is
    selected) once. Controller opens the new VM's page for this creation task. Until the host
    reports the VM, the page shows **Creation** followed by the task status, with *This VM appears
-   here after its host reports it.* and a **Task history** link. If the task fails, the page
-   shows **Creation failed** with the host's reason instead. Once the VM is reported, follow
+   here after its host reports it.* and a **Task history** link. A queued task means the request
+   reached Core, not that placement succeeded. If the task fails, the page shows **Creation
+   failed** with Core's reason instead. Once the VM is reported, follow
    **Creation task** to its result and inspect **Observed state** and its freshness independently.
 
 ### Memory modes
@@ -367,8 +373,9 @@ failed and uncertain transfers show their own status.
   Brave, Edge 135 or later), where this cannot happen; in other browsers use the keyboard
   (focus the field, then Arrow keys and Enter) or a current Chromium-based browser.
 - **No selectable host or rejected capability:** reconnect the selected host, confirm it
-  belongs to this pool, and install matching Core components if it predates managed-VM
-  creation. Revocation and stale connectivity block new work.
+  belongs to this pool, and upgrade Controller followed by Core on the selected host and pool
+  master until both report master-owned VM placement. Revocation and stale connectivity block
+  new work.
 - **Storage check fails:** inspect the Core error, then follow the source-specific recovery
   steps in [Register VM storage repositories](storage-repositories.md). Do not point a local
   registration at a remote mount that may disappear.
@@ -411,9 +418,13 @@ failed and uncertain transfers show their own status.
   picked has stopped being verified for this host — usually because the host went stale or a
   registration was re-checked. Reselect the resource, or go back to **Storage**,
   **Networking** or **ISO library** and confirm its state before continuing.
-- **The submission is refused immediately:** unresolvable storage, network or ISO selections
-  and capacity beyond what the host reports are rejected by Controller without queuing a host
-  task. Nothing was created; correct the entry and submit again.
+- **The submission is refused immediately:** the selected host or pool master is stale,
+  unauthorized, in a different pool, or has not been upgraded for master-owned placement.
+  Restore the connection or finish the upgrade, then submit again.
+- **A creation task failed:** Core validates the current storage, network, ISO, CPU and memory
+  state from the pool master and target host. Read the task error, correct that Core-reported
+  condition, then submit a new request. A failed task does not prove a prior interrupted request
+  had no effect; reuse the original request while its outcome is uncertain.
 - **The creation task failed with a duplicate name, a used MAC or dedicated memory the host
   cannot promise:** the host checks its own record and libvirt, so these arrive as a failed
   task in **Task history** with the conflicting VM named. Nothing was created and the name and
@@ -492,6 +503,10 @@ failed and uncertain transfers show their own status.
   writable instance. Retain host-local recovery access.
 
 ## Verification
+
+See [master placement evidence](../qa/2026-09-18-master-vm-placement.md) for the
+unreleased admission change. Browser checks use simulated Core responses; native
+multi-host outage and recovery acceptance remains open.
 
 The [pool CPU baseline evidence](../qa/2026-09-17-cpu-baseline.md) separates native platform,
 backend and simulated-browser checks for this unreleased change. It does not certify every

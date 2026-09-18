@@ -6,12 +6,42 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.3.2` →
-> Debian `0.3.2`).
+> development software. Builds use the newest numbered changelog heading (`0.3.3` →
+> Debian `0.3.3`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.3.3] — 2026-09-18
+
+### Minor Feature
+
+- VM creation, edits and persistent media changes now receive pool-master approval
+  using current Core resource checks, with rejections shown in Task history.
+  Upgrade Controller, then Core on the selected host and pool master; older Core
+  versions block these changes rather than bypassing approval.
+
+### Bug Fixes
+
+- Retrying a completed storage registration returns the original repository and
+  task instead of incorrectly reporting changed input (BUG-0279).
+- VM startup checks the most specific matching storage repository and rejects
+  ambiguous ownership, preventing a broader registration from bypassing checks
+  on a nested repository (BUG-0280).
+- Default-resource checks no longer depend on the build machine's libvirt
+  directories (BUG-0278).
+
+### Miscellaneous
+
+- Both release workflows now start the actual Controller package and verify its
+  database, bundled UI/source and administrator login before publication. Push
+  and pull-request workflows also check that packages without working SQLite
+  support are rejected.
+- Updated API references, operator guidance and roadmap with bounded package,
+  appliance, offline installation and native two-host placement evidence. Those
+  labs used recorded 0.3.2 development snapshots, not rebuilt 0.3.3 artifacts;
+  Phase 3, Phase 4 and final release acceptance remain open.
 
 ## [0.3.2] — 2026-09-17
 

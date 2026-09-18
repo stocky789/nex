@@ -531,6 +531,47 @@ new work for stale, revoked, wrong-pool or unsupported hosts and withholds manag
 from reports lacking that capability. Older agents retain inventory refresh support; the
 shared upgrade rule applies.
 
+### Master-owned VM placement approval
+
+API impact: **changed authenticated Core-peer contract; existing client create/update contracts**.
+Before Controller queues any `vm-create` or `vm-update`, both the selected Core and its current
+pool master must report `pool-vm-placement-v1`; otherwise the client receives `409` and no command
+is queued. Controller keeps request syntax, administrator/CSRF authorization, UUID assignment and
+request-ID replay, but does not decide resource readiness, capacity, CPU compatibility, VM identity
+or edit eligibility from its mirrored inventory.
+
+For each definition transition the pool master calls the selected ready Core at its advertised
+origin through pinned mTLS private `POST /api/v1/pool/placement`, with the exact `Command`,
+operation ID and current membership generation. That Core reads current native managed state for at
+most 20 seconds and returns a master-accepted body bounded to 128 KiB:
+`{generation,operation_id,vm_id,vm,storage,accepted:true}` after rechecking membership. The master
+requires every echoed value and `accepted:true`, checks returned shared-storage identity against its
+master record, then takes its durable locks, rechecks the same membership generation and persists
+the existing `pool-vms.json` definition or pending revision before acknowledging the owner. No
+durable VM lock spans the peer RPC. A missing acknowledgement from an older Core, timeout,
+unavailable member, changed membership
+or native refusal fails closed; no definition, reservation, permit, start or Controller-side
+placement record is created. A `409` peer refusal contains only a sanitized JSON `{error}` reason,
+at most 240 bytes, with CR/LF/NUL replaced; the master may surface that diagnostic in its own
+refusal. `replay:true` says the target recognized an identical existing journal command and did
+not repeat native checks, so it can confirm only an existing durable master record and never seed
+one. Reconcile an interrupted reply through the same stable operation and durable master record;
+never infer approval from a Controller mirror or retry a changed command.
+
+An exact redelivery that already has a local `vm-create` or `vm-update` journal entry still needs
+current placement admission. If admission is unavailable or refused, Core reports that original
+operation `needs_attention` and does not call native execution or journal reconciliation with a
+bare context. A fresh exact redelivery whose admission succeeds follows the normal native replay
+path. This prevents a lost master/cluster fence from becoming permission to reconcile a possibly
+mutating definition operation.
+
+Core repeats native validation immediately before effects, so an observation that becomes stale
+after master approval produces the command's normal failed or `needs_attention` result. This covers
+creation, stopped edits and media changes that become durable definition transitions through
+`vm-update`; a tray reconnect that leaves the definition unchanged remains ordinary media owner
+admission. A replacement Controller re-adopts definitions from master Core inventory and does not
+reconstruct placement decisions.
+
 The browser uses its administrator session, exact HTTPS Origin and CSRF token. The shared
 `Command` transports one storage, network, media or VM specification through the existing
 outbound report response. `storage-register` and `network-register` check an existing

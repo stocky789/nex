@@ -47,6 +47,9 @@ func journalsOf(t *testing.T, e *ManagedEngine) []managedJournal {
 
 func TestRegisterDefaultsIsIdempotentAndRespectsExistingEntries(t *testing.T) {
 	ctx := context.Background()
+	previous := DefaultStoragePath
+	DefaultStoragePath = filepath.Join(t.TempDir(), "not-created-yet")
+	t.Cleanup(func() { DefaultStoragePath = previous })
 	e := NewManaged(filepath.Join(t.TempDir(), "state"))
 	nics := []protocol.NIC{{Name: "nex0", Kind: "physical", Master: "nexbr0"}, {Name: "nexbr0", Kind: "bridge"}}
 	if err := e.RegisterDefaults(ctx, "pool-1", "bad host!", nics); err == nil {

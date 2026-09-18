@@ -73,8 +73,10 @@ host-local console and full-screen or separate-window views.
    **Inserting the install media…** or **Ejecting the driver disc…** clears when the task
    succeeds or the host reports the requested tray contents. If the task fails or needs
    attention, its reason remains visible; inspect it in Recent tasks.
-   This works the same for a VM whose disks are on pool-shared storage; the host records
-   the change on its pool master, so the ISO is still attached after the VM is re-adopted.
+   This works the same for a VM whose disks are on pool-shared storage; Core records the
+   change on its pool master, so the ISO is still attached after the VM is re-adopted. The
+   selected host and pool master must be upgraded for master-owned placement; a queued media
+   task can still fail when Core validates the current tray or ISO state.
 4. A guest can eject its own disc: the Debian installer does after it has copied the base
    system, and then asks you to reinsert it. The control shows the ISO Nex recorded with
    **(ejected in the VM)** and says *The VM ejected the disc. Insert it again to reconnect
@@ -252,6 +254,10 @@ Leaving the console leaves the VM running. While a reconnect is pending the badg
 
 ## Verification
 
+See [master placement evidence](../qa/2026-09-18-master-vm-placement.md) for the
+unreleased admission change. Browser checks use simulated Core responses; native
+multi-host outage and recovery acceptance remains open.
+
 Realtime placement and polling controls have [separate simulated-browser evidence](../changes/2026-09-17-console-realtime-stats.json); this does not establish native guest sampling.
 
 VM, host-local and toolbar console flows were walked through against a Debian 13 guest in a
@@ -283,4 +289,3 @@ real-keyboard canvas typing beyond GRUB keys and a second administrator's ticket
 on a host. The findings
 these changes answer are recorded in the
 [Windows 11 UEFI lab report](../qa/2026-09-16-windows-11-uefi-lab.md).
-
