@@ -1,0 +1,33 @@
+{
+  "summary": "Remove elapsed-wall-time dependence from clustered storage browser fixtures and explicitly exercise the real expiry guard. API impact: none; test only.",
+  "paths": [
+    "tests/integration/cluster_storage_browser.py",
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-18-storage-ci-readiness.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Test fixture clock only; no operator workflow or product behavior changes."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No client or Controller/Core storage, inventory or placement contracts change; existing fixtures retain their data."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No feature scope or native-storage acceptance gate changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The browser test clock adds no durable product state."
+  },
+  "verification": {
+    "method": "Read exact hosted failure and confirmed source commit. A 31-second-old original observation reproduced the placeholder-only failure; fixed full browser scenario passed including explicit expiry and recovery of the selectable option. Storage unit and browser budget tests passed; existing push/PR workflows cover both. No hosted validation of the correction claimed.",
+    "evidence": [
+      "docs/qa/2026-09-18-storage-ci-readiness.md",
+      "tests/integration/cluster_storage_browser.py",
+      "web/src/storage.test.mjs"
+    ]
+  }
+}

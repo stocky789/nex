@@ -17,6 +17,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
+- Clustered storage browser fixtures use controlled time so a slow runner cannot
+  expire their healthy report; an explicit expiry check still verifies that stale
+  storage is excluded from VM placement (BUG-0293).
+
 - Storage browser checks allow asynchronous results the same bounded time as browser
   actions and match each inspected request to its trigger, preventing false failures
   when a valid folder listing arrives after five seconds (BUG-0292).

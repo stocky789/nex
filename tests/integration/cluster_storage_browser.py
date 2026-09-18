@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Built UI check for Core-reported clustered iSCSI safety states."""
 from functools import partial
-from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import threading
@@ -27,7 +26,9 @@ def main():
                    "nodes": [{"host_id": "core-1", "corosync_node_id": 1, "corosync_address": "192.0.2.10", "fence": {"kind": "virsh", "endpoint": "lab.example.test", "target_id": "00000000-0000-0000-0000-000000000001", "virsh_uri": "qemu+ssh://lab/system"}}]},
         "members": []
     }]}
-    observed_now = datetime.now(timezone.utc).isoformat()
+    # A stable snapshot needs a matching browser clock: real storage access
+    # expires after 30s, but unrelated test steps may take longer on a busy runner.
+    observed_now = "2026-09-18T00:00:00Z"
     data = {"session": {"username": "operator", "csrf_token": "fixture-csrf"}, "sites": [{"id": "site-qa", "name": "QA site"}],
             "pools": [{"id": "pool-qa", "site_id": "site-qa", "name": "QA pool", "master_host_id": "core-1"}], "hosts": hosts,
             "storage": [
@@ -94,6 +95,8 @@ def main():
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1440, "height": 1000})
+            # Freeze Date only; polling, cancellation and simulated-delay timers run.
+            page.clock.set_fixed_time(observed_now)
             # Functional checks share the 30s action budget on busy CI runners;
             # this suite does not impose a five-second UI performance requirement.
             expect.set_options(timeout=30000)
@@ -311,9 +314,18 @@ def main():
             page.get_by_role("button", name="Next", exact=True).click()
             page.get_by_role("button", name="Next", exact=True).click()
             disk_storage = page.get_by_role("region", name="Create VM", exact=True).get_by_role("combobox", name="Storage", exact=True)
+            expect(disk_storage.locator('option[value="gfs2-lun"]')).to_have_count(1)
             disk_options = disk_storage.locator("option").all_text_contents()
             assert any("Clustered GFS2" in option for option in disk_options), disk_options
             assert not any("Exclusive iSCSI" in option or "Stale GFS2" in option or "Errored GFS2" in option for option in disk_options), disk_options
+            # Exercise the actual expiry guard with controlled time, independent
+            # of how long the previous UI checks took on this runner.
+            page.clock.set_fixed_time("2026-09-18T00:00:31Z")
+            page.get_by_role("button", name="Refresh view", exact=True).click()
+            expect(disk_storage.locator('option[value="gfs2-lun"]')).to_have_count(0)
+            page.clock.set_fixed_time(observed_now)
+            page.get_by_role("button", name="Refresh view", exact=True).click()
+            expect(disk_storage.locator('option[value="gfs2-lun"]')).to_have_count(1)
             disk_storage.select_option("gfs2-lun")
             expect(disk_storage).to_have_value("gfs2-lun")
             page.screenshot(path=str(ROOT / ".cache/cluster-storage-vm-selection-mock.png"), full_page=True)

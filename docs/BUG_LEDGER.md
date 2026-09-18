@@ -3138,3 +3138,31 @@ Append resolved defects with their evidence and the approach to avoid.
 - Avoid: retrying the whole suite, treating rendering as proof a request was captured,
   imposing an undocumented performance threshold on functional tests, or describing
   a simulated delay as proof of the hosted runner's exact scheduling cause.
+
+## BUG-0293 — Healthy clustered browser fixture expired during the test
+
+- Date: 2026-09-18. Status: fixed locally; hosted validation outstanding.
+- Symptom: after the repository browser suite passed, the clustered suite's VM
+  storage selector contained only `Select VM-ready storage` on the hosted runner.
+- Root cause: its healthy member observation was stamped once at Python startup.
+  By the VM-selection scenario it exceeded the real 30-second access freshness
+  limit, so the UI correctly excluded it. The previous dispatch/readiness audit
+  missed this separate wall-time dependency; increasing readiness waits cannot fix it.
+- Fix: pair a deterministic observation with Playwright's fixed Date clock before
+  navigation. Timers keep running for inventory polling and cancellation checks.
+  Product freshness enforcement remains unchanged. Read the selector only after
+  its expected option renders.
+- Regression: ageing the original startup fixture by 31 seconds reproduced the
+  exact placeholder-only assertion. The fixed full browser scenario passed, and
+  now explicitly advances browser time by 31 seconds to verify exclusion before
+  resetting the fixture clock and verifying availability again. Existing stale,
+  errored, exclusive-storage and disconnected-host exclusions remain asserted.
+  A second full run with an injected real 31-second delay before VM creation also
+  passed; this verification-only sleep is not shipped in CI.
+  `node web/src/storage.test.mjs` and the browser timeout unit check passed.
+  Both providers' push/PR foundation workflows already run the browser and storage
+  unit checks; no workflow edit is required.
+- Evidence: [follow-up clock verification](qa/2026-09-18-storage-ci-readiness.md#follow-up-fixture-freshness).
+- Avoid: refreshing fake observation timestamps on every read, extending the real
+  freshness limit, placing observations in the future, or relying on fast machines
+  to finish the test before its fixtures expire.
