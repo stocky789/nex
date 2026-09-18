@@ -29,7 +29,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - VM startup checks the most specific matching storage repository and rejects
   ambiguous ownership, preventing a broader registration from bypassing checks
   on a nested repository (BUG-0280).
-- Default-resource checks no longer depend on the build machine's libvirt
+- Default-resource tests no longer depend on the build machine's libvirt
   directories (BUG-0278).
 
 ### Miscellaneous
