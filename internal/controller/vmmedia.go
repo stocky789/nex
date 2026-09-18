@@ -59,7 +59,7 @@ func (c *Controller) mediaVM(w http.ResponseWriter, r *http.Request, user, csrf 
 	if c.replayResource(w, tx, v.RequestID, "vm-media", payload) {
 		return
 	}
-	if err = c.managedHost(tx, pool, host); err != nil {
+	if err = c.placementHost(tx, pool, host); err != nil {
 		fail(w, 409, err.Error())
 		return
 	}

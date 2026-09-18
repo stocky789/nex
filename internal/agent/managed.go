@@ -13,6 +13,7 @@ import (
 	"nex.local/nex/internal/protocol"
 	"nex.local/nex/internal/vmhost"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -195,6 +196,7 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 					var finishMutation func(bool)
 					var finishVMExecution func(protocol.Result, error) error
 					executed := false
+					replayBlocked := false
 					if err == nil {
 						finishMutation, err = BeginPoolStorageMutation(ctx, memberStore, cmd)
 					}
@@ -205,11 +207,22 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 					if err == nil {
 						executionCtx, err = poolVMCommandExecutionContext(ctx, memberStore, cmd)
 					}
-					if err == nil {
+					// A redelivered exact definition command may already have a durable
+					// pending or terminal journal entry. Do not turn a fresh placement or
+					// clustered-storage refusal into a new definite failure, but do not
+					// call Engine.Execute with a bare context: that could reconcile a
+					// native mutation without the fencing admission it still requires.
+					if err != nil && (cmd.Kind == "vm-create" || cmd.Kind == "vm-update") {
+						if journaled, ok := engine.JournaledCommand(cmd.OperationID); ok && reflect.DeepEqual(journaled, cmd) {
+							result.Status, result.Error = "needs_attention", err.Error()
+							replayBlocked, err = true, nil
+						}
+					}
+					if err == nil && !replayBlocked {
 						executed = true
 						result, err = engine.Execute(executionCtx, cmd, mediaFetcher(identity))
 					}
-					if finishVMExecution != nil {
+					if finishVMExecution != nil && !replayBlocked {
 						if finishErr := finishVMExecution(result, err); finishErr != nil && err == nil {
 							// The host-side journal may prove a local mutation or a
 							// local failure, but the master did not confirm the matching
@@ -219,10 +232,10 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 							result.Status, result.Error = "needs_attention", finishErr.Error()
 						}
 					}
-					if finishMutation != nil {
+					if finishMutation != nil && !replayBlocked {
 						finishMutation(err == nil && (result.Status == "succeeded" || result.Status == "failed"))
 					}
-					if reserved && (err != nil || result.Status != "succeeded") {
+					if reserved && !replayBlocked && (err != nil || result.Status != "succeeded") {
 						ReleasePoolStorageReservations(ctx, memberStore, cmd)
 					}
 					// A VM update can remove its last remote disk and a media eject has

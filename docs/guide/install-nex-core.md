@@ -184,6 +184,14 @@ to configured Debian repositories. No Nex package repository is configured yet.
 
 ## Verification
 
+The [0.3.2 local artifact lab](../qa/2026-09-18-release-artifact-lab.md) verified
+its recorded ISO with BIOS/KVM and UEFI/TCG menu review, an automated offline
+BIOS installation, media-free first boot and reboot. This was serial automation,
+not a new walkthrough of the graphical steps. The NIC-less lab explicitly set
+loopback management for Core service checks; real management networking, UEFI
+installation, multiple-disk safety and failure recovery remain unverified on that
+snapshot. Later storage changes were not included.
+
 The [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md) (`0.2.10~gate5`, 2026-09-17,
 disposable nested-KVM lab with SeaBIOS, screen captured every 4 s) walked the graphical steps 1–8
 and 10: checksum, boot menu, host and network pages, the only target disk, the unconfirmed-erase

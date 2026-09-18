@@ -10,17 +10,25 @@ duplicates. Assets stream from disk: a multi-gigabyte ISO is never read into mem
 Reads GITHUB_API_URL, GITHUB_REPOSITORY and GITHUB_TOKEN as the runner sets them.
 """
 import argparse
+import http.client
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
+# A multi-gigabyte upload crosses a reverse proxy that can drop it mid-body.
+UPLOAD_ATTEMPTS = 3
+RETRY_SECONDS = 5
+
 
 class GiteaError(RuntimeError):
-    pass
+    def __init__(self, message, status=0):
+        super().__init__(message)
+        self.status = status
 
 
 class Repo:
@@ -40,12 +48,44 @@ class Repo:
         if status == 404 and method == "GET":
             return None
         if status not in (200, 201, 204):
-            raise GiteaError(f"{method} {path}: HTTP {status} {text[:300].decode(errors='replace')}")
+            raise GiteaError(f"{method} {path}: HTTP {status} {text[:300].decode(errors='replace')}", status)
         return json.loads(text) if text else None
 
     def json(self, method, path, payload):
         return self.request(method, path, json.dumps(payload).encode(),
                             {"Content-Type": "application/json"})
+
+
+def upload(repo, release_id, asset):
+    """Attach one asset, resending it when the connection or the proxy drops it.
+
+    A dropped multi-gigabyte ISO used to fail the whole release: rebuilding the
+    ISO for half an hour to reattach one file is not a recovery path. Each retry
+    resends from the start after discarding whatever the failed attempt left
+    registered under that name, and a short upload the server stored truncated
+    counts as a failure rather than a published release with a broken download.
+    """
+    path = f"/releases/{release_id}/assets?name={urllib.parse.quote(asset.name)}"
+    size = asset.stat().st_size
+    for attempt in range(1, UPLOAD_ATTEMPTS + 1):
+        try:
+            with asset.open("rb") as stream:
+                created = repo.request("POST", path, stream, {
+                    "Content-Type": "application/octet-stream", "Content-Length": str(size)})
+            stored = (created or {}).get("size")
+            if stored is not None and stored != size:
+                raise GiteaError(f"{asset.name}: stored {stored} of {size} bytes", 500)
+            return created
+        except (OSError, http.client.HTTPException, GiteaError) as error:
+            # 4xx is a request this retry would repeat verbatim; only transport
+            # and server-side failures are worth sending the bytes again.
+            if attempt == UPLOAD_ATTEMPTS or getattr(error, "status", 500) < 500:
+                raise
+            print(f"gitea-release: {asset.name} attempt {attempt} failed: {error}", file=sys.stderr)
+            time.sleep(RETRY_SECONDS * attempt)
+            for existing in repo.request("GET", f"/releases/{release_id}/assets") or []:
+                if existing.get("name") == asset.name:
+                    repo.request("DELETE", f"/releases/{release_id}/assets/{existing['id']}")
 
 
 def publish(repo, tag, target, name, notes, assets):
@@ -55,15 +95,21 @@ def publish(repo, tag, target, name, notes, assets):
     tag_info = repo.request("GET", f"/tags/{tag}")
     if tag_info and tag_info["commit"]["sha"] != target:
         repo.request("DELETE", f"/tags/{tag}")
+    # Keep the release private until every asset has survived server-side size
+    # verification. A terminal upload failure can then leave only a draft, not a
+    # public release serving a known-truncated artifact.
     release = repo.json("POST", "/releases", {
         "tag_name": tag, "target_commitish": target, "name": name, "body": notes,
-        "draft": False, "prerelease": "-" in tag})
-    for asset in assets:
-        with asset.open("rb") as stream:
-            repo.request("POST", f"/releases/{release['id']}/assets?name={urllib.parse.quote(asset.name)}",
-                         stream, {"Content-Type": "application/octet-stream",
-                                  "Content-Length": str(asset.stat().st_size)})
-    return release
+        "draft": True, "prerelease": "-" in tag})
+    try:
+        for asset in assets:
+            upload(repo, release["id"], asset)
+        return repo.json("PATCH", f"/releases/{release['id']}", {"draft": False})
+    except (OSError, http.client.HTTPException, GiteaError):
+        # Do not retain a failed draft either: older forges have exposed draft
+        # attachments through direct download URLs.
+        repo.request("DELETE", f"/releases/{release['id']}")
+        raise
 
 
 def main(argv=None):
@@ -87,7 +133,7 @@ def main(argv=None):
     try:
         release = publish(Repo(args.api_url, args.repository, token), args.tag, args.target,
                           args.name, args.notes.read_text(), args.assets)
-    except GiteaError as error:
+    except (GiteaError, OSError, http.client.HTTPException) as error:
         print(f"gitea-release: {error}", file=sys.stderr)
         return 1
     print(release.get("html_url") or release["id"])

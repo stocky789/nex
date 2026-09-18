@@ -7,6 +7,7 @@
 <nav aria-label="API operations"><ul>
 <li><a href="#peerJoin">POST /api/v1/pool/join</a></li>
 <li><a href="#peerAdvertiseOrigin">POST /api/v1/pool/advertise</a></li>
+<li><a href="#peerCheckVMPlacement">POST /api/v1/pool/placement</a></li>
 <li><a href="#peerListPoolStorage">GET /api/v1/pool/storage</a></li>
 <li><a href="#peerGetPoolStorage">GET /api/v1/pool/storage/{repository_id}</a></li>
 <li><a href="#peerReservePoolStorage">POST /api/v1/pool/storage/{repository_id}/reserve</a></li>
@@ -147,6 +148,94 @@
       &quot;application/json&quot;: {
         &quot;schema&quot;: {
           &quot;$ref&quot;: &quot;#/components/schemas/PeerAdvertiseRequest&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="peerCheckVMPlacement"><h2>POST <code>/api/v1/pool/placement</code></h2>
+<p>Check one member&#x27;s native VM placement</p><p>Served by the current ready selected member at its advertised origin and called only by its current pool master over pinned mutual TLS. The request names one exact vm-create or vm-update command and the current membership generation. The member reads its current durable managed state, including the no-effect clustered-storage admission context, and performs no mutation, reservation, or start. It returns only after native placement checks complete and after rechecking membership. The master accepts an acknowledgement only when generation, operation_id, vm_id and vm echo exactly and accepted is true; before saving its definition or reservation it takes its durable locks and rechecks that same membership generation. A missing acknowledgement field from an older Core, timeout, connection failure, refusal or membership change fails placement closed. replay:true means the target recognized the identical existing journal command and did no fresh native check; it may confirm only an existing durable master placement record, never create one. A failed placement admission for an exact journalled definition command does not authorize native execution or journal reconciliation; Core reports needs_attention. Retry only the same operation and command after reconciliation; changed input with the same operation is refused. Requests and master-accepted replies are bounded to 128 KiB; the member&#x27;s preflight deadline is 20 seconds.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerCheckVMPlacement&quot;,
+  &quot;summary&quot;: &quot;Check one member&#x27;s native VM placement&quot;,
+  &quot;description&quot;: &quot;Served by the current ready selected member at its advertised origin and called only by its current pool master over pinned mutual TLS. The request names one exact vm-create or vm-update command and the current membership generation. The member reads its current durable managed state, including the no-effect clustered-storage admission context, and performs no mutation, reservation, or start. It returns only after native placement checks complete and after rechecking membership. The master accepts an acknowledgement only when generation, operation_id, vm_id and vm echo exactly and accepted is true; before saving its definition or reservation it takes its durable locks and rechecks that same membership generation. A missing acknowledgement field from an older Core, timeout, connection failure, refusal or membership change fails placement closed. replay:true means the target recognized the identical existing journal command and did no fresh native check; it may confirm only an existing durable master placement record, never create one. A failed placement admission for an exact journalled definition command does not authorize native execution or journal reconciliation; Core reports needs_attention. Retry only the same operation and command after reconciliation; changed input with the same operation is refused. Requests and master-accepted replies are bounded to 128 KiB; the member&#x27;s preflight deadline is 20 seconds.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool master \u2192 selected pool member&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Fresh accepted native observation for this exact command.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolPlacementReply&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed JSON, body over 128 KiB, or a command other than a valid vm-create or vm-update.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or unverified client certificate, or caller is not the current pool master.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Method other than POST; Allow: POST.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Native placement is unavailable or refused, or membership changed during the preflight. No admission was recorded; retry the same command only after reconciliation. The bounded sanitized reason is diagnostic only.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: {
+              &quot;error&quot;: {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;maxLength&quot;: 240,
+                &quot;x-max-utf8-bytes&quot;: 240
+              }
+            },
+            &quot;required&quot;: [
+              &quot;error&quot;
+            ]
+          }
+        }
+      }
+    }
+  },
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;description&quot;: &quot;JSON, at most 128 KiB.&quot;,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolPlacementRequest&quot;
         }
       }
     }
@@ -778,12 +867,12 @@
   }
 }</pre></details></section>
 <section id="peerPoolVMExecution"><h2>POST <code>/api/v1/pool/vms/{vm_id}</code></h2>
-<p>Admit a pool VM execution transition</p><p>Served by the pool master, serialized per master. The owner member asks the master to durably record a VM definition or execution transition before acting locally; the master writes its record before replying. Actions: define (create=true seeds a new record from a valid vm owned by the caller; otherwise spec_match reports whether vm matches the durable definition), start (defined/stopped → starting, epoch+1, returns a random permit), running (starting → running), stop (owner check only), stopped (owner proves stop; placement retained), reboot (requires running) and media (owner check only), update-reserve (reserve one exact next revision), update-commit and update-abort (settle it with exact local journal evidence). Only the recorded owner may transition a VM; there is no expiry or timeout cleanup, so unknown execution stays fenced and an unreachable host is never treated as stopped. Retries after a lost reply are reconciled against the durable record rather than repeated blindly. Body at most 1 MiB.</p>
+<p>Admit a pool VM execution transition</p><p>Served by the pool master, serialized per master. The owner member asks the master to durably record a VM definition or execution transition before acting locally; the master writes its record before replying. For define(create=true) and update-reserve, before taking the durable VM lock the master obtains the selected current member&#x27;s exact authenticated native placement preflight; no lock spans that RPC. It validates returned shared-storage observations and persists the definition or exact next revision before setting placement_accepted=true. Actions: define (create=true seeds a new record from a valid vm owned by the caller; otherwise spec_match reports whether vm matches the durable definition), start (defined/stopped → starting, epoch+1, returns a random permit), running (starting → running), stop (owner check only), stopped (owner proves stop; placement retained), reboot (requires running) and media (owner check only), update-reserve (reserve one exact next revision), update-commit and update-abort (settle it with exact local journal evidence). Only the recorded owner may transition a VM; there is no expiry or timeout cleanup, so unknown execution stays fenced and an unreachable host is never treated as stopped. Retries after a lost reply reconcile the exact durable definition or reservation; a missing placement_accepted acknowledgement, preflight timeout or membership change fails closed. Body at most 1 MiB.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;peerPoolVMExecution&quot;,
   &quot;summary&quot;: &quot;Admit a pool VM execution transition&quot;,
-  &quot;description&quot;: &quot;Served by the pool master, serialized per master. The owner member asks the master to durably record a VM definition or execution transition before acting locally; the master writes its record before replying. Actions: define (create=true seeds a new record from a valid vm owned by the caller; otherwise spec_match reports whether vm matches the durable definition), start (defined/stopped \u2192 starting, epoch+1, returns a random permit), running (starting \u2192 running), stop (owner check only), stopped (owner proves stop; placement retained), reboot (requires running) and media (owner check only), update-reserve (reserve one exact next revision), update-commit and update-abort (settle it with exact local journal evidence). Only the recorded owner may transition a VM; there is no expiry or timeout cleanup, so unknown execution stays fenced and an unreachable host is never treated as stopped. Retries after a lost reply are reconciled against the durable record rather than repeated blindly. Body at most 1 MiB.&quot;,
+  &quot;description&quot;: &quot;Served by the pool master, serialized per master. The owner member asks the master to durably record a VM definition or execution transition before acting locally; the master writes its record before replying. For define(create=true) and update-reserve, before taking the durable VM lock the master obtains the selected current member&#x27;s exact authenticated native placement preflight; no lock spans that RPC. It validates returned shared-storage observations and persists the definition or exact next revision before setting placement_accepted=true. Actions: define (create=true seeds a new record from a valid vm owned by the caller; otherwise spec_match reports whether vm matches the durable definition), start (defined/stopped \u2192 starting, epoch+1, returns a random permit), running (starting \u2192 running), stop (owner check only), stopped (owner proves stop; placement retained), reboot (requires running) and media (owner check only), update-reserve (reserve one exact next revision), update-commit and update-abort (settle it with exact local journal evidence). Only the recorded owner may transition a VM; there is no expiry or timeout cleanup, so unknown execution stays fenced and an unreachable host is never treated as stopped. Retries after a lost reply reconcile the exact durable definition or reservation; a missing placement_accepted acknowledgement, preflight timeout or membership change fails closed. Body at most 1 MiB.&quot;,
   &quot;security&quot;: [
     {
       &quot;PoolMemberCertificate&quot;: []
@@ -2042,6 +2131,102 @@
   &quot;required&quot;: [],
   &quot;x-go-type&quot;: &quot;agent.poolVMInventoryReply&quot;
 }</pre></details>
+<details id="PoolPlacementRequest"><summary>PoolPlacementRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;command&quot;: {
+      &quot;type&quot;: &quot;object&quot;,
+      &quot;properties&quot;: {
+        &quot;operation_id&quot;: {
+          &quot;type&quot;: &quot;string&quot;
+        },
+        &quot;kind&quot;: {
+          &quot;type&quot;: &quot;string&quot;,
+          &quot;enum&quot;: [
+            &quot;vm-create&quot;,
+            &quot;vm-update&quot;
+          ]
+        },
+        &quot;vm&quot;: {
+          &quot;anyOf&quot;: [
+            {
+              &quot;$ref&quot;: &quot;#/components/schemas/VMCreateSpec&quot;
+            },
+            {
+              &quot;type&quot;: &quot;null&quot;
+            }
+          ]
+        }
+      },
+      &quot;required&quot;: [
+        &quot;operation_id&quot;,
+        &quot;kind&quot;,
+        &quot;vm&quot;
+      ],
+      &quot;description&quot;: &quot;The supported subset of Command; operation_id must equal the enclosing operation_id and vm must be non-null.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;generation&quot;,
+    &quot;operation_id&quot;,
+    &quot;command&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;agent.poolPlacementRequest&quot;,
+  &quot;description&quot;: &quot;The exact managed vm-create or vm-update command that the master is about to admit; command.operation_id must equal operation_id.&quot;
+}</pre></details>
+<details id="PoolPlacementReply"><summary>PoolPlacementReply</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;vm&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/VMCreateSpec&quot;
+    },
+    &quot;storage&quot;: {
+      &quot;type&quot;: &quot;array&quot;,
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StorageRegistration&quot;
+      }
+    },
+    &quot;accepted&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;replay&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 240,
+      &quot;x-max-utf8-bytes&quot;: 240,
+      &quot;description&quot;: &quot;Sanitized refusal reason, emitted only with HTTP 409; CR, LF and NUL are replaced by a generic reason.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;generation&quot;,
+    &quot;operation_id&quot;,
+    &quot;vm_id&quot;,
+    &quot;vm&quot;,
+    &quot;storage&quot;,
+    &quot;accepted&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;agent.poolPlacementReply&quot;,
+  &quot;description&quot;: &quot;A read-only target-host observation. On 200, vm is an exact echo of the requested definition and accepted is true only when all native preflight checks passed. replay is present only when an identical existing target journal command was recognized; it cannot authorize a new master record. On 409, only error is emitted. The master must reject a missing, changed or false acknowledgement.&quot;
+}</pre></details>
 <details id="PoolVMRequest"><summary>PoolVMRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;properties&quot;: {
@@ -2114,11 +2299,14 @@
     },
     &quot;update_revision&quot;: {
       &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;placement_accepted&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
     }
   },
   &quot;required&quot;: [],
   &quot;x-go-type&quot;: &quot;agent.poolVMRequest&quot;,
-  &quot;description&quot;: &quot;Request and response share this shape: the master echoes the request after setting epoch and, per action, permit, spec_match, update_accepted and update_revision. Older masters omit acknowledgement fields; clients must treat a missing acknowledgement as unsafe.&quot;
+  &quot;description&quot;: &quot;Request and response share this shape: the master echoes the request after setting epoch and, per action, permit, spec_match, update_accepted, update_revision and placement_accepted. placement_accepted is true only after the master has received a fresh exact target-host preflight and durably recorded the create definition or update reservation. Older masters omit acknowledgement fields; clients must treat a missing acknowledgement as unsafe.&quot;
 }</pre></details>
 <details id="SMBStorageIdentity"><summary>SMBStorageIdentity</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,

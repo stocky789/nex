@@ -94,6 +94,9 @@ def main():
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1440, "height": 1000})
             page.set_default_timeout(3000)
+            # Cold CI asset loading gets Playwright's normal navigation budget;
+            # individual controls must still respond within the shorter action limit.
+            page.set_default_navigation_timeout(30000)
             # Match the returning signed-in browser whose session the API fixture supplies.
             page.add_init_script("localStorage.setItem('nex-signed-in', '1')")
             page.on("pageerror", lambda error: errors.append(str(error)))

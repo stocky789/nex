@@ -353,3 +353,38 @@ func TestMergeProgressStaleInstalling(t *testing.T) {
 		t.Fatalf("%+v %v", prog, ok)
 	}
 }
+
+// Only a restarted process can be stuck mid-install. While this one is still applying,
+// apt reports the new version as soon as dpkg unpacks it, and repairing the phase then
+// would announce a finished update over an apply that has not restarted the service yet.
+func TestMergeProgressLeavesARunningApplyAlone(t *testing.T) {
+	isolatePaths(t)
+	gate := make(chan struct{})
+	fakeCommands(t, func(line string) (string, int) {
+		if strings.Contains(line, "install -y") {
+			<-gate
+		}
+		if strings.HasPrefix(line, "dpkg-query") {
+			return "9.9.9", 0
+		}
+		return "", 0
+	})
+	dir := t.TempDir()
+	if _, err := StartApplyLocal("https://mirror.test/apt", "nex-core-local", dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { close(gate); WaitApply() }()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if p, ok := ReadProgress(dir); ok && p.Phase == "installing" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the apply never reached installing")
+		}
+	}
+	st := Status{InstalledVersion: "9.9.9", AvailableVersion: "9.9.9"}
+	MergeProgress(&st, dir)
+	if st.Phase != "installing" {
+		t.Fatalf("apply still running, reported %+v", st)
+	}
+}

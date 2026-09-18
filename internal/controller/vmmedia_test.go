@@ -46,13 +46,13 @@ func TestMediaRequestsAreAuthorizedDurableAndDispatched(t *testing.T) {
 		return a.report(cert, protocol.ReportRequest{Version: 1, Sequence: sequence, Capabilities: caps, Inventory: inv, Results: results})
 	}
 	var enrolled []protocol.Result
-	for _, cmd := range report([]string{protocol.ManagedVMCapability}).Commands {
+	for _, cmd := range report([]string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability}).Commands {
 		enrolled = append(enrolled, protocol.Result{OperationID: cmd.OperationID, Status: "succeeded"})
 	}
 	if w := a.call("POST", "/api/v1/vms/"+vm+"/media", body, nil, 409); !strings.Contains(w.Body.String(), "does not support central media") {
 		t.Fatal(w.Body.String())
 	}
-	caps := []string{protocol.ManagedVMCapability, protocol.MediaCapability}
+	caps := []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.MediaCapability}
 	report(caps, enrolled...)
 
 	var first map[string]any
@@ -243,11 +243,7 @@ func TestVMDriversMediaIsValidatedLikeInstallMedia(t *testing.T) {
 		l.report(protocol.Result{OperationID: media.OperationID, Status: "succeeded"})
 		return media
 	}
-	install, drivers, foreign := upload("install", 0), upload("drivers", 1), upload("foreign", 2)
-	other := l.a.enroll(l.a.token(l.a.site(), ""), csr(t))
-	if _, err := l.a.c.db.Exec("UPDATE managed_resources SET host_id=? WHERE id=?", other.HostID, foreign.ID); err != nil {
-		t.Fatal(err)
-	}
+	install, drivers := upload("install", 0), upload("drivers", 1)
 	spec := func(name, driversID string) protocol.VMCreateSpec {
 		s := vmSpec(l.pool, l.host.HostID, name, l.storage, l.network, install.ID)
 		s.DriversMediaID = driversID
@@ -269,10 +265,6 @@ func TestVMDriversMediaIsValidatedLikeInstallMedia(t *testing.T) {
 
 	l.caps = append(l.caps, protocol.DriversDriveCapability)
 	l.report()
-	expect(l.create("create-unknown", spec("guest-unknown", "iso-missing"), 404).Body.String(), "driver disc ISO")
-	expect(l.create("create-foreign", spec("guest-foreign", foreign.ID), 404).Body.String(), "driver disc ISO")
-	expect(l.update("edit-unknown", created.VMID, spec("guest-plain", "iso-missing"), 404)["error"].(string), "driver disc ISO")
-	expect(l.update("edit-foreign", created.VMID, spec("guest-plain", foreign.ID), 404)["error"].(string), "driver disc ISO")
 
 	read(t, l.create("create-valid", spec("guest-valid", drivers.ID), 202), &created)
 	if cmds := l.report().Commands; len(cmds) != 1 || cmds[0].VM.DriversMediaID != drivers.ID {

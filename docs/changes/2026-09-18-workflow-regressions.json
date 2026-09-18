@@ -1,0 +1,46 @@
+{
+  "summary": "Assess the latest PR release draft/native-harness changes and repair two browser CI deadlines with regressions. Missing per-commit assessment caused the push documentation failure.",
+  "paths": [
+    "scripts/gitea-release.py",
+    "tests/test_gitea_release.py",
+    "tests/integration/managed_vm_browser.py",
+    "tests/integration/phase1_browser.py",
+    "tests/integration/cluster_storage_browser.py",
+    "tests/test_cluster_browser_timeouts.py",
+    "tests/test_managed_vm_browser_modes.py",
+    "docs/guide/publish-a-release.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/qa/2026-09-18-workflow-regressions.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "pages": [
+      "docs/guide/publish-a-release.md"
+    ],
+    "reason": "Document draft publication only after all uploads and cleanup/retry limits. Acceptance harness fixes change no operator workflow."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Only release-tool forge calls and browser test sequencing change. Nex Controller/Core caller, agent command, inventory/result and client-facing contracts remain unchanged."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Repairs CI and documents evidence; no phase acceptance or product scope changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No Nex durable state added or changed. Forge release drafts are external publication tooling, not pool or Controller data."
+  },
+  "verification": {
+    "method": "Actual hosted failed-job logs inspected; local release unittest suite passed six checks and failed three against previous publisher. Cluster browser suite passed; delayed asset experiment reproduced 3s timeout versus 4.02s successful load. Phase1 browser walkthrough passed 21 checks after deterministic stale-snapshot regression failed at old 5s deadline. Both providers run these suites on push/PR. Native full lab and hosted rerun remain outstanding; see QA evidence for boundaries. Native-mode structural guard regression passes and fails four unguarded accesses against the original harness; no native VM execution claimed.",
+    "evidence": [
+      "docs/qa/2026-09-18-workflow-regressions.md",
+      "docs/BUG_LEDGER.md",
+      "tests/test_gitea_release.py",
+      "tests/test_cluster_browser_timeouts.py",
+      "tests/integration/phase1_browser.py",
+      "tests/test_managed_vm_browser_modes.py"
+    ]
+  }
+}

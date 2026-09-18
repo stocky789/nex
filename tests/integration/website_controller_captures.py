@@ -41,7 +41,7 @@ VIEWS = [('General', 'Health checks', 'desktop-shell.png'),
 # assert_public_text keeps passing; the ISO is a 64 KiB fixture with a valid descriptor.
 # A current Nex Core advertises every managed capability; omitting any renders the demo
 # host as outdated ("upgrade Nex Core") and disables the power controls in the capture.
-CAPABILITIES = ['managed-vm-v1', 'vm-update-v1', 'vm-power-v1', 'console-v1',
+CAPABILITIES = ['managed-vm-v1', 'pool-vm-placement-v1', 'vm-update-v1', 'vm-power-v1', 'console-v1',
                 'host-console-v1', 'vm-media-v1', 'storage-repositories-v1']
 STORAGE_NAME, STORAGE_PATH = 'Local NVMe storage', '/var/lib/nex/storage'
 NETWORK_NAME, ISO_NAME = 'Guest network', 'debian-13-netinst.iso'
@@ -80,7 +80,7 @@ def capture(lab, args):
         '-admin-username', 'root', '-admin-password-file', password,
         '-stale-after', '5m', '-ui-dir', ROOT / 'web/dist', '-source-archive', source)
     lab.client(cert)
-    eventually(lambda: lab.api('/api/v1/sites', expected=401), 'controller startup')
+    lab.started()
     lab.csrf = lab.api('/api/v1/session', {'username': 'root', 'password': password.read_text()})['csrf_token']
     site = lab.api('/api/v1/sites', {'name': 'Community demo'}, expected=201)
     token = lab.api('/api/v1/enrollment-tokens', {'site_id': site['id']}, expected=201)['token']

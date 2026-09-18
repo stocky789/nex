@@ -27,6 +27,11 @@ jobs:
       # runner can exceed Go's default ten-minute package deadline.
       - name: Test Go services and recovery
         run: go test -race -timeout 20m ./...
+      - name: Verify Controller package startup gate rejects the SQLite stub
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends dpkg-dev openssl gcc libc6-dev
+          python3 tests/integration/controller_package_smoke.py
       - name: Check Go dependency advisories
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.7.0

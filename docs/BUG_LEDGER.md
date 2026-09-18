@@ -2480,12 +2480,12 @@ Append resolved defects with their evidence and the approach to avoid.
 
 ## BUG-0246 — Every nex-controller package from 0.1.6~alpha1 to 0.2.9 shipped a Controller that cannot start
 
-- Date: 2026-09-17. Status: fixed; regression added; release smoke-start outstanding.
+- Date: 2026-09-17. Status: fixed; package smoke-start gate added 2026-09-18; hosted execution outstanding.
 - Symptom: in the Phase 2 gate3 lab run on 0.2.10~gate3, the `nex-controller` deb binary exited at start with "Binary was compiled with CGO_ENABLED=0, go-sqlite3 requires cgo to work. This is a stub". `go version -m` on the packaged binaries reports `CGO_ENABLED=0` for 0.1.6~alpha1, 0.2.2, 0.2.5, 0.2.6, 0.2.7, 0.2.9 and 0.2.10~gate3, so every Controller package from 0.1.6~alpha1 through 0.2.9 is affected. A Controller installed from the package, including one upgraded through apt, gets a binary that cannot open its database, and the service keeps restarting; recovery needs a shell. Appliances built from the image keep their own working binary.
 - Root cause: `packaging/controller/Dockerfile` installed no C toolchain (`gcc`, `libc6-dev`) and neither `packaging/controller/build-inside.sh` nor `appliance/build-inside.sh` set `CGO_ENABLED`, so `go build` silently fell back to `CGO_ENABLED=0` and linked the go-sqlite3 stub.
 - Fix: the controller builder image installs `gcc` and `libc6-dev`, and both build scripts `export CGO_ENABLED=1` before `go build`, so a builder without a compiler fails the build instead of producing the stub.
 - Regression: `python3 -m unittest tests.test_distribution_packaging.ControllerCgoBuildTests` failed before the fix (1 failure, 2 errors) and passes after; the full module ran 23 tests OK. Artifact check: a throwaway `0.2.10~cgocheck` package built with `packaging/controller/build.py` reports `CGO_ENABLED=1` in `go version -m`, and its binary started on 127.0.0.1 with an empty data directory, created `controller.db` and answered HTTPS 200. CI: step "Check contracts and contributor tools" (`unittest discover -s tests -p 'test_*.py'`) in job `contracts` in both `phase1` workflows.
-- Follow-up (release-workflow owner): the release workflow checks only the package version and never extracts or smoke-starts the packaged Controller binary, so a runtime-broken package can still be published; add a `go version -m` cgo check or a start-with-empty-data-dir check to artifact verification. Withdrawing or superseding the published broken packages and operator recovery guidance remain an owner decision.
+- Follow-up (2026-09-18): both release workflows now extract and smoke-start the exact Controller package in the Debian 13 builder before creating/uploading a release. The gate requires a fresh SQLite database, packaged UI/source and an authenticated session. `python3 tests/integration/controller_package_smoke.py` passed locally: a real CGO-enabled Controller in a disposable package passed and a real CGO-disabled one failed with the original SQLite stub diagnostic. Both `phase1` workflows run this regression on pushes and pull requests; the later [exact 0.3.2 artifact lab](qa/2026-09-18-release-artifact-lab.md) passed real-package startup and installed service restart/crash/reinstall/reboot checks. Green hosted execution for the final source remains outstanding. See [package-gate evidence](qa/2026-09-18-controller-package-smoke.md). The [Phase 2 close](qa/2026-09-17-phase2-gate/CLOSED.md) records the owner decision to supersede the broken historical packages with 0.3.0+; this change does not remove published artifacts.
 - Avoid: relying on Go's implicit cgo default in a builder image with no C compiler; it builds without error and fails only at runtime.
 
 ## BUG-0247 — A resumed interrupted delete briefly published needs_attention while it was still running
@@ -2749,3 +2749,222 @@ Append resolved defects with their evidence and the approach to avoid.
   fixed build.
 - Avoid: treating libvirt's state set as `running`/`shut off` only, or letting one VM's
   unobservable state fail a host-wide inventory publication.
+
+## BUG-0274 — Core shutdown abandoned a running update, and the page called it done early
+
+- Date: 2026-09-18
+- Symptom: `go test -race ./...` failed intermittently in CI with
+  `TestLocalUpdatesAuthAndApply` ... `TempDir RemoveAll cleanup: unlinkat
+  /tmp/TestLocalUpdatesAuthAndApply*/002/state: directory not empty`; repeated runs of the
+  same package also failed with `update already in progress`.
+- Root cause: two halves of the same mistake. `MergeProgress` repaired a stuck phase to
+  `done` whenever apt already reported the new version, which is also true mid-apply because
+  dpkg unpacks before the service restart, so a status read could report a finished update
+  while the apply goroutine was still working. `Service.Close` never waited for that
+  goroutine (it is not on `s.wg`), so the apply kept writing `progress.json` into the state
+  directory after shutdown — racing the caller that was already removing it.
+- Fix: `nexupdate.WaitApply` waits for the background apply, and `Service.Close` calls it
+  beside the existing enrollment-agent wait; `MergeProgress` repairs a stuck phase only when
+  this process is not the one applying.
+- Regression: `go test -race ./internal/localcore -run TestCloseWaitsForTheBackgroundUpdate`
+  fails without the wait ("Close returned while the apply was still writing to the state
+  directory", with a detected race) and passes with it;
+  `go test -race ./internal/nexupdate -run TestMergeProgressLeavesARunningApplyAlone` reports
+  `done` without the guard and `installing` with it. Full `./internal/localcore` and
+  `./internal/nexupdate` suites passed. Both phase1 workflow copies run these in the `go`
+  lane on pushes and pull requests. No update was applied on a real host for this fix.
+- Avoid: believing a status read over the goroutine that is still writing the status, or
+  leaving a writer running past the Close that owns its directory.
+
+## BUG-0275 — A dropped connection while attaching the ISO failed the whole release
+
+- Date: 2026-09-18
+- Symptom: the release workflow failed in "Create or replace the release" with
+  `ssl.SSLEOFError: EOF occurred in violation of protocol` raised as
+  `urllib.error.URLError` while posting the multi-gigabyte ISO, discarding a 37-minute build.
+- Root cause: `scripts/gitea-release.py` sent each asset exactly once. A connection dropped
+  mid-body had no retry, and a short body the server accepted would have published a
+  truncated download.
+- Fix: each asset is attached with up to three attempts; a retry discards whatever the failed
+  attempt left registered under that name and resends from the start, a stored size that does
+  not match the file is a failure, and a 4xx is not retried.
+- Regression: `python3 -m unittest discover -s tests -p 'test_gitea_release.py'` — 6 tests
+  passed; the dropped-upload test fails with `UPLOAD_ATTEMPTS = 1` (the previous behaviour)
+  and passes with the retry. Both phase1 workflow copies run it in the contracts lane on
+  pushes and pull requests. The fix has not yet been exercised against the real forge; the
+  next release run is that evidence.
+- Avoid: one-shot uploads of release-sized artifacts, or treating 201 as proof the server
+  kept every byte.
+
+## BUG-0276 — The browser lane read a busy runner as a dead Controller
+
+- Date: 2026-09-18
+- Symptom: `Capture Controller gallery with neutral demo inventory` failed with
+  `AssertionError: controller startup; last transport error: <urlopen error [Errno 111]
+  Connection refused>`, after which the Controller process did not stop within the harness's
+  five seconds and had to be killed.
+- Root cause: startup waits used `eventually`'s default 15-second window. Controller startup
+  measured 0.10s on an idle machine, but the phase1 workflow runs six lanes on one host
+  (including `go test -race ./...`), and the wait discarded the Controller's own log, so a
+  slow start and a crashed start produced the same message.
+- Fix: `Lab.started()` in `tests/integration/phase1.py` waits 60 seconds and prints the
+  process log when it gives up; all eight Controller startup waits across the integration
+  harnesses call it, not only the lane that failed.
+- Regression: no automated check asserts a timeout, so regression coverage is outstanding;
+  both paths were exercised by hand against the built Controller — a healthy start returned,
+  and a Controller started without its source archive failed with
+  `matching -source-archive required: stat dist/nex-source.tar.gz: no such file or directory`
+  printed from its log instead of only "connection refused". The browser lanes in both
+  workflow copies exercise the helper on every push and pull request.
+- Avoid: sizing a CI wait to an idle machine, or discarding the log of the process being
+  waited for.
+
+## BUG-0277 — Agent timing checks measured the runner, not the behaviour
+
+- Date: 2026-09-18
+- Symptom: the `go` lane failed intermittently in `internal/agent` with
+  `TestReportBoundsManagedLibvirtObservation`: `report waited for libvirt observation:
+  2.361014647s` (and, in an earlier run, `blocking virsh was not invoked`), and
+  `TestManagedSlowCommandKeepsReportingAndCancels`: `heartbeat blocked during command:
+  0 reports`. The same package took 295s in the failing run against 128s in a passing one.
+- Root cause: both checks asserted wall-clock numbers sized for an idle machine. The
+  observation bound was 2s against a virsh that blocks for 30s, so any slow report failed even
+  though it had not waited for libvirt; the slow-command check gave the whole run 5s to get a
+  child process started and measured "cancelled promptly" from the start of the run rather
+  than from the cancellation, and reported a command that never started as a blocked
+  heartbeat.
+- Fix: bound the observation at 10s, still far below the blocking virsh; give the slow-command
+  run 20s to reach the command (it still ends on the third heartbeat seen during it), measure
+  prompt cancellation from the cancellation, and fail separately when the command never
+  started.
+- Regression: `go test -race -run
+  'TestManagedSlowCommandKeepsReportingAndCancels|TestReportBoundsManagedLibvirtObservation'
+  -count=4 ./internal/agent` passed with all 16 cores saturated by busy loops, and `-count=3`
+  passed idle; full `go test -race ./...` passed except `internal/vmhost`
+  `TestRegisterDefaultsIsIdempotentAndRespectsExistingEntries`, which needs root for `runuser`
+  and is green in CI. The failures are load-dependent, so no check reproduces the original
+  timing on demand; the `go` lane in both workflow copies is the standing check.
+- Avoid: asserting a wall-clock number that a busy build machine controls, or letting one
+  assertion report two different failures.
+
+## BUG-0278 — Default-resource test depended on the development host's libvirt directory
+
+- Date: 2026-09-18
+- Symptom: `TestRegisterDefaultsIsIdempotentAndRespectsExistingEntries` expected one
+  network journal but found an additional storage attempt on workstations where
+  `/var/lib/libvirt/images` exists; the native `runuser` check then failed without root.
+- Root cause: the test assumed the default storage path did not exist rather than
+  selecting an absent temporary path. The BUG-0277 note described the resulting
+  permission error; running the test as root is not its actual requirement.
+- Fix: point this test at an absent child of its temporary directory and restore the
+  package default afterward. Production resource registration is unchanged.
+- Regression: reproduced the original failure with the existing libvirt directory;
+  `go test ./internal/vmhost -count=1` and focused placement/default-resource
+  race checks passed after the repair. Both push/PR workflow copies run
+  the test through `go test -race -timeout 20m ./...`.
+- Avoid: depending on whether optional virtualization directories happen to exist on
+  the machine running a unit test, or modifying real host directories to make it pass.
+
+## BUG-0279 — Storage projection broke idempotent registration replay
+
+- Date: 2026-09-18. Status: fixed in the working tree; native retry reproduced before the fix.
+- Symptom: in the native standalone-Core lab, `POST /api/v1/storage` with the exact local
+  registration payload and `request_id` `lab-local-0` returned 201 initially. After Core
+  reported the completed repository, retrying that unchanged payload returned 409
+  `request_id already used with another payload`.
+- Root cause: `mirrorStorageProjection` rewrote an existing `managed_resources` row's
+  `payload` with its synthetic adoption request and Core-resolved repository fields.
+  `replayResource` correctly compares the saved input byte-for-byte, so the Controller
+  subsequently compared the operator's original request with its own replacement payload.
+- Fix: refresh only the Controller's disposable storage command projection, pool/host and
+  name. The original request payload remains the idempotent replay record. Newly adopted
+  repositories still receive their synthetic adoption payload because they have no original
+  Controller request to replay.
+- Regression: `TestStorageRepositoryIsCoreAllocatedAndAdopted` first failed with the exact
+  409 after Core adoption, then passed after the fix by replaying the original request and
+  requiring the same Core-allocated repository ID and operation. `go test ./internal/controller
+  -run 'Storage' -count=1` passed. Both existing push/PR `phase1` workflows run the Go suite
+  with `go test -race -timeout 20m ./...`.
+- Avoid: updating a request payload while refreshing an observed resource mirror; payload is
+  immutable replay input, while command is the current host-reported projection.
+
+## BUG-0280 — VM startup could check a nested repository through its parent
+
+- Date: 2026-09-18. Status: fixed in the working tree.
+- Symptom: a managed VM disk beneath a nested local repository could be assigned to its
+  broader parent registration at startup because repository selection stopped at the first
+  matching path. Map iteration made that choice unstable, allowing the wrong repository's
+  availability and identity check to decide whether the VM could start.
+- Root cause: the startup guard used the first prefix match instead of resolving ownership by
+  the longest registered storage root. It also needed to discard an equal-root ambiguity from
+  a broader root once a more-specific root was found.
+- Fix: select the longest matching root, reject equally specific roots with different IDs as
+  ambiguous, and reset the ambiguity state whenever a longer root supersedes the prior choice.
+  The disk remains required to be beneath that selected repository's `nex-vms/<vm-id>/` path.
+- Regression: `TestStorageStartupGuardUsesMostSpecificRepository` covers parent and nested
+  roots, an ambiguous parent superseded by an unambiguous nested root, equal-root refusal, the
+  selected repository verification, foreign-VM refusal and unavailable nested storage. The
+  focused guard regression and full vmhost test run passed locally. Both existing push/PR
+  `phase1` workflows run the Go suite with `go test -race -timeout 20m ./...`.
+- Avoid: using first-match filesystem-root ownership where nested repositories are valid, or
+  retaining an ambiguity after a more-specific root has made it irrelevant.
+
+
+## BUG-0281 — Failed release uploads exposed incomplete releases
+
+- Date: 2026-09-18. Status: fixed in the PR; documentation assessment added locally.
+- Symptom/root cause: the publisher created a public release before uploading its assets,
+  so an exhausted retry or rejected upload left incomplete downloads visible.
+- Fix: create a draft, publish only after all size checks pass, and delete the draft on
+  handled upload failure. Replacement still removes the old release first; this is not
+  an atomic rollback. A killed runner or failed cleanup can leave a draft.
+- Regression: `python3 -m unittest discover -s tests -p 'test_gitea_release.py'` passed
+  all six checks against a simulated HTTP forge. The updated checks fail three cases
+  against the previous publisher, including rejected and truncated upload cleanup.
+  Both providers' push/PR workflows discover this suite. Hosted publication remains untested.
+- Avoid: making the release public before verifying all assets, or claiming a local forge
+  simulation proves real release delivery.
+
+## BUG-0282 — Storage browser navigation inherited a short control deadline
+
+- Date: 2026-09-18. Status: fixed locally.
+- Symptom: hosted clustered-storage acceptance timed out on its initial page load at 3s.
+- Root cause: Playwright's default action timeout also sets navigation's deadline unless
+  navigation is configured separately. The harness shortened both while intending quick
+  control failures. The precise cause of hosted asset-loading delay was not established.
+- Fix: keep 3s controls and explicitly restore the normal 30s navigation budget.
+- Regression: `test_cluster_browser_timeouts.py` failed before and passed after the fix.
+  A real Chromium experiment with a 4s delayed asset failed at 3.00s with the original
+  setup and loaded in 4.02s with the fix. The full clustered-storage browser suite passed.
+  Both providers' push/PR workflows run the unit regression and browser suite.
+- Avoid: blind navigation retries or widening every control assertion.
+
+## BUG-0283 — Freshness assertion expired before the next inventory poll
+
+- Date: 2026-09-18. Status: fixed locally.
+- Symptom: hosted enrollment browser acceptance saw a stale host on its initial visit
+  and failed before the next refresh. The exact hosted agent-report delay is unknown.
+- Root cause: the fixture permits only 2s before staleness, while the UI refreshes every
+  10s and the assertion waited only 5s. One stale sample could therefore fail healthy recovery.
+- Fix: allow that freshness assertion 15s; retain the fixture's staleness threshold and
+  other deadlines. Inject one stale observation, then restore real API responses to prove
+  automatic refresh recovery deterministically.
+- Regression: the injected observation failed with the original 5s assertion and passed
+  with 15s. Both providers' existing push/PR `phase1.py --browser` steps run this regression.
+  The injection simulates stale inventory; it does not prove host scheduling under contention.
+- Avoid: disabling stale-state checks or changing production freshness thresholds to pass CI.
+
+
+## BUG-0284 — Native VM browser lab accessed simulator-only controls
+
+- Date: 2026-09-18. Status: fixed in the PR; regression added locally.
+- Symptom/root cause: placement fault scenarios accessed `config['control']` in native
+  mode, whose configuration has no simulator control dictionary.
+- Fix: run those injected capability/rejection scenarios only in simulated mode; keep
+  common VM creation and UI checks in both modes.
+- Regression: `test_managed_vm_browser_modes.py` passes against the corrected harness
+  and rejects four unguarded accesses in the original. Both providers' existing push/PR
+  unittest discovery runs it. This is a structural guard check; the full native lab
+  was not rerun and native end-to-end acceptance remains outstanding.
+- Avoid: invoking simulator fault controls in native execution or removing simulated
+  rejection coverage to make the native harness work.

@@ -223,27 +223,49 @@ func checkStorageStartup(ctx context.Context, d domainXML, js []managedJournal, 
 		if disk.Type != "file" || !filepath.IsAbs(path) || filepath.Clean(path) != path || disk.Source.Dev != "" || disk.Source.Protocol != "" {
 			return errors.New("managed VM startup requires a registered filesystem disk")
 		}
-		found := false
-		for _, s := range repositories {
-			root := storageRegistrationPath(s)
-			if !strings.HasPrefix(path, root+string(filepath.Separator)) {
-				continue
-			}
-			if disk.Device == "disk" && !strings.HasPrefix(path, filepath.Join(root, "nex-vms", d.UUID)+string(filepath.Separator)) {
-				return errors.New("managed VM startup disk does not belong to this VM")
-			}
-			if !checked[s.ID] {
-				if err := verify(ctx, s); err != nil {
-					return errors.New("managed VM startup blocked: repository is unavailable or its identity changed")
-				}
-				checked[s.ID] = true
-			}
-			found = true
-			break
+		s, err := storageStartupRepository(path, repositories)
+		if err != nil {
+			return err
 		}
-		if !found {
-			return errors.New("managed VM startup disk repository is missing or detached")
+		root := storageRegistrationPath(s)
+		if disk.Device == "disk" && !strings.HasPrefix(path, filepath.Join(root, "nex-vms", d.UUID)+string(filepath.Separator)) {
+			return errors.New("managed VM startup disk does not belong to this VM")
+		}
+		if !checked[s.ID] {
+			if err := verify(ctx, s); err != nil {
+				return errors.New("managed VM startup blocked: repository is unavailable or its identity changed")
+			}
+			checked[s.ID] = true
 		}
 	}
 	return nil
+}
+
+// storageStartupRepository assigns a path to its most specific registered root.
+// Nested local registrations are valid, so a broad default registration must not
+// claim a VM disk stored in a nested repository.
+func storageStartupRepository(path string, repositories map[string]protocol.StorageRegistration) (protocol.StorageRegistration, error) {
+	var selected protocol.StorageRegistration
+	selectedRoot := ""
+	ambiguous := false
+	for _, s := range repositories {
+		root := storageRegistrationPath(s)
+		if !strings.HasPrefix(path, root+string(filepath.Separator)) {
+			continue
+		}
+		if selectedRoot == "" || len(root) > len(selectedRoot) {
+			selected, selectedRoot, ambiguous = s, root, false
+			continue
+		}
+		if len(root) == len(selectedRoot) && s.ID != selected.ID {
+			ambiguous = true
+		}
+	}
+	if selectedRoot == "" {
+		return protocol.StorageRegistration{}, errors.New("managed VM startup disk repository is missing or detached")
+	}
+	if ambiguous {
+		return protocol.StorageRegistration{}, errors.New("managed VM startup disk repository ownership is ambiguous")
+	}
+	return selected, nil
 }

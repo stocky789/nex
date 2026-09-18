@@ -1,0 +1,12 @@
+{
+  "summary": "Record actual current-artifact build and disposable native runtime verification, including hosted CI failures and remaining acceptance limits.",
+  "paths": ["docs/qa/2026-09-18-release-artifact-lab.md"],
+  "guide": {"impact": "none", "reason": "Verification evidence only; no operator behavior or instructions changed."},
+  "api": {"impact": "none", "reason": "API impact: none. The lab exercises existing session, site, bootstrap and local-host contracts without changing either endpoint or implementation."},
+  "roadmap": {"impact": "none", "reason": "This bounded artifact lab does not close a phase or change the published milestone status."},
+  "state": {"owner": "none", "reason": "No product durable state is introduced; lab credentials, sites and VM disks are disposable."},
+  "verification": {
+    "method": "Build with the real release scripts; exercise exact package startup, native systemd lifecycle and appliance boot; inspect actual hosted CI jobs. Results and incomplete gates are distinguished in the QA report.",
+    "evidence": ["docs/qa/2026-09-18-release-artifact-lab.md"]
+  }
+}

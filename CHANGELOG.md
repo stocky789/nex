@@ -6,12 +6,47 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.3.2` →
-> Debian `0.3.2`).
+> development software. Builds use the newest numbered changelog heading (`0.3.3` →
+> Debian `0.3.3`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.3.3] — 2026-09-18
+
+### Minor Feature
+
+- VM creation, edits and persistent media changes now receive pool-master approval
+  using current Core resource checks, with rejections shown in Task history.
+  Upgrade Controller, then Core on the selected host and pool master; older Core
+  versions block these changes rather than bypassing approval.
+
+### Bug Fixes
+
+- Gitea releases are published only after every asset finishes uploading and passes its
+  reported-size check; handled upload failures remove the incomplete draft (BUG-0281).
+- Browser acceptance checks allow normal page loading and inventory refresh times
+  on busy runners without lengthening ordinary control checks (BUG-0282, BUG-0283).
+
+- Retrying a completed storage registration returns the original repository and
+  task instead of incorrectly reporting changed input (BUG-0279).
+- VM startup checks the most specific matching storage repository and rejects
+  ambiguous ownership, preventing a broader registration from bypassing checks
+  on a nested repository (BUG-0280).
+- Default-resource tests no longer depend on the build machine's libvirt
+  directories (BUG-0278).
+
+### Miscellaneous
+
+- Both release workflows now start the actual Controller package and verify its
+  database, bundled UI/source and administrator login before publication. Push
+  and pull-request workflows also check that packages without working SQLite
+  support are rejected.
+- Updated API references, operator guidance and roadmap with bounded package,
+  appliance, offline installation and native two-host placement evidence. Those
+  labs used recorded 0.3.2 development snapshots, not rebuilt 0.3.3 artifacts;
+  Phase 3, Phase 4 and final release acceptance remain open.
 
 ## [0.3.2] — 2026-09-17
 
@@ -28,6 +63,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   when `/var/lib/libvirt/images` is not there yet.
 - Host inventory under load starts the libvirt domain list sooner so a short probe budget
   cannot skip it, and Add host gives enrollment enough time to finish under busy CI.
+- A Core host update that is still installing is no longer reported as finished, and shutting
+  Core down waits for an update it started instead of leaving the install running behind it
+  (BUG-0274).
+- Publishing a release survives a connection dropped part-way through uploading the ISO: each
+  file is resent instead of failing the whole release, and a file the forge stored short is
+  rejected rather than published as a broken download (BUG-0275).
+- Browser checks give a busy build machine enough time to start the Controller, and print the
+  Controller's own log when it never answers (BUG-0276). Two host-agent checks now measure the
+  behaviour they describe instead of how fast the build machine is (BUG-0277).
 - A guest that put itself to sleep (Windows Sleep, for example) no longer locks up its VM
   and every other VM on the same host. The VM is shown as asleep, **Start** wakes it, Shut
   down and Reboot wake it first, and Force stop and Force reboot work directly. New and

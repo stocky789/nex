@@ -76,7 +76,12 @@ Controller host page **Version** field; that package version is the only Nex Cor
   following the update; it has not completed or failed as far as the page knows. Select
   **Check** to read the host's current state.
 - If Core shows Installing after the service is already back, refresh **Updates**; completed
-  installs clear themselves once the installed version matches available.
+  installs clear themselves once the installed version matches available. While the same Core is
+  still applying, the page keeps showing its real step: apt reports the new version as soon as it
+  unpacks, which is before the restart the update still has to do.
+- Stopping or restarting Nex Core during an apply waits for that install to finish instead of
+  interrupting it, so the stop takes as long as apt does. Let it finish; a killed apt is what
+  leaves a half-configured package behind.
 - **"refusing APT downgrade while version-2 storage state is retained"** on a host that is
   upgrading, not downgrading: that host still has the release whose downgrade guard read APT's
   configure step as an unidentified package. The guard that runs is the installed one, so the

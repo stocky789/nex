@@ -17,6 +17,7 @@ import (
 	"syscall"
 
 	"nex.local/nex/internal/agent"
+	"nex.local/nex/internal/nexupdate"
 	"nex.local/nex/internal/vmhost"
 	"nex.local/nex/internal/websecurity"
 )
@@ -148,6 +149,10 @@ func (s *Service) Close() error {
 	// The embedded enrollment agent is not on s.wg; wait for it so callers (and
 	// testing.T.TempDir cleanup) can remove AgentStateDir without racing Save().
 	releaseHandoffAgent(s.cfg.AgentStateDir)
+	// A background update apply is not on s.wg either, and it keeps writing
+	// progress into DataDir; abandoning it would leave dpkg running and write
+	// into a directory the caller is about to remove.
+	nexupdate.WaitApply()
 	return s.lock.Close()
 }
 

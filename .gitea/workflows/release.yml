@@ -155,6 +155,16 @@ jobs:
               sha256sum "$artifact" > "$artifact.sha256"
             done )
 
+      - name: Smoke-start the packaged Controller
+        env:
+          NEX_VERSION: ${{ steps.version.outputs.version }}
+          NEX_HOST_WORKSPACE: ${{ steps.host.outputs.workspace }}
+        run: |
+          set -euo pipefail
+          scripts/ci-docker.sh run --rm --entrypoint python3 -v "$PWD:/repo:ro" \
+            nex-controller-builder /repo/scripts/check-controller-package.py \
+            "/repo/dist/controller/nex-controller_${NEX_VERSION}_amd64.deb"
+
       - name: Create or replace the release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

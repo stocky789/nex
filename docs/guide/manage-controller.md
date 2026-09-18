@@ -350,6 +350,13 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
 
 ## Verification
 
+The [0.3.2 local artifact lab](../qa/2026-09-18-release-artifact-lab.md) checked
+the exact Controller package in a disposable Debian VM: authenticated HTTPS,
+service restart/crash recovery, same-version reinstall and reboot preserved a
+site's identity. It used the packaged wrapper's configuration paths and API
+requests, not a new browser or step-by-step walkthrough of this guide. This does
+not establish cross-version upgrades, restored backups or current hosted CI.
+
 Recorded checks and their limits:
 
 - [Phase 1 acceptance](../qa/phase1/acceptance.md) and [Debian/libvirt check](../qa/phase1/debian.md).

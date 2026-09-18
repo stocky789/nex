@@ -1,0 +1,45 @@
+{
+  "summary": "Validate current Core placement in a disposable two-node native KVM/NFS lab; fix exact storage registration replay and nested repository startup selection. API impact: existing contract; no new endpoint or durable state.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "docs/plans/2026-09-18-master-vm-placement.md",
+    "docs/qa/2026-09-18-master-vm-placement.md",
+    "docs/qa/2026-09-18-controller-package-smoke.md",
+    "docs/qa/2026-09-18-native-placement-lab.md",
+    "internal/controller/storage.go",
+    "internal/controller/storage_test.go",
+    "internal/vmhost/storage_guard.go",
+    "internal/vmhost/storage_guard_test.go"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Restores documented exact registration retries and valid VM starts; no changed operator steps. Native API and browser evidence is recorded in QA.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "POST storage registration retains original request identity across Core inventory projection; VM power remains an authenticated Controller relay to native Core startup validation. Existing schema, authorization and results remain unchanged.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Records bounded native acceptance progress; Phase 3 and Phase 4 remain open and published milestone status is unchanged.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new state. Preserves existing original request payload for idempotency and existing Core repository/VM ownership records; Controller observed inventory remains a disposable projection."
+  },
+  "verification": {
+    "method": "Actual two-node Debian13 nested-KVM/libvirt/NFS lab, authenticated Controller/Core APIs, exact current package smoke in Debian13, focused Controller storage and full vmhost race checks, independent code review; see QA for actual executed paths and limitations.",
+    "evidence": [
+      "docs/qa/2026-09-18-native-placement-lab.md",
+      "internal/controller/storage_test.go",
+      "internal/vmhost/storage_guard_test.go"
+    ]
+  }
+}

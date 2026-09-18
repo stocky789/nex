@@ -87,7 +87,11 @@ marked prerelease. The changelog section supplies the notes and the release has 
 
 The tag points at the commit that built the release. Pushing the same version again deletes
 the previous release, moves the tag to the new commit and uploads fresh assets, so a version
-has exactly one release and it always matches the newest build.
+has exactly one release and it always matches the newest build. Each asset is checked against
+its size on disk when the forge reports a stored size, and an upload the forge drops part-way through is resent
+rather than failing the run. On Gitea, the replacement stays a draft until every asset passes
+that check, then is published. A handled upload failure deletes the draft; the previous
+release has already been removed, so rerun publication to restore that version.
 
 With deploy secrets set, `https://<site>/apt/` also serves the new packages in the signed
 `Release`/`Packages` index, so enrolled hosts see the update under **Updates**. The publisher
@@ -113,6 +117,15 @@ the package index does not list the released version.
   the workflow points `TMPDIR` there for that reason.
 - **"gitea-release: ... HTTP 409"** — the tag is protected or another release still holds it.
   Remove the protection or the stray release and re-run.
+- **"gitea-release: <asset> attempt N failed: ..."** — the connection to the forge dropped while
+  that asset was uploading, which a multi-gigabyte ISO invites. The workflow deletes whatever the
+  attempt registered and resends the whole file, up to three attempts for transport/server
+  failures; rejected requests fail immediately. If it fails, the Gitea publisher attempts to delete the draft: fix the path to the
+  forge and rerun the same version. If cleanup also fails or the runner is terminated, inspect
+  and remove any leftover draft before retrying.
+- **"<asset>: stored N of M bytes"** — the forge accepted the upload but kept a short file. The
+  release is failed on purpose rather than published with a download that cannot be installed.
+  Check the forge's upload size limit and any proxy in front of it.
 - **A throwaway signing key warning** — set the `NEX_APPLIANCE_SIGNING_KEY` secret so every
   release is signed with the operator key.
 - **Deploy secrets are not set** — the workflow says so and publishes to Gitea only. Add the
@@ -124,6 +137,10 @@ the package index does not list the released version.
   ISOs are pruned. Check `du -sh /srv/nex-apt /srv/nex-downloads` before large release runs.
 
 ## Verification
+
+The 0.3.3 Gitea draft-publication success, dropped connection, rejected upload and short-upload
+paths passed against a local simulated forge; this does not establish hosted publication. See
+[workflow regression evidence](../qa/2026-09-18-workflow-regressions.md).
 
 `python3 -m unittest discover -s tests -p 'test_*.py'` covers version resolution
 (`test_release_version.py`), the Docker wrapper (`test_ci_docker.py`), release publication

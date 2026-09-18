@@ -62,7 +62,10 @@ def simulated(lab):
     stopped = threading.Event()
     failures = []
     # control lets a walkthrough change what the simulated host observes and applies.
-    control = {'state': 'shut off', 'cpu_baseline': {'model': 'SyntheticBaseline', 'features': [{'name': 'sse4.2', 'policy': 'require'}], 'machine': 'q35', 'generation': 1, 'member_count': 1, 'observed_at': datetime.now(timezone.utc).isoformat()}}
+    control = {'state': 'shut off',
+               'capabilities': ['managed-vm-v1', 'pool-vm-placement-v1', 'vm-update-v1', 'vm-media-v1', 'storage-repositories-v1', 'vm-cpu-baseline-v1'],
+               'reject_placement': False,
+               'cpu_baseline': {'model': 'SyntheticBaseline', 'features': [{'name': 'sse4.2', 'policy': 'require'}], 'machine': 'q35', 'generation': 1, 'member_count': 1, 'observed_at': datetime.now(timezone.utc).isoformat()}}
     specs = {}
     managed_storage = {}
     managed_outcomes = []
@@ -75,7 +78,7 @@ def simulated(lab):
                 for v in vms:
                     v['state'] = control['state']
                 payload = {'version': 1, 'sequence': sequence,
-                        'capabilities': ['managed-vm-v1', 'vm-update-v1', 'vm-media-v1', 'storage-repositories-v1', 'vm-cpu-baseline-v1'],
+                        'capabilities': control['capabilities'],
                         'results': results,
                         'inventory': {'observed_at': now, 'hostname': 'simulated-browser-host', 'cpu_count': 8, 'cpu_models': ['qemu64', 'Skylake-Server', 'FutureCPU-v7'],
                         'memory_bytes': 16 * 1024**3, 'vms': vms, 'cpu_baseline': control['cpu_baseline'],
@@ -88,6 +91,11 @@ def simulated(lab):
                     answer = json.load(response)
                 results = []
                 for command in answer.get('commands') or []:
+                    if command.get('vm') and control['reject_placement']:
+                        control['reject_placement'] = False
+                        results.append({'operation_id': command['operation_id'], 'status': 'failed',
+                                        'error': 'pool master rejected placement', 'observed_at': now})
+                        continue
                     results.append({'operation_id': command['operation_id'], 'status': 'succeeded', 'observed_at': now})
                     if command.get('storage'):
                         storage = {**command['storage']}
@@ -434,9 +442,10 @@ def acceptance(config, password, iso, evidence, mode):
         capture('review-360')
         page.set_viewport_size({'width': 1440, 'height': 1000})
         # Let the real server accept creation, then lose only its response.
-        bodies = []
+        bodies, create_headers = [], []
         def lose_reply(route):
             bodies.append(route.request.post_data_json)
+            create_headers.append(route.request.headers)
             response = route.fetch()
             assert response.status == 202
             route.abort('connectionreset')
@@ -468,12 +477,38 @@ def acceptance(config, password, iso, evidence, mode):
         assert page.url.endswith(f"#/vms/{created_vm['id']}/{created_vm['operation_id']}"), page.url
         spec = created_vm['spec']
         assert bodies and all(b['name'] == vm_name for b in bodies), bodies
+        csrf = create_headers[0].get('x-csrf-token')
+        assert csrf, create_headers
         assert [d['name'] for d in spec['disks']] == ['system', 'data'] and [d['bus'] for d in spec['disks']] == ['virtio', 'sata'], spec
         assert spec['disks'][1]['thin'] is False and spec['cpu'] == {'count': 2, 'sockets': 2, 'cores': 1, 'threads': 1, 'model': 'Skylake-Server'}, spec
         assert spec['memory'] == {'mode': 'maximum', 'size_mib': 512} and spec['boot']['media_boot_order'] == 1, spec
         # An automatic MAC is listed as its effective derived address.
         assert re.fullmatch(r'52:54:00:[0-9a-f]{2}:[0-9a-f]{2}:00', spec['nics'][0]['mac']) and spec['nics'][1]['mac'] == '52:54:00:ab:cd:ef', spec
         capture('created-desktop')
+        # Simulator-only fault controls prove that an old Core is rejected synchronously and
+        # a current Core's asynchronous placement rejection leaves an actionable task route.
+        if mode == 'simulated':
+            request = {**bodies[0], 'name': 'Placement browser failure ' + suffix}
+            request['request_id'] = 'placement-browser-capability-' + suffix
+            config['control']['capabilities'] = [cap for cap in config['control']['capabilities'] if cap != 'pool-vm-placement-v1']
+            eventually(lambda: 'pool-vm-placement-v1' not in next(h for h in page.request.get(config['url'] + '/api/v1/hosts').json() if h['id'] == config['host_id'])['capabilities'], 'simulated Core without placement capability')
+            rejected = page.request.post(config['url'] + '/api/v1/vms', data=request, headers={'X-CSRF-Token': csrf})
+            assert rejected.status == 409 and 'master-owned VM placement; upgrade Nex Core' in rejected.text(), rejected.text()
+            config['control']['capabilities'].append('pool-vm-placement-v1')
+            eventually(lambda: 'pool-vm-placement-v1' in next(h for h in page.request.get(config['url'] + '/api/v1/hosts').json() if h['id'] == config['host_id'])['capabilities'], 'simulated Core placement capability restored')
+            request['request_id'] = 'placement-browser-rejected-' + suffix
+            config['control']['reject_placement'] = True
+            rejected = page.request.post(config['url'] + '/api/v1/vms', data=request, headers={'X-CSRF-Token': csrf})
+            assert rejected.status == 202, rejected.text()
+            rejected_create = rejected.json()
+            page.goto(config['url'] + f"/#/vms/{rejected_create['vm_id']}/{rejected_create['operation']['id']}")
+            creation = page.get_by_role('region', name='Creation task', exact=True)
+            expect(creation).to_contain_text('Creation failed', timeout=30000)
+            expect(creation).to_contain_text('pool master rejected placement', timeout=30000)
+            expect(creation.get_by_role('link', name='Task history', exact=True)).to_have_attribute('href', '#/tasks')
+            capture('core-rejected-placement')
+            page.goto(config['url'] + f"/#/vms/{created_vm['id']}")
+            passed('A Core without master-owned placement is rejected before dispatch; a simulated Core placement rejection shows its Task history route, while the earlier interrupted-request retry succeeds')
         page.set_viewport_size({'width': 360, 'height': 800})
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'details narrow page overflow'
         capture('created-360')

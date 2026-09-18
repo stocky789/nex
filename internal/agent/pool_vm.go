@@ -74,6 +74,9 @@ type poolVMRequest struct {
 	// a definition-transition acknowledgement.
 	UpdateAccepted bool `json:"update_accepted,omitempty"`
 	UpdateRevision int  `json:"update_revision,omitempty"`
+	// PlacementAccepted is an explicit acknowledgement from a current master
+	// after its fresh target-host preflight and durable definition reservation.
+	PlacementAccepted bool `json:"placement_accepted,omitempty"`
 }
 
 // poolVMRecordMatchesSpec binds an interrupted operation to the immutable
@@ -491,12 +494,12 @@ func isPoolSharedStorage(s protocol.StorageRegistration) bool {
 // never from the client command.  ValidateClusteredISCSI is also a live native
 // readiness gate before a start permit is written.
 func poolVMExecutionContext(ctx context.Context, s *Store, v protocol.VMCreateSpec) (context.Context, error) {
-	managed, checks := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(ctx)
+	storage, checks := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).AppliedStorage()
 	if !managedVMChecksReady(checks) {
 		return nil, errors.New("managed storage state is unavailable")
 	}
 	byID := map[string]protocol.StorageRegistration{}
-	for _, storage := range managed.Storage {
+	for _, storage := range storage {
 		byID[storage.ID] = storage
 	}
 	var selected protocol.StorageClusterConfig
@@ -676,18 +679,65 @@ func PoolVMHandler(s *Store) http.Handler {
 			http.Error(w, "invalid VM execution request", http.StatusBadRequest)
 			return
 		}
+		req.PlacementAccepted, req.UpdateAccepted, req.SpecMatch = false, false, false
+		// A definition placement is decided by the master for every VM, including
+		// local-storage guests.  Do the bounded target RPC before the durable VM
+		// lock; locks must never span a peer request.
+		var placement poolPlacementReply
+		if req.Action == "define" && req.Create || req.Action == "update-reserve" {
+			membership, membershipErr := Membership(s)
+			cmdKind := "vm-create"
+			if req.Action == "update-reserve" {
+				cmdKind = "vm-update"
+			}
+			command := protocol.Command{OperationID: req.OperationID, Kind: cmdKind, VM: req.VM}
+			if membershipErr != nil || req.OperationID == "" || req.VM == nil {
+				http.Error(w, "VM placement preflight is unavailable", http.StatusConflict)
+				return
+			}
+			placement, membershipErr = poolVMPlacement(r.Context(), s, membership, member, command)
+			if membershipErr == nil {
+				membershipErr = poolVMPlacementStorageMatches(r.Context(), s, placement, *req.VM)
+			}
+			if membershipErr != nil {
+				http.Error(w, "VM placement preflight refused: "+placementError(membershipErr), http.StatusConflict)
+				return
+			}
+		}
 		poolVMMu.Lock()
 		defer poolVMMu.Unlock()
+		// All placement admission paths take the established VM → peer lock order.
+		// Keep the peer lock through savePoolVMs so membership cannot change between
+		// the authenticated preflight and durable owner/reservation record.
+		placementMutation := (req.Action == "define" && req.Create) || req.Action == "update-reserve"
+		var currentMembership protocol.PoolMembership
+		if placementMutation {
+			poolPeerMu.Lock()
+			defer poolPeerMu.Unlock()
+			peer, peerErr := loadPoolPeer(s)
+			if peerErr != nil || peer.Membership.Valid() != nil {
+				http.Error(w, "VM placement membership is unavailable", http.StatusConflict)
+				return
+			}
+			currentMembership = peer.Membership
+		}
 		state, err := loadPoolVMs(s)
 		if err != nil {
 			http.Error(w, "execution state unavailable", 500)
 			return
 		}
+		if placementMutation && !placementMembershipMatches(s, currentMembership, placement.Generation, member) {
+			http.Error(w, "VM placement membership changed before durable admission", http.StatusConflict)
+			return
+		}
 		record, ok := state.VMs[id]
+		if placement.Replay && (!ok || (req.Action == "update-reserve" && !placementReservationMatches(record, req.OperationID, req.VM))) {
+			http.Error(w, "VM placement replay has no durable master record", http.StatusConflict)
+			return
+		}
 		switch req.Action {
 		case "update-reserve":
-			membership, membershipErr := Membership(s)
-			if req.VM == nil || membershipErr != nil || vmhost.ValidateManagedCommand(protocol.Command{OperationID: req.OperationID, Kind: "vm-update", VM: req.VM}) != nil || reserveOrSeedPoolVMUpdate(&state, membership, &record, ok, member.HostID, req.OperationID, req.Previous, req.VM) != nil {
+			if req.VM == nil || !placementMutation || vmhost.ValidateManagedCommand(protocol.Command{OperationID: req.OperationID, Kind: "vm-update", VM: req.VM}) != nil || reserveOrSeedPoolVMUpdate(&state, currentMembership, &record, ok, member.HostID, req.OperationID, req.Previous, req.VM) != nil {
 				http.Error(w, "VM update is not eligible for the durable pool owner record", http.StatusConflict)
 				return
 			}
@@ -696,6 +746,7 @@ func PoolVMHandler(s *Store) http.Handler {
 			if err == nil && record.PendingUpdate != nil {
 				req.UpdateAccepted = true
 				req.UpdateRevision = record.PendingUpdate.Next.Revision
+				req.PlacementAccepted = true
 			}
 		case "update-commit":
 			if !ok || req.Update == nil || commitPoolVMUpdate(&record, member.HostID, *req.Update) != nil {
@@ -743,6 +794,9 @@ func PoolVMHandler(s *Store) http.Handler {
 			}
 			if req.VM != nil && err == nil && poolVMRecordMatchesSpec(record, *req.VM) {
 				req.SpecMatch = true
+				if req.Create {
+					req.PlacementAccepted = true
+				}
 			}
 		case "start":
 			if !ok || record.PendingUpdate != nil || record.PoolID != s.State.PoolID || record.HostID != member.HostID || (record.State != "defined" && record.State != "stopped") {
@@ -809,8 +863,8 @@ func poolVMMediaChangesDefinition(v protocol.VMCreateSpec, req protocol.VMMediaR
 // PoolVMMediaCommand expresses a shared VM's media change as the same durable prior→next
 // definition transition vm-update uses, so the master reserves the exact next revision
 // before this host applies it and its committed Spec cannot drift.  The operation keeps its
-// identity, so the Controller still tracks the media task it queued.  A local-only VM, and a
-// media request that leaves the definition unchanged, keep the lighter vm-media path.
+// identity, so the Controller still tracks the media task it queued. A media
+// request that leaves the definition unchanged keeps the lighter vm-media path.
 func PoolVMMediaCommand(ctx context.Context, s *Store, cmd protocol.Command) protocol.Command {
 	if cmd.Kind != "vm-media" || cmd.VMMedia == nil {
 		return cmd
@@ -819,10 +873,16 @@ func PoolVMMediaCommand(ctx context.Context, s *Store, cmd protocol.Command) pro
 	// definition already carries the first attempt's change, so deriving the next revision
 	// again would make one operation ID mean two different commands.
 	if journaled, ok := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).JournaledCommand(cmd.OperationID); ok {
-		return journaled
+		if journaled.Kind == "vm-media" && reflect.DeepEqual(journaled, cmd) {
+			return journaled
+		}
+		if journaled.Kind == "vm-update" && journaled.VM != nil && journaled.VM.ID == cmd.VMMedia.VMID && journaled.VM.PoolID == cmd.VMMedia.PoolID && journaled.VM.HostID == cmd.VMMedia.HostID && reflect.DeepEqual(protocol.ApplyVMMedia(*journaled.VM, cmd.VMMedia.Action, cmd.VMMedia.Drive, cmd.VMMedia.MediaID), *journaled.VM) {
+			return journaled
+		}
+		return cmd
 	}
-	v, shared, err := poolSharedVM(ctx, s, cmd)
-	if err != nil || !shared || !poolVMMediaChangesDefinition(v, *cmd.VMMedia) {
+	v, _, err := poolSharedVM(ctx, s, cmd)
+	if err != nil || !poolVMMediaChangesDefinition(v, *cmd.VMMedia) {
 		return cmd
 	}
 	next := protocol.ApplyVMMedia(v, cmd.VMMedia.Action, cmd.VMMedia.Drive, cmd.VMMedia.MediaID)
@@ -841,23 +901,29 @@ func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (
 	if err != nil {
 		return nil, err
 	}
-	if !shared {
+	definition := cmd.Kind == "vm-create" || cmd.Kind == "vm-update"
+	// Placement ownership covers every VM definition. The shared-storage fence
+	// below still covers only operations which could create a second writer.
+	if !shared && !definition {
 		return func(protocol.Result, error) error { return nil }, nil
 	}
-	if err := poolVMStopOnly(s, cmd, v); err == nil {
+	stopErr := poolVMStopOnly(s, cmd, v)
+	if shared && stopErr == nil {
 		// Do not turn loss of quorum into an inability to stop a known local
 		// writer.  In particular, do not write a start permit, call an
 		// unreachable master, or infer a durable "stopped" transition from a
 		// request timeout.  The Engine journals and observes the native request;
 		// later authenticated inventory is the only reconciliation path.
 		return func(protocol.Result, error) error { return nil }, nil
-	} else if isPoolVMStopOnly(cmd) {
-		return nil, err
+	} else if shared && isPoolVMStopOnly(cmd) {
+		return nil, stopErr
 	}
-	if _, err := poolVMExecutionContext(ctx, s, v); err != nil {
-		return nil, err
+	if shared {
+		if _, err := poolVMExecutionContext(ctx, s, v); err != nil {
+			return nil, err
+		}
 	}
-	if cmd.Kind != "vm-create" {
+	if (shared || definition) && cmd.Kind != "vm-create" {
 		if err := PublishPoolVMInventory(ctx, s); err != nil {
 			return nil, err
 		}
@@ -907,15 +973,22 @@ func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (
 	epoch := uint64(0)
 	if action == "update-reserve" {
 		previous, priorErr := poolVMUpdatePrevious(ctx, s, v.ID)
-		if cmd.VM == nil || priorErr != nil || vmhost.ValidateManagedCommand(cmd) != nil || poolVMUpdateRequestPeer(ctx, s, v.ID, action, cmd.OperationID, previous, cmd.VM, nil) != nil {
-			return nil, errors.New("pool master did not reserve the durable VM update")
+		if cmd.VM == nil || priorErr != nil || vmhost.ValidateManagedCommand(cmd) != nil {
+			return nil, errors.New("VM update definition is unavailable or invalid")
+		}
+		if err := poolVMUpdateRequestPeer(ctx, s, v.ID, action, cmd.OperationID, previous, cmd.VM, nil); err != nil {
+			return nil, err
+		}
+	} else if action == "define" && cmd.Kind == "vm-create" {
+		if err := poolVMDefineRequestPeer(ctx, s, *cmd.VM, cmd.OperationID); err != nil {
+			return nil, err
 		}
 	} else if action != "start" {
 		if err := poolVMRequestPeer(ctx, s, v.ID, action, nil, cmd.Kind == "vm-create", cmd.VM, nil); err != nil {
 			return nil, err
 		}
 	}
-	if cmd.Kind == "vm-create" && v.StartAfterCreate {
+	if shared && cmd.Kind == "vm-create" && v.StartAfterCreate {
 		if err := poolVMRequestPeer(ctx, s, v.ID, "start", &permit, false, nil, &epoch); err != nil {
 			return nil, err
 		}
@@ -959,7 +1032,7 @@ func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (
 			// reboot must not be translated into a placement transition.
 			return nil
 		}
-		if cmd.Kind == "vm-create" && !v.StartAfterCreate {
+		if !shared || (cmd.Kind == "vm-create" && !v.StartAfterCreate) {
 			return nil
 		}
 		state, err := vmhost.ManagedVMState(context.Background(), v.ID)
@@ -977,7 +1050,57 @@ func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (
 	}, nil
 }
 
+func poolVMDefineRequestPeer(ctx context.Context, s *Store, vm protocol.VMCreateSpec, operationID string) error {
+	membership, err := Membership(s)
+	if err != nil || operationID == "" {
+		return errors.New("VM placement membership or operation is unavailable")
+	}
+	if membership.MasterHostID == s.State.HostID {
+		member := protocol.PoolMember{HostID: s.State.HostID, Generation: membership.Generation, Status: "ready"}
+		placement, err := poolVMPlacement(ctx, s, membership, member, protocol.Command{OperationID: operationID, Kind: "vm-create", VM: &vm})
+		if err != nil {
+			return err
+		}
+		if err := poolVMPlacementStorageMatches(ctx, s, placement, vm); err != nil {
+			return err
+		}
+		return poolVMLocalPlacement(s, vm.ID, "define", nil, true, &vm, nil, &placement)
+	}
+	master, err := PoolMasterURL(s)
+	if err != nil {
+		return err
+	}
+	client, err := PoolPeerClient(s, master)
+	if err != nil {
+		return err
+	}
+	defer client.CloseIdleConnections()
+	body, _ := json.Marshal(poolVMRequest{VMID: vm.ID, Action: "define", Create: true, OperationID: operationID, VM: &vm})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(master, "/")+poolVMPath+vm.ID, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 1024))
+		return errors.New("pool master refused VM placement: " + placementError(errors.New(string(body))))
+	}
+	var reply poolVMRequest
+	if json.NewDecoder(response.Body).Decode(&reply) != nil || reply.VMID != vm.ID || reply.Action != "define" || reply.OperationID != operationID || !reply.PlacementAccepted || !reply.SpecMatch {
+		return errors.New("pool master did not acknowledge VM placement")
+	}
+	return nil
+}
+
 func poolVMRequestPeer(ctx context.Context, s *Store, id, action string, permit *string, create bool, vm *protocol.VMCreateSpec, epoch *uint64) error {
+	if create {
+		return errors.New("VM creation requires exact operation placement admission")
+	}
 	membership, err := Membership(s)
 	if err != nil {
 		return err
@@ -1033,6 +1156,20 @@ func poolVMUpdateRequestPeer(ctx context.Context, s *Store, id, action, operatio
 		return err
 	}
 	if membership.MasterHostID == s.State.HostID {
+		if action == "update-reserve" {
+			if next == nil {
+				return errors.New("VM placement definition is unavailable")
+			}
+			member := protocol.PoolMember{HostID: s.State.HostID, Generation: membership.Generation, Status: "ready"}
+			placement, preflightErr := poolVMPlacement(ctx, s, membership, member, protocol.Command{OperationID: operationID, Kind: "vm-update", VM: next})
+			if preflightErr != nil {
+				return preflightErr
+			}
+			if err := poolVMPlacementStorageMatches(ctx, s, placement, *next); err != nil {
+				return err
+			}
+			return poolVMLocalUpdatePlacement(s, id, action, operationID, previous, next, evidence, &placement)
+		}
 		return poolVMLocalUpdate(s, id, action, operationID, previous, next, evidence)
 	}
 	master, err := PoolMasterURL(s)
@@ -1056,13 +1193,14 @@ func poolVMUpdateRequestPeer(ctx context.Context, s *Store, id, action, operatio
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return errors.New("pool master refused VM update transition")
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return errors.New("pool master refused VM update transition: " + placementError(errors.New(string(body))))
 	}
 	var result poolVMRequest
 	if json.NewDecoder(resp.Body).Decode(&result) != nil {
 		return errors.New("invalid pool VM update transition response")
 	}
-	if result.VMID != id || result.Action != action || result.OperationID != operationID || !result.UpdateAccepted {
+	if result.VMID != id || result.Action != action || result.OperationID != operationID || !result.UpdateAccepted || (action == "update-reserve" && !result.PlacementAccepted) {
 		return errors.New("pool master did not confirm the durable VM update transition")
 	}
 	wantRevision := 0
@@ -1077,14 +1215,49 @@ func poolVMUpdateRequestPeer(ctx context.Context, s *Store, id, action, operatio
 	return nil
 }
 
+// placementMembershipMatches validates the final admission snapshot while the
+// caller holds poolPeerMu through the durable VM record write.
+func placementMembershipMatches(s *Store, membership protocol.PoolMembership, generation uint64, selected protocol.PoolMember) bool {
+	if membership.Valid() != nil || membership.PoolID != s.State.PoolID || membership.MasterHostID != s.State.HostID || membership.Generation != generation {
+		return false
+	}
+	for _, member := range membership.Members {
+		if member.HostID == selected.HostID && member.Status == "ready" && member.Generation == generation {
+			return selected.CertificateSHA256 == "" || member.CertificateSHA256 == selected.CertificateSHA256
+		}
+	}
+	return false
+}
+
+func placementReservationMatches(record poolVMRecord, operationID string, next *protocol.VMCreateSpec) bool {
+	return next != nil && record.PendingUpdate != nil && record.PendingUpdate.OperationID == operationID && reflect.DeepEqual(record.PendingUpdate.Next, *next)
+}
+
 func poolVMLocalUpdate(s *Store, id, action, operationID string, previous, next *protocol.VMCreateSpec, evidence *vmhost.VMUpdateEvidence) error {
+	return poolVMLocalUpdatePlacement(s, id, action, operationID, previous, next, evidence, nil)
+}
+
+func poolVMLocalUpdatePlacement(s *Store, id, action, operationID string, previous, next *protocol.VMCreateSpec, evidence *vmhost.VMUpdateEvidence, placement *poolPlacementReply) error {
 	poolVMMu.Lock()
 	defer poolVMMu.Unlock()
+	var membership protocol.PoolMembership
+	if placement != nil {
+		poolPeerMu.Lock()
+		defer poolPeerMu.Unlock()
+		peer, err := loadPoolPeer(s)
+		membership = peer.Membership
+		if err != nil || !placementMembershipMatches(s, membership, placement.Generation, protocol.PoolMember{HostID: s.State.HostID}) {
+			return errors.New("pool membership changed before durable VM placement")
+		}
+	}
 	state, err := loadPoolVMs(s)
 	if err != nil {
 		return err
 	}
 	record, ok := state.VMs[id]
+	if placement != nil && placement.Replay && (!ok || !placementReservationMatches(record, operationID, next)) {
+		return errors.New("VM placement replay has no matching durable master reservation")
+	}
 	if !ok && action != "update-reserve" {
 		return errors.New("VM has no durable pool execution record")
 	}
@@ -1094,7 +1267,10 @@ func poolVMLocalUpdate(s *Store, id, action, operationID string, previous, next 
 		if valid && ok {
 			valid = previous != nil && poolVMRecordMatchesSpec(record, *previous) && reservePoolVMUpdate(&record, s.State.HostID, operationID, *next) == nil
 		} else if valid {
-			membership, membershipErr := Membership(s)
+			var membershipErr error
+			if placement == nil {
+				membership, membershipErr = Membership(s)
+			}
 			valid = membershipErr == nil && reserveOrSeedPoolVMUpdate(&state, membership, &record, ok, s.State.HostID, operationID, previous, next) == nil
 		}
 		if !valid {
@@ -1115,13 +1291,28 @@ func poolVMLocalUpdate(s *Store, id, action, operationID string, previous, next 
 	return savePoolVMs(s, state)
 }
 func poolVMLocal(s *Store, id, action string, permit *string, create bool, vm *protocol.VMCreateSpec, epoch *uint64) error {
+	return poolVMLocalPlacement(s, id, action, permit, create, vm, epoch, nil)
+}
+
+func poolVMLocalPlacement(s *Store, id, action string, permit *string, create bool, vm *protocol.VMCreateSpec, epoch *uint64, placement *poolPlacementReply) error {
 	poolVMMu.Lock()
 	defer poolVMMu.Unlock()
+	if placement != nil {
+		poolPeerMu.Lock()
+		defer poolPeerMu.Unlock()
+		peer, err := loadPoolPeer(s)
+		if err != nil || !placementMembershipMatches(s, peer.Membership, placement.Generation, protocol.PoolMember{HostID: s.State.HostID}) {
+			return errors.New("pool membership changed before durable VM placement")
+		}
+	}
 	state, err := loadPoolVMs(s)
 	if err != nil {
 		return err
 	}
 	r, ok := state.VMs[id]
+	if placement != nil && placement.Replay && !ok {
+		return errors.New("VM placement replay has no durable master record")
+	}
 	switch action {
 	case "define":
 		if ok && (r.PendingUpdate != nil || r.HostID != s.State.HostID) {

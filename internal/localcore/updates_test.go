@@ -4,6 +4,7 @@ package localcore
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -16,8 +17,10 @@ import (
 
 // stubApt redirects nexupdate at a fake apt so this API test never touches the
 // host's package manager. The installed version advances once the upgrade runs,
-// which is what ApplyLocal checks to decide the update actually happened.
-func stubApt(t *testing.T, installed, candidate string) {
+// which is what ApplyLocal checks to decide the update actually happened. A
+// non-nil gate holds the install until it is closed, so a test can keep an apply
+// running while it checks what shutdown does with it.
+func stubApt(t *testing.T, installed, candidate string, gate <-chan struct{}) {
 	t.Helper()
 	dir := t.TempDir()
 	prevSource, prevStamp := nexupdate.AptSourcePath, nexupdate.IndexStampPath
@@ -38,6 +41,9 @@ func stubApt(t *testing.T, installed, candidate string) {
 		case strings.HasPrefix(line, "apt-cache policy"):
 			return exec.CommandContext(ctx, "printf", "  Candidate: %s\n", candidate)
 		case strings.Contains(line, "install -y"):
+			if gate != nil {
+				<-gate
+			}
 			current.Store(candidate)
 		}
 		return exec.CommandContext(ctx, "true")
@@ -49,7 +55,7 @@ func stubApt(t *testing.T, installed, candidate string) {
 }
 
 func TestLocalUpdatesAuthAndApply(t *testing.T) {
-	stubApt(t, "0.1.0", "9.9.9")
+	stubApt(t, "0.1.0", "9.9.9", nil)
 	t.Setenv("NEX_UPDATE_REPO", "https://mirror.test/apt")
 
 	s, _ := testService(t)
@@ -88,5 +94,41 @@ func TestLocalUpdatesAuthAndApply(t *testing.T) {
 	}
 	if st.Phase != "done" {
 		t.Fatalf("expected a completed apply, got %+v", st)
+	}
+}
+
+// The apply runs on a goroutine that keeps writing progress into the state
+// directory, so shutting the service down while it runs used to leave dpkg
+// running and files appearing in a directory the caller was already removing.
+func TestCloseWaitsForTheBackgroundUpdate(t *testing.T) {
+	gate := make(chan struct{})
+	stubApt(t, "0.1.0", "9.9.9", gate)
+	t.Setenv("NEX_UPDATE_REPO", "https://mirror.test/apt")
+
+	s, cfg := testService(t)
+	cookie, csrf := loginLocal(t, s)
+	w := callLocal(s, "POST", "/api/local/v1/updates/apply", map[string]any{}, cookie, csrf, "https://core.test")
+	if w.Code != 202 {
+		t.Fatalf("apply %d %s", w.Code, w.Body)
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- s.Close() }()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while the apply was still writing to the state directory")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(gate)
+	select {
+	case <-closed:
+	case <-time.After(30 * time.Second):
+		t.Fatal("Close did not return after the apply finished")
+	}
+	// Nothing may write here any more; that is what makes removing the directory safe.
+	if err := os.RemoveAll(cfg.DataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(cfg.DataDir); !os.IsNotExist(err) {
+		t.Fatalf("state directory came back after Close: %v", err)
 	}
 }

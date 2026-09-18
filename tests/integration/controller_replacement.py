@@ -67,7 +67,7 @@ def controller(lab, binary, source, name):
                         '-tls-key', key, '-admin-username', 'root', '-admin-password-file', password,
                         '-stale-after', '3s', '-ui-dir', ROOT / 'web/dist', '-source-archive', source)
     lab.client(cert)
-    eventually(lambda: lab.api('/api/v1/sites', expected=401), name + ' startup')
+    lab.started(name)
     lab.csrf = lab.api('/api/v1/session', {'username': 'root', 'password': password.read_text()})['csrf_token']
     site = lab.api('/api/v1/sites', {'name': name + ' site'}, expected=201)
     token = lab.path / f'{name}-token'

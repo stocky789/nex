@@ -62,7 +62,7 @@ def main():
             '-stale-after', '3s', '-ui-dir', ROOT / 'web/dist']
         lab.start('controller', *controller_args)
         lab.client(cert)
-        eventually(lambda: lab.api('/api/v1/sites', expected=401), 'controller startup')
+        lab.started()
         session = lab.api('/api/v1/session', {'username': 'root', 'password': password.read_text()})
         lab.csrf = session['csrf_token']
         site = lab.api('/api/v1/sites', {'name': 'Console QA'}, expected=201)

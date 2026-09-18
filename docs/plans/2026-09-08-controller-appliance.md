@@ -80,8 +80,14 @@ Keep development and simulation limits explicit. No invented successful walkthro
 - [x] API references, focused tests, guide walkthrough and documentation checks pass.
 - [x] Independent implementation and evidence review findings resolved.
 - [x] Host Debian package installation and automatic appliance deployment verified end to end.
-- [ ] Bundle the host package and signed appliance into Nex Core installation media
-  (source hooks land `nex-core-local` in the offline repo; rebuilt-ISO boot verification remains).
+- [x] Exact 0.3.2 local snapshot: rebuilt ISO/package/appliance identity and signature,
+  offline BIOS/KVM install/reboot, installed Core service and standalone appliance
+  boot/authentication/secret cleanup passed in the [artifact lab](../qa/2026-09-18-release-artifact-lab.md).
+  The NIC-less ISO service test used explicit loopback recovery configuration.
+- [ ] Complete that exact ISO's local deployment → enrollment/adoption → first
+  managed VM and installation/bootstrap failure-recovery integration. Standalone
+  appliance boot does not prove this chain; hardware/Secure Boot remain separate.
+  See the [current priorities](2026-09-14-production-readiness-handoff.md#recommended-next-work).
 
 Evidence: [clean deployment and recovery](../qa/appliance/lab.md),
 [package installation](../qa/appliance/package.md), [browser states](../qa/appliance/browser.md),
@@ -89,7 +95,8 @@ and [checks/review](../qa/appliance/checks.md). Simulated lost-response/error ch
 are distinguished from real KVM boot, power and service-restart results.
 
 Real physical hardware, whole-image redistribution clearance, hosted CI execution,
-and full Phase 2/3 acceptance remain separate evidence gates.
+and full Phase 3 acceptance remain separate evidence gates. Phase 2 was already
+closed on 2026-09-17; this lab neither reopens it nor closes another phase.
 
 ## Console access URL
 

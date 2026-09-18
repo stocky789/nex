@@ -209,9 +209,12 @@ func TestManagedSlowCommandKeepsReportingAndCancels(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	t.Setenv("NEX_TEST_STARTED", started)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// The budget only has to outlast a contended runner getting the command started;
+	// the run ends on the third heartbeat seen during it, not on this deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	var reports, whileRunning atomic.Int32
+	var cancelledAt atomic.Int64
 	_, identity := testManagedIdentity(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req protocol.ReportRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -224,6 +227,7 @@ func TestManagedSlowCommandKeepsReportingAndCancels(t *testing.T) {
 		count := reports.Add(1)
 		if _, err := os.Stat(started); err == nil {
 			if whileRunning.Add(1) >= 3 {
+				cancelledAt.CompareAndSwap(0, time.Now().UnixNano())
 				cancel()
 			}
 		}
@@ -235,15 +239,20 @@ func TestManagedSlowCommandKeepsReportingAndCancels(t *testing.T) {
 	}))
 	s := testStore(t)
 	s.State = identity
-	start := time.Now()
 	if err := Run(ctx, s, RunConfig{Heartbeat: 100 * time.Millisecond, ProbeInterval: time.Second, ProbeTimeout: 20 * time.Millisecond}); err != nil {
 		t.Fatal(err)
+	}
+	// Separate failures: a command that never ran says nothing about the heartbeat.
+	if _, err := os.Stat(started); err != nil {
+		t.Fatalf("the slow command never started: %v", err)
 	}
 	if whileRunning.Load() < 3 {
 		t.Fatalf("heartbeat blocked during command: %d reports", whileRunning.Load())
 	}
-	if time.Since(start) > 3*time.Second {
-		t.Fatal("worker did not cancel promptly")
+	// Measured from the cancellation, not from the run: how long the worker takes to
+	// let go is the claim, and how long a loaded runner took to get there is not.
+	if since := time.Since(time.Unix(0, cancelledAt.Load())); since > 3*time.Second {
+		t.Fatalf("worker did not cancel promptly: %v", since)
 	}
 	if s.State.Journal["slow-network"].Status == "succeeded" {
 		t.Fatal("cancelled command was incorrectly completed")
@@ -323,7 +332,9 @@ func TestReportBoundsManagedLibvirtObservation(t *testing.T) {
 	if err = report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: 500 * time.Millisecond}); err != nil {
 		t.Fatal(err)
 	}
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
+	// Well under the 30-second virsh: the claim is that report does not wait for the
+	// observation, not that a loaded runner finishes the rest of a report quickly.
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
 		t.Fatalf("report waited for libvirt observation: %v", elapsed)
 	}
 	if _, err := os.Stat(started); err != nil {

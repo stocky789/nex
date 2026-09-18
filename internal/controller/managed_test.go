@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -62,6 +63,9 @@ type managedLab struct {
 
 func newManagedLab(t *testing.T, caps ...string) *managedLab {
 	t.Helper()
+	if !slices.Contains(caps, protocol.PoolVMPlacementCapability) {
+		caps = append(caps, protocol.PoolVMPlacementCapability)
+	}
 	a := newClient(t)
 	host := a.enroll(a.token(a.site(), ""), csr(t))
 	l := &managedLab{a: a, t: t, cert: certificate(t, host.CertificatePEM), host: host, caps: caps, pool: a.poolOf(host.HostID)}
@@ -112,7 +116,7 @@ func TestManagedWorkflowScopeRetryAndMedia(t *testing.T) {
 		iso.Networks = nil
 		v := protocol.ReportRequest{Version: 1, Sequence: sequence, Results: results, Inventory: &protocol.Inventory{Hostname: "core", CPUCount: 8, MemoryBytes: 16 << 30, Managed: iso}}
 		if caps {
-			v.Capabilities = []string{protocol.ManagedVMCapability}
+			v.Capabilities = []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability}
 		}
 		return a.report(cert, v)
 	}
@@ -201,7 +205,7 @@ func TestManagedWorkflowScopeRetryAndMedia(t *testing.T) {
 	var created createdVM
 	read(t, a.call("POST", "/api/v1/vms", v, nil, 202), &created)
 	sequence++
-	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: sequence, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Hostname: "core", CPUCount: 8, MemoryBytes: 16 << 30, Checks: []protocol.Check{{Name: "libvirt", Status: "healthy", ObservedAt: time.Now().UTC()}}, VMs: []protocol.VM{{ID: created.VMID, Name: "guest1", State: "shut off"}}}})
+	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: sequence, Capabilities: []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability}, Inventory: &protocol.Inventory{Hostname: "core", CPUCount: 8, MemoryBytes: 16 << 30, Checks: []protocol.Check{{Name: "libvirt", Status: "healthy", ObservedAt: time.Now().UTC()}}, VMs: []protocol.VM{{ID: created.VMID, Name: "guest1", State: "shut off"}}}})
 	a.call("POST", "/api/v1/appliances/adopt", applianceRequest{RequestID: "adopt-guest", PoolID: pool, HostID: host.HostID, VMID: created.VMID, Name: "guest1"}, nil, 409)
 	if !applianceUUID(created.VMID) {
 		t.Fatal("invalid stable uuid")
@@ -430,7 +434,7 @@ func TestHostReportedManagedStateIsAdopted(t *testing.T) {
 	nics := []protocol.NIC{{Name: "nex0", Kind: "physical", Master: "br0"}, {Name: "br0", Kind: "bridge"}}
 	inv := &protocol.Inventory{Hostname: "core", CPUCount: 8, MemoryBytes: 16 << 30, NICs: nics, Managed: managed}
 	report := func(seq uint64) protocol.ReportResponse {
-		return a.report(cert, protocol.ReportRequest{Version: 1, Sequence: seq, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: inv})
+		return a.report(cert, protocol.ReportRequest{Version: 1, Sequence: seq, Capabilities: []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability}, Inventory: inv})
 	}
 	if response := report(1); len(response.Commands) != 0 {
 		t.Fatalf("adopted entries must not be dispatched: %+v", response.Commands)
@@ -532,30 +536,6 @@ func TestCreateVMSpecificationReferencesAndScope(t *testing.T) {
 		l.create("bad-"+name, v, 400)
 	}
 	l.create("", l.spec("guest1"), 400)
-	unknownCPU := l.spec("unknown-cpu")
-	unknownCPU.CPU.Model = "EPYC-Genoa"
-	l.create("unknown-cpu", unknownCPU, 409)
-	// References must name a resource this host has verified in this pool.
-	for name, bad := range map[string]func(v *protocol.VMCreateSpec){
-		"storage": func(v *protocol.VMCreateSpec) { v.Disks[0].StorageID = "absent" },
-		"network": func(v *protocol.VMCreateSpec) { v.NICs[0].NetworkID = "absent" },
-		"media": func(v *protocol.VMCreateSpec) {
-			v.MediaID, v.Boot.MediaBootOrder, v.Disks[0].BootOrder = "absent", 1, 2
-		},
-	} {
-		v := l.spec("guest1")
-		bad(&v)
-		l.create("missing-"+name, v, 404)
-	}
-	// A registration the host has not verified yet is not a usable reference either.
-	var queued protocol.StorageRegistration
-	read(t, a.call("POST", "/api/v1/storage", registrationRequest{RequestID: "extra-storage", PoolID: l.pool, HostID: l.host.HostID, Name: "Extra", Path: "/var/lib/nex/vms"}, nil, 201), &queued)
-	unverified := l.spec("guest1")
-	unverified.Disks[0].StorageID = queued.ID
-	l.create("unverified-storage", unverified, 404)
-	over := l.spec("guest1")
-	over.CPU.Count = 16
-	l.create("over-capacity", over, 409)
 	// Two interfaces: one manual address and one derived from the assigned VM identity.
 	first := l.spec("guest1")
 	first.NICs[0].MAC = "52:54:00:aa:bb:01"
@@ -603,6 +583,50 @@ duplicateRecorded:
 	l.create("fresh-again", l.spec("guest2"), 202)
 	a.call("POST", "/api/v1/hosts/"+l.host.HostID+"/revoke", nil, nil, 200)
 	l.create("revoked-host", l.spec("guest3"), 409)
+}
+
+func TestCreateVMPlacementDoesNotTrustResourceMirrors(t *testing.T) {
+	l := newManagedLab(t, protocol.ManagedVMCapability)
+	v := l.spec("master-checked")
+	v.Disks[0].StorageID = "not-in-controller-mirror"
+	v.NICs[0].NetworkID = "also-not-in-controller-mirror"
+	var created createdVM
+	read(t, l.create("master-checked", v, 202), &created)
+	commands := l.report().Commands
+	if len(commands) != 1 || commands[0].VM == nil || commands[0].VM.Disks[0].StorageID != v.Disks[0].StorageID || commands[0].VM.NICs[0].NetworkID != v.NICs[0].NetworkID {
+		t.Fatalf("Controller did not relay unmirrored placement request: %+v", commands)
+	}
+	l.report(protocol.Result{OperationID: created.Operation.ID, Status: "failed", Error: "storage is not available to this pool"})
+	var replay createdVM
+	read(t, l.create("master-checked", v, 200), &replay)
+	if replay.Operation.ID != created.Operation.ID || replay.Operation.Status != "failed" || replay.Operation.Error == "" {
+		t.Fatalf("failed Core placement was not safely replayed: %+v", replay)
+	}
+}
+
+func TestCreateVMPlacementRequiresUpgradedCore(t *testing.T) {
+	l := newManagedLab(t, protocol.ManagedVMCapability)
+	l.caps = []string{protocol.ManagedVMCapability}
+	l.report()
+	if body := l.create("old-core", l.spec("old-core"), 409).Body.String(); !strings.Contains(body, "master-owned VM placement") {
+		t.Fatal(body)
+	}
+}
+
+func TestUpdateVMPlacementDoesNotTrustResourceMirrors(t *testing.T) {
+	l := newManagedLab(t, protocol.ManagedVMCapability, protocol.UpdateCapability)
+	var created createdVM
+	read(t, l.create("initial", l.spec("initial"), 202), &created)
+	initial := *l.report().Commands[0].VM
+	l.reportState("shut off", &protocol.ManagedState{VMs: []protocol.VMCreateSpec{initial}}, protocol.Result{OperationID: created.Operation.ID, Status: "succeeded"})
+	next := initial
+	next.NICs[0].MAC = protocol.NICMAC(created.VMID, 0, initial.NICs[0])
+	next.NICs[0].NetworkID = "not-in-controller-mirror"
+	l.update("unmirrored-update", created.VMID, next, 202)
+	commands := l.reportState("shut off", &protocol.ManagedState{VMs: []protocol.VMCreateSpec{initial}}).Commands
+	if len(commands) != 1 || commands[0].VM == nil || commands[0].VM.NICs[0].NetworkID != next.NICs[0].NetworkID {
+		t.Fatalf("Controller did not relay unmirrored update: %+v", commands)
+	}
 }
 
 // addDisks appends n further valid disks, outside the boot order.

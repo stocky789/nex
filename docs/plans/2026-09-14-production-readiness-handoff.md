@@ -1,6 +1,6 @@
 # Production-readiness handoff
 
-Date: 2026-09-14. Status: **not production-ready**.
+Created: 2026-09-14. Updated: 2026-09-18. Status: **not production-ready**.
 
 ## Current status
 
@@ -17,6 +17,64 @@ Still open: exclusive-iSCSI registration/guest/adoption acceptance and the fault
 scale, soak, physical-device and CI/release gates below. Results, receipts and
 failed attempts: [reliability follow-up](../qa/2026-09-14-cluster-storage-reliability.md)
 and [concurrent storage QA](../qa/2026-09-12-concurrent-pool-storage.md).
+
+## What changed in the 2026-09-18 review and implementation
+
+These are working-tree achievements, not a new release or phase closure. Phase 2
+was already closed before this work; the review corrected stale status wording.
+
+| Initial finding | Outcome now | Remaining evidence |
+|---|---|---|
+| Release publication checked package metadata but could miss a Controller that exits at startup (BUG-0246). | Both release workflows now extract and start the exact Controller package, check SQLite, UI/source and authenticated sessions before publication. Real CGO-enabled and CGO-disabled fixture packages prove acceptance and rejection locally and in Debian 13. | Exact 0.3.2 package startup and installed systemd restart/crash/reinstall/reboot checks passed in the [artifact lab](../qa/2026-09-18-release-artifact-lab.md). Hosted acceptance remains open: inspected Gitea HEAD jobs failed, GitHub evidence was unavailable, and the tested snapshot is uncommitted. |
+| Controller resource/capacity mirrors still decided VM placement. | Core master now approves create/update and media definition changes, obtains authenticated target preflight and persists owner/specification or update reservation. Local-storage definitions are included; ordinary local-only power remains independent of the master. | Bounded two-host KVM/NFS lab now passes local master/member create/edit/start and retries; replacement, storage-identity faults and interrupted-operation acceptance remain open. See [placement QA](../qa/2026-09-18-master-vm-placement.md). |
+| README and handoff mixed historical gaps with current implementation. | Phase 2 closure and published package history are reconciled. API contracts, guide prerequisites/retries, changelog and roadmap distinguish implementation from acceptance. | Phase 3/4 and production gates remain open; no new acceptance was inferred from documentation. |
+| Verification needed to match the new behavior. | Full Go race checks and final agent/vmhost race checks passed; API generation, 29 contract checks, simulated browser workflows, docs/privacy checks and independent review passed. Exact retry and stale-membership checks preserve durable records; refused replay cannot enter native reconciliation. | Native commands and browser Core responses use fixtures where stated. The late namespace-dependent test was removed and replaced with portable admission checks. Native two-node KVM/NFS evidence is now recorded separately; no hosted CI or physical-host proof is claimed. |
+
+## Recommended next work
+
+This orders the existing gates below; it does not expand scope or reopen accepted
+Phase 2 work. The immediate objective is **one exact current build, with delivery
+and Phase 3 installation evidence**, followed by native placement acceptance.
+
+1. **Local artifact verification signed off; finish hosted delivery acceptance.**
+   The [recorded 0.3.2 snapshot](../qa/2026-09-18-release-artifact-lab.md) passed real
+   builders, artifact/source hash binding, both installed package services,
+   Controller same-version reinstall and package-service crash/reboot recovery.
+   The exact appliance boot and offline BIOS ISO install/reboot also passed.
+   Later storage edits are excluded. Build/test the final source before release;
+   after the project owner's push, obtain green required hosted jobs and a release
+   run for that revision. Inspection found failed Gitea HEAD checks, no HEAD
+   release run and unavailable GitHub evidence; this is not green CI sign-off.
+2. **Finish Phase 3 integration on the release candidate.** The bounded offline
+   BIOS installation, media-free first boot/reboot and service checks are complete
+   for that snapshot. Still connect the exact installed host through local appliance
+   bootstrap or external-Controller enrollment to its first managed VM. Exercise
+   multiple disks, real management networking, interrupted installation/bootstrap
+   and recovery; retain physical Intel/AMD and host Secure Boot gates. UEFI menu
+   review does not establish current-build UEFI installation. Appliance assembly
+   and separate-host export/restore already exist; verify the integrated chain
+   rather than rebuilding them. See the
+   [appliance acceptance record](2026-09-08-controller-appliance.md#acceptance-evidence).
+3. **Finish native placement fault/recovery acceptance.** Local master/member
+   create/update/start, NFS member placement, missing network/capacity rejection,
+   exact retries and service-outage continuity now have bounded native evidence.
+   Still cover shared definition/media changes, storage identity loss, lost replies,
+   membership changes and Controller replacement. Prove one durable
+   owner and no second writer. Use the [placement plan](2026-09-18-master-vm-placement.md#acceptance)
+   as the checklist; code implementation is complete, this evidence is not.
+4. **Complete the remaining Phase 4 Core foundation.** Close member join and
+   storage/network convergence, interrupted reconciliation and staged management
+   network recovery before treating a Controller join screen as completion. Then
+   deliver signed authority replicas and fenced transfer/eject/promotion with their
+   recovery checks; automatic succession retains its own quorum/fencing gate.
+5. **Only then expand into the dependent roadmap.** Snapshots precede independent
+   backup and verified restoration, followed by migration and later HA. Managed
+   container applications stay after the VM foundation. Shared storage alone does
+   not make those features available.
+
+API impact: **none** for this status/priority update; the implemented placement
+contract is assessed in its own plan and change record. Guide impact: **none**;
+this adds no operator workflow. State owner: **none**; no durable product state changes.
 
 ## Start here
 
@@ -46,11 +104,11 @@ unexecuted items are kept apart.
 | Five-host scale and soak | Three-host results do not certify five hosts, long-duration load or repeated fault recovery. |
 | Member authority replica | Planned, not implemented: signed, generation-numbered master push of pool authority to every ready member, with observed replica generation. See [pool authority transfer](2026-09-08-nex-platform.md#pool-authority-transfer-and-master-succession). |
 | Authority transfer / automatic succession | Planned, not implemented: planned handover, eject, manual promotion and quorum-plus-fence automatic succession, with their lab gates in the same section. |
-| Placement approval on master | Controller still validates placement from its mirror of host reports; the master Core must approve it from its own records. |
+| Master-owned VM placement acceptance | **Implemented, acceptance open.** Core now approves create/update and VM media definition changes from the pool master's records using a fresh target-host preflight; Controller mirrors no longer grant or reject placement. Focused tests, browser review and bounded two-node nested-KVM/NFS checks passed ([native evidence](../qa/2026-09-18-native-placement-lab.md)). Controller replacement, storage-identity faults, membership races and interrupted multi-host recovery remain open. |
 | Physical SAN/NAS and fence devices | Needs an explicitly disposable supported hardware profile covering durability, power loss and exclusion. Nested virsh fencing does not certify physical devices. |
 | Recovery, mobility and HA | Snapshots, verified backup/restore, permanent host/master loss, migration, upgrades and separately gated automatic HA/failback keep their platform gates. Shared storage does not provide them. |
-| Latest ISO full installation | The exact 0.2.9 release ISO (`4c44133a…2f2b9`) passed BIOS/UEFI menu boots and unattended offline UEFI installation, first boot and reboot under TCG; Secure Boot host installation, the full Phase 3 multi-disk/network/recovery gate and physical hardware remain unaccepted. |
-| Release and CI | Release tooling creates a whole-media source bundle, final-ISO/source binding manifest, and publisher-side binding check; it omits six unreviewed firmware packages and records the Nex artwork license. Exact hashes, component/source closure, retained notices, BIOS/UEFI menus and unattended install/reboot passed. The 0.2.9 ISO, matching source, manifest and both signed APT packages were published and independently hash-verified over public HTTPS on 2026-09-17. Real hosted GitHub/Gitea runs and a supported-version/hardware scope remain open. **Found 2026-09-17 (BUG-0246):** every published `nex-controller` package from 0.1.6~alpha1 to 0.2.9, including this 0.2.9 package, was built without cgo and exits at start; hash verification did not start it. Fixed in the uncommitted working tree and proven with the 0.2.10~gate5 package binary ([gate report](../qa/2026-09-17-phase2-gate/checks.md) row 12), not yet released. Owner decisions: whether to pull or supersede the affected packages and how to tell operators to recover, and whether the release workflow should smoke-start the packaged Controller and check `CGO_ENABLED=1` before publishing ([owner decisions](../qa/2026-09-17-phase2-gate/checks.md#open-owner-decisions) 6 and 8). |
+| Latest ISO installation evidence | The local 0.3.2 snapshot (`ddb3887a…cac6d5`) passed offline BIOS/KVM installation, first boot/reboot, installed Core service and nested KVM in the [artifact lab](../qa/2026-09-18-release-artifact-lab.md); its UEFI coverage is menu-only and management was explicitly loopback-configured. The earlier exact 0.2.9 release ISO (`4c44133a…2f2b9`) passed BIOS/UEFI menu boots and unattended offline UEFI installation, first boot and reboot under TCG; Secure Boot host installation, the full Phase 3 multi-disk/network/recovery gate and physical hardware remain unaccepted. |
+| Release and CI | Release tooling creates a whole-media source bundle, final-ISO/source binding manifest, and publisher-side binding check; it omits six unreviewed firmware packages and records the Nex artwork license. Exact hashes, component/source closure, retained notices, BIOS/UEFI menus and unattended install/reboot passed. The 0.3.1 ISO, matching source, manifest and both signed APT packages were published and independently hash-verified over public HTTPS on 2026-09-17; its extracted Controller package started with CGO support, an isolated SQLite database and HTTPS 200 ([release verification](../qa/2026-09-17-nex-core-0.3.1-release.md)). **BUG-0246:** Controller packages from 0.1.6~alpha1 through 0.2.9 were built without cgo and exit at start; those retained historical packages were superseded by 0.3.0+ publication, not removed. This is resolved for Phase 2 scope ([close record](../qa/2026-09-17-phase2-gate/CLOSED.md)). Both release workflows now gate publication on packaged-Controller startup, SQLite, UI/source and authenticated-session checks; the real good/bad binary fixture regression passed locally ([evidence](../qa/2026-09-18-controller-package-smoke.md)). The exact local 0.3.2 package and installed services now pass ([artifact evidence](../qa/2026-09-18-release-artifact-lab.md)); green hosted execution for the final release revision remains required evidence. A supported-version/hardware scope also remains open. |
 
 ### VM foundation, added 2026-09-16
 

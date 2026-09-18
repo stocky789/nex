@@ -1865,6 +1865,7 @@
         ],
         "x-introduced-version": "0.1.0",
         "x-audience": "client",
+        "x-core-placement": "Requires selected Core and current pool master to advertise pool-vm-placement-v1. Controller queues the unchanged command; Core makes the fresh placement decision. Missing capability returns 409 before queueing; preflight loss or refusal later fails the task closed. Same request_id and payload replay normally; changed payload conflicts.",
         "responses": {
           "202": {
             "description": "Success",
@@ -4366,6 +4367,7 @@
         ],
         "x-introduced-version": "0.1.0",
         "x-audience": "client",
+        "x-core-placement": "Requires the VM's selected Core and current pool master to advertise pool-vm-placement-v1. Missing capability returns 409 before queueing. A media change that rewrites the durable definition is Core-mediated as vm-update and receives the same fail-closed master placement preflight; a tray reconnect that leaves the definition unchanged remains media owner admission.",
         "parameters": [
           {
             "name": "id",
@@ -4517,6 +4519,7 @@
         ],
         "x-introduced-version": "0.1.0",
         "x-audience": "client",
+        "x-core-placement": "Requires selected Core and current pool master to advertise pool-vm-placement-v1. Controller queues the unchanged command; Core makes the fresh placement decision. Missing capability returns 409 before queueing; preflight loss or refusal later fails the task closed. Same request_id and payload replay normally; changed payload conflicts.",
         "parameters": [
           {
             "name": "id",
@@ -5881,7 +5884,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Last accepted sequenced report capabilities; managed-vm-v1 is required for new managed-VM work. Host connectivity freshness is checked separately."
+            "description": "Last accepted sequenced report capabilities; managed-vm-v1 is required for new managed-VM work and pool-vm-placement-v1 is required on both a selected host and its pool master before Controller queues a VM definition transition. Host connectivity freshness is checked separately."
           }
         },
         "required": [
@@ -7023,7 +7026,7 @@
               "x-max-utf8-bytes": 100
             },
             "maxItems": 32,
-            "description": "Advertised on every report. managed-vm-v1 enables managed command delivery. storage-cluster-session-monitor-v1 offers the additive clustered session-monitor projection; it must be acknowledged through storage_clusters_support before Core sends that projection. Omission or null disables managed delivery for this report; a newer sequence also replaces stored capabilities. vm-cpu-baseline-v1 advertises generic fixed CPU feature support and native pool baseline discovery; upgrade Controller before Core for additive fields."
+            "description": "Advertised on every report. managed-vm-v1 enables managed command delivery. pool-vm-placement-v1 means Core supports the fail-closed master-owned placement preflight for VM definition transitions. storage-cluster-session-monitor-v1 offers the additive clustered session-monitor projection; it must be acknowledged through storage_clusters_support before Core sends that projection. Omission or null disables managed delivery for this report; a newer sequence also replaces stored capabilities. vm-cpu-baseline-v1 advertises generic fixed CPU feature support and native pool baseline discovery; upgrade Controller before Core for additive fields."
           },
           "storage_discoveries": {
             "type": [

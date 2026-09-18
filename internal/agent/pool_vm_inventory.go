@@ -160,13 +160,8 @@ func localPoolVMInventory(ctx context.Context, s *Store, generation uint64) (poo
 			// ownership itself remains on the master record.
 			_ = vmhost.RemovePoolVMStartPermit(s.dir, vm.ID)
 		}
-		shared := vmUsesInventorySharedStorage(vm, storage)
-		// A local-only definition is not a pool ownership record. Requiring
-		// its historical update chain here would let an unrelated local VM make
-		// every pool inventory publication unavailable. A current local-only
-		// definition can nevertheless be the exact successor to a shared owner
-		// record. Ask the read-only journal helper in that case, but only require
-		// evidence when either side actually references shared storage.
+		// Every definition now has a master-owned placement record. The journal
+		// evidence remains read-only and only settles an exact next revision.
 		// A VM without exact evidence (for example an unresolved newer update) is
 		// still published, without an Updates entry, at its highest succeeded
 		// revision, which the master already records; that VM's pending-update
@@ -175,7 +170,7 @@ func localPoolVMInventory(ctx context.Context, s *Store, generation uint64) (poo
 		// publication, as before.
 		if vm.Revision > 0 {
 			evidence, err := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).SuccessfulVMUpdateEvidence(ctx, vm.ID)
-			if err == nil && reflect.DeepEqual(evidence.Current, vm) && (shared || vmUsesInventorySharedStorage(evidence.Previous, storage)) {
+			if err == nil && reflect.DeepEqual(evidence.Current, vm) {
 				updates[vm.ID] = evidence
 			}
 		}
@@ -257,10 +252,7 @@ func seedPoolVMOwners(s *Store, membership protocol.PoolMembership, state *poolV
 				}
 			}
 			old, exists := state.VMs[vm.ID]
-			if !shared && !exists {
-				continue
-			}
-			if inv.Observed[vm.ID] != "running" && inv.Observed[vm.ID] != "shut off" {
+			if shared && inv.Observed[vm.ID] != "running" && inv.Observed[vm.ID] != "shut off" {
 				return errors.New("shared VM runtime observation is invalid")
 			}
 			if prior := seen[vm.ID]; prior != "" && prior != host {
@@ -271,9 +263,11 @@ func seedPoolVMOwners(s *Store, membership protocol.PoolMembership, state *poolV
 				return errors.New("shared VM owner conflicts with current inventory")
 			}
 			if !exists {
-				vmState := "stopped"
+				vmState := "defined"
 				if inv.Observed[vm.ID] == "running" {
 					vmState = "running"
+				} else if inv.Observed[vm.ID] == "shut off" {
+					vmState = "stopped"
 				}
 				state.VMs[vm.ID] = poolVMRecord{PoolID: s.State.PoolID, VMID: vm.ID, HostID: host, State: vmState, Autostart: vm.Autostart, Epoch: 1, Spec: vm}
 			} else if old.Spec.ID != "" && !reflect.DeepEqual(old.Spec, vm) {
