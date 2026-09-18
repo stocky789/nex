@@ -3111,3 +3111,30 @@ Append resolved defects with their evidence and the approach to avoid.
   hosted CI rerun or publication exercised.
 - Avoid: assuming a visible busy state proves network dispatch, sleeping for a fixed
   period before asserting, retrying the entire test, or weakening the stale-owner guard.
+
+## BUG-0292 — Storage browser readiness used a shorter deadline than browser actions
+
+- Date: 2026-09-18. Status: fixed locally; hosted rerun outstanding.
+- Symptom: the hosted repository browser check failed waiting for `Open /exports`
+  after reopening the NFS picker, while the final diagnostic snapshot already
+  contained that button. The other foundation jobs passed; the browser gate failed.
+- Root cause: actions/navigation allowed 30 seconds, but functional UI expectations
+  still used five seconds. A loaded picker did not have a defined five-second
+  performance requirement. Some request inspections also read the last Python
+  capture before confirming the triggering request had arrived.
+- Fix: give both storage browser suites a bounded 30-second expectation budget;
+  bind root/refresh/up request assertions to Playwright request events. Reuse the
+  deferred-route wait for both harnesses, and wait for fence results before reading
+  their captured requests. Keep every cancellation, old-close, stale-owner and
+  credential safety assertion; no product code changed.
+- Regression: injecting a one-shot 5.5-second discovery response delivery delay at
+  the failing reopen reproduced the original five-second locator failure. The fixed
+  `storage_repositories_browser.py` completed all 12 scenario groups with no page
+  errors; `cluster_storage_browser.py` also passed with its credential dispatch
+  regression. The timeout policy unit test, documentation/privacy gates and diff
+  check passed. Both providers already execute the browser scripts and unit suite
+  on pushes and pull requests; no workflow edits are needed.
+- Evidence: [commands, hosted observation and simulated-test limits](qa/2026-09-18-storage-ci-readiness.md).
+- Avoid: retrying the whole suite, treating rendering as proof a request was captured,
+  imposing an undocumented performance threshold on functional tests, or describing
+  a simulated delay as proof of the hosted runner's exact scheduling cause.

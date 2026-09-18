@@ -15,6 +15,8 @@ import threading
 
 from playwright.sync_api import expect, sync_playwright
 
+from storage_browser_support import take_deferred
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -129,7 +131,9 @@ def main():
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1440, "height": 1000})
-            # Keep standard 30s action/navigation budgets; UI assertions remain 5s.
+            # Functional checks share the 30s action budget on busy CI runners;
+            # this suite does not impose a five-second UI performance requirement.
+            expect.set_options(timeout=30000)
             # The UI probes the session only for a browser that signed in before (BUG-0208).
             page.add_init_script("localStorage.setItem('nex-signed-in', '1')")
             page.on("pageerror", lambda error: errors.append(str(error)))
@@ -177,19 +181,20 @@ def main():
             nfs_browser = page.get_by_role("dialog", name="Browse exports", exact=True)
             expect(nfs_browser.get_by_role("status")).to_contain_text("Loading folders")
             expect(nfs_browser.get_by_role("button", name="Select folder", exact=True)).to_be_disabled()
+            delayed_route, delayed_reply = take_deferred(page, deferred_browser_replies, "NFS export discovery")
             nfs_browser.get_by_role("button", name="Cancel", exact=True).click()
             expect(nfs_browser).to_be_hidden()
-            delayed_route, delayed_reply = deferred_browser_replies.pop()
             mode["browser_deferred"] = False
             delayed_route.fulfill(json=delayed_reply)
             page.wait_for_timeout(100)
             expect(nfs_browser).to_be_hidden()
             expect(form.get_by_label("Export path")).to_have_value("/ignored/draft")
             expect(form.get_by_label("Existing directory within export")).to_have_value("old/draft")
-            form.get_by_role("button", name="Browse exports", exact=True).click()
+            with page.expect_request("**/api/v1/storage/discover") as root_request:
+                form.get_by_role("button", name="Browse exports", exact=True).click()
             nfs_browser = page.get_by_role("dialog", name="Browse exports", exact=True)
             expect(nfs_browser).to_be_visible()
-            nfs_root = submissions[-1][1]
+            nfs_root = root_request.value.post_data_json
             assert nfs_root["kind"] == "nfs" and nfs_root["server"] == "nfs.example.test" and "path" not in nfs_root, nfs_root
             expect(nfs_browser.get_by_role("button", name="Up", exact=True)).to_be_disabled()
             nfs_browser.get_by_role("button", name="Cancel", exact=True).click()
@@ -240,6 +245,18 @@ def main():
             }""")
             nfs_browser.get_by_role("button", name="Cancel", exact=True).click()
             page.wait_for_function("window.deliverOldBrowserClose")
+            # A busy runner can deliver a valid listing after the default 5s
+            # assertion deadline. Keep that scheduling gap in the regression.
+            page.evaluate("""() => {
+                const originalFetch = window.fetch;
+                window.fetch = async (...args) => {
+                    if (args[0] !== '/api/v1/storage/discover') return originalFetch(...args);
+                    window.fetch = originalFetch;
+                    const response = await originalFetch(...args);
+                    await new Promise(resolve => setTimeout(resolve, 5500));
+                    return response;
+                };
+            }""")
             form.get_by_role("button", name="Browse exports", exact=True).click()
             expect(nfs_browser.get_by_role("button", name="Open /exports", exact=True)).to_be_visible()
             page.evaluate("window.deliverOldBrowserClose()")
@@ -248,11 +265,13 @@ def main():
             checks.append("Escape cancels discovery before its reply; delayed close events cannot empty a reopened modal")
             nfs_browser.get_by_role("button", name="Open /exports", exact=True).dblclick()
             expect(nfs_browser.get_by_role("button", name="Up", exact=True)).to_be_enabled()
-            nfs_browser.get_by_role("button", name="Refresh", exact=True).click()
-            assert submissions[-1][1]["path"] == "/exports", submissions[-1]
+            with page.expect_request("**/api/v1/storage/discover") as refresh_request:
+                nfs_browser.get_by_role("button", name="Refresh", exact=True).click()
+            assert refresh_request.value.post_data_json["path"] == "/exports", refresh_request.value.post_data_json
             nfs_browser.get_by_role("button", name="Open /exports/team", exact=True).dblclick()
-            nfs_browser.get_by_role("button", name="Up", exact=True).click()
-            assert submissions[-1][1]["path"] == "/exports", submissions[-1]
+            with page.expect_request("**/api/v1/storage/discover") as up_request:
+                nfs_browser.get_by_role("button", name="Up", exact=True).click()
+            assert up_request.value.post_data_json["path"] == "/exports", up_request.value.post_data_json
             nfs_browser.get_by_role("button", name="Open /exports/team", exact=True).dblclick()
             team_folder = nfs_browser.get_by_role("button", name="Open /exports/team/vms", exact=True)
             team_folder.focus()
@@ -307,10 +326,11 @@ def main():
             expect(form.get_by_role("button", name="Browse shared folders", exact=True)).to_be_enabled()
             form.get_by_label("Share", exact=True).fill("old-share")
             expect(form.get_by_label("Existing directory within share")).to_have_count(0)
-            form.get_by_role("button", name="Browse shared folders", exact=True).click()
+            with page.expect_request("**/api/v1/storage/discover") as smb_request:
+                form.get_by_role("button", name="Browse shared folders", exact=True).click()
             smb_browser = page.get_by_role("dialog", name="Browse shared folders", exact=True)
             expect(smb_browser).to_be_visible()
-            smb_root = submissions[-1][1]
+            smb_root = smb_request.value.post_data_json
             assert smb_root["kind"] == "smb" and smb_root["credentials"] == {"username": "nex-vm", "secret": secret, "domain": "truenas"} and "path" not in smb_root, smb_root
             smb_browser.get_by_role("button", name="Open /team-share", exact=True).dblclick()
             share_folder = smb_browser.get_by_role("button", name="Open /team-share/vms, existing repository", exact=True)

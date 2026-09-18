@@ -1,0 +1,35 @@
+{
+  "summary": "Align storage browser functional readiness budgets and synchronize captured requests. API impact: none; test harness changes only.",
+  "paths": [
+    "tests/integration/cluster_storage_browser.py",
+    "tests/integration/storage_repositories_browser.py",
+    "tests/integration/storage_browser_support.py",
+    "tests/test_cluster_browser_timeouts.py",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/qa/2026-09-18-storage-ci-readiness.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Only browser test harnesses change; operator behavior and guide instructions remain unchanged."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Existing storage/discover, storage/credentials and fence request fixtures retain their contracts; no client-facing or Controller/Core API changes."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No product milestone or native-storage acceptance status changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Only transient test queues and time budgets are affected; no durable product state."
+  },
+  "verification": {
+    "method": "Read hosted failure log, reproduced five-second locator failure with delayed discovery delivery, then passed both complete storage browser scripts and the policy unit check. Documentation/privacy/whitespace checks passed. Existing push/PR workflows cover the regressions; no hosted rerun of the fix.",
+    "evidence": [
+      "docs/qa/2026-09-18-storage-ci-readiness.md",
+      "tests/test_cluster_browser_timeouts.py"
+    ]
+  }
+}

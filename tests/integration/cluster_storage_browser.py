@@ -6,21 +6,11 @@ from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import threading
-from time import monotonic
+from storage_browser_support import take_deferred
 
 from playwright.sync_api import expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[2]
-
-
-def take_deferred(page, pending, description):
-    # UI busy/dialog state can render before the route callback runs. Pump
-    # Playwright events until the actual request arrives, within its normal budget.
-    deadline = monotonic() + 30
-    while not pending and monotonic() < deadline:
-        page.wait_for_timeout(25)
-    assert pending, f"{description} was not requested within 30s"
-    return pending.pop()[0]
 
 
 def main():
@@ -104,8 +94,9 @@ def main():
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1440, "height": 1000})
-            # Keep Playwright's normal 30s action/navigation budgets for shared CI;
-            # UI assertions retain their separate, bounded 5s expectation deadline.
+            # Functional checks share the 30s action budget on busy CI runners;
+            # this suite does not impose a five-second UI performance requirement.
+            expect.set_options(timeout=30000)
             # Match the returning signed-in browser whose session the API fixture supplies.
             page.add_init_script("localStorage.setItem('nex-signed-in', '1')")
             page.on("pageerror", lambda error: errors.append(str(error)))
@@ -131,7 +122,7 @@ def main():
             registration.get_by_role("button", name="Browse exports", exact=True).click()
             browser_dialog = page.get_by_role("dialog", name="Browse exports", exact=True)
             expect(browser_dialog).to_be_visible()
-            pending_browser = take_deferred(page, deferred_browser, "NFS export discovery")
+            pending_browser, _ = take_deferred(page, deferred_browser, "NFS export discovery")
             browser_dialog.get_by_role("button", name="Cancel", exact=True).click()
             expect(browser_dialog).to_be_hidden()
             pending_browser.fulfill(json={"status": "succeeded", "candidates": [{"kind": "nfs", "source": {"nfs": {"server": "nfs.example.test", "export": "/exports/late"}}, "path": "/exports/late", "browsable": True}]})
@@ -139,7 +130,7 @@ def main():
             expect(page.get_by_role("button", name="Open /exports/late", exact=True)).to_have_count(0)
             registration.get_by_role("button", name="Browse exports", exact=True).click()
             expect(browser_dialog).to_be_visible()
-            pending_browser = take_deferred(page, deferred_browser, "NFS export discovery")
+            pending_browser, _ = take_deferred(page, deferred_browser, "NFS export discovery")
             page.keyboard.press("Escape")
             expect(browser_dialog).to_be_hidden()
             pending_browser.fulfill(json={"status": "succeeded", "candidates": [{"kind": "nfs", "source": {"nfs": {"server": "nfs.example.test", "export": "/exports/late"}}, "path": "/exports/late", "browsable": True}]})
@@ -201,9 +192,9 @@ def main():
             fence_button.click()
             dialog.get_by_label("Confirmation", exact=True).fill("FENCE core-1")
             dialog.get_by_role("button", name="Verify power fence", exact=True).click()
-            assert len(fences) == 3 and fences[2]["host_id"] == "core-1" and fences[2]["repository_id"] == "gfs2-lun" and fences[2]["fence_confirmation"] == "FENCE core-1", fences
             expect(panel).to_contain_text("Fence proof for core-1")
             expect(panel).to_contain_text("Core is reconciling this requested proof; it is not safe to retry.")
+            assert len(fences) == 3 and fences[2]["host_id"] == "core-1" and fences[2]["repository_id"] == "gfs2-lun" and fences[2]["fence_confirmation"] == "FENCE core-1", fences
             fence_button = panel.get_by_role("button", name="Verify power fence", exact=True)
             expect(fence_button).to_be_disabled()
             assert fence_button.get_attribute("title") == "Core is reconciling the existing fence request; Nex will not retry it automatically."
@@ -238,6 +229,7 @@ def main():
             reverify.click()
             reverify_dialog.get_by_label("Confirmation", exact=True).fill("FENCE core-1")
             reverify_dialog.get_by_role("button", name="Reverify power fence", exact=True).click()
+            expect(panel).to_contain_text("Core is reconciling this requested proof; it is not safe to retry.")
             assert len(fences) == 4 and fences[3]["host_id"] == "core-1" and fences[3]["repository_id"] == "gfs2-lun", fences
             expect(panel).to_contain_text("Core is reconciling this requested proof; it is not safe to retry.")
             config = cluster["operations"][0]["config"]
@@ -267,14 +259,14 @@ def main():
             mode["discovery"] = "deferred"
             setup.get_by_role("button", name="Discover targets", exact=True).click()
             expect(setup.get_by_role("button", name="Discovering targets…", exact=True)).to_be_disabled()
-            pending_discovery = take_deferred(page, deferred_discovery, "iSCSI target discovery")
+            pending_discovery, _ = take_deferred(page, deferred_discovery, "iSCSI target discovery")
             setup.get_by_role("button", name="Cancel discovery", exact=True).click()
             expect(setup.get_by_label("Target IQN", exact=True)).to_have_value("")
             pending_discovery.fulfill(json={"status": "succeeded", "candidates": [{"kind": "iscsi", "source": {"iscsi": {"portal": "storage.example.test:3260", "target_iqn": "iqn.2026-01.example.test:late"}}}]})
             expect(setup.get_by_role("button", name="Use iqn.2026-01.example.test:late", exact=True)).to_have_count(0)
             # Returning to the original portal must not revive its aborted request.
             setup.get_by_role("button", name="Discover targets", exact=True).click()
-            pending_discovery = take_deferred(page, deferred_discovery, "iSCSI target discovery")
+            pending_discovery, _ = take_deferred(page, deferred_discovery, "iSCSI target discovery")
             setup.get_by_label("Target portal", exact=True).fill("other-storage.example.test:3260")
             setup.get_by_label("Target portal", exact=True).fill("storage.example.test:3260")
             pending_discovery.fulfill(json={"status": "succeeded", "candidates": [{"kind": "iscsi", "source": {"iscsi": {"portal": "storage.example.test:3260", "target_iqn": "iqn.2026-01.example.test:aborted-a"}}}]})
@@ -433,7 +425,7 @@ def main():
             race_start = len(requests)
             smb_update.locator("form").evaluate("form => form.requestSubmit()")
             expect(smb_update.get_by_role("button", name="Submitting…", exact=True)).to_be_disabled()
-            pending_credentials = take_deferred(page, deferred_credentials, "SMB credential handoff")
+            pending_credentials, _ = take_deferred(page, deferred_credentials, "SMB credential handoff")
             hosts[0]["connection"] = "stale"
             page.get_by_role("button", name="Refresh view", exact=True).click()
             expect(cached_smb.get_by_text("last report", exact=True)).to_be_visible()

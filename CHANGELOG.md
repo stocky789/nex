@@ -17,6 +17,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
+- Storage browser checks allow asynchronous results the same bounded time as browser
+  actions and match each inspected request to its trigger, preventing false failures
+  when a valid folder listing arrives after five seconds (BUG-0292).
+
 - Storage browser checks wait for the actual credential or discovery request before
   testing delayed replies, avoiding false CI failures on busy runners (BUG-0291).
 - Installation media now compresses the complete Windows driver ISO and avoids
