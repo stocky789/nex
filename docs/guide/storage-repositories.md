@@ -72,7 +72,8 @@ for production workloads. Use an explicitly selected disposable lab host.
    - **NFSv4 export:** enter **NFS server**, then select **Browse exports**.
    - In either picker, select a row and **Select folder**, or double-click a row to open it.
      **Up** returns to the parent and **Refresh** lists it again. **Cancel** or Escape closes the
-     picker without changing the form.
+     picker without changing the form, including while folders are loading. A late discovery
+     reply must not reopen it; select the browse button again to start a new request.
    - **iSCSI LUN:** enter **Target portal**, then **Discover targets** and select a target
      to fill its IQN. Discovery does not log into or mount a target.
    - Local directories and mounted ZFS datasets offer **Discover safe existing sources**.
@@ -314,6 +315,9 @@ A terminal `failed` task is not retried; fix the cause and submit a new request.
   transaction bypasses this protection and is unsupported.
 
 ## Verification
+
+The Escape/discovery race and immediate reopening were exercised in Chromium against
+the built UI with simulated Core replies; see [storage dialog workflow verification](../qa/2026-09-18-storage-dialog-workflow.md).
 
 Local, NFS, SMB, ZFS and iSCSI registration, guest write/reboot, outage recovery and Controller
 replacement are recorded in [storage repository checks](../qa/storage-repositories/checks.md). The

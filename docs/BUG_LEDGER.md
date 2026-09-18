@@ -3031,3 +3031,23 @@ Append resolved defects with their evidence and the approach to avoid.
   of the actual hosted slowdown. No production API, state or operator behavior changed.
 - Avoid: correcting only one sibling fixture or coupling page-load deadlines to short
   interactive-action budgets.
+
+## BUG-0288 — Escape and discovery replies left an empty modal blocking storage
+
+- Date: 2026-09-18. Status: fixed locally; hosted rerun outstanding.
+- Symptom: the next Browse exports click timed out for 30 seconds because an empty
+  open storage dialog intercepted input. A named-dialog hidden assertion missed it.
+- Root cause: native Escape closed the dialog before its asynchronous close handler
+  cancelled discovery; an intervening reply reopened it before the handler erased
+  its content. An old close notification could also clear a newly reopened picker.
+- Fix: abort discovery synchronously on cancel and ignore close notifications while
+  the shared NFS/SMB dialog is open again.
+- Regression: `tests/integration/storage_repositories_browser.py` now delivers discovery
+  during Escape and an old close notification after reopening. The original built UI
+  failed the first check; removing only the close guard failed the second. The fixed
+  full browser suite passed 12 checks with no page errors. UI typecheck, tests and
+  build passed. Both providers' existing push/PR foundation workflows run this script.
+  Commands, inspected captures and simulation limits are recorded in
+  [workflow evidence](qa/2026-09-18-storage-dialog-workflow.md).
+- Avoid: increasing timeouts for a modal lifecycle race, checking only a dialog's
+  accessible name, or letting a previous opening's close event clear current content.

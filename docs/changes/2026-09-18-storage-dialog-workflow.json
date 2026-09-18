@@ -1,0 +1,41 @@
+{
+  "summary": "Fix the storage folder picker Escape/discovery race behind browser CI failure; document separate unresolved hosted ISO upload disconnects. API impact: existing contract.",
+  "paths": [
+    "web/src/storage.tsx",
+    "tests/integration/storage_repositories_browser.py",
+    "docs/guide/storage-repositories.md",
+    "docs/guide/publish-a-release.md",
+    "docs/qa/2026-09-18-storage-dialog-workflow.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "pages": [
+      "docs/guide/storage-repositories.md",
+      "docs/guide/publish-a-release.md"
+    ],
+    "reason": "Describe cancellation while loading and reopening; explain diagnosis of repeated TLS upload failures and the distinct release size limit."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API reference impact: none; runtime API impact: existing contract. Existing POST /api/v1/storage/discover admin caller, Controller transient dispatch, Core discovery and matched host/pool result contracts remain unchanged; only local dialog lifecycle changes."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug correction and investigation do not close any phase or delivery gate."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Only ephemeral picker request/dialog state changes; no durable Controller or Core record is added or altered."
+  },
+  "verification": {
+    "method": "Hosted failed-job logs inspected and summarized with private details removed. Deterministic Chromium Escape/discovery regression failed original UI; removing close guard failed reopened-picker scenario. Fixed full browser suite passed 12 checks with no page errors; UI typecheck, tests and build passed, reopened capture inspected. Six release publisher simulation tests, documentation worktree gate, privacy test and diff check passed. Both existing providers run the browser regression on push/PR. Actual hosted upload cause and rerun remain unresolved; see QA report.",
+    "evidence": [
+      "docs/qa/2026-09-18-storage-dialog-workflow.md",
+      "tests/integration/storage_repositories_browser.py",
+      "tests/test_gitea_release.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

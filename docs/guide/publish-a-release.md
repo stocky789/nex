@@ -126,6 +126,13 @@ the package index does not list the released version.
 - **"<asset>: stored N of M bytes"** — the forge accepted the upload but kept a short file. The
   release is failed on purpose rather than published with a download that cannot be installed.
   Check the forge's upload size limit and any proxy in front of it.
+- **Repeated "EOF occurred in violation of protocol" during ISO upload** — the TLS connection
+  ended before the upload completed; this message alone does not identify which server or proxy
+  closed it. Check their logs, request-body limits and timeouts. Gitea's release limit is
+  `[repository.release] FILE_MAX_SIZE`, not `[attachment] MAX_SIZE`; its documented default is
+  2048 MB, below a 3.5 GB ISO. See the [Gitea configuration reference](https://docs.gitea.com/administration/config-cheat-sheet/#repository---release-repositoryrelease).
+  Confirm the actual configured limit and upload route before retrying; more retries cannot
+  bypass a fixed size limit.
 - **A throwaway signing key warning** — set the `NEX_APPLIANCE_SIGNING_KEY` secret so every
   release is signed with the operator key.
 - **Deploy secrets are not set** — the workflow says so and publishes to Gitea only. Add the

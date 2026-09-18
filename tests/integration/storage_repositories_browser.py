@@ -195,11 +195,57 @@ def main():
             nfs_browser.get_by_role("button", name="Cancel", exact=True).click()
             expect(form.get_by_label("Export path")).to_have_value("/ignored/draft")
             expect(form.get_by_label("Existing directory within export")).to_have_value("old/draft")
+            # Deliver the pending discovery response during Escape, before the native
+            # dialog close event (whose delivery is delayed by 100ms here). A reply
+            # must not reopen a cancelled picker. Drain the previous close first.
+            page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+            page.evaluate("""() => {
+                const fetch = window.fetch;
+                const dialog = document.querySelector('dialog.storage-browser');
+                document.addEventListener('close', event => {
+                    event.stopImmediatePropagation();
+                    setTimeout(() => {
+                        dialog.dispatchEvent(new Event('close'));
+                        window.discoveryCloseDelivered = true;
+                    }, 100);
+                }, {capture: true, once: true});
+                window.discoveryReadyForEscape = false;
+                window.fetch = async (...args) => {
+                    if (args[0] !== '/api/v1/storage/discover') return fetch(...args);
+                    window.fetch = fetch;
+                    const response = await fetch(...args);
+                    return new Promise(resolve => {
+                        document.querySelector('dialog.storage-browser').addEventListener(
+                            'cancel', () => resolve(response), {once: true});
+                        window.discoveryReadyForEscape = true;
+                    });
+                };
+            }""")
             form.get_by_role("button", name="Browse exports", exact=True).click()
+            page.wait_for_function("window.discoveryReadyForEscape")
             page.keyboard.press("Escape")
+            page.wait_for_function("window.discoveryCloseDelivered")
+            expect(page.locator("dialog.storage-browser")).not_to_have_attribute("open", "")
             expect(nfs_browser).to_be_hidden()
             expect(form.get_by_label("Export path")).to_have_value("/ignored/draft")
             form.get_by_role("button", name="Browse exports", exact=True).click()
+            expect(nfs_browser.get_by_role("button", name="Open /exports", exact=True)).to_be_visible()
+            # A close notification queued for the previous opening must not clear a
+            # newly opened picker; browsers deliver close events asynchronously.
+            page.evaluate("""() => {
+                document.addEventListener('close', event => {
+                    event.stopImmediatePropagation();
+                    window.deliverOldBrowserClose = () => event.target.dispatchEvent(new Event('close'));
+                }, {capture: true, once: true});
+            }""")
+            nfs_browser.get_by_role("button", name="Cancel", exact=True).click()
+            page.wait_for_function("window.deliverOldBrowserClose")
+            form.get_by_role("button", name="Browse exports", exact=True).click()
+            expect(nfs_browser.get_by_role("button", name="Open /exports", exact=True)).to_be_visible()
+            page.evaluate("window.deliverOldBrowserClose()")
+            expect(nfs_browser.get_by_role("button", name="Open /exports", exact=True)).to_be_visible()
+            page.screenshot(path=str(args.evidence / "nfs-browser-reopened.png"), full_page=True)
+            checks.append("Escape cancels discovery before its reply; delayed close events cannot empty a reopened modal")
             nfs_browser.get_by_role("button", name="Open /exports", exact=True).dblclick()
             expect(nfs_browser.get_by_role("button", name="Up", exact=True)).to_be_enabled()
             nfs_browser.get_by_role("button", name="Refresh", exact=True).click()
