@@ -106,11 +106,11 @@ After building the appliance and a matching complete source snapshot, build the 
 package with an independently trusted raw Ed25519 public key:
 
 ```sh
-python3 packaging/core-local/build.py --source dist/nex-source.tar.gz --bundle dist/appliance --trusted-key /secure/nex-release-public-key.raw --version 0.1.0+security1
+python3 packaging/core-local/build.py --source dist/nex-source.tar.gz --bundle dist/appliance --trusted-key /secure/nex-release-public-key.raw --version DEVELOPMENT_VERSION
 ```
 
 This uses a Debian Docker builder and writes
-`dist/core-local/nex-core-local_0.1.0+security1_amd64.deb`. Both builders accept `--docker` for
+`dist/core-local/nex-core-local_DEVELOPMENT_VERSION_amd64.deb`. Both builders accept `--docker` for
 an executable wrapper. The package includes the signed appliance, local UI/service and
 source; dependency installation may still need Debian repository access, so do not claim
 empty-host offline installation from this package alone.

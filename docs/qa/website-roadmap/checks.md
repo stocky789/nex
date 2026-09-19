@@ -1,5 +1,9 @@
 # Website roadmap page verification
 
+Decision: project owner, 2026-09-19 — `roadmap-1440.png` and `roadmap-360.png` are an accepted historical evidence limitation and are not to be recreated. This does not claim the files exist or waive verification for new changes.
+
+Historical-evidence audit, 2026-09-19: no QA raster capture is tracked in this repository — `.gitignore` excludes `docs/qa/**/*.png` and the other image extensions — so every capture named in this report, including `header-360.png`, `roadmap-768.png` and `roadmap-hover-1440.png`, is absent from a fresh checkout and cannot be re-inspected here. The report/results below retain the original run's scope. No replacement images or new run are claimed. See [QA raster captures are untracked](../../DOCUMENTATION.md#qa-raster-captures-are-untracked).
+
 Date: 2026-09-11. Status: build, local and deployed browser walkthroughs and capture inspection
 passed; published as release `20260911-roadmap`. Open: independent review.
 

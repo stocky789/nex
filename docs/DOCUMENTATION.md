@@ -87,10 +87,13 @@ Example for an internal tooling change (replace paths and evidence with the real
 }
 ```
 
-For applicable changes set `impact` to `updated` and list the guide/API pages updated in the same
-diff. `guide.pages` names guide Markdown; `api.pages` names `docs/API.md` or files under `docs/api/`.
-The API field concerns documentation impact; retain the runtime API impact classification from
-[AGENTS.md](../AGENTS.md#required-api-impact-check) in the summary/plan.
+For applicable guide and roadmap changes, set `impact` to `updated` and list the updated
+pages. New records use `api.impact: none | existing contract | changed contract | new contract`,
+matching the [required API impact check](../AGENTS.md#required-api-impact-check); `updated` is
+accepted only in tracked historical records. Explain the decision in the record and summary/plan.
+`guide.pages` names guide Markdown; `api.pages` names `docs/API.md` or files under `docs/api/`.
+List applicable reference changes in the same diff; clarifying an existing contract does not
+imply a runtime behaviour change.
 
 `roadmap.impact` says whether the change moves the published
 [roadmap board](../website/src/routes/roadmap/+page.svelte). Set it to `updated` and name the page
@@ -122,6 +125,27 @@ Evidence paths in new or updated assessments must exist; historical records keep
 paths. A test source is a runnable check, not proof it passed: the verification method must say
 what was run. Feature walkthroughs should link a `docs/qa/` report. Do not change an unrelated page
 to satisfy the gate. Removed features update navigation and surviving guidance.
+
+## QA raster captures are untracked
+
+`.gitignore` excludes `docs/qa/**/*.png`, `*.jpg`, `*.jpeg`, `*.webp` and `*.gif`, so no QA
+screenshot is tracked in this repository. Change records and QA reports therefore cite capture
+filenames that are not present in a fresh checkout and cannot be re-inspected from the
+repository; the captures exist only on the machine that produced them. At the 2026-09-19 audit,
+374 of the 412 image paths cited across 39 change records were absent from the checkout.
+
+This is a standing reviewability limitation, not a closed finding. Reviewers may and should
+raise evidence reviewability, including missing captures, when it affects a judgement they
+have to make. What a reviewer cannot do is treat an untracked capture as proof of anything,
+or accept a claim that captures were inspected without the report saying who inspected them,
+when, and in what environment. Written QA reports under `docs/qa/` and results files remain
+the reviewable record; keep them specific enough to stand without the images.
+
+The project owner separately closed three missing historical website screenshots as accepted,
+recorded in the [2026-09-19 audit note](qa/2026-09-19-documentation-sweep.md#historical-website-screenshots).
+That decision means those three are not to be recreated or treated as outstanding work; it
+does not establish that every other cited capture is present, and it does not waive
+verification for new changes.
 
 ## Local and hosted checks
 

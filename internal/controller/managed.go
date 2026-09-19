@@ -150,8 +150,16 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 		return map[string]any{"vm_id": cmd.VMMedia.VMID, "action": cmd.VMMedia.Action, "media_id": cmd.VMMedia.MediaID, "operation": op}
 	case cmd.StorageLifecycle != nil:
 		return map[string]any{"repository_id": cmd.StorageLifecycle.RepositoryID, "action": cmd.StorageLifecycle.Action, "operation": op}
+	case cmd.ResourceLifecycle != nil:
+		return map[string]any{"resource": cmd.ResourceLifecycle.Resource, "resource_id": cmd.ResourceLifecycle.ResourceID, "action": cmd.ResourceLifecycle.Action, "operation": op}
 	case cmd.CredentialRetire != nil:
 		return map[string]any{"receipt": cmd.CredentialRetire.Receipt, "action": "retire", "operation": op}
+	case cmd.ZFSProvision != nil:
+		response := map[string]any{"name": cmd.ZFSProvision.Name, "pool_id": cmd.ZFSProvision.PoolID, "scope": cmd.ZFSProvision.Scope, "hosts": cmd.ZFSProvision.Hosts, "operation": op}
+		if cmd.ZFSProvision.RepositoryID != "" {
+			response["repository_id"] = cmd.ZFSProvision.RepositoryID
+		}
+		return response
 	default:
 		return map[string]any{"vm_id": cmd.VM.ID, "operation": op}
 	}
@@ -282,7 +290,10 @@ func (c *Controller) registerResource(w http.ResponseWriter, r *http.Request, us
 		return
 	}
 	defer tx.Rollback()
-	if c.replayResource(w, tx, v.RequestID, kind, v) {
+	// The stored payload is the request exactly as received, so an identical retry replays
+	// even though a pool VLAN is re-homed onto the master below.
+	received := v
+	if c.replayResource(w, tx, v.RequestID, kind, received) {
 		return
 	}
 	if err = c.managedHost(tx, v.PoolID, v.HostID); err != nil {
@@ -290,6 +301,13 @@ func (c *Controller) registerResource(w http.ResponseWriter, r *http.Request, us
 		return
 	}
 	if v.Kind == "vlan" {
+		var master string
+		if err = tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", v.PoolID).Scan(&master); err != nil || master == "" {
+			fail(w, 409, "pool master is unavailable")
+			return
+		}
+		// Pool VLANs are master-owned desired state. Members pull and materialize them.
+		v.HostID = master
 		inv, err := hostInventory(tx, v.HostID)
 		if err != nil {
 			fail(w, 500, "inventory unavailable")
@@ -306,13 +324,110 @@ func (c *Controller) registerResource(w http.ResponseWriter, r *http.Request, us
 		cmd.Storage = &protocol.StorageRegistration{ID: id, PoolID: v.PoolID, HostID: v.HostID, Name: v.Name, Path: v.Path, OperationID: opID, Status: "queued"}
 	} else {
 		cmd.Network = &protocol.NetworkRegistration{ID: id, PoolID: v.PoolID, HostID: v.HostID, Name: v.Name, Kind: v.Kind, Source: v.Source, Uplink: v.Uplink, VLAN: v.VLAN, OperationID: opID, Status: "queued"}
+		if v.Kind == "vlan" {
+			cmd.Network.Generation = 1
+		}
 	}
-	op, err := c.saveResource(tx, user, v.RequestID, v.PoolID, v.HostID, v.Name, id, cmd, v)
+	op, err := c.saveResource(tx, user, v.RequestID, v.PoolID, v.HostID, v.Name, id, cmd, received)
 	if err != nil || tx.Commit() != nil {
 		fail(w, 500, "registration storage failed")
 		return
 	}
 	write(w, 201, resourceResponse(cmd, op))
+}
+
+// hostSupportsCapability reports whether the host's last report advertised a capability.
+func hostSupportsCapability(tx *sql.Tx, host, capability string) bool {
+	var raw string
+	var caps []string
+	return tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", host).Scan(&raw) == nil && json.Unmarshal([]byte(raw), &caps) == nil && slices.Contains(caps, capability)
+}
+
+type resourceLifecycleAPIRequest struct {
+	RequestID          string `json:"request_id"`
+	PoolID             string `json:"pool_id"`
+	ExpectedGeneration uint64 `json:"expected_generation,omitempty"`
+	Name               string `json:"name,omitempty"`
+}
+
+func (c *Controller) removeNetwork(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	c.networkLifecycle(w, r, user, "remove")
+}
+func (c *Controller) renameNetwork(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	c.networkLifecycle(w, r, user, "update")
+}
+
+// networkLifecycle relays a pool VLAN removal or rename to the pool master's Core, which does
+// the work, journals the tombstone or the new generation, and propagates it to members. The
+// Controller keeps nothing: the mirror row disappears only when the master reports the
+// tombstone, and a fresh Controller rebuilds the same picture from that report alone.
+func (c *Controller) networkLifecycle(w http.ResponseWriter, r *http.Request, user, action string) {
+	var body resourceLifecycleAPIRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	body.Name = strings.TrimSpace(body.Name)
+	id := r.PathValue("id")
+	if !identifierValid(id) || !nameValid(body.RequestID) || !nameValid(body.PoolID) {
+		fail(w, http.StatusBadRequest, "network, pool_id and stable request_id required")
+		return
+	}
+	tx, err := c.db.Begin()
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "storage unavailable")
+		return
+	}
+	defer tx.Rollback()
+	// The payload is stored exactly as received, so an identical retry replays and a
+	// different body under the same request_id is refused.
+	if c.replayResource(w, tx, body.RequestID, "network-"+action, body) {
+		return
+	}
+	// The pool master owns pool VLANs; a client-named host is never trusted.
+	var master string
+	if err = tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", body.PoolID).Scan(&master); err != nil || master == "" {
+		fail(w, http.StatusConflict, "pool master is unavailable")
+		return
+	}
+	if err = c.managedHost(tx, body.PoolID, master); err != nil {
+		fail(w, http.StatusConflict, err.Error())
+		return
+	}
+	if !hostSupportsCapability(tx, master, protocol.PoolResourceRemovalCapability) {
+		fail(w, http.StatusConflict, "the pool master does not support removing pool networks yet; upgrade Nex Core")
+		return
+	}
+	var raw, status string
+	if err = tx.QueryRow("SELECT r.command,o.status FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.id=? AND r.kind='network-register' AND r.pool_id=? AND r.host_id=?", id, body.PoolID, master).Scan(&raw, &status); err != nil || status != "succeeded" {
+		fail(w, http.StatusNotFound, "network is not registered on this pool's master")
+		return
+	}
+	var registered protocol.Command
+	if json.Unmarshal([]byte(raw), &registered) != nil || registered.Network == nil {
+		fail(w, http.StatusNotFound, "network is not registered on this pool's master")
+		return
+	}
+	if !protocol.IsPoolSharedNetwork(*registered.Network) {
+		fail(w, http.StatusConflict, "only pool VLAN networks can be removed")
+		return
+	}
+	if protocol.NetworkGeneration(*registered.Network) != body.ExpectedGeneration {
+		fail(w, http.StatusConflict, "network generation is no longer current; refresh and retry")
+		return
+	}
+	v := protocol.ResourceLifecycleRequest{Resource: "network", Action: action, ResourceID: id, PoolID: body.PoolID, HostID: master, ExpectedGeneration: body.ExpectedGeneration, Name: body.Name}
+	if err = protocol.ValidateResourceLifecycle(v); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	opID := random()
+	cmd := protocol.Command{OperationID: opID, Kind: "network-" + action, ResourceLifecycle: &v}
+	op, err := c.saveResource(tx, user, body.RequestID, body.PoolID, master, registered.Network.Name, "network-operation-"+opID, cmd, body)
+	if err != nil || tx.Commit() != nil {
+		fail(w, http.StatusInternalServerError, "network operation failed")
+		return
+	}
+	write(w, http.StatusAccepted, resourceResponse(cmd, op))
 }
 
 // adoptManaged is the managed step of a host report, run inside the report transaction after
@@ -369,6 +484,13 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 			storageOperation[outcome.ID] = outcome.OperationID
 		}
 	}
+	// A Core-provisioned ZFS repository has one canonical master projection even
+	// when its scope selects only a member. If the master no longer reports that
+	// registration, its durable Core record did not complete or was removed; do
+	// not keep a successful Controller mirror from an earlier report.
+	if err = c.reconcileZFSStorageProjections(tx, pool, host, m.Storage, inv.Checks); err != nil {
+		return err
+	}
 	count := func(query string, args ...any) (int, error) {
 		var n int
 		err := tx.QueryRow(query, args...).Scan(&n)
@@ -419,7 +541,7 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		// A remote repository's configuration belongs to its master. Members may report
 		// their own access while reconnecting, but that observation must never replace
 		// the master's mirrored record or manufacture a second repository row.
-		if m.Membership != nil && m.Membership.Valid() == nil && m.Membership.PoolID == pool && m.Membership.MasterHostID != host && protocol.IsPoolSharedStorage(s) {
+		if m.Membership != nil && m.Membership.Valid() == nil && m.Membership.PoolID == pool && m.Membership.MasterHostID != host && (protocol.IsPoolSharedStorage(s) || s.ZFSProvisioned) {
 			continue
 		}
 		if s.OperationID == "" {
@@ -476,9 +598,53 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		}
 	}
 	for _, n := range m.Networks {
+		// Pool VLAN configuration belongs to the master. Members materialize bridges
+		// locally and report access; they must never replace the master's mirrored row.
+		if m.Membership != nil && m.Membership.Valid() == nil && m.Membership.PoolID == pool && m.Membership.MasterHostID != host && protocol.IsPoolSharedNetwork(n) {
+			continue
+		}
+		// A host's own membership claim is not the authority: a member reporting without a
+		// valid membership must not re-home, rename or remove a pool VLAN that the recorded
+		// master of its pool already mirrors.
+		if protocol.IsPoolSharedNetwork(n) || n.Tombstone {
+			var owner string
+			err := tx.QueryRow("SELECT p.master_host_id FROM managed_resources r JOIN pools p ON p.id=r.pool_id WHERE r.id=? AND r.kind='network-register'", n.ID).Scan(&owner)
+			if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+			if owner != "" && owner != host {
+				continue
+			}
+		}
+		// A removed network carries only its identity, so it is answered before any shape
+		// check. The mirror is dropped only for the reporting host's own row, which keeps a
+		// member's tombstone from deleting the master's pool VLAN.
+		if n.Tombstone {
+			if err = c.mirrorNetworkProjection(tx, pool, host, n); err != nil {
+				return err
+			}
+			continue
+		}
 		if ok, err := held(n.ID, "network-register"); err != nil || ok {
 			if err != nil {
 				return err
+			}
+			if protocol.IsPoolSharedNetwork(n) {
+				// One unusable master row must not fail the whole report: record it the
+				// same way an unadoptable entry is recorded and keep the held mirror.
+				if !nameValid(n.Name) || !networkShapeValid(n.Kind, n.Source, n.Uplink, n.VLAN) {
+					if err = attention("network", "network-register", n.ID, n.Name, "invalid network name or shape"); err != nil {
+						return err
+					}
+					continue
+				}
+				if err = c.mirrorNetworkProjection(tx, pool, host, n); err != nil {
+					return err
+				}
+				if err = resolved("network", n.ID); err != nil {
+					return err
+				}
+				continue
 			}
 			// The Core report is the evidence that this existing journal entry now
 			// belongs to the joined pool. Preserve its original command/request/audit.
@@ -501,20 +667,50 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 			}
 			continue
 		}
-		v := registrationRequest{RequestID: "adopt-network:" + host + ":" + n.ID, PoolID: pool, HostID: host, Name: strings.TrimSpace(n.Name), Kind: n.Kind, Source: n.Source, Uplink: n.Uplink, VLAN: n.VLAN}
-		opID := random()
-		cmd := protocol.Command{OperationID: opID, Kind: "network-register", Network: &protocol.NetworkRegistration{ID: n.ID, PoolID: pool, HostID: host, Name: v.Name, Kind: n.Kind, Source: n.Source, Uplink: n.Uplink, VLAN: n.VLAN, OperationID: opID, Status: "succeeded"}}
-		if err = save("network", v.Name, n.ID, cmd, v); err != nil {
+		if err = c.mirrorNetworkProjection(tx, pool, host, n); err != nil {
+			return err
+		}
+		// A network the host has since repaired closes its earlier attention record.
+		if err = resolved("network", n.ID); err != nil {
 			return err
 		}
 	}
 	for _, md := range m.Media {
+		// ISO library metadata on pool-shared storage belongs to the master. Members
+		// verify the file on their mount and report access without minting a second row.
+		if m.Membership != nil && m.Membership.Valid() == nil && m.Membership.PoolID == pool && m.Membership.MasterHostID != host {
+			var raw string
+			if err := tx.QueryRow("SELECT r.command FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.id=? AND r.kind='storage-register' AND r.pool_id=? AND o.status='succeeded'", md.StorageID, pool).Scan(&raw); err == nil {
+				var cmd protocol.Command
+				if json.Unmarshal([]byte(raw), &cmd) == nil && cmd.Storage != nil && protocol.IsPoolSharedStorage(*cmd.Storage) {
+					continue
+				}
+			}
+		}
+		// A removed ISO carries only its identity; the host_id predicate in the mirror keeps
+		// a member's tombstone from deleting the owning host's row.
+		if md.Tombstone {
+			if err = c.mirrorMediaProjection(tx, pool, host, md); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := mirrorDownloadedMedia(tx, host, md); err != nil {
 			return err
 		}
 		if ok, err := held(md.ID, "iso-import"); err != nil || ok {
 			if err != nil {
 				return err
+			}
+			// Only the owning host may refresh the mirrored command (including member_access).
+			var owner string
+			if err = tx.QueryRow("SELECT host_id FROM managed_resources WHERE id=? AND kind='iso-import'", md.ID).Scan(&owner); err != nil {
+				return err
+			}
+			if owner == host {
+				if err = c.mirrorMediaProjection(tx, pool, host, md); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -573,12 +769,12 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 			}
 		}
 		for _, n := range s.NICs {
-			if _, e := readyResource(tx, n.NetworkID, "network-register", pool, host); e != nil && reason == "" {
+			if _, e := c.readyNetworkForHost(tx, n.NetworkID, pool, host); e != nil && reason == "" {
 				reason = "network " + clip(n.NetworkID, 64) + " is not adopted on this host"
 			}
 		}
 		for _, id := range []string{s.MediaID, s.DriversMediaID} {
-			if _, e := readyResource(tx, id, "iso-import", pool, host); id != "" && e != nil && reason == "" {
+			if _, e := c.readyMediaForHost(tx, id, pool, host); id != "" && e != nil && reason == "" {
 				reason = "ISO " + clip(id, 64) + " is not adopted on this host"
 			}
 		}
@@ -756,7 +952,7 @@ func (c *Controller) adoptAppliances(tx *sql.Tx, host, pool string, inv *protoco
 
 func managedKind(kind string) bool {
 	switch kind {
-	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "iso-import", "vm-create", "vm-update", "vm-power", "vm-delete", "vm-media":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "network-remove", "network-update", "iso-import", "media-remove", "vm-create", "vm-update", "vm-power", "vm-delete", "vm-media":
 		return true
 	}
 	return false
@@ -817,16 +1013,25 @@ func readyResource(tx *sql.Tx, id, kind, pool, host string) (protocol.Command, e
 // master has just reported that member's matching, QEMU-safe access.  The row remains
 // a disposable mirror of the master's record; this is not a Controller placement grant.
 func (c *Controller) readyStorageForHost(tx *sql.Tx, id, pool, host string) (protocol.Command, error) {
-	if cmd, err := readyResource(tx, id, "storage-register", pool, host); err == nil {
-		return cmd, nil
-	}
 	var raw, status string
 	var cmd protocol.Command
 	if err := tx.QueryRow("SELECT r.command,o.status FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.id=? AND r.kind='storage-register' AND r.pool_id=?", id, pool).Scan(&raw, &status); err != nil || status != "succeeded" || json.Unmarshal([]byte(raw), &cmd) != nil || cmd.Storage == nil {
 		return cmd, fmt.Errorf("selected resource must be verified on the selected host and pool")
 	}
 	s := cmd.Storage
-	if s.HostID == host || !protocol.IsPoolSharedStorage(*s) {
+	if s.ZFSProvisioned {
+		now := time.Now()
+		for _, access := range s.ZFSHostAccess {
+			if access.HostID == host && access.Readable && access.Writable && access.Error == "" && access.Path != "" && !access.ObservedAt.IsZero() && !access.ObservedAt.After(now) && now.Sub(access.ObservedAt) <= c.cfg.StaleAfter {
+				return cmd, nil
+			}
+		}
+		return cmd, fmt.Errorf("selected resource must be verified on the selected host and pool")
+	}
+	if s.HostID == host {
+		return cmd, nil
+	}
+	if !protocol.IsPoolSharedStorage(*s) {
 		return cmd, fmt.Errorf("selected resource must be verified on the selected host and pool")
 	}
 	if protocol.IsClusteredISCSI(*s) {
@@ -845,6 +1050,119 @@ func (c *Controller) readyStorageForHost(tx *sql.Tx, id, pool, host string) (pro
 		}
 	}
 	return cmd, fmt.Errorf("selected resource must be verified on the selected host and pool")
+}
+
+// readyNetworkForHost accepts a pool VLAN on a member when the master reported that
+// member's successful apply. Host-local bridges still require a same-host registration.
+func (c *Controller) readyNetworkForHost(tx *sql.Tx, id, pool, host string) (protocol.Command, error) {
+	if cmd, err := readyResource(tx, id, "network-register", pool, host); err == nil {
+		return cmd, nil
+	}
+	var raw, status string
+	var cmd protocol.Command
+	if err := tx.QueryRow("SELECT r.command,o.status FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.id=? AND r.kind='network-register' AND r.pool_id=?", id, pool).Scan(&raw, &status); err != nil || status != "succeeded" || json.Unmarshal([]byte(raw), &cmd) != nil || cmd.Network == nil {
+		return cmd, fmt.Errorf("selected resource must be verified on the selected host and pool")
+	}
+	n := cmd.Network
+	if n.HostID == host || !protocol.IsPoolSharedNetwork(*n) {
+		return cmd, fmt.Errorf("selected resource must be verified on the selected host and pool")
+	}
+	generation := protocol.NetworkGeneration(*n)
+	now := time.Now()
+	for _, access := range n.MemberAccess {
+		if access.NetworkID == n.ID && access.HostID == host && access.Generation == generation && access.UplinkPresent && access.Bridge == n.Source && access.Error == "" && !access.ObservedAt.IsZero() && !access.ObservedAt.After(now) && now.Sub(access.ObservedAt) <= c.cfg.StaleAfter {
+			return cmd, nil
+		}
+	}
+	return cmd, fmt.Errorf("selected resource must be verified on the selected host and pool")
+}
+
+// readyMediaForHost accepts an ISO on a member when it is registered on that host, or when
+// it lives on pool-shared storage and the master reported that member's verified digest.
+func (c *Controller) readyMediaForHost(tx *sql.Tx, id, pool, host string) (protocol.Command, error) {
+	if id == "" {
+		return protocol.Command{}, fmt.Errorf("selected resource must be verified on the selected host and pool")
+	}
+	if cmd, err := readyResource(tx, id, "iso-import", pool, host); err == nil {
+		return cmd, nil
+	}
+	var raw, status string
+	var cmd protocol.Command
+	if err := tx.QueryRow("SELECT r.command,o.status FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.id=? AND r.kind='iso-import' AND r.pool_id=?", id, pool).Scan(&raw, &status); err != nil || status != "succeeded" || json.Unmarshal([]byte(raw), &cmd) != nil || cmd.Media == nil {
+		return cmd, fmt.Errorf("selected resource must be verified on the selected host and pool")
+	}
+	md := cmd.Media
+	if md.HostID == host {
+		return cmd, fmt.Errorf("selected resource must be verified on the selected host and pool")
+	}
+	if _, err := c.readyStorageForHost(tx, md.StorageID, pool, host); err != nil {
+		return cmd, fmt.Errorf("selected resource must be verified on the selected host and pool")
+	}
+	now := time.Now()
+	for _, access := range md.MemberAccess {
+		if access.MediaID == md.ID && access.HostID == host && access.StorageID == md.StorageID && access.SHA256 == md.SHA256 && access.Error == "" && !access.ObservedAt.IsZero() && !access.ObservedAt.After(now) && now.Sub(access.ObservedAt) <= c.cfg.StaleAfter {
+			return cmd, nil
+		}
+	}
+	return cmd, fmt.Errorf("selected resource must be verified on the selected host and pool")
+}
+
+// mirrorNetworkProjection refreshes the Controller's disposable network projection from Core.
+func (c *Controller) mirrorNetworkProjection(tx *sql.Tx, pool, host string, network protocol.NetworkRegistration) error {
+	// Core durably removed this network: drop the disposable mirror. Nothing recreates it,
+	// because adoption only ever mirrors what a host still reports.
+	if network.Tombstone {
+		_, err := tx.Exec("DELETE FROM managed_resources WHERE id=? AND kind='network-register' AND pool_id=? AND host_id=?", network.ID, pool, host)
+		return err
+	}
+	if !nameValid(network.Name) || !networkShapeValid(network.Kind, network.Source, network.Uplink, network.VLAN) {
+		return fmt.Errorf("invalid network projection")
+	}
+	network.PoolID, network.HostID = pool, host
+	if protocol.IsPoolSharedNetwork(network) && network.Generation == 0 {
+		network.Generation = 1
+	}
+	var opID string
+	err := tx.QueryRow("SELECT operation_id FROM managed_resources WHERE id=? AND kind='network-register'", network.ID).Scan(&opID)
+	if err == nil {
+		network.OperationID, network.Status, network.Error = opID, "succeeded", ""
+		command, commandErr := json.Marshal(protocol.Command{OperationID: opID, Kind: "network-register", Network: &network})
+		if commandErr != nil {
+			return fmt.Errorf("network projection encoding failed")
+		}
+		_, err = tx.Exec("UPDATE managed_resources SET pool_id=?,host_id=?,name=?,command=? WHERE id=? AND kind='network-register'", pool, host, network.Name, string(command), network.ID)
+		return err
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+	opID = random()
+	network.OperationID, network.Status, network.Error = opID, "succeeded", ""
+	cmd := protocol.Command{OperationID: opID, Kind: "network-register", Network: &network}
+	payload := registrationRequest{RequestID: "adopt-network:" + host + ":" + network.ID, PoolID: pool, HostID: host, Name: strings.TrimSpace(network.Name), Kind: network.Kind, Source: network.Source, Uplink: network.Uplink, VLAN: network.VLAN}
+	_, err = c.saveResourceStatus(tx, "system", payload.RequestID, pool, host, network.Name, network.ID, "succeeded", cmd, payload)
+	return err
+}
+
+// mirrorMediaProjection refreshes media rows, including member_access from the master.
+func (c *Controller) mirrorMediaProjection(tx *sql.Tx, pool, host string, media protocol.Media) error {
+	if media.Tombstone {
+		_, err := tx.Exec("DELETE FROM managed_resources WHERE id=? AND kind='iso-import' AND pool_id=? AND host_id=?", media.ID, pool, host)
+		return err
+	}
+	media.PoolID, media.HostID = pool, host
+	var opID string
+	err := tx.QueryRow("SELECT operation_id FROM managed_resources WHERE id=? AND kind='iso-import'", media.ID).Scan(&opID)
+	if err != nil {
+		return nil
+	}
+	media.OperationID, media.Status, media.Error, media.URL = opID, "succeeded", "", ""
+	command, commandErr := json.Marshal(protocol.Command{OperationID: opID, Kind: "iso-import", Media: &media})
+	if commandErr != nil {
+		return fmt.Errorf("media projection encoding failed")
+	}
+	_, err = tx.Exec("UPDATE managed_resources SET pool_id=?,host_id=?,name=?,command=? WHERE id=? AND kind='iso-import'", pool, host, media.Name, string(command), media.ID)
+	return err
 }
 
 type createVMRequest struct {

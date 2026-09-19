@@ -6,12 +6,27 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.3.4` →
-> Debian `0.3.4`).
+> development software. Builds use the newest numbered changelog heading (`0.3.5` →
+> Debian `0.3.5`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.3.5] — 2026-09-19
+
+### Minor Feature
+
+- Cleaner CPU selection: the pool baseline is marked **(Recommended)** and detailed feature lists are hidden.
+- Pool members automatically receive shared VLAN and ISO library configuration.
+- Pool VLAN networks can now be renamed or removed, and imported ISOs removed, from the pool
+  master; members apply the change themselves, and anything a VM still uses is refused.
+- Experimental ZFS setup is in development; ZFS-enabled images remain restricted to internal test labs.
+- Simpler ZFS setup: choose hosts and disks on one screen, then review and erase; the Storage page lists repositories first.
+
+### Bug Fixes
+
+- Fixed VM creation incorrectly rejecting registered SMB or NFS storage.
 
 ## [0.3.4] — 2026-09-18
 

@@ -1,15 +1,20 @@
-# Register VM storage repositories
+# Add VM storage repositories
 
 ## Status
 
-This development workflow registers an existing storage source on a Nex Core host for VM
-disks and ISO images. Supported repository types are **Local directory**, **NFSv4 export**,
+This development workflow registers an existing storage source or provisions a new local
+ZFS repository from explicitly selected disks on Nex Core. Registered sources can hold VM
+disks and ISO images according to their reported capabilities; newly provisioned ZFS
+repositories currently hold VM disks only. An existing OpenZFS dataset is a separate
+registration path and can hold ISO images when Core reports that capability. Supported repository types are **Local directory**, **NFSv4 export**,
 **OpenZFS dataset**, **SMB3 share** and **iSCSI LUN**. Nex Core owns the registration,
 connection details and credentials; Controller shows the state Core reports, and a rebuilt
 Controller recovers the same repositories when the host reconnects.
 
-Local directories, OpenZFS datasets and ordinary ext4/XFS iSCSI LUNs are assigned to one Core
-host. NFSv4 and SMB3 repositories can be shared from a pool master to joined members (see
+Local directories, existing OpenZFS datasets and ordinary ext4/XFS iSCSI LUNs are assigned
+to one Core host. A provisioned ZFS repository can cover every configured host, with separate
+local disks on each configured host. Its data is not shared, and moving a VM between these
+hosts would require a disk copy; that migration workflow is not part of this feature. NFSv4 and SMB3 repositories can be shared from a pool master to joined members (see
 [Join an enrolled Nex Core to a pool](join-a-pool.md)). This is not live migration, HA,
 snapshots or backups.
 
@@ -36,11 +41,14 @@ for production workloads. Use an explicitly selected disposable lab host.
   filesystem identity; a changed server address or filesystem blocks use (no transparent server
   failover). Both the Core root identity and the QEMU service account must write. A root-squash
   export works only when its anonymous root mapping is explicitly the QEMU UID/GID.
-- **OpenZFS dataset:** the matching Debian OpenZFS userspace tools and kernel module already
-  installed and working on Core, and an existing imported, mounted filesystem dataset with its
+- **New ZFS repository:** matching Core with ZFS provisioning support, working OpenZFS tools
+  and kernel module, and explicitly selected disposable lab disks. The distribution recipe
+  includes OpenZFS; exact-image and hardware acceptance remains open. System, mounted and
+  in-use disks cannot be selected. Existing data requires an exact typed device confirmation.
+- **Existing OpenZFS dataset:** an already imported, mounted filesystem dataset with its
   pool and reported mount point. Encrypted datasets must already have their key available at
-  boot. Nex never creates, imports or upgrades a pool, mounts or unmounts the dataset, or changes
-  pool or dataset properties. The mount point must be a clean absolute path without whitespace,
+  boot. This advanced registration path never creates, imports or upgrades a pool, mounts or
+  unmounts the original dataset, or changes pool or dataset properties. The mount point must be a clean absolute path without whitespace,
   control characters, `%` or `\`.
 - **SMB3 share:** an existing SMB 3.1.1 server/share with encryption support, and an account,
   optional domain/workgroup, and password with access for every intended member Core and QEMU. SMB1 and relaxed cache/locking
@@ -116,15 +124,80 @@ for production workloads. Use an explicitly selected disposable lab host.
    with the new **CHAP account** and **CHAP secret**. First shut off every VM using the repository
    and settle pending disk, media and storage tasks; Nex does not stop VMs automatically. If an
    update is refused because the repository generation changed, reload, recheck and retry.
-9. To remove an unused credential, in **Unused storage credentials** select its **Host**, then
+9. To remove an unused credential, open **Unused storage credentials** at the bottom of the **Storage** page, select its **Host**, then
    **Find unused credentials**. The table shows only opaque receipts, status and creation time.
    Select **Retire unused credentials**, review the receipt and confirm. Core rejects it if the
    receipt became attached in the meantime. Retiring never deletes repository data.
 10. To stop using a local, NFS, SMB, ZFS or ordinary iSCSI repository, select **Detach**, type the
     exact **Repository name**, then select **Detach storage**. Core refuses while VM disks,
     retained disks or media depend on it. Detach removes Nex configuration and Nex-managed
-    mount/session setup (for ZFS, only the bind alias). It never deletes data, formats a LUN,
+    mount/session setup where applicable. For ZFS it unregisters Nex storage while
+    leaving the native pool and dataset intact. It never deletes data, formats a LUN,
     touches the original ZFS dataset, or removes `.nex-storage-marker`.
+
+### Provision local ZFS storage from selected disks
+
+Use matching development builds on disposable lab hosts. The
+[verification report](../qa/2026-09-19-zfs-provisioning.md) distinguishes tested paths from
+open native and image-delivery checks.
+
+1. Open the pool's **Storage** page and select **Add ZFS storage**. The **Add ZFS storage**
+   dialog opens on **Choose disks** and asks every connected host for its disks.
+2. Enter a **Storage name**, then tick the hosts to include. Ticking several hosts, or the
+   only host of a one-host pool, gives each configured host an independent local zpool under
+   the same repository name, and other hosts can be added to it later. Ticking one host of
+   several creates storage for that host only. Neither choice makes disks shared.
+3. Under each ticked host, tick only the disks intended for this repository. Each row shows
+   size, type, model and serial; **Has old data — will be erased** marks a disk that needs a
+   typed confirmation on the next screen. Open **unavailable disks** to see disks Core
+   refuses, with its reason; they cannot be ticked, and a confirmation cannot override an
+   in-use or system-device refusal. To leave a host for later, keep it ticked and tick none
+   of its disks. Untick a host only when the storage should never include it: with one host
+   left ticked, the storage belongs to that host alone and no other host can join it later.
+   A newly joined host needs an explicit later disk selection; Nex never copies
+   another host's selection to it. Use **Add this host** in **ZFS storage by host** to add
+   disks for that host under the existing repository identity; the dialog opens for that
+   host only and is not offered for hosts Core has already configured for the repository.
+   If one host cannot report its devices, its message appears under that host and it is
+   left as it is while the other hosts remain selectable. **Refresh disks** asks Core again.
+4. Check the layout shown under each host: single disk for one device, mirror for two, and
+   RAIDZ1 for three or more. One disk has no redundancy. With four or more disks ticked,
+   **Layout** also offers RAIDZ1, striped mirrors (even counts) and RAIDZ2; leave it on
+   **Automatic** to accept Core's default. A choice that no longer fits the ticked disks
+   returns to **Automatic**.
+5. Select **Review and erase →** and review every selected device and its host. For old
+   data, type the exact displayed by-id name. Select **Erase disks and create storage** only
+   after verifying the list: provisioning destroys data on the selected devices. Core checks
+   identity and eligibility again before acting.
+6. Follow the operation and each host's outcome. A healthy configured host can use its
+   own local repository; a failed or unconfigured host cannot. Wait for fresh Core access
+   and capacity before creating a VM. ZFS supports thin VM disks; thick allocation stays
+   unavailable.
+
+Core creates its own pool name and `vms` filesystem dataset with a Core-owned mountpoint,
+4 KiB alignment, LZ4 compression, access-time updates disabled and extended attributes
+stored in system attributes. Synchronous writes remain enabled. The advanced **Use an
+existing dataset** path retains the registration procedure above.
+
+The pool master carries out **Update**, **Recheck** and **Detach** for a provisioned repository.
+**Update** and **Detach** act on the whole repository and Core refuses them when aimed at a
+member; **Detach** unregisters every configured host, and **Recheck** checks the selected
+configured host. For a provisioned repository, **Update** can only change the repository name —
+device selection, layout and pool settings are fixed once provisioned; add disks for a host that is not
+set up yet with **Add this host** instead. Core refuses these actions while any configured host has
+no successful provisioning outcome ("hosts that are not currently configured"); a repository
+with a host whose provisioning ended in **Needs attention** therefore cannot yet be detached
+from Nex, which is a recorded open limitation.
+
+If the browser loses a reply, retry the same unchanged request; do not start a second
+provisioning operation over the same devices. Resubmitting the same hosts, devices, name and
+layout repeats the same request, including after stepping back or reopening the dialog; changing
+any of them makes a new request. A reopened dialog starts again at **Choose disks** with nothing
+ticked, asks Core for current devices, and never remembers a typed erase confirmation: tick the
+disks and type it again before **Erase disks and create storage** becomes available. Core continues accepted work without the
+browser or Controller. An ambiguous destructive step stays **Needs attention** until it
+can be safely reconciled; it is not permission to erase again. **Detach** unregisters
+storage and keeps the zpool and data intact.
 
 ### Use NFS or SMB on a joined member
 
@@ -135,18 +208,25 @@ generation plus **Readable**, **Writable**, **QEMU writable** and **Locking** be
 it can select the repository. A failed, stale or missing report is not overridable: fix the
 member's export/share, identity, QEMU permissions, capacity or locking and wait for recheck.
 
+ISO library entries imported onto that shared repository also reach joined members after the
+repository is healthy there: the member verifies the file digest and reports access. Import the
+ISO on the master only; do not upload the same ISO again on the member.
+
 The member's **pool-storage-reconciliation** health check is **unknown** before its first run or
 when stale, **failed** after a failure, and **healthy** only after a fresh success. After the
 master's management service restarts, member access shows **awaiting member reconciliation** until
 new reports arrive; registrations and VM assignments are retained, so do not register again.
 
-OpenZFS and ordinary exclusive iSCSI stay single-host. Never attach the same exclusive iSCSI
-filesystem to another Core.
+The pool-scoped provisioned-ZFS aggregate is local on each configured host, with different data and
+capacity on each host. Existing-dataset ZFS and ordinary exclusive iSCSI stay single-host.
+Never attach the same exclusive iSCSI filesystem to another Core.
 
 ### Set up clustered iSCSI / GFS2 (development only)
 
 Use **Resources → Storage → Clustered iSCSI / GFS2** only for shared block storage; the ordinary
-**iSCSI LUN** form stays exclusive to one Core. In a selected disposable lab, provide:
+**iSCSI LUN** form stays exclusive to one Core. The panel sits folded at the bottom of the
+**Storage** page until Core reports a configuration or a problem; select its heading to open
+it. In a selected disposable lab, provide:
 
 - Three to five fresh, enrolled Cores in the pool that advertise clustered-iSCSI support, and a
   matching Controller (an older Controller does not show session-monitor readiness).
@@ -208,7 +288,9 @@ ownership and storage validation. It is not keepalive, HA or failover.
 
 **Pool storage repositories** shows each repository's backend/source, **Accessible host**, Core
 access state, capacity and check time, plus each member's access for master-owned NFS/SMB storage.
-A healthy repository can store VM disks and ISO images on its eligible hosts. Core rechecks
+A healthy repository can store the resource types shown by its capabilities on eligible
+hosts. Newly provisioned ZFS repositories hold VM disks; select another ISO-capable
+repository for installation media. Core rechecks
 identity and access before disk, media and guest starts, so a disconnected share, changed mount,
 read-only filesystem or failed permission/lock check blocks new writes and starts.
 
@@ -219,7 +301,10 @@ Controller loss does not stop resident VMs or authorize another host to write th
 Controller replacement, reconnect the same Core; do not register the repository or re-enter
 credentials unless Core reports a rotation is needed.
 
-Core periodically retries an interrupted storage task and updates **Task history** with its outcome.
+Core periodically reconciles interrupted storage tasks when it can prove continuation is
+safe, and updates **Task history** with the outcome. For ZFS provisioning, an ambiguous
+erase or changed device remains **Needs attention**; automatic recovery never authorizes
+another erase. Inspect the reported cause before taking further action.
 A terminal `failed` task is not retried; fix the cause and submit a new request.
 
 ## Troubleshooting
@@ -310,11 +395,17 @@ A terminal `failed` task is not retried; fix the cause and submit a new request.
 - **Credential rotation or retirement is refused:** for rotation, shut off every VM using the
   repository and settle pending operations. For retirement, refresh **Unused storage credentials**
   and retry only if the receipt is still listed.
-- **An APT removal or downgrade is refused:** a host with version-2 repository records, credential
-  receipts or tombstones needs a matching storage-repository package. Restore it. A manual `dpkg`
-  transaction bypasses this protection and is unsupported.
+- **An APT removal or downgrade is refused:** retained repository state needs a matching
+  storage-capable package. Hosts with ZFS provisioning records and Controllers managing
+  ZFS-provisioning Cores require the newer ZFS-capable package. Restore that matching build;
+  do not delete journals to bypass the guard. A manual `dpkg` transaction bypasses this
+  protection and is unsupported.
 
 ## Verification
+
+ZFS disk provisioning has separate [rollout verification](../qa/2026-09-19-zfs-provisioning.md).
+Its acceptance remains open; earlier existing-dataset checks do not prove disk provisioning,
+pool-wide recovery or the new image delivery path.
 
 The Escape/discovery race and immediate reopening were exercised in Chromium against
 the built UI with simulated Core replies; see [storage dialog workflow verification](../qa/2026-09-18-storage-dialog-workflow.md).

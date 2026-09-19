@@ -508,7 +508,13 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	// A v2 Core asks for this acknowledgement before it advertises the repository
 	// capability. v1 peers receive their original response shape unchanged.
 	if v.Version == protocol.Version {
-		out.StorageRepositories = &protocol.StorageRepositorySupport{ProtocolVersion: protocol.Version, Capability: protocol.StorageRepositoryCapability}
+		repositoryCapability := protocol.StorageRepositoryCapability
+		// Reuse the established support capability handshake: a Core must not send
+		// ZFS-only inventory to a strict older Controller until this acknowledgement.
+		if slices.Contains(v.Capabilities, protocol.ZFSProvisionCapability) {
+			repositoryCapability = protocol.ZFSProvisionCapability
+		}
+		out.StorageRepositories = &protocol.StorageRepositorySupport{ProtocolVersion: protocol.Version, Capability: repositoryCapability}
 		clusterCapability := protocol.StorageClusterCapability
 		if slices.Contains(v.Capabilities, protocol.StorageClusterSessionMonitorCapability) {
 			clusterCapability = protocol.StorageClusterSessionMonitorCapability
@@ -528,6 +534,31 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		var status, kind string
 		err = tx.QueryRow("SELECT status,kind FROM operations WHERE id=? AND host_id=?", res.OperationID, host).Scan(&status, &kind)
 		if err != nil {
+			if err == sql.ErrNoRows {
+				// A replacement Controller has no record of terminal work that Core
+				// completed under the former Controller. Acknowledge that host's
+				// retained result without manufacturing state from it. An operation
+				// known for another host is still a rejected cross-host result.
+				var owner string
+				ownerErr := tx.QueryRow("SELECT host_id FROM operations WHERE id=?", res.OperationID).Scan(&owner)
+				if ownerErr == nil && owner != host {
+					fail(w, 400, "result operation does not belong to host")
+					return
+				}
+				if ownerErr == sql.ErrNoRows {
+					// Nothing here is stored. Echo any ID the agent accepts for a command
+					// (non-empty, at most 128 bytes) so a former Controller's result is
+					// acknowledged instead of being re-sent forever.
+					if res.OperationID != "" && len(res.OperationID) <= 128 {
+						out.AcknowledgedResults = append(out.AcknowledgedResults, res.OperationID)
+					}
+					continue
+				}
+				if ownerErr != nil {
+					fail(w, 500, "result lookup failed")
+					return
+				}
+			}
 			fail(w, 400, "result operation does not belong to host")
 			return
 		}
@@ -535,7 +566,12 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 			fail(w, 409, "operation has not been delivered")
 			return
 		}
-		if status == "dispatched" {
+		// Core may recover a durable ZFS provision after it previously reported
+		// needs_attention (an interrupted create whose native receipt later verifies).
+		// Accept only that exact authoritative recovery; other kinds settle through the
+		// host's reported managed outcomes, and the Controller never infers success from
+		// an adopted storage projection.
+		if status == "dispatched" || (status == "needs_attention" && kind == "storage-zfs-provision" && res.Status == "succeeded") {
 			if _, err = tx.Exec("UPDATE operations SET status=?,error=?,updated_at=? WHERE id=?", res.Status, res.Error, stamp(), res.OperationID); err != nil || c.audit(tx, "host:"+host, "operation."+res.Status, res.OperationID) != nil {
 				fail(w, 500, "result storage failed")
 				return
@@ -593,13 +629,17 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 					err = c.cleanupJoinedAutoPool(tx, host, formerPool, merged)
 				}
 			}
-			// The managed journal is mirrored into managed_resources, not stored as inventory.
+			// Managed definitions are mirrored into managed_resources. Keep only the
+			// master-owned membership and ZFS outcomes needed for host status here.
 			stored := *merged
 			// Membership is retained only as the master's latest Core report so a
 			// replacement Controller can enroll a proven peer. Other managed state is
 			// projected into managed_resources and must not be duplicated in inventory.
-			if merged.Managed != nil && merged.Managed.Membership != nil {
-				stored.Managed = &protocol.ManagedState{Membership: merged.Managed.Membership}
+			if merged.Managed != nil && (merged.Managed.Membership != nil || len(merged.Managed.ZFSProvisions) != 0) {
+				// These are Core's master-journal outcomes, retained only as the latest
+				// host observation so the Controller can render per-host status. A fresh
+				// Controller re-adopts them from the next Core inventory report.
+				stored.Managed = &protocol.ManagedState{Membership: merged.Managed.Membership, ZFSProvisions: merged.Managed.ZFSProvisions}
 			} else {
 				stored.Managed = nil
 			}

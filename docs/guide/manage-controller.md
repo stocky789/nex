@@ -286,7 +286,9 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
 - **Pool master unknown:** the pool's **General** panel shows **Unknown** when the master
   host record is missing or revoked. The pool and its resources remain; re-enroll the same
   host with **Re-enroll host** to restore it. Changing a pool's master is not available
-  in this build.
+  in this build. Do not treat Controller replacement or host re-enrollment as a master
+  transfer: the future manual, fence-verified promotion and safe member rejoin flow remains
+  planned.
 - **Confirm and add host reports "Already enrolled":** the message continues
   `Host <id> still trusts a Controller at this address. Use Re-enroll host on that host, or check the Controller address.`
   The host is already enrolled with a Controller at the same address and with the same

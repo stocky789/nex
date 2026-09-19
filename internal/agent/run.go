@@ -160,6 +160,9 @@ func applyResponse(s *Store, r protocol.ReportResponse) error {
 		if storageRepositoryCommand(cmd) && !s.State.StorageProtocolReady {
 			return errors.New("controller sent a storage repository command before protocol preflight completed")
 		}
+		if cmd.Kind == "storage-zfs-provision" && !s.State.ZFSProvisionProtocolReady {
+			return errors.New("controller sent a ZFS provision command before ZFS protocol preflight completed")
+		}
 		if old, ok := s.State.Journal[cmd.OperationID]; ok {
 			if old.Command != nil {
 				a, _ := json.Marshal(old.Command)
@@ -216,9 +219,11 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	managed, checks := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(appliedCtx)
 	cancelApplied()
 	managed.Storage = PoolStorageMemberAccess(s, managed.Storage)
+	managed.Networks = PoolNetworkMemberAccess(s, managed.Networks)
 	if check := PoolStorageReconcileCheck(s); check != nil {
 		checks = append(checks, *check)
 	}
+	checks = append(checks, PoolConvergeChecks(s)...)
 	// Membership is a master-owned Core record (with the member's authenticated copy).
 	// Reporting it is the sole Controller adoption path; no Controller cache derives it.
 	if membership, err := Membership(s); err == nil {
@@ -227,6 +232,12 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	if storage != nil {
 		managed.Storage = storage.Overlay(managed.Storage)
 	}
+	// Pool-local ZFS access is a bounded fresh observation; never let an
+	// unreachable member consume the outbound heartbeat's whole context.
+	zfsAccessCtx, cancelZFSAccess := context.WithTimeout(ctx, cfg.ProbeTimeout)
+	managed.Storage = PoolZFSStorageProjection(zfsAccessCtx, s, managed.Storage)
+	cancelZFSAccess()
+	managed.Media = PoolMediaMemberAccess(s, managed.Media, managed.Storage)
 	credentialsReadable := true
 	if _, err := vmhost.StorageCredentialReceipts(s.dir); err != nil {
 		credentialsReadable = false
@@ -236,6 +247,7 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	confirmCtx, cancelConfirm := context.WithTimeout(ctx, cfg.ProbeTimeout)
 	managed.Outcomes = confirmPoolVMUpdateOutcomes(confirmCtx, s, commandOutcomes(s.State.Journal, managed.Outcomes), managed.Storage)
 	cancelConfirm()
+	managed.ZFSProvisions = PoolZFSInventory(s)
 	inv.Managed = managed
 	inv.Checks = append(inv.Checks, checks...)
 	completeJournal(s, inv, cfg.ProbeInterval+2*cfg.ProbeTimeout)
@@ -249,7 +261,7 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	// DriversDriveCapability is deliberately absent from the legacy v1 list below: a host
 	// defines the second CD drive either way, but the capability is the Controller's signal
 	// that it may send drive="drivers", and a strict v1 decoder must not be handed v2 names.
-	capabilities := []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.DriversDriveCapability, protocol.UsageHistoryCapability, protocol.CPUBaselineCapability}
+	capabilities := []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.DriversDriveCapability, protocol.UsageHistoryCapability, protocol.CPUBaselineCapability, protocol.PoolResourceRemovalCapability}
 	if s.State.StorageProtocolLegacy {
 		version = protocol.LegacyVersion
 		capabilities = []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.MediaCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.UsageHistoryCapability}
@@ -260,7 +272,17 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		inv = &legacy
 	}
 	if s.State.StorageProtocolReady {
-		capabilities = append(capabilities, "storage-repositories-v1", protocol.StorageDiscoveryCapability)
+		capabilities = append(capabilities, "storage-repositories-v1", protocol.StorageDiscoveryCapability, protocol.ZFSProvisionCapability)
+		if !s.State.ZFSProvisionProtocolReady && inv.Managed != nil {
+			// Strict older Controllers reject unknown managed and registration
+			// fields. Advertise the optional extension, but omit every pool-local
+			// ZFS record until this Controller explicitly acknowledges it; presenting
+			// it as a legacy host-local registration would lose its pool semantics.
+			managed := zfsLegacyManagedProjection(inv.Managed)
+			copy := *inv
+			copy.Managed = managed
+			inv = &copy
+		}
 	}
 	if s.State.StorageClusterProtocolReady {
 		capabilities = append(capabilities, protocol.StorageClusterCapability)
@@ -305,8 +327,13 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		}
 		return err
 	}
-	if !s.State.StorageProtocolReady && response.StorageRepositories != nil && response.StorageRepositories.ProtocolVersion == protocol.Version && response.StorageRepositories.Capability == protocol.StorageRepositoryCapability {
-		s.State.StorageProtocolReady = true
+	if response.StorageRepositories != nil && response.StorageRepositories.ProtocolVersion == protocol.Version && (response.StorageRepositories.Capability == protocol.StorageRepositoryCapability || response.StorageRepositories.Capability == protocol.ZFSProvisionCapability) {
+		if !s.State.StorageProtocolReady {
+			s.State.StorageProtocolReady = true
+		}
+		if response.StorageRepositories.Capability == protocol.ZFSProvisionCapability {
+			s.State.ZFSProvisionProtocolReady = true
+		}
 		if err = s.Save(); err != nil {
 			return persistenceError{fmt.Errorf("persist storage protocol preflight: %w", err)}
 		}
@@ -340,7 +367,11 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 					continue
 				}
 				work, cancel := context.WithTimeout(ctx, 8*time.Second)
-				results = append(results, vmhost.DiscoverStorage(work, request))
+				if request.Kind == "zfs-device" {
+					results = append(results, discoverZFSDevices(work, request))
+				} else {
+					results = append(results, vmhost.DiscoverStorage(work, request))
+				}
 				cancel()
 			}
 			appendStorageDiscoveries(s, results)
@@ -388,6 +419,15 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		m.Tick(ctx)
 	}
 	return nil
+}
+
+func zfsLegacyManagedProjection(managed *protocol.ManagedState) *protocol.ManagedState {
+	copy := *managed
+	copy.Storage = slices.DeleteFunc(append([]protocol.StorageRegistration(nil), copy.Storage...), func(entry protocol.StorageRegistration) bool {
+		return entry.ZFSProvisioned
+	})
+	copy.ZFSProvisions = nil
+	return &copy
 }
 
 // confirmPoolVMUpdateOutcomes prevents a successful local managed journal from
@@ -532,7 +572,10 @@ func legacyStorageSafe(state State, managed *protocol.ManagedState, credentialsR
 		}
 	}
 	for _, outcome := range managed.Outcomes {
-		if outcome.Kind == "storage-register" || outcome.Kind == "storage-update" || outcome.Kind == "storage-recheck" || outcome.Kind == "storage-detach" || outcome.Kind == "storage-credential-retire" {
+		// A pool network/ISO removal or rename is v2-only history: a host that performed
+		// one must not fall back to reporting as a legacy v1 host, which drops its whole
+		// managed state and with it the tombstones the Controller mirror needs.
+		if outcome.Kind == "storage-register" || outcome.Kind == "storage-update" || outcome.Kind == "storage-recheck" || outcome.Kind == "storage-detach" || outcome.Kind == "storage-credential-retire" || outcome.Kind == "network-remove" || outcome.Kind == "network-update" || outcome.Kind == "media-remove" {
 			return false
 		}
 	}
@@ -586,6 +629,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	probes["cpu-baseline"] = PoolCPUProbe(s)
 	m := NewMonitor(cfg.ProbeTimeout, probes)
 	storage := vmhost.NewStorageMonitor(cfg.ProbeTimeout)
+	s.storageMonitor.Store(storage)
 	var poolReconcileRunning atomic.Bool
 	var clusterReconcileRunning atomic.Bool
 	// Deferred before cancel so it runs after it: Run must not return while its background
@@ -641,12 +685,20 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			if !poolReconcileRunning.CompareAndSwap(false, true) {
 				return
 			}
+			runWork.Add(1)
 			go func() {
+				defer runWork.Done()
 				defer poolReconcileRunning.Store(false)
 				// Each repository gets its own bounded deadline. A single shared
 				// deadline would let one slow NFS/SMB/GFS2 access check skip every
 				// later member-access report in this pass.
 				_ = reconcilePoolStorageFromMaster(probeCtx, s, cfg.ProbeTimeout)
+				// Networks and media ride the same member pull pass: master owns the
+				// durable desired set; members materialize locally and report access.
+				// Their outcome is recorded, not discarded: a member whose VLAN or
+				// shared ISO never materialized must not report itself healthy.
+				recordPoolConverge(s, poolNetworkConvergeCheck, reconcilePoolNetworksFromMaster(probeCtx, s, cfg.ProbeTimeout))
+				recordPoolConverge(s, poolMediaConvergeCheck, reconcilePoolMediaFromMaster(probeCtx, s, cfg.ProbeTimeout))
 			}()
 		}
 		m.Tick(probeCtx)
@@ -701,27 +753,57 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		case <-ctx.Done():
 			return nil
 		case done := <-completed:
-			entry := s.State.Journal[active]
-			if done.err != nil {
-				entry.Status = "needs_attention"
-				entry.Error = "local execution or persistence failed; inspect retained managed VM journal before recovery"
-				entry.ObservedAt = time.Now().UTC()
-			} else {
-				entry.Status, entry.Error, entry.ObservedAt = done.result.Status, done.result.Error, done.result.ObservedAt
-				if done.result.OperationID != active || (entry.Status != "succeeded" && entry.Status != "failed" && entry.Status != "needs_attention") {
-					return errors.New("invalid local managed command completion")
-				}
-				forgetDeletedVM(cfg.history, entry)
+			active, err = completeManagedCommand(s, active, done, cfg.history)
+			if err != nil {
+				return err
 			}
-			s.State.Journal[active] = entry
-			if err = s.Save(); err != nil {
-				return persistenceError{err}
-			}
-			active = ""
 			m.Tick(probeCtx)
 		case <-ticker.C:
 		}
 	}
+}
+
+// completeManagedCommand runs only on the heartbeat owner of Store. Background
+// recovery may finish while a different command is queued for the worker.
+func completeManagedCommand(s *Store, active string, done managedCompletion, history *usageHistory) (string, error) {
+	id := active
+	if done.background {
+		id = done.result.OperationID
+	}
+	if id == "" {
+		return active, errors.New("invalid local managed command completion")
+	}
+	entry, found := s.State.Journal[id]
+	if done.background && (!found || entry.Status == "succeeded") {
+		// Completed aggregates outlive transport acknowledgements. Do not invent
+		// a missing command or re-publish an already settled result every tick.
+		return active, nil
+	}
+	if !found {
+		return active, errors.New("local managed command completion has no journal entry")
+	}
+	if done.err != nil {
+		entry.Status = "needs_attention"
+		entry.Error = "local execution or persistence failed; inspect retained managed VM journal before recovery"
+		entry.ObservedAt = time.Now().UTC()
+	} else {
+		if done.result.OperationID != id || (done.result.Status != "succeeded" && done.result.Status != "failed" && done.result.Status != "needs_attention") {
+			return active, errors.New("invalid local managed command completion")
+		}
+		entry.Status, entry.Error, entry.ObservedAt = done.result.Status, done.result.Error, done.result.ObservedAt
+		forgetDeletedVM(history, entry)
+	}
+	if done.background {
+		entry.Acknowledged = false
+	}
+	s.State.Journal[id] = entry
+	if err := s.Save(); err != nil {
+		return active, persistenceError{err}
+	}
+	if !done.background && id == active {
+		active = ""
+	}
+	return active, nil
 }
 
 // Controller bounds each error to 4096 UTF-8 bytes; keep full details in the journal.

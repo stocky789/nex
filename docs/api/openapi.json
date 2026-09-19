@@ -1310,7 +1310,7 @@
       "post": {
         "operationId": "reportHost",
         "summary": "Report observations and reconcile commands",
-        "description": "Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Versions 1 and 2 are accepted; version 2 starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Clustered storage has its own v2 acknowledgement: a Core sends neither clustered results nor storage-clustered-iscsi-v2 until it receives storage_clusters_support with that exact capability. The Controller sends that acknowledgement on every v2 preflight. A newly reconnected Core may offer the session-monitor preflight while withholding storage-clustered-iscsi-v2; before its acknowledged follow-up report, Controller clustered routes return retryable 503 negotiation pending without dispatching work or falling back. Core resets this readiness on start, Controller replacement/enrollment and report disconnect, so an older strict Controller sees only the clean preflight; queued Core results remain durable until a matching Controller acknowledges. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409, foreign/unknown operation IDs return 400. Terminal results are acknowledged without rewriting the original outcome. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects.",
+        "description": "Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Versions 1 and 2 are accepted; version 2 starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Clustered storage has its own v2 acknowledgement: a Core sends neither clustered results nor storage-clustered-iscsi-v2 until it receives storage_clusters_support with that exact capability. The Controller sends that acknowledgement on every v2 preflight. A newly reconnected Core may offer the session-monitor preflight while withholding storage-clustered-iscsi-v2; before its acknowledged follow-up report, Controller clustered routes return retryable 503 negotiation pending without dispatching work or falling back. Core resets this readiness on start, Controller replacement/enrollment and report disconnect, so an older strict Controller sees only the clean preflight; queued Core results remain durable until a matching Controller acknowledges. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409; known operation IDs belonging to another host return 400. Valid results for unknown operation IDs from a former Controller are acknowledged without creating operations or resource state. Terminal results are acknowledged without rewriting the original outcome, except an authoritative succeeded result for the same host and operation may settle a prior needs_attention outcome after Core recovery. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects.",
         "tags": [
           "Core agent → Controller"
         ],
@@ -2225,6 +2225,88 @@
         }
       }
     },
+    "/api/v1/storage/zfs/provision": {
+      "post": {
+        "operationId": "provisionZFSStorage",
+        "summary": "Provision ZFS storage from selected devices",
+        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. The Controller persists a stable request_id and relays one durable storage-zfs-provision command only to the selected pool master advertising storage-zfs-provision-v1. Every selected host must also be fresh, active, in the selected pool and advertise storage-zfs-provision-v1; otherwise the request is refused with 409 before Core is asked. Core owns the repository identity, validates each selected device immediately before destructive work, executes any selected member work through its authenticated peer channel, journals recovery, and reports the resulting Core-owned repository projection. An accepted request is not proof that devices were changed; poll operations and refreshed host inventory. Identical retries return the original request and operation; a changed payload conflicts.",
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "x-introduced-version": "0.1.0",
+        "x-audience": "client",
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Token returned by login or current session."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ZFSProvisionAPIRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Provision request accepted; Core work is pending.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "repository_id": { "type": "string" },
+                    "name": { "type": "string" },
+                    "pool_id": { "type": "string" },
+                    "scope": { "type": "string" },
+                    "hosts": { "type": "array", "items": { "$ref": "#/components/schemas/ZFSProvisionHost" } },
+                    "operation": { "$ref": "#/components/schemas/Operation" }
+                  },
+                  "required": ["name", "pool_id", "scope", "hosts", "operation"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Existing provision request for identical request_id and payload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "repository_id": { "type": "string" },
+                    "name": { "type": "string" },
+                    "pool_id": { "type": "string" },
+                    "scope": { "type": "string" },
+                    "hosts": { "type": "array", "items": { "$ref": "#/components/schemas/ZFSProvisionHost" } },
+                    "operation": { "$ref": "#/components/schemas/Operation" }
+                  },
+                  "required": ["name", "pool_id", "scope", "hosts", "operation"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": { "description": "Malformed JSON, unknown field, invalid request ID, name, scope, host selection, layout, device identity or erase confirmation." },
+          "401": { "description": "Administrator session required." },
+          "403": { "description": "Origin or CSRF rejected." },
+          "409": { "description": "Pool/master or selected host is unavailable or ineligible, the master lacks storage-zfs-provision-v1, or request_id conflicts." },
+          "500": { "description": "Controller persistence failure; no durable command was accepted." }
+        }
+      }
+    },
     "/api/v1/storage/cluster": {
       "get": {
         "operationId": "getStorageCluster",
@@ -3115,7 +3197,7 @@
       "post": {
         "operationId": "createNetworkRegistration",
         "summary": "Register pool guest network",
-        "description": "Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. No disk formatting. kind vlan creates an additive guest bridge on the host without touching the management bridge; other kinds perform no network configuration. Unobserved or non-physical uplinks conflict with 409. Definite failed registrations can be revalidated using a new request_id; queued, dispatched and needs_attention reservations must be reconciled first.",
+        "description": "Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. No disk formatting. kind vlan creates an additive guest bridge on the host without touching the management bridge; other kinds perform no network configuration. For kind vlan the submitted host_id only selects the pool: the registration is master-owned, so the response and later reads carry the pool master as host_id, and resending the identical body (member host_id included) replays the same registration and operation. Unobserved or non-physical uplinks conflict with 409. Definite failed registrations can be revalidated using a new request_id; queued, dispatched and needs_attention reservations must be reconciled first.",
         "security": [
           {
             "AdminSession": []
@@ -3227,6 +3309,260 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/NetworkRegistrationRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/networks/{id}": {
+      "delete": {
+        "operationId": "removeNetworkRegistration",
+        "summary": "Remove a pool VLAN guest network",
+        "description": "Implemented in development product 0.3.5, protocol v1. Administrator session, same HTTPS Origin and X-CSRF-Token required; JSON rejects unknown fields and bodies over 1 MiB. Controller only relays: the target host is always the pool master resolved from the pool record, so host_id is not accepted and a body carrying one is refused with 400 invalid JSON request. The pool master's Core checks the expected generation, refuses while any VM on any host in the pool references the network (running or stopped) and while any ready member's published VM inventory is stale, tears the guest bridge, its 802.1Q sub-interface when no other Nex stanza uses it and its /etc/network/interfaces.d stanza down, and journals a durable tombstone. Members converge on their next member pull pass, refusing locally while one of their own VMs uses the network. Only kind vlan networks are removable; a host-automatic bridge or libvirt network is refused with 409. 202 is acceptance, not teardown: the registration disappears from the library only when the master reports the tombstone. An identical request_id replays the same operation with 200; a different body under that request_id is 409. Requires the pool master to advertise pool-resource-removal-v1.",
+        "tags": [
+          "Client → Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "x-introduced-version": "0.3.5",
+        "x-audience": "client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Core-owned network registration identifier."
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NetworkLifecycleAPIRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Removal queued to the pool master.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceLifecycleResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Replay of the same request_id and body; no second operation was queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceLifecycleResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid JSON, unknown field such as host_id, bad identifier or request_id, or a name sent to a removal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid administrator session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin or CSRF token rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The network is not a succeeded registration on this pool's master.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No pool master, master stale or lacking pool-resource-removal-v1, not a pool VLAN, stale expected_generation, or replay conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller persistence failure; nothing was queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "renameNetworkRegistration",
+        "summary": "Rename a pool VLAN guest network",
+        "description": "Implemented in development product 0.3.5, protocol v1. Administrator session, same HTTPS Origin and X-CSRF-Token required. Same relay and same body as the removal plus name, which must be nonblank, at most 200 UTF-8 bytes and free of slashes and control characters. Renaming is the only change this call makes: the bridge name is derived from the uplink and VLAN tag and appears in every VM's domain XML, so changing an uplink or VLAN tag means removing the network and registering a new one, which gives it a new identity. The pool master records the new name at generation + 1 and rewrites its interfaces.d stanza; each member steps its own generation forward on its next pull pass, and a member whose uplink or VLAN differs reports pool network <id> changed uplink or VLAN; remove and re-add it instead of re-plumbing a bridge. Only kind vlan networks can be renamed (409 only pool VLAN networks can be removed). 202 is acceptance; the new name appears when the master reports it.",
+        "tags": [
+          "Client → Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "x-introduced-version": "0.3.5",
+        "x-audience": "client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Core-owned network registration identifier."
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NetworkLifecycleAPIRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Rename queued to the pool master.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceLifecycleResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Replay of the same request_id and body; no second operation was queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceLifecycleResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid JSON, unknown field, bad identifier or request_id, or a missing or invalid name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid administrator session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin or CSRF token rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The network is not a succeeded registration on this pool's master.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No pool master, master stale or lacking pool-resource-removal-v1, not a pool VLAN, stale expected_generation, or replay conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller persistence failure; nothing was queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
               }
             }
           }
@@ -4899,8 +5235,8 @@
     "/api/v1/media/{id}": {
       "delete": {
         "operationId": "deleteMedia",
-        "summary": "Remove a failed ISO import from the library",
-        "description": "Implemented in development product 0.2.8, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Removes the library record of an iso-import whose operation is failed or needs_attention, so a download that failed does not occupy the library forever with no way to clear it (BUG-0203). Retrying a failed download is POST /api/v1/media/download again under a NEW request_id; there is no separate retry operation. 409 when the import is still queued or dispatched, and 409 when it SUCCEEDED: the ISO then lives on its host, Nex Core has no media-removal command, and Controller will not drop a record for bytes it cannot delete. 409 while another media transfer holds the staging lock. 404 for an unknown id. Only Controller-owned staging bytes of a failed upload are deleted; no Core command is issued and no host state is touched. The removal is audited as media.discard.",
+        "summary": "Discard a failed ISO import, or remove an imported ISO",
+        "description": "Implemented in development product 0.2.8, protocol v1; the succeeded-import branch added in 0.3.5. Requires an administrator session, same Origin and X-CSRF-Token. For an iso-import whose operation is failed or needs_attention the call takes NO body and removes only this Controller's library record and its own staging bytes, so a download that failed does not occupy the library forever with no way to clear it (BUG-0203); no Core command is issued, no host state is touched, and the discard is audited as media.discard. For a SUCCEEDED import the call now relays a media-remove command to the host that stores the ISO (the pool master for pool-shared media) and requires a body {request_id}; no pool_id, host_id or expected_generation is accepted, because the pool, owner and current generation all come from the host-reported record. Core unlinks the published file, refuses while any VM on any host in the pool has the ISO in a CD drive (running or stopped) and while member VM inventory is stale, and journals a durable tombstone that members converge to; the library row disappears only when the host reports that tombstone. Retrying a failed download is POST /api/v1/media/download again under a NEW request_id; there is no separate retry operation. 409 when the import is still queued or dispatched, 409 while another media transfer holds the staging lock, and 409 when the owning host does not advertise pool-resource-removal-v1 (checked before the body is read, so an older client's bodyless call still gets the upgrade answer). 404 for an unknown id.",
         "tags": [
           "Client → Controller"
         ],
@@ -4932,7 +5268,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The library record was removed.",
+            "description": "The failed import's library record was removed, or a removal request replayed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4949,8 +5285,18 @@
               }
             }
           },
+          "202": {
+            "description": "Removal of an imported ISO queued to the host that stores it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceLifecycleResponse"
+                }
+              }
+            }
+          },
           "400": {
-            "description": "Invalid request.",
+            "description": "Invalid request, or a missing or blank request_id on a succeeded import.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4993,7 +5339,7 @@
             }
           },
           "409": {
-            "description": "The import is still running, or it succeeded and its ISO is stored on a host.",
+            "description": "The import is still running, another media transfer holds the staging lock, the owning host does not support pool-resource-removal-v1, or the request_id replays a different payload.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6028,8 +6374,12 @@
               "storage-recheck",
               "storage-detach",
               "storage-credential-retire",
+              "storage-zfs-provision",
               "network-register",
+              "network-remove",
+              "network-update",
               "iso-import",
+              "media-remove",
               "vm-create",
               "vm-update",
               "vm-power",
@@ -6121,10 +6471,31 @@
               }
             ]
           },
+          "resource_lifecycle": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceLifecycleRequest"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "network-remove, network-update and media-remove payload."
+          },
           "credential_retire": {
             "anyOf": [
               {
                 "$ref": "#/components/schemas/StorageCredentialRetireRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "zfs_provision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ZFSProvisionRequest"
               },
               {
                 "type": "null"
@@ -7198,8 +7569,12 @@
               "storage-recheck",
               "storage-detach",
               "storage-credential-retire",
+              "storage-zfs-provision",
               "network-register",
+              "network-remove",
+              "network-update",
               "iso-import",
+              "media-remove",
               "vm-create",
               "vm-update",
               "vm-power",
@@ -8866,7 +9241,8 @@
             "type": "boolean"
           },
           "shared": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Core-observed shared-storage capability, never by itself permission to place or start a VM. Provisioned ZFS is always false because each selected host has an independent local zpool."
           },
           "eligible_host_ids": {
             "type": [
@@ -8987,6 +9363,54 @@
         ],
         "x-go-type": "protocol.StorageLifecycleRequest"
       },
+      "ResourceLifecycleRequest": {
+        "type": "object",
+        "description": "network-remove, network-update and media-remove payload. Registration keeps the Command.network/Command.media shape, whose resource ID is reserved permanently on the host; a lifecycle change takes its own operation slot (network-lifecycle:<resource_id>:<operation_id>, media-lifecycle:<resource_id>:<operation_id>), so a removal never collides with the registration that created the resource. kind is always resource + \"-\" + action, so media-update does not exist. Core validates the same shape Controller does.",
+        "properties": {
+          "resource": {
+            "type": "string",
+            "enum": [
+              "network",
+              "media"
+            ]
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "remove",
+              "update"
+            ],
+            "description": "update is a rename and applies to a network only."
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "host_id": {
+            "type": "string",
+            "description": "The host Core applies this to: always the pool master for a pool VLAN, and the reported owner for an imported ISO. Controller resolves it; clients do not send it."
+          },
+          "expected_generation": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Required and at least 1. Core refuses a request whose generation is no longer current; 0 on the wire is read as 1 for records written before generations existed."
+          },
+          "name": {
+            "type": "string",
+            "description": "New network name; update only, nonblank, at most 200 UTF-8 bytes, no slashes or control characters. A removal must not carry one."
+          }
+        },
+        "required": [
+          "resource",
+          "action",
+          "resource_id",
+          "pool_id",
+          "host_id"
+        ],
+        "x-go-type": "protocol.ResourceLifecycleRequest"
+      },
       "StorageCredentialOffer": {
         "type": "object",
         "properties": {
@@ -9066,6 +9490,7 @@
               "local",
               "nfs",
               "zfs",
+              "zfs-device",
               "smb",
               "iscsi"
             ]
@@ -9113,6 +9538,16 @@
           },
           "existing": {
             "type": "boolean"
+          },
+          "device": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ZFSDevice"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -9121,6 +9556,93 @@
           "browsable"
         ],
         "x-go-type": "protocol.StorageDiscoveryCandidate"
+      },
+      "ZFSDevice": {
+        "type": "object",
+        "properties": {
+          "by_id": { "type": "string" },
+          "model": { "type": "string" },
+          "serial": { "type": "string" },
+          "fingerprint": { "type": "string" },
+          "size_bytes": { "type": "integer", "minimum": 0 },
+          "rotational": { "type": "boolean" },
+          "eligibility": { "type": "string" }
+        },
+        "required": ["by_id", "fingerprint", "size_bytes", "rotational", "eligibility"],
+        "x-go-type": "protocol.ZFSDevice"
+      },
+      "ZFSProvisionDevice": {
+        "type": "object",
+        "properties": {
+          "by_id": { "type": "string" },
+          "serial": { "type": "string" },
+          "fingerprint": { "type": "string" },
+          "size_bytes": { "type": "integer", "minimum": 0 },
+          "erase_confirmation": { "type": "string" }
+        },
+        "required": ["by_id", "serial", "fingerprint", "size_bytes"],
+        "x-go-type": "protocol.ZFSProvisionDevice"
+      },
+      "ZFSProvisionHost": {
+        "type": "object",
+        "properties": {
+          "host_id": { "type": "string" },
+          "layout": { "type": "string" },
+          "devices": { "type": ["array", "null"], "items": { "$ref": "#/components/schemas/ZFSProvisionDevice" } }
+        },
+        "required": ["host_id", "layout", "devices"],
+        "x-go-type": "protocol.ZFSProvisionHost"
+      },
+      "ZFSProvisionRequest": {
+        "type": "object",
+        "properties": {
+          "repository_id": { "type": "string" },
+          "name": { "type": "string" },
+          "pool_id": { "type": "string" },
+          "scope": { "type": "string" },
+          "hosts": { "type": ["array", "null"], "items": { "$ref": "#/components/schemas/ZFSProvisionHost" } }
+        },
+        "required": ["name", "pool_id", "scope", "hosts"],
+        "x-go-type": "protocol.ZFSProvisionRequest"
+      },
+      "ZFSProvisionAPIRequest": {
+        "type": "object",
+        "properties": {
+          "request_id": { "type": "string" },
+          "repository_id": { "type": "string" },
+          "name": { "type": "string" },
+          "pool_id": { "type": "string" },
+          "scope": { "type": "string", "enum": ["host", "pool"] },
+          "hosts": { "type": ["array", "null"], "items": { "$ref": "#/components/schemas/ZFSProvisionHost" } }
+        },
+        "required": ["request_id", "name", "pool_id", "scope", "hosts"],
+        "description": "Core allocates repository_id when omitted. Supplying a Core-owned repository_id configures selected hosts for that existing pool-scoped repository."
+      },
+      "ZFSProvisionHostResult": {
+        "type": "object",
+        "properties": {
+          "repository_id": { "type": "string" },
+          "pool_id": { "type": "string" },
+          "name": { "type": "string" },
+          "scope": { "type": "string" },
+          "host_id": { "type": "string" },
+          "layout": { "type": "string" },
+          "devices": { "type": ["array", "null"], "items": { "$ref": "#/components/schemas/ZFSProvisionDevice" } },
+          "status": { "type": "string" },
+          "error": { "type": "string" },
+          "pool_guid": { "type": "string" },
+          "dataset_guid": { "type": "string" }
+        },
+        "required": ["repository_id", "pool_id", "name", "scope", "host_id", "layout", "devices", "status"],
+        "x-go-type": "protocol.ZFSProvisionHostResult",
+        "description": "Durable outcome for one selected host. pool_guid and dataset_guid identify that host's independent native zpool and dataset after a successful provision; this outcome alone is not a current access observation."
+      },
+      "ZFSHostAccess": {
+        "type": "object",
+        "properties": {"host_id": {"type": "string"}, "pool_guid": {"type": "string"}, "dataset_guid": {"type": "string"}, "path": {"type": "string"}, "readable": {"type": "boolean"}, "writable": {"type": "boolean"}, "total_bytes": {"type": "integer", "minimum": 0}, "available_bytes": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]}, "observed_at": {"type": "string", "format": "date-time"}, "error": {"type": "string"}},
+        "required": ["host_id", "readable", "writable"],
+        "x-go-type": "protocol.ZFSHostAccess",
+        "description": "Current per-host observation for a Core-provisioned local ZFS repository. The GUIDs, path, capacity and read/write flags apply only to host_id; a missing or errored observation grants no placement permission."
       },
       "StorageDiscoveryResult": {
         "type": "object",
@@ -9426,6 +9948,33 @@
         ],
         "x-go-type": "protocol.PoolStorageAccess"
       },
+      "PoolNetworkAccess": {
+        "type": "object",
+        "properties": {
+          "network_id": { "type": "string" },
+          "host_id": { "type": "string" },
+          "generation": { "type": "integer", "minimum": 0 },
+          "bridge": { "type": "string" },
+          "uplink_present": { "type": "boolean" },
+          "observed_at": { "type": "string", "format": "date-time" },
+          "error": { "type": "string" }
+        },
+        "required": ["network_id", "host_id", "generation", "uplink_present", "observed_at"],
+        "x-go-type": "protocol.PoolNetworkAccess"
+      },
+      "PoolMediaAccess": {
+        "type": "object",
+        "properties": {
+          "media_id": { "type": "string" },
+          "host_id": { "type": "string" },
+          "storage_id": { "type": "string" },
+          "sha256": { "type": "string" },
+          "observed_at": { "type": "string", "format": "date-time" },
+          "error": { "type": "string" }
+        },
+        "required": ["media_id", "host_id", "storage_id", "observed_at"],
+        "x-go-type": "protocol.PoolMediaAccess"
+      },
       "PoolStorageReservationRequest": {
         "type": "object",
         "properties": {
@@ -9538,6 +10087,19 @@
             "items": {
               "$ref": "#/components/schemas/PoolStorageAccess"
             }
+          },
+          "zfs_host_access": {
+            "type": ["array", "null"],
+            "items": {"$ref": "#/components/schemas/ZFSHostAccess"},
+            "description": "Current local access observations for each configured host of a Core-provisioned ZFS repository."
+          },
+          "zfs_provisioned": {
+            "type": "boolean",
+            "description": "True only for a repository created through Core ZFS provisioning."
+          },
+          "zfs_scope": {
+            "type": "string",
+            "description": "Requested ZFS scope (host or pool). Pool scope shares the Core repository identity across independent host-local zpools; it does not make storage shared."
           }
         },
         "required": [
@@ -9550,7 +10112,7 @@
           "status"
         ],
         "x-go-type": "protocol.StorageRegistration",
-        "description": "Core-owned repository configuration and observation. A repository has one selected host in this release; shared is a capability observation, never placement permission. Source identity, access, capacity and health are Core observations; a missing or replaced mount blocks writes and never falls back to a mountpoint. For ZFS, source.zfs.mount_path remains the existing dataset mount and path is the Core-owned /var/lib/nex-storage/<repository-id> bind alias used by VM disks; detach removes only that alias, never ZFS properties. Credentials remain Core-local and inventory reports only presence. A fresh Controller adopts these records from Inventory.managed.storage."
+        "description": "Core-owned repository configuration and observation. A repository has one selected host in this release; shared is a capability observation, never placement permission. Source identity, access, capacity and health are Core observations; a missing or replaced mount blocks writes and never falls back to a mountpoint. For existing-dataset ZFS registration, source.zfs.mount_path remains the existing dataset mount and path is the Core-owned /var/lib/nex-storage/<repository-id> bind alias used by VM disks; detach removes only that alias and never ZFS properties. Core ZFS provisioning creates its own tagged pool and vms dataset, then uses the same alias. Credentials remain Core-local and inventory reports only presence. A fresh Controller adopts these records from Inventory.managed.storage."
       },
       "NetworkRegistration": {
         "type": "object",
@@ -9599,11 +10161,30 @@
             "type": "string",
             "description": "Uplink NIC name: required for kind vlan; set on kind bridge when the registration was created automatically for the untagged network of a bridge on a physical port."
           },
+          "generation": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "kind vlan: master-owned desired generation members reconcile against; 0 on host-local registrations."
+          },
           "vlan": {
             "type": "integer",
             "minimum": 0,
             "maximum": 4094,
             "description": "kind vlan only: 802.1Q tag, 0 untagged."
+          },
+          "member_access": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "description": "kind vlan: the master's observations of each member's applied bridge; absent on host-local registrations.",
+            "items": {
+              "$ref": "#/components/schemas/PoolNetworkAccess"
+            }
+          },
+          "tombstone": {
+            "type": "boolean",
+            "description": "The host durably removed this network. The row carries only id, pool_id, host_id and the generation after the removal; name, kind, source and the rest are absent. A Controller deletes its mirror row for that host and never re-adopts the registration from an older report, and a peer list never carries one."
           }
         },
         "required": [
@@ -9665,6 +10246,24 @@
           "url": {
             "type": "string",
             "description": "Command-only public HTTP(S) source URL. Omitted from client responses and applied host inventory. Requires iso-download-v1."
+          },
+          "member_access": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PoolMediaAccess"
+            }
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Fences removal, as it does for storage and networks. Imports leave it zero and every reader treats zero as 1."
+          },
+          "tombstone": {
+            "type": "boolean",
+            "description": "The host durably removed this ISO and unlinked its published file. The row carries only id, pool_id, host_id and the generation after the removal; a Controller deletes its mirror row for that host and never re-adopts the import from an older report."
           }
         },
         "required": [
@@ -10114,6 +10713,79 @@
         ],
         "additionalProperties": false
       },
+      "NetworkLifecycleAPIRequest": {
+        "type": "object",
+        "description": "Body of DELETE and PATCH /api/v1/networks/{id}. There is deliberately no host_id: the pool master owns pool VLANs and Controller resolves it, so a client-supplied host is rejected as an unknown field.",
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "description": "Stable idempotency key. The same key with the same body replays the original operation; with a different body it is 409."
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "expected_generation": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The network generation the operator acted on. It must equal the mirrored registration's generation, so a stale view is refused instead of changing a network that moved underneath it."
+          },
+          "name": {
+            "type": "string",
+            "description": "PATCH only: the new network name."
+          }
+        },
+        "required": [
+          "request_id",
+          "pool_id",
+          "expected_generation"
+        ],
+        "additionalProperties": false
+      },
+      "MediaRemoveAPIRequest": {
+        "type": "object",
+        "description": "Body of DELETE /api/v1/media/{id} for an import whose operation succeeded. The failed-import discard takes no body at all, and no pool, host or generation is accepted here: all three come from the host-reported record.",
+        "properties": {
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "ResourceLifecycleResponse": {
+        "type": "object",
+        "description": "Acceptance of a pool network or ISO lifecycle request. The resource stays in Controller's projection until the owning host reports the tombstone or the new name.",
+        "properties": {
+          "resource": {
+            "type": "string",
+            "enum": [
+              "network",
+              "media"
+            ]
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "remove",
+              "update"
+            ]
+          },
+          "operation": {
+            "$ref": "#/components/schemas/Operation"
+          }
+        },
+        "required": [
+          "resource",
+          "resource_id",
+          "action",
+          "operation"
+        ]
+      },
       "StorageCredentialRequest": {
         "type": "object",
         "properties": {
@@ -10466,6 +11138,16 @@
               "$ref": "#/components/schemas/StorageCredentialReceipt"
             },
             "description": "Redacted Core-owned receipt metadata for adoption; it never contains credential bytes."
+          },
+          "zfs_provisions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ZFSProvisionHostResult"
+            },
+            "description": "Core-owned ZFS provisioning results for Controller adoption."
           },
           "membership": {
             "anyOf": [
@@ -11393,6 +12075,17 @@
       },
       "semantics": "Verify existing local directory access; no formatting. Refuse, as a failed result, a path another non-failed registration on this host already holds. The host self-registers /var/lib/libvirt/images as ISO through this same verification, with a host-generated ID, unless any journal entry already holds that path. Succeeded registrations are reported back in Inventory.managed.storage and adopted by a Controller that does not hold them (request_id adopt-storage:<host>:<id>) without redelivery."
     },
+    "storage-zfs-provision": {
+      "transport": "POST /api/v1/agent/report response.commands",
+      "capability": "storage-zfs-provision-v1",
+      "payload": {
+        "$ref": "#/components/schemas/ZFSProvisionRequest"
+      },
+      "result": {
+        "$ref": "#/components/schemas/Result"
+      },
+      "semantics": "Master-directed durable ZFS provisioning. Core owns repository identity, validates stable selected devices immediately before destructive work, journals recovery and performs selected member work through authenticated Core-peer transport. Results are reported in Inventory.managed.zfs_provisions for adoption after Controller replacement."
+    },
     "storage-update": {
       "transport": "POST /api/v1/agent/report response.commands",
       "capability": "storage-repositories-v1",
@@ -11448,6 +12141,28 @@
       },
       "semantics": "Verify existing bridge or active libvirt network without edits; for kind vlan, idempotently create bridge <uplink>v<vlan> over the 802.1Q sub-interface, persist it under /etc/network/interfaces.d and refuse uplinks or VLAN devices already used by the host configuration. Refuse, as a failed result, a bridge (shared by kind bridge and vlan) or libvirt network another non-failed registration on this host already holds. The host self-registers <port> untagged for every bridge on a physical NIC or bond through this same verification, with host-generated IDs, unless any journal entry already holds that bridge. Succeeded registrations are reported back in Inventory.managed.networks and adopted by a Controller that does not hold them (request_id adopt-network:<host>:<id>) without redelivery."
     },
+    "network-remove": {
+      "transport": "POST /api/v1/agent/report response.commands",
+      "capability": "pool-resource-removal-v1",
+      "payload": {
+        "$ref": "#/components/schemas/ResourceLifecycleRequest"
+      },
+      "result": {
+        "$ref": "#/components/schemas/Result"
+      },
+      "semantics": "Remove a pool VLAN guest network (kind vlan only; anything else is the failed result \"only pool VLAN networks can be removed\"). Core checks the expected generation, then refuses while any VM definition on that host references the network, running or stopped (\"network cannot be removed while used by VM <uuid>\"). On the pool master the agent additionally refuses while any VM in any member's published inventory uses it (\"… on host <host>\"), and fails closed when membership or that inventory cannot be read or a ready member has not published at the current membership generation (\"pool VM inventory is incomplete; wait for every member to report before removing this network\"). Teardown proves ownership from the /etc/network/interfaces.d/nex-<bridge> stanza Nex itself wrote (\"bridge <b> was not created by Nex; remove it by hand\"), refuses a bridge carrying any port but its own guest port (\"network still has attached interfaces\"), deletes the bridge, deletes <uplink>.<vlan> only when it is a VLAN device with no master that no other Nex stanza names, and removes the stanza. The uplink, the management bridge, host addresses, routes and /etc/network/interfaces are never touched. Teardown is idempotent, so an interrupted removal settles on replay and there is no needs_attention outcome. Success journals a tombstone: the network leaves Inventory.managed.networks as a tombstone row, the host stops rebuilding the bridge, and the Core ID can never be re-registered — re-adding the same uplink and VLAN mints a new network with a new identity, so VM NICs must be re-pointed."
+    },
+    "network-update": {
+      "transport": "POST /api/v1/agent/report response.commands",
+      "capability": "pool-resource-removal-v1",
+      "payload": {
+        "$ref": "#/components/schemas/ResourceLifecycleRequest"
+      },
+      "result": {
+        "$ref": "#/components/schemas/Result"
+      },
+      "semantics": "Rename a pool VLAN guest network. The payload carries no uplink, VLAN or source, and the projection copies only the name, so a rename structurally cannot re-plumb a bridge; kind, source, uplink and VLAN are unchanged and the single native effect is one atomic rewrite of the /etc/network/interfaces.d/nex-<bridge> stanza, whose header comment carries the name. The generation becomes expected_generation + 1. A member applies the master's name one generation at a time, so a member several renames behind steps through each one and never reports a generation it did not apply; a member whose journalled source, uplink or VLAN differs reports \"pool network <id> changed uplink or VLAN; remove and re-add it\" instead. A stale expected generation is refused with \"network generation is no longer current; refresh and retry\"."
+    },
     "iso-import": {
       "transport": "POST /api/v1/agent/report response.commands",
       "capability": "managed-vm-v1",
@@ -11458,6 +12173,17 @@
         "$ref": "#/components/schemas/Result"
       },
       "semantics": "Without media.url, fetch assigned staged media over host mTLS and verify supplied size/hash/ISO. With media.url, require iso-download-v1 and zero initial size/hash; Core downloads public HTTP(S) destinations with DNS/redirect address checks, no credentials or environment proxies, capacity limits and ISO validation. Core records computed size/hash in its durable applied journal, then reports Inventory.managed.media without URL. Controller mirrors completion metadata and a fresh Controller re-adopts identities and names. Interrupted dispatched work is reconciled through the journal; ambiguous imports require attention."
+    },
+    "media-remove": {
+      "transport": "POST /api/v1/agent/report response.commands",
+      "capability": "pool-resource-removal-v1",
+      "payload": {
+        "$ref": "#/components/schemas/ResourceLifecycleRequest"
+      },
+      "result": {
+        "$ref": "#/components/schemas/Result"
+      },
+      "semantics": "Remove an imported ISO. Core checks the expected generation (\"ISO generation is no longer current; refresh and retry\"), refuses while any VM definition on that host names the ISO as media_id or drivers_media_id, running or stopped (\"ISO cannot be removed while attached to VM <uuid>\"), and on the pool master also refuses for any VM in a member's published inventory (\"… on host <host>\") and fails closed on incomplete member inventory. Teardown unlinks the published file <storage>/nex-media/<id>.iso and nothing else; a file already gone is success, which is also what the second host on shared storage observes. No VM disk is touched. Success journals a tombstone: the ISO leaves Inventory.managed.media as a tombstone row, and neither VM creation nor a member's shared-media adoption resolves it any more."
     },
     "vm-create": {
       "transport": "POST /api/v1/agent/report response.commands",

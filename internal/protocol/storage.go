@@ -14,6 +14,7 @@ import (
 
 const StorageRepositoryCapability = "storage-repositories-v1"
 const StorageDiscoveryCapability = "storage-discovery-v1"
+const ZFSProvisionCapability = "storage-zfs-provision-v1"
 
 const (
 	StorageKindLocal = "local"
@@ -208,7 +209,58 @@ type StorageDiscoveryCandidate struct {
 	// Existing is true when Core observed a leftover or current Nex repository
 	// marker in that folder. It is advisory for picking; registration still
 	// verifies identity and access.
-	Existing bool `json:"existing,omitempty"`
+	Existing bool       `json:"existing,omitempty"`
+	Device   *ZFSDevice `json:"device,omitempty"`
+}
+
+type ZFSDevice struct {
+	ByID        string `json:"by_id"`
+	Model       string `json:"model,omitempty"`
+	Serial      string `json:"serial,omitempty"`
+	SizeBytes   uint64 `json:"size_bytes"`
+	Rotational  bool   `json:"rotational"`
+	Eligibility string `json:"eligibility"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+type ZFSProvisionDevice struct {
+	ByID              string `json:"by_id"`
+	Serial            string `json:"serial"`
+	SizeBytes         uint64 `json:"size_bytes"`
+	EraseConfirmation string `json:"erase_confirmation,omitempty"`
+	Fingerprint       string `json:"fingerprint"`
+}
+
+type ZFSProvisionHost struct {
+	HostID  string               `json:"host_id"`
+	Layout  string               `json:"layout"`
+	Devices []ZFSProvisionDevice `json:"devices"`
+}
+
+// Repository identity is deliberately absent: Nex Core assigns it while
+// durably accepting this master-owned request.
+type ZFSProvisionRequest struct {
+	// RepositoryID is empty for a new repository. A later pool-scoped host
+	// configuration names an existing Core-owned identity only.
+	RepositoryID string             `json:"repository_id,omitempty"`
+	Name         string             `json:"name"`
+	PoolID       string             `json:"pool_id"`
+	Scope        string             `json:"scope"`
+	Hosts        []ZFSProvisionHost `json:"hosts"`
+}
+
+type ZFSProvisionHostResult struct {
+	RepositoryID string               `json:"repository_id"`
+	PoolID       string               `json:"pool_id"`
+	Name         string               `json:"name"`
+	Scope        string               `json:"scope"`
+	HostID       string               `json:"host_id"`
+	Layout       string               `json:"layout"`
+	Devices      []ZFSProvisionDevice `json:"devices"`
+	Status       string               `json:"status"`
+	Error        string               `json:"error,omitempty"`
+	PoolGUID     string               `json:"pool_guid,omitempty"`
+	DatasetGUID  string               `json:"dataset_guid,omitempty"`
 }
 
 // StorageDiscoveryResult deliberately returns only operator-safe source metadata and
@@ -229,6 +281,7 @@ var storageUUID = regexp.MustCompile(`^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit
 var iscsiWWID = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,255}$`)
 var storageOpaqueID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 var storageMarkerID = regexp.MustCompile(`^[0-9a-f]{32}$`)
+var zfsDeviceFingerprint = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var storageLockTable = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 
 func storagePath(raw string) bool {
@@ -448,8 +501,8 @@ func ValidateStorageDiscovery(v StorageDiscoveryRequest) error {
 	if !storageOpaqueID.MatchString(v.RequestID) || !storageOpaqueID.MatchString(v.PoolID) || !storageOpaqueID.MatchString(v.HostID) {
 		return errors.New("storage discovery needs valid request, pool and host IDs")
 	}
-	if v.Kind != StorageKindLocal && v.Kind != StorageKindNFS && v.Kind != StorageKindZFS && v.Kind != StorageKindSMB && v.Kind != StorageKindISCSI {
-		return errors.New("storage discovery kind must be local, nfs, zfs, smb or iscsi")
+	if v.Kind != StorageKindLocal && v.Kind != StorageKindNFS && v.Kind != StorageKindZFS && v.Kind != StorageKindSMB && v.Kind != StorageKindISCSI && v.Kind != "zfs-device" {
+		return errors.New("storage discovery kind must be local, nfs, zfs, smb, iscsi or zfs-device")
 	}
 	if v.Server != "" && !storageServer(v.Server) {
 		return errors.New("storage discovery server is invalid")
@@ -467,4 +520,66 @@ func ValidateStorageDiscovery(v StorageDiscoveryRequest) error {
 		return errors.New("iSCSI discovery needs a portal")
 	}
 	return nil
+}
+
+func ValidateZFSProvision(v ZFSProvisionRequest) error {
+	if !storageOpaqueID.MatchString(v.PoolID) || (v.RepositoryID != "" && !storageOpaqueID.MatchString(v.RepositoryID)) || strings.TrimSpace(v.Name) == "" || len(v.Name) > 128 || (v.Scope != "host" && v.Scope != "pool") || len(v.Hosts) == 0 {
+		return errors.New("ZFS provision needs name, pool scope and hosts")
+	}
+	seen := map[string]bool{}
+	for _, host := range v.Hosts {
+		if !storageOpaqueID.MatchString(host.HostID) || seen[host.HostID] || !ValidZFSLayout(ZFSLayout(host.Layout, len(host.Devices)), len(host.Devices)) {
+			return errors.New("ZFS provision host or layout is invalid")
+		}
+		seen[host.HostID] = true
+		byID := map[string]bool{}
+		for _, device := range host.Devices {
+			if !strings.HasPrefix(device.ByID, "/dev/disk/by-id/") || strings.ContainsAny(device.ByID, "\x00\r\n") || device.Serial == "" || device.SizeBytes == 0 || !zfsDeviceFingerprint.MatchString(device.Fingerprint) || byID[device.ByID] {
+				return errors.New("ZFS provision device is invalid")
+			}
+			byID[device.ByID] = true
+			if device.EraseConfirmation != "" && device.EraseConfirmation != device.ByID {
+				return errors.New("ZFS erase confirmation must name the selected device")
+			}
+		}
+	}
+	if v.Scope == "host" && len(v.Hosts) != 1 {
+		return errors.New("host-scoped ZFS provision needs one host")
+	}
+	return nil
+}
+
+// ValidZFSLayout reports whether an explicit layout can be built from exactly
+// this many devices. An empty layout is not a layout: callers that accept the
+// Core default resolve it with ZFSLayout first, so the default is visible where
+// it is applied rather than hidden in this check.
+func ValidZFSLayout(layout string, devices int) bool {
+	switch layout {
+	case "single":
+		return devices == 1
+	case "mirror":
+		return devices == 2
+	case "raidz1":
+		return devices >= 3
+	case "raidz2":
+		return devices >= 4
+	case "striped_mirrors":
+		return devices >= 4 && devices%2 == 0
+	}
+	return false
+}
+
+// ZFSLayout applies Core's fixed defaults when an operator did not request an
+// override. It is shared by validation, the host worker and API clients.
+func ZFSLayout(layout string, devices int) string {
+	if layout != "" {
+		return layout
+	}
+	if devices == 1 {
+		return "single"
+	}
+	if devices == 2 {
+		return "mirror"
+	}
+	return "raidz1"
 }

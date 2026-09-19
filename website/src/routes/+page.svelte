@@ -51,7 +51,7 @@
         >
       </div>
       <p class="development-note">
-        <span aria-hidden="true">◌</span> Early development. Public builds are not available yet.
+        <span aria-hidden="true">◌</span> Early development. Disposable evaluation only.
       </p>
     </div>
     <figure class="architecture">
@@ -227,7 +227,7 @@
           Development<br />status.
         </h2>
         <p>
-          Development builds are available to approved testers.
+          Development builds are for disposable evaluation.
         </p>
       </div>
     </div>
@@ -248,15 +248,15 @@
           <span class="release-kicker">Development download</span
           ><strong><a href="https://nexvirtualization.com/downloads/latest/">Latest Nex Core build</a></strong>
           <p>
-            Available through this approved private site for disposable evaluation.
+            Check the build’s release notes and verification limits before evaluating it.
           </p>
         </div>
         <div>
           <span class="release-kicker">Next milestones</span
-          ><strong>VM lifecycle, recovery and updates</strong>
+          ><strong>Pool acceptance, recovery and migration</strong>
           <p>
-            Create and manage VMs, restore their data and update
-            existing installations safely.
+            VM lifecycle is implemented. Complete pool safety checks, then deliver
+            snapshots, backups, verified restores and migration.
           </p>
         </div>
         <div class="release-footnote">

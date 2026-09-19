@@ -1,8 +1,9 @@
 # Package repository and in-product updates
 
 Date: 2026-09-09  
-Status: APT is live at `https://nexvirtualization.com/apt/`
-(`nex-controller` `0.1.3`, `nex-core-local` `0.1.4` at the last verified publication).
+Status: Historical update-path plan. As recorded at its last verified publication, APT
+served `nex-controller` `0.1.3` and `nex-core-local` `0.1.4` at
+`https://nexvirtualization.com/apt/`.
 The next release must publish a version newer than `0.1.5~alpha1`; domain default; private HTTP
 repo URLs are remapped to that default. Controller appliances ship `apply-update`
 + path unit so Updates Check/Update work after deploy. Signing key under
@@ -10,6 +11,10 @@ repo URLs are remapped to that default. Controller appliances ship `apply-update
 `sudo nex-apt-publish`.
 Disposable lab verified Check/Apply for both packages against the public repo.
 Host backend remains `/srv/nex-apt` on the website VM.
+
+This dated record does not assert the current archive contents or that working version
+`0.3.5` is published. ZFS-enabled ISO publication is currently refused until the
+external-distribution gates are closed.
 
 ## Decision
 

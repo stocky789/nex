@@ -42,7 +42,7 @@ Use an explicitly selected disposable lab host.
   own record and an upgrade never renames it. For local-directory ownership, remote storage
   preparation,
   supported filesystem types, credentials and single-host limits, see
-  [Register VM storage repositories](storage-repositories.md).
+  [Add VM storage repositories](storage-repositories.md).
 - Free space on each storage target for the **full size of every disk placed on it plus about
   4 GiB of headroom**, whether the disks are thin or thick. Thin disks are checked at their
   full size on creation but are not reserved afterwards, so later growth can still fill the
@@ -65,7 +65,7 @@ Use an explicitly selected disposable lab host.
   Upgrade Controller before Core; an older Controller rejects the new Core report fields.
 - For a Windows guest on a **VirtIO** or **SCSI** disk bus or a **VirtIO** network adapter:
   the virtio-win driver ISO on the same host, attached as the VM's **Driver disc**, because
-  Windows Setup cannot see those devices without it. Current Core media seed Fedora virtio-win
+  Windows Setup cannot see those devices without it. Current Core media seeds Fedora virtio-win
   into the host ISO library on enroll; select it as **Driver disc**. On an older host without
   that seed, import matching media first. Choosing **SATA** and **Intel e1000e** avoids that
   at some cost in performance.
@@ -87,7 +87,7 @@ Use an explicitly selected disposable lab host.
    directory on the host, then register it yourself with **Register storage** below;
    a failed registration does not reserve its path. To add local, NFSv4, OpenZFS, SMB3 or iSCSI
    storage, select **Register storage**, then follow
-   [Register VM storage repositories](storage-repositories.md). Wait for the row to show
+   [Add VM storage repositories](storage-repositories.md). Wait for the row to show
    `healthy`, readable and writable before using it; follow its link to **Task history** if it
    remains queued or reports an error.
 3. Open **Networking**. The host registers its untagged network (for example **nex0 untagged**
@@ -168,7 +168,8 @@ Use an explicitly selected disposable lab host.
         any field clears all three. Set a topology only when guest licensing or NUMA-aware
         software needs a particular shape.
       - **CPU model** — new drafts use **Pool CPU baseline** when Core can verify a common
-        CPU across every current pool member. Selecting it saves its named model, fixed
+        CPU across every current pool member. This choice is marked **(Recommended)**.
+        Selecting it saves its named model, fixed
         features and machine type with this VM. They do not change when pool membership
         changes. If the baseline is unavailable, wait for all members to be ready and
         reachable, or explicitly choose a CPU model. All host-usable named choices remain
@@ -178,7 +179,9 @@ Use an explicitly selected disposable lab host.
         Core checks an explicit CPU definition against the actual host runtime before
         defining or starting it. A current pool baseline does not guarantee future-host or
         live-migration compatibility; migration is not implemented in this slice. Change
-        a VM's CPU only while stopped. See the fixed feature summary beneath the selector.
+        a VM's CPU only while stopped. Individual CPU feature flags are not displayed;
+        the saved settings remain intact. A saved baseline is marked **(Recommended)**
+        only while it matches the currently available pool baseline.
       - **Memory mode** — **Dedicated** or **Maximum**; see [Memory modes](#memory-modes).
       - **Memory (MiB)** — 512 to 262144. The page shows the host's reported CPU and memory
         capacity underneath as observation, not an admission decision. This size is the ceiling
@@ -258,8 +261,9 @@ Use an explicitly selected disposable lab host.
       - **Driver disc** — an optional second ISO, or **No driver disc**, in the VM's second CD
         drive. For Windows on **VirtIO** or **SCSI**, use virtio-win here so Setup can load the
         disk driver (**Load driver**, then the `amd64` folder for the guest's Windows version).
-        Import matching driver media into the selected host's ISO library first; the public 0.2.9
-        ISO does not include or pre-select it. The list
+        Current Core media seeds Fedora virtio-win into the selected host's ISO library after
+        enrollment; select it here. On an older host without that seed, import matching driver
+        media first. The list
         excludes whatever is selected as **Install ISO**, so one image cannot fill both drives.
         The field is disabled, with *This host's Nex Core does not provide a second CD drive
         yet*, when the placement host runs an older Nex Core; upgrade it to attach a driver
@@ -377,7 +381,7 @@ failed and uncertain transfers show their own status.
   master until both report master-owned VM placement. Revocation and stale connectivity block
   new work.
 - **Storage check fails:** inspect the Core error, then follow the source-specific recovery
-  steps in [Register VM storage repositories](storage-repositories.md). Do not point a local
+  steps in [Add VM storage repositories](storage-repositories.md). Do not point a local
   registration at a remote mount that may disappear.
 - **Network check fails:** for a VLAN network, read the task error: the uplink must be a
   physical NIC or bond reported by the host (a bond member is refused; use the bond), the VLAN must not already belong to another

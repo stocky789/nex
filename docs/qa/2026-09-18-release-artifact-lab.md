@@ -1,4 +1,4 @@
-# Current release-artifact lab
+# Release-artifact lab — 2026-09-18
 
 Date: 2026-09-18. Local development build, version 0.3.2, from the working tree
 based on `3db55e1a08b056c5f039565fc6fd1195ab507da4`, including uncommitted changes.

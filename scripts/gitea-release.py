@@ -89,6 +89,22 @@ def upload(repo, release_id, asset):
 
 
 def publish(repo, tag, target, name, notes, assets):
+    for asset in assets:
+        if asset.name.endswith("-compliance-manifest.json"):
+            try:
+                manifest = json.loads(asset.read_text())
+            except ValueError as error:
+                # A manifest that cannot be read cannot clear the gate below.
+                raise GiteaError(f"invalid compliance manifest {asset.name}: {error}") from error
+            if not isinstance(manifest, dict):
+                raise GiteaError(f"invalid compliance manifest {asset.name}: not an object")
+            components = manifest.get("components")
+            if isinstance(components, list) and any(
+                    isinstance(component, dict) and component.get("package") in
+                    {"zfs-dkms", "zfsutils-linux"} for component in components):
+                raise GiteaError(
+                    "ZFS-enabled ISO publishing is blocked pending verified OpenZFS "
+                    "licence, DKMS/kernel, offline-install, Secure Boot and boot-recovery evidence")
     existing = repo.request("GET", f"/releases/tags/{tag}")
     if existing:
         repo.request("DELETE", f"/releases/{existing['id']}")

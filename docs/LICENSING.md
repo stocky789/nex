@@ -201,12 +201,34 @@ corresponding source with the component manifest before external distribution,
 under the release evidence gate above. This inspection does not grant external
 release clearance.
 
-OpenZFS is intentionally not included in the ISO or `nex-core-local` package.
-It remains an optional existing-host capability pending an exact package/source
-license review, DKMS and supported-kernel build evidence, offline dependency
-evidence, Secure Boot signing/key-handling evidence where applicable, and
-known-good boot recovery testing. This record grants no ZFS redistribution
-clearance and makes no Secure Boot compatibility claim.
+Decision: project owner, 2026-09-19 — OpenZFS is built into the Core distribution
+recipe ([plan](plans/2026-09-19-zfs-repository-provisioning.md)). The installer and
+Core package request Debian `zfs-dkms`, `zfsutils-linux` and matching kernel headers;
+installer binary and source repositories include `contrib`. These are separately
+executed native programs and a native kernel module, not implementation copied or
+linked into Nex. The media carries the `zfs-dkms` source package only: no prebuilt
+ZFS kernel module is redistributed, and DKMS builds the module on the installed
+host against that host's kernel headers. This replaces the optional existing-host
+dependency policy.
+
+The rollout's package inspection identified Debian `zfs-dkms` and `zfsutils-linux`
+`2.3.9-0+deb13u1`, source `zfs-linux` at the same version. Its Debian copyright file
+identifies CDDL-1.0 and separately licensed BSD-2-Clause portions. Retain the complete
+exact-package notices and matching source, including all component-specific terms;
+this summary is not a blanket combined-kernel licensing determination.
+
+**External distribution of ZFS-enabled images, including alphas, remains blocked.**
+The exact final component/source licence review, matching corresponding source and
+notice retention, supported-kernel DKMS build, offline installation, Secure Boot
+signing/key handling where applicable, kernel-upgrade and known-good boot recovery
+must have inspected evidence. Until those gates close, ZFS-enabled images are for
+internal disposable labs only. Configuration changes and unit tests do not establish
+that an image builds, boots or can be redistributed. See the
+[rollout verification](qa/2026-09-19-zfs-provisioning.md) for actual checks and limits.
+That report records internal QA4 offline installation, first boot, reboot, and a
+separate disposable kernel-package upgrade and retained-kernel fallback. Those
+results narrow the technical unknowns; they do not close the remaining licence,
+Secure Boot, exact-final-artifact, or external source-delivery gates.
 
 ## Native clustered-GFS2 dependencies — 2026-09-12
 

@@ -236,6 +236,21 @@ func TestStorageProjectionUsesCoreAllocatedRegistration(t *testing.T) {
 	}
 }
 
+// The Controller stamps its own request state ("queued") into a typed repository
+// command and Core copies the request into the applied record. A succeeded
+// projection must not echo that: the master refuses a shared repository whose
+// placement observation carries a status other than empty or succeeded.
+func TestStorageProjectionDropsControllerRequestState(t *testing.T) {
+	request := protocol.StorageRegistration{PoolID: "pool-1", HostID: "host-1", Name: "remote", Kind: protocol.StorageKindSMB, OperationID: "op-1", Status: "queued"}
+	applied := request
+	applied.ID, applied.Generation, applied.Path = "core-storage-1", 1, "/var/lib/nex-storage/core-storage-1"
+	js := []managedJournal{{Command: protocol.Command{Kind: "storage-register", Storage: &request}, Result: protocol.Result{Status: "succeeded"}, AppliedStorage: &applied}}
+	got, err := managedStorage(js, applied.ID)
+	if err != nil || got.Status != "" || got.OperationID != "" || got.Error != "" {
+		t.Fatalf("projection echoed Controller request state: %+v %v", got, err)
+	}
+}
+
 func TestStorageCorePathsAllocatesISCSIMount(t *testing.T) {
 	s := protocol.StorageRegistration{ID: "core-storage-1", Source: protocol.StorageSource{ISCSI: &protocol.ISCSIStorageSource{TargetIQN: "iqn.2026-01.example:vm"}}}
 	storageCorePaths(&s)
@@ -335,6 +350,38 @@ func TestISCSIRegistrationConflictPreventsSecondSessionPreparation(t *testing.T)
 	alias.Source.ISCSI.MountPath = filepath.Join(storageMountRoot, "second")
 	if err := registrationConflict([]managedJournal{{Command: protocol.Command{OperationID: "first-op", Kind: "storage-register", Storage: &firstRequest}, Result: protocol.Result{OperationID: "first-op", Status: "needs_attention"}, AppliedStorage: &firstApplied}}, protocol.Command{OperationID: "alias-op", Kind: "storage-register", Storage: &alias}); err == nil {
 		t.Fatal("portal alias for the same iSCSI WWID/filesystem was accepted")
+	}
+}
+
+// Every enrolled host is master of its own pool first, so it already holds a registration
+// for the uplink and VLAN it later meets again as a member. Refusing the identical network
+// under the joined pool's ID leaves that member unable to converge, and unable to resolve
+// the pool network for a VM NIC, for as long as it stays in the pool.
+func TestNetworkRegistrationAcceptsTheSameVLANFromTheJoinedPool(t *testing.T) {
+	own := protocol.NetworkRegistration{
+		ID: "own-net", PoolID: "own-pool", HostID: "host-1", Name: "Servers",
+		Kind: "vlan", Source: protocol.GuestBridge("nex1", 100), Uplink: "nex1", VLAN: 100,
+	}
+	js := []managedJournal{{Command: protocol.Command{OperationID: "own-op", Kind: "network-register", Network: &own}, Result: protocol.Result{OperationID: "own-op", Status: "succeeded"}}}
+	register := func(n protocol.NetworkRegistration) error {
+		return registrationConflict(js, protocol.Command{OperationID: "join-op", Kind: "network-register", Network: &n})
+	}
+	joined := own
+	joined.ID, joined.PoolID = "master-net", "joined-pool"
+	if err := register(joined); err != nil {
+		t.Fatalf("identical pool network refused: %v", err)
+	}
+	// The bridge namespace is still held against a different definition, and against a
+	// second network inside one pool.
+	changed := joined
+	changed.VLAN = 200
+	if register(changed) == nil {
+		t.Fatal("a different VLAN on the same bridge was accepted")
+	}
+	duplicate := joined
+	duplicate.PoolID = own.PoolID
+	if register(duplicate) == nil {
+		t.Fatal("a duplicate network inside one pool was accepted")
 	}
 }
 

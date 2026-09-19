@@ -79,6 +79,17 @@ def compliance_manifest(path, version):
     return path, manifest
 
 
+def reject_unverified_zfs(manifest):
+    components = manifest.get("components")
+    if not isinstance(components, list):
+        return
+    if any(isinstance(component, dict) and component.get("package") in
+           {"zfs-dkms", "zfsutils-linux"} for component in components):
+        raise ReleasePublishError(
+            "ZFS-enabled ISO publishing is blocked pending verified OpenZFS licence, "
+            "DKMS/kernel, offline-install, Secure Boot and boot-recovery evidence")
+
+
 def sha256(path, chunk=1 << 20):
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -130,6 +141,7 @@ def publish(root, iso, source, manifest, keep):
     version = iso_version(iso)
     source = release_asset(source, SOURCE_NAME, "source bundle", version)
     manifest, manifest_data = compliance_manifest(manifest, version)
+    reject_unverified_zfs(manifest_data)
     assets = (iso, source, manifest)
     digests = {asset.name: sha256(asset) for asset in assets}
     for key, asset in (("iso", iso), ("source_bundle", source)):

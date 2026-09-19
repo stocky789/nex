@@ -12,8 +12,10 @@ import (
 	"errors"
 	"fmt"
 	"nex.local/nex/internal/protocol"
+	"nex.local/nex/internal/vmhost"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -52,6 +54,9 @@ type State struct {
 	// authenticated Controller v2 preflight. It prevents a package upgrade from
 	// sending new storage fields to a strict v1 Controller.
 	StorageProtocolReady bool `json:"storage_protocol_ready,omitempty"`
+	// ZFSProvisionProtocolReady is the narrower Controller acknowledgement for
+	// ZFS-only inventory and commands. It resets on Controller replacement.
+	ZFSProvisionProtocolReady bool `json:"zfs_provision_protocol_ready,omitempty"`
 	// StorageClusterProtocolReady is Controller-connection scoped. It is set
 	// only by the explicit clustered-storage v2 acknowledgement and reset on
 	// reconnect/replacement before a report can carry clustered-storage data.
@@ -71,9 +76,11 @@ type Store struct {
 	dir               string
 	lock              *os.File
 	poolStorageAccess map[string]map[string]protocol.PoolStorageAccess
-	beforePublish     func() error // test-only deterministic pre-rename failure hook
-	afterPublish      func() error // test-only deterministic post-rename failure hook
-	State             State
+	// storageMonitor is Run's live access observer, shared so a peer reply is as fresh as a report.
+	storageMonitor atomic.Pointer[vmhost.StorageMonitor]
+	beforePublish  func() error // test-only deterministic pre-rename failure hook
+	afterPublish   func() error // test-only deterministic post-rename failure hook
+	State          State
 }
 
 // publishedStateError means state.json was atomically renamed before the

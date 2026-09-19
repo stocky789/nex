@@ -113,6 +113,7 @@ type ManagedState struct {
 	// replaced Controller records so host truth is not lost with the old database.
 	Outcomes           []ManagedOutcome           `json:"outcomes,omitempty"`
 	CredentialReceipts []StorageCredentialReceipt `json:"credential_receipts,omitempty"`
+	ZFSProvisions      []ZFSProvisionHostResult   `json:"zfs_provisions,omitempty"`
 	Membership         *PoolMembership            `json:"membership,omitempty"`
 }
 
@@ -198,18 +199,20 @@ type RotateRequest struct {
 	CSRPEM  string `json:"csr_pem"`
 }
 type Command struct {
-	Storage          *StorageRegistration            `json:"storage,omitempty"`
-	Network          *NetworkRegistration            `json:"network,omitempty"`
-	Media            *Media                          `json:"media,omitempty"`
-	VM               *VMCreateSpec                   `json:"vm,omitempty"`
-	Power            *VMPowerRequest                 `json:"power,omitempty"`
-	Delete           *VMDeleteRequest                `json:"delete,omitempty"`
-	VMMedia          *VMMediaRequest                 `json:"vm_media,omitempty"`
-	StorageLifecycle *StorageLifecycleRequest        `json:"storage_lifecycle,omitempty"`
-	CredentialRetire *StorageCredentialRetireRequest `json:"credential_retire,omitempty"`
-	Pool             *PoolCommand                    `json:"pool,omitempty"`
-	OperationID      string                          `json:"operation_id"`
-	Kind             string                          `json:"kind"`
+	Storage           *StorageRegistration            `json:"storage,omitempty"`
+	Network           *NetworkRegistration            `json:"network,omitempty"`
+	Media             *Media                          `json:"media,omitempty"`
+	VM                *VMCreateSpec                   `json:"vm,omitempty"`
+	Power             *VMPowerRequest                 `json:"power,omitempty"`
+	Delete            *VMDeleteRequest                `json:"delete,omitempty"`
+	VMMedia           *VMMediaRequest                 `json:"vm_media,omitempty"`
+	StorageLifecycle  *StorageLifecycleRequest        `json:"storage_lifecycle,omitempty"`
+	ResourceLifecycle *ResourceLifecycleRequest       `json:"resource_lifecycle,omitempty"`
+	CredentialRetire  *StorageCredentialRetireRequest `json:"credential_retire,omitempty"`
+	ZFSProvision      *ZFSProvisionRequest            `json:"zfs_provision,omitempty"`
+	Pool              *PoolCommand                    `json:"pool,omitempty"`
+	OperationID       string                          `json:"operation_id"`
+	Kind              string                          `json:"kind"`
 }
 type Result struct {
 	OperationID string    `json:"operation_id"`

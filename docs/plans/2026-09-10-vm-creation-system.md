@@ -65,11 +65,13 @@ milestone; each item below is either in this slice or listed under follow-ups wi
   [CPU plan](2026-09-17-cpu-baseline.md) and [checks and limits](../qa/2026-09-17-cpu-baseline.md).
   This is included in the [0.3.1 website/APT release](../qa/2026-09-17-nex-core-0.3.1-release.md);
   existing operator hosts were not upgraded, and migration acceptance remains open.
-- **Creation still never starts a guest.** `StartAfterCreate` is satisfied by the Controller
-  issuing the existing, proven `vm-power` `start` request after creation succeeds — not by adding
-  a start path to the managed create engine. This preserves the engine's stated invariant
-  (`internal/vmhost/managed.go`) and shows the operator two honest tasks rather than one.
-  `Autostart` is a libvirt property (`virsh autostart`), not a start, and stays in the engine.
+- **Start after creation is Core-owned.** `StartAfterCreate` is carried in `vm-create`; after
+  disks exist and the definition is verified, Core records its one start attempt in the creation
+  journal. A failed attempt leaves the successful creation and its VM stopped, then reports a
+  failed `vm-power` outcome. Replay never issues another start, and Controller issues no
+  follow-on power operation. `Autostart` remains a libvirt property (`virsh autostart`), not a
+  start. This supersedes the earlier Controller-follow-on design; see the implemented contract
+  in [the API reference](../API.md#managed-vm-creation) and the focused Core/Controller regressions.
 - **Both firmware paths remain supported.** UEFI is the default; BIOS is selectable. The existing
   UEFI preflight against `domcapabilities` carries over unchanged.
 
@@ -185,8 +187,8 @@ exclusive-ownership check to every disk; `virsh autostart` when requested. Uniqu
 listing, staged journal writes and the uncertain-outcome wording are unchanged.
 
 **Controller** (`internal/controller/managed.go`): validate the specification, resolve storage,
-network and media references, enforce pool/host scope and MAC uniqueness, dispatch, and — only after
-creation succeeds — issue the follow-on `vm-power` `start` when `StartAfterCreate` is set.
+network and media references, enforce pool/host scope and MAC uniqueness, then dispatch the
+`vm-create` command, including `StartAfterCreate`. It does not issue a follow-on power request.
 
 **UI**: the wizard moves out of `web/src/managed.tsx` into a new `web/src/vm-create.tsx`; repeatable
 disk and network rows make the existing file too large to hold both. Six steps: Identity →
@@ -207,8 +209,8 @@ uncommitted working tree. Unticked boxes were **not run**; none of them may be c
       tests pin the `qemu-img` argv and the per-target plan, not a real allocation on a host.
 - [x] Capacity preflight uses the memory ceiling in both modes and refuses what cannot be met.
 - [x] Controller rejects unauthorized, wrong-host/pool, stale-resource, invalid-input, duplicate-MAC,
-      over-capacity and replayed requests; `StartAfterCreate` dispatches the existing `vm-power`
-      start only after creation succeeds (Go tests).
+      over-capacity and replayed requests; `StartAfterCreate` is carried by `vm-create`, while
+      Core starts once and records its durable result (Go tests).
 - [x] Journal round-trip: the full specification and per-disk paths persist on the pool master and a
       replaced Controller re-adopts the VM with identity, name and shape intact
       (`tests/integration/controller_replacement.py`).

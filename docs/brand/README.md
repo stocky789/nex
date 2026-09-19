@@ -7,7 +7,7 @@ Status: Original blue/platinum Relay revision 2 identity approved by project own
 
 Nex is the parent brand. **Nex Core** is the Debian-based virtualization host, using KVM/QEMU, libvirt, and a local agent. **Nex Controller** is the centralized management service, API, and web UI. Use one master symbol and wordmark, with Core and Controller as readable descriptors rather than separate brands. Write Nex, Nex Core, and Nex Controller in prose; a lowercase `nex` wordmark is an intentional visual treatment.
 
-The project is in development. The [platform plan](../plans/2026-09-08-nex-platform.md) starts at Phase 0; the [interface review](../plans/2026-09-08-feature-and-ux-review.md) defines future operator workflows. Brand approval changes neither acceptance gates nor product scope.
+The project is in development. The [platform plan](../plans/2026-09-08-nex-platform.md) records current phase status; the [interface review](../plans/2026-09-08-feature-and-ux-review.md) defines future operator workflows. Brand approval changes neither acceptance gates nor product scope.
 
 project owner clarified that the original blue, white, and grey identity stays primary. Colors from the later references are additions to the palette, not instructions to recolor the logo or replace the light brand board. Reference imagery supplies color inspiration only; do not copy competitor logos, typography, layouts, or wording.
 
@@ -72,7 +72,7 @@ Use the full Nex Core or Nex Controller lockup at product entry points. Use the 
 
 ## Production asset status
 
-The original blue/platinum identity is approved; supporting colors expand its available palette. Vector masters, separate product lockups, and 16/24/32-pixel icon exports remain to be produced and checked. Review the colors in an actual controller screen when UI work begins. The custom installer header now renders the approved Nex Core lockup directly from this
+The original blue/platinum identity is approved; supporting colors expand its available palette. Vector masters, separate product lockups, and 16/24/32-pixel icon exports remain to be produced and checked. Continue checking these colors against actual Controller screens when UI styles change. The custom installer header now renders the approved Nex Core lockup directly from this
 board using native image cropping and scaling; it does not approximate the mark with a font.
 This is reuse of the approved raster artwork, not a completed production vector master.
 See [installer logo verification](../qa/iso/2026-09-08-installer-logo.md).

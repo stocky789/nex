@@ -420,7 +420,7 @@ func (e *ManagedEngine) readJournal(name string) (managedJournal, error) {
 		resolved.URL, resolved.SizeBytes, resolved.SHA256 = "", j.DownloadedMedia.SizeBytes, j.DownloadedMedia.SHA256
 		cmd := j.Command
 		cmd.Media = &resolved
-		if resolved != *j.DownloadedMedia || validateManaged(cmd) != nil {
+		if !reflect.DeepEqual(resolved, *j.DownloadedMedia) || validateManaged(cmd) != nil {
 			return j, errors.New("invalid downloaded ISO metadata")
 		}
 	}
@@ -506,6 +506,13 @@ func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch f
 			if old.Result.Status == "pending" || old.Result.Status == "needs_attention" {
 				return e.reconcile(ctx, old)
 			}
+			// A completed ZFS pool may need its non-destructive local registration
+			// retried after a host prerequisite (for example libvirt's storage
+			// driver) is repaired. The pool provision receipt remains the authority;
+			// retry only the exact failed registration, never the disk operation.
+			if old.Result.Status == "failed" && c.Kind == "storage-register" && c.Storage != nil && c.Storage.ZFSProvisioned && zfsRegistrationRetryAllowed(ctx) {
+				return e.retryFailedZFSRegistration(ctx, old, js, fetch)
+			}
 			return old.Result, nil
 		}
 	}
@@ -527,6 +534,10 @@ func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch f
 			j.Result.Error = "storage lifecycle operation is unresolved; inspect or reconcile it before retrying"
 			return j.Result, e.save(j)
 		}
+		if c.ResourceLifecycle != nil && old.Command.ResourceLifecycle != nil && old.Command.ResourceLifecycle.Resource == c.ResourceLifecycle.Resource && old.Command.ResourceLifecycle.ResourceID == c.ResourceLifecycle.ResourceID && (old.Result.Status == "pending" || old.Result.Status == "needs_attention") {
+			j.Result.Error = c.ResourceLifecycle.Resource + " lifecycle operation is unresolved; inspect or reconcile it before retrying"
+			return j.Result, e.save(j)
+		}
 		if c.CredentialRetire != nil && old.Command.CredentialRetire != nil && old.Command.CredentialRetire.Receipt == c.CredentialRetire.Receipt && (old.Result.Status == "pending" || old.Result.Status == "needs_attention") {
 			j.Result.Error = "storage credential retirement is unresolved; inspect or reconcile it before retrying"
 			return j.Result, e.save(j)
@@ -538,6 +549,12 @@ func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch f
 		// reconciliation may retry the identical repository after its server recovers.
 		// needs_attention remains reserved because native rollback is ambiguous.
 		if c.Kind == "storage-register" && old.Command.Kind == "storage-register" && old.Result.Status == "failed" && old.Command.Storage != nil && c.Storage != nil && old.Command.Storage.ID == c.Storage.ID && old.Command.Storage.Generation == c.Storage.Generation {
+			continue
+		}
+		// A failed guest VLAN apply left no applied projection, and building the bridge is
+		// idempotent, so a member may retry the same pool network once its uplink or trunk is
+		// fixed. needs_attention stays reserved, as it does for storage.
+		if c.Kind == "network-register" && old.Command.Kind == "network-register" && old.Result.Status == "failed" && old.Command.Network != nil && c.Network != nil && old.Command.Network.ID == c.Network.ID && protocol.IsPoolSharedNetwork(*c.Network) && protocol.IsPoolSharedNetwork(*old.Command.Network) {
 			continue
 		}
 		if managedResourceID(old.Command) == managedResourceID(c) {
@@ -560,6 +577,41 @@ func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch f
 			j.Result.Status = "needs_attention"
 		}
 		j.Result.Error = err.Error()
+	}
+	return j.Result, e.save(j)
+}
+
+type zfsRegistrationRetryContextKey struct{}
+
+// WithZFSProvisionRegistrationRetry authorizes one retry of a failed local ZFS
+// registration. Callers may use it only after ZFSProvisioner.Provision returned
+// succeeded for the same operation, which re-reads the tagged pool/dataset and
+// GUIDs. Ordinary storage reconciliation must never infer that proof from a
+// registration request alone.
+func WithZFSProvisionRegistrationRetry(ctx context.Context) context.Context {
+	return context.WithValue(ctx, zfsRegistrationRetryContextKey{}, true)
+}
+
+func zfsRegistrationRetryAllowed(ctx context.Context) bool {
+	allowed, _ := ctx.Value(zfsRegistrationRetryContextKey{}).(bool)
+	return allowed
+}
+
+func (e *ManagedEngine) retryFailedZFSRegistration(ctx context.Context, j managedJournal, js []managedJournal, fetch func(context.Context, string) (io.ReadCloser, error)) (protocol.Result, error) {
+	j.Result = protocol.Result{OperationID: j.Command.OperationID, Status: "pending", ObservedAt: time.Now().UTC()}
+	j.Stage = "validating"
+	if err := e.save(j); err != nil {
+		return j.Result, err
+	}
+	err := e.apply(ctx, &j, js, fetch)
+	j.Result.ObservedAt = time.Now().UTC()
+	if err == nil {
+		j.Result.Status, j.Result.Error = "succeeded", ""
+	} else {
+		j.Result.Status, j.Result.Error = "failed", err.Error()
+		if errors.Is(err, ErrStorageRollbackUncertain) || j.Stage == "attaching" {
+			j.Result.Status = "needs_attention"
+		}
 	}
 	return j.Result, e.save(j)
 }
@@ -644,6 +696,199 @@ func (e *ManagedEngine) AppliedStorage() ([]protocol.StorageRegistration, []prot
 	return appliedStorageProjection(js, bad)
 }
 
+// ErrManagedJournalIncomplete reports that this host's journal could not be read whole:
+// an entry is unparseable or the retained-entry cap truncated the listing. A projection built
+// from it is a subset of what this host actually holds, so a peer must never read absence from
+// it as removal. The text is fixed and names no file, so it is safe to return over the wire.
+var ErrManagedJournalIncomplete = errors.New("managed journal is incomplete")
+
+// AppliedNetworks lists succeeded network registrations from the journal without
+// promoting interrupted work or querying libvirt. Peer pool list handlers use this, and a
+// member deletes what an authoritative list omits, so an incomplete journal is an error here
+// rather than a short list: the host's own inventory report keeps using Applied, which
+// surfaces the same condition as the managed-journal check instead of failing.
+func (e *ManagedEngine) AppliedNetworks() ([]protocol.NetworkRegistration, error) {
+	js, bad := e.readable()
+	if len(bad) != 0 {
+		return nil, ErrManagedJournalIncomplete
+	}
+	out := appliedNetworkProjection(js)
+	for i := range out {
+		out[i].MemberAccess = nil
+	}
+	return out, nil
+}
+
+// NetworkRemoved reports whether this host durably removed the network, which is permanent:
+// Execute reserves the resource ID for good, so the same ID can never be registered again here.
+func (e *ManagedEngine) NetworkRemoved(id string) (bool, error) {
+	js, bad := e.readable()
+	if len(bad) != 0 {
+		return false, ErrManagedJournalIncomplete
+	}
+	_, ok := networkTombstones(js)[id]
+	return ok, nil
+}
+
+// MediaRemoved is the same permanent-removal question for an imported ISO.
+func (e *ManagedEngine) MediaRemoved(id string) (bool, error) {
+	js, bad := e.readable()
+	if len(bad) != 0 {
+		return false, ErrManagedJournalIncomplete
+	}
+	_, ok := mediaTombstones(js)[id]
+	return ok, nil
+}
+
+// appliedNetworkProjection lists the networks this host still holds, in journal order, with
+// renames applied, followed by a tombstone row for each network it removed.
+func appliedNetworkProjection(js []managedJournal) []protocol.NetworkRegistration {
+	live, removed := networkProjection(js), networkTombstones(js)
+	out, seen := make([]protocol.NetworkRegistration, 0, len(js)), map[string]bool{}
+	for _, j := range js {
+		if j.Result.Status != "succeeded" || j.Command.Kind != "network-register" || j.Command.Network == nil {
+			continue
+		}
+		n, ok := live[j.Command.Network.ID]
+		if !ok || seen[n.ID] {
+			continue
+		}
+		seen[n.ID] = true
+		out = append(out, n)
+	}
+	for _, id := range slices.Sorted(maps.Keys(removed)) {
+		out = append(out, removed[id])
+	}
+	return out
+}
+
+// appliedMediaProjection is the same for imported ISOs, which have no rename.
+func appliedMediaProjection(js []managedJournal) []protocol.Media {
+	removed := mediaTombstones(js)
+	out, seen := make([]protocol.Media, 0, len(js)), map[string]bool{}
+	for _, j := range js {
+		if j.Result.Status != "succeeded" || j.Command.Kind != "iso-import" || j.Command.Media == nil {
+			continue
+		}
+		m := journalMedia(j)
+		if _, gone := removed[m.ID]; gone || seen[m.ID] {
+			continue
+		}
+		seen[m.ID] = true
+		m.OperationID, m.Status, m.Error = "", "", ""
+		out = append(out, m)
+	}
+	for _, id := range slices.Sorted(maps.Keys(removed)) {
+		out = append(out, removed[id])
+	}
+	return out
+}
+
+// AppliedMedia lists succeeded ISO imports from the journal without downloading or
+// promoting interrupted transfers. Peer pool media list handlers use this.
+func (e *ManagedEngine) AppliedMedia() ([]protocol.Media, error) {
+	js, bad := e.readable()
+	if len(bad) != 0 {
+		return nil, ErrManagedJournalIncomplete
+	}
+	out := appliedMediaProjection(js)
+	for i := range out {
+		out[i].URL, out[i].MemberAccess = "", nil
+	}
+	return out, nil
+}
+
+// sharedMediaAdoptionOperation names the journal entry AdoptSharedMedia writes for an ISO a
+// member found already present on pool-shared storage. It is deterministic so a repeated
+// adoption reuses the file, and it is what distinguishes an adopted copy from an import this
+// host performed itself. It must stay inside identifier's 64 characters: a pool media ID is
+// already up to 64 long, so it cannot be a prefix; a bounded digest of it can.
+func sharedMediaAdoptionOperation(mediaID string) string {
+	digest := sha256.Sum256([]byte("pool-media\x00" + mediaID))
+	return "media-" + hex.EncodeToString(digest[:])[:32]
+}
+
+// mediaAdopted reports whether this host's live record of the ISO is an adoption of a file
+// another host imported, rather than an import this host performed. On pool-shared storage
+// that file is the pool's only copy, so only the importing host may unlink it.
+func mediaAdopted(js []managedJournal, id string) bool {
+	for _, j := range js {
+		if j.Result.Status == "succeeded" && j.Command.Kind == "iso-import" && j.Command.Media != nil && j.Command.Media.ID == id {
+			return j.Command.OperationID == sharedMediaAdoptionOperation(id)
+		}
+	}
+	return false
+}
+
+// AdoptSharedMedia journals a succeeded iso-import for an ISO already present on
+// pool-shared storage after member pull. It verifies size and digest and never downloads.
+func (e *ManagedEngine) AdoptSharedMedia(ctx context.Context, media protocol.Media) error {
+	if media.ID == "" || media.StorageID == "" || media.SHA256 == "" || media.SizeBytes < 32774 {
+		return errors.New("invalid shared media adoption")
+	}
+	js, _ := e.readable()
+	if published, path, err := publishedMediaPath(js, media.ID); err == nil {
+		// Already adopted: prove the published file is still present at its recorded
+		// size rather than re-hashing every shared ISO on every converge pass. The
+		// digest is verified on first adoption and again whenever a VM attaches it.
+		if published.StorageID == media.StorageID && published.SHA256 == media.SHA256 && published.SizeBytes == media.SizeBytes {
+			if info, statErr := os.Lstat(path); statErr == nil && info.Mode().IsRegular() && info.Size() == media.SizeBytes {
+				return nil
+			}
+		}
+		return verifyISOContext(ctx, path, media)
+	}
+	storage, err := managedStorage(js, media.StorageID)
+	if err != nil {
+		return err
+	}
+	if storage.Path == "" {
+		return errors.New("shared media storage path is unavailable")
+	}
+	path := filepath.Join(storage.Path, "nex-media", media.ID+".iso")
+	if err = verifyISOContext(ctx, path, media); err != nil {
+		return err
+	}
+	op := sharedMediaAdoptionOperation(media.ID)
+	media.URL, media.OperationID, media.Status, media.Error, media.MemberAccess = "", op, "succeeded", "", nil
+	command := protocol.Command{OperationID: op, Kind: "iso-import", Media: &media}
+	// save() does not validate, and an entry readJournal rejects fails every later
+	// managed operation on this host. Apply the same validation Execute applies.
+	if err = validateManaged(command); err != nil {
+		return err
+	}
+	return e.save(managedJournal{
+		Command:   command,
+		Result:    protocol.Result{OperationID: op, Status: "succeeded", ObservedAt: time.Now().UTC()},
+		MediaPath: path,
+	})
+}
+
+// EnsureAppliedNetwork observes a network this host has already journalled and, for a VLAN
+// guest bridge removed out of band, re-applies the unchanged registration. Execute cannot:
+// it reserves the network's resource ID permanently, so pool converge would otherwise
+// report a journal match as success forever without ever observing the bridge.
+func (e *ManagedEngine) EnsureAppliedNetwork(ctx context.Context, id string) error {
+	js, err := e.journals()
+	if err != nil {
+		return err
+	}
+	n, err := managedNetwork(js, id)
+	if err != nil {
+		return err
+	}
+	if err = verifyNetwork(ctx, n); err == nil || n.Kind != "vlan" {
+		return err
+	}
+	// Rebuilding rewrites host network configuration, so it takes the lock Execute holds.
+	lock, err := (&Engine{config: Config{StateDir: e.stateDir}}).lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock(lock)
+	return ensureGuestBridge(ctx, n, e.networkDir)
+}
+
 func appliedStorageProjection(js []managedJournal, bad []string) ([]protocol.StorageRegistration, []protocol.Check) {
 	storage := make([]protocol.StorageRegistration, 0, len(js))
 	for _, s := range storageProjection(js) {
@@ -677,6 +922,10 @@ func managedResourceID(c protocol.Command) string {
 		return "storage-lifecycle:" + c.StorageLifecycle.RepositoryID + ":" + c.OperationID
 	case "storage-credential-retire":
 		return "storage-credential-retire:" + c.CredentialRetire.Receipt + ":" + c.OperationID
+	case "network-remove", "network-update", "media-remove":
+		// A lifecycle change cannot reuse the permanent network:/media: reservation the
+		// registration holds, so each one gets its own slot.
+		return c.ResourceLifecycle.Resource + "-lifecycle:" + c.ResourceLifecycle.ResourceID + ":" + c.OperationID
 	case "network-register":
 		return "network:" + c.Network.ID
 	case "iso-import":
@@ -702,7 +951,7 @@ func validateManaged(c protocol.Command) error {
 		return errors.New("invalid operation ID")
 	}
 	count := 0
-	for _, present := range []bool{c.Storage != nil, c.Network != nil, c.Media != nil, c.VM != nil, c.Power != nil, c.Delete != nil, c.VMMedia != nil, c.StorageLifecycle != nil, c.CredentialRetire != nil} {
+	for _, present := range []bool{c.Storage != nil, c.Network != nil, c.Media != nil, c.VM != nil, c.Power != nil, c.Delete != nil, c.VMMedia != nil, c.StorageLifecycle != nil, c.ResourceLifecycle != nil, c.CredentialRetire != nil, c.ZFSProvision != nil} {
 		if present {
 			count++
 		}
@@ -712,6 +961,14 @@ func validateManaged(c protocol.Command) error {
 	}
 	var id, pool, host string
 	switch c.Kind {
+	case "storage-zfs-provision":
+		if c.ZFSProvision == nil {
+			return errors.New("ZFS provision payload required")
+		}
+		if err := protocol.ValidateZFSProvision(*c.ZFSProvision); err != nil {
+			return err
+		}
+		id, pool = c.OperationID, c.ZFSProvision.PoolID
 	case "storage-register":
 		if c.Storage == nil {
 			return errors.New("storage payload required")
@@ -729,6 +986,14 @@ func validateManaged(c protocol.Command) error {
 			return err
 		}
 		id, pool, host = c.StorageLifecycle.RepositoryID, c.StorageLifecycle.PoolID, c.StorageLifecycle.HostID
+	case "network-remove", "network-update", "media-remove":
+		if c.ResourceLifecycle == nil || c.Kind != c.ResourceLifecycle.Resource+"-"+c.ResourceLifecycle.Action {
+			return errors.New("resource lifecycle payload does not match command")
+		}
+		if err := protocol.ValidateResourceLifecycle(*c.ResourceLifecycle); err != nil {
+			return err
+		}
+		id, pool, host = c.ResourceLifecycle.ResourceID, c.ResourceLifecycle.PoolID, c.ResourceLifecycle.HostID
 	case "storage-credential-retire":
 		if c.CredentialRetire == nil {
 			return errors.New("storage credential retirement payload required")
@@ -845,7 +1110,7 @@ func validateManaged(c protocol.Command) error {
 	default:
 		return errors.New("unsupported managed command")
 	}
-	if ((c.Kind != "storage-register" || id != "") && !identifier.MatchString(id)) || !identifier.MatchString(pool) || !identifier.MatchString(host) {
+	if ((c.Kind != "storage-register" || id != "") && !identifier.MatchString(id)) || !identifier.MatchString(pool) || (c.Kind != "storage-zfs-provision" && !identifier.MatchString(host)) {
 		return errors.New("invalid resource scope")
 	}
 	return nil
@@ -1150,6 +1415,12 @@ func storageCorePaths(s *protocol.StorageRegistration) {
 func storageCapabilities(s protocol.StorageRegistration) protocol.StorageCapabilities {
 	thick := s.StorageKind() == protocol.StorageKindLocal || s.StorageKind() == protocol.StorageKindNFS || s.StorageKind() == protocol.StorageKindISCSI
 	caps := protocol.StorageCapabilities{VMDisk: true, ISO: true, Thin: true, Thick: thick, EligibleHostIDs: []string{s.HostID}}
+	if s.ZFSProvisioned {
+		// Pool-local ZFS has per-host paths. This slice has no host-targeted
+		// media placement contract, so advertising ISO would promise a source
+		// that may only exist on another host.
+		caps.ISO = false
+	}
 	if protocol.IsClusteredISCSI(s) {
 		caps.Shared = true
 		caps.EligibleHostIDs = append([]string(nil), s.Source.ISCSI.EligibleHostIDs...)
@@ -1311,6 +1582,9 @@ func storageProjection(js []managedJournal) map[string]protocol.StorageRegistrat
 			if copy.Generation == 0 {
 				copy.Generation = 1
 			}
+			// The command carries the Controller's request state ("queued"); only
+			// succeeded entries reach here, so it is never an observation.
+			copy.OperationID, copy.Status, copy.Error = "", "", ""
 			normalizeStorageCapabilities(&copy)
 			if copy.Generation > tombstone[copy.ID] {
 				if prior, ok := out[copy.ID]; !ok || copy.Generation >= prior.Generation {
@@ -1470,20 +1744,184 @@ func credentialRotationSafe(ctx context.Context, js []managedJournal, id string)
 	return nil
 }
 
-func managedNetwork(js []managedJournal, id string) (protocol.NetworkRegistration, error) {
+// networkProjection folds successful network events by generation: a rename advances the
+// generation and changes only the name, a removal is a tombstone, so neither an older
+// registration nor a pre-rename name can reappear after Controller replacement.
+func networkProjection(js []managedJournal) map[string]protocol.NetworkRegistration {
+	out := map[string]protocol.NetworkRegistration{}
 	for _, j := range js {
-		if j.Result.Status == "succeeded" && j.Command.Network != nil && j.Command.Network.ID == id {
-			return *j.Command.Network, nil
+		if j.Result.Status != "succeeded" || j.Command.Kind != "network-register" || j.Command.Network == nil {
+			continue
 		}
+		n := *j.Command.Network
+		n.OperationID, n.Status, n.Error = "", "", ""
+		if prior, ok := out[n.ID]; !ok || protocol.NetworkGeneration(n) >= protocol.NetworkGeneration(prior) {
+			out[n.ID] = n
+		}
+	}
+	// Journal filenames are operation IDs, not an event sequence. Repeated passes apply the
+	// generation chain independently of directory order; each pass advances one network and
+	// the bounded loop cannot spin on malformed history.
+	for pass := 0; pass < len(js); pass++ {
+		changed := false
+		for _, j := range js {
+			if j.Result.Status != "succeeded" || j.Command.ResourceLifecycle == nil || j.Command.ResourceLifecycle.Resource != "network" {
+				continue
+			}
+			v := j.Command.ResourceLifecycle
+			n, known := out[v.ResourceID]
+			if !known || protocol.NetworkGeneration(n) != v.ExpectedGeneration {
+				continue
+			}
+			switch v.Action {
+			case "update":
+				n.Name, n.Generation = v.Name, v.ExpectedGeneration+1
+				out[v.ResourceID], changed = n, true
+			case "remove":
+				delete(out, v.ResourceID)
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+	return out
+}
+
+// networkTombstones names the networks this host durably removed, as Controller mirror rows.
+func networkTombstones(js []managedJournal) map[string]protocol.NetworkRegistration {
+	return resourceTombstones(js, "network", func(v protocol.ResourceLifecycleRequest) protocol.NetworkRegistration {
+		return protocol.NetworkRegistration{ID: v.ResourceID, PoolID: v.PoolID, HostID: v.HostID, Generation: v.ExpectedGeneration + 1, Tombstone: true}
+	})
+}
+
+// mediaTombstones names the imported ISOs this host durably removed.
+func mediaTombstones(js []managedJournal) map[string]protocol.Media {
+	return resourceTombstones(js, "media", func(v protocol.ResourceLifecycleRequest) protocol.Media {
+		return protocol.Media{ID: v.ResourceID, PoolID: v.PoolID, HostID: v.HostID, Generation: v.ExpectedGeneration + 1, Tombstone: true}
+	})
+}
+
+func resourceTombstones[T any](js []managedJournal, resource string, row func(protocol.ResourceLifecycleRequest) T) map[string]T {
+	out, at := map[string]T{}, map[string]uint64{}
+	for _, j := range js {
+		v := j.Command.ResourceLifecycle
+		if j.Result.Status != "succeeded" || v == nil || v.Resource != resource || v.Action != "remove" {
+			continue
+		}
+		if prior, ok := at[v.ResourceID]; ok && prior >= v.ExpectedGeneration+1 {
+			continue
+		}
+		out[v.ResourceID], at[v.ResourceID] = row(*v), v.ExpectedGeneration+1
+	}
+	return out
+}
+
+// networkDependencies names the VM definitions this host holds that attach the network.
+func networkDependencies(js []managedJournal, id string) []string {
+	var out []string
+	for vmID, v := range currentDefinitions(js) {
+		if slices.ContainsFunc(v.NICs, func(n protocol.VMNIC) bool { return n.NetworkID == id }) {
+			out = append(out, vmID)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// mediaDependencies names the VM definitions this host holds that hold the ISO in a CD drive.
+func mediaDependencies(js []managedJournal, id string) []string {
+	var out []string
+	for vmID, v := range currentDefinitions(js) {
+		if v.MediaID == id || v.DriversMediaID == id {
+			out = append(out, vmID)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// NetworkDependencies reports local VM definitions that would refuse this network's removal.
+// Pool convergence calls it as a precheck, so a persistent refusal writes no journal entry.
+func (e *ManagedEngine) NetworkDependencies(id string) []string {
+	js, _ := e.readable()
+	return networkDependencies(js, id)
+}
+
+// MediaDependencies is the same precheck for an imported ISO.
+func (e *ManagedEngine) MediaDependencies(id string) []string {
+	js, _ := e.readable()
+	return mediaDependencies(js, id)
+}
+
+// networkRemovalRefusal is the whole refusal set of a network-remove for a network this host
+// holds: the VM dependency and every native precondition of the teardown. apply calls it
+// immediately before the teardown and CheckNetworkRemoval calls it with no effect at all, so
+// the dry run and the real thing cannot drift.
+func (e *ManagedEngine) networkRemovalRefusal(js []managedJournal, n protocol.NetworkRegistration) error {
+	if !protocol.IsPoolSharedNetwork(n) {
+		// Every host re-registers its automatic untagged networks once a minute
+		// (RegisterDefaults), so removing one would only flap.
+		return errors.New("only pool VLAN networks can be removed")
+	}
+	if deps := networkDependencies(js, n.ID); len(deps) > 0 {
+		return errors.New("network cannot be removed while used by VM " + strings.Join(deps, ", "))
+	}
+	return checkGuestBridgeRemovable(n, e.networkDir)
+}
+
+// CheckNetworkRemoval reports why this host would refuse to remove the pool network, without
+// journalling, locking or changing anything. Pool convergence calls it before Execute: a
+// removal that is refused on every probe tick would otherwise mint a journal entry per tick
+// and reach the retained-entry cap, after which every managed operation on the host fails.
+func (e *ManagedEngine) CheckNetworkRemoval(ctx context.Context, id string) error {
+	js, bad := e.readable()
+	if len(bad) != 0 {
+		return ErrManagedJournalIncomplete
+	}
+	n, err := managedNetwork(js, id)
+	if err != nil {
+		return err
+	}
+	return e.networkRemovalRefusal(js, n)
+}
+
+// mediaRemovalRefusal is the same for an imported ISO. The unlink itself has no precondition
+// beyond the dependency: an absent file is a completed removal.
+func mediaRemovalRefusal(js []managedJournal, id string) error {
+	if deps := mediaDependencies(js, id); len(deps) > 0 {
+		return errors.New("ISO cannot be removed while attached to VM " + strings.Join(deps, ", "))
+	}
+	return nil
+}
+
+// CheckMediaRemoval is CheckNetworkRemoval for an imported ISO.
+func (e *ManagedEngine) CheckMediaRemoval(ctx context.Context, id string) error {
+	js, bad := e.readable()
+	if len(bad) != 0 {
+		return ErrManagedJournalIncomplete
+	}
+	if _, _, err := managedMedia(js, id); err != nil {
+		return err
+	}
+	return mediaRemovalRefusal(js, id)
+}
+
+func managedNetwork(js []managedJournal, id string) (protocol.NetworkRegistration, error) {
+	if n, ok := networkProjection(js)[id]; ok {
+		return n, nil
 	}
 	return protocol.NetworkRegistration{}, errors.New("network is not registered on this host")
 }
 
 // managedMedia resolves an imported ISO and the path this host published it to.
 func managedMedia(js []managedJournal, id string) (protocol.Media, string, error) {
-	for _, j := range js {
-		if j.Result.Status == "succeeded" && j.Command.Media != nil && j.Command.Media.ID == id {
-			return journalMedia(j), j.MediaPath, nil
+	if _, removed := mediaTombstones(js)[id]; !removed {
+		for _, j := range js {
+			if j.Result.Status == "succeeded" && j.Command.Kind == "iso-import" && j.Command.Media != nil && j.Command.Media.ID == id {
+				return journalMedia(j), j.MediaPath, nil
+			}
 		}
 	}
 	return protocol.Media{}, "", errors.New("ISO is not imported on this host")
@@ -1599,15 +2037,10 @@ func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []
 			out.Outcomes = append(out.Outcomes, protocol.ManagedOutcome{OperationID: c.OperationID + ":start", Kind: "vm-power", ID: id, Name: name, Status: "failed", Error: "VM created but not started: " + j.Start})
 		}
 		switch c.Kind {
-		case "storage-register", "storage-update", "storage-recheck", "storage-detach":
-		case "network-register":
-			n := *c.Network
-			n.OperationID, n.Status, n.Error = "", "", ""
-			out.Networks = append(out.Networks, n)
-		case "iso-import":
-			m := journalMedia(j)
-			m.OperationID, m.Status, m.Error = "", "", ""
-			out.Media = append(out.Media, m)
+		// Storage, networks and media are projections: registrations folded with the
+		// rename and removal events that followed them, appended after this loop.
+		case "storage-register", "storage-update", "storage-recheck", "storage-detach",
+			"network-register", "network-remove", "network-update", "iso-import", "media-remove":
 		case "vm-create", "vm-update":
 			// The current definition is the highest succeeded revision; the create entry is
 			// revision 0. Succeeded deletes remove the VM from the reported inventory.
@@ -1633,6 +2066,7 @@ func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []
 		}
 	}
 	out.Storage, _ = appliedStorageProjection(js, nil)
+	out.Networks, out.Media = appliedNetworkProjection(js), appliedMediaProjection(js)
 	// Overlap the libvirt domain list with credential projection when VMs need verifying.
 	// Report bounds Applied with ProbeTimeout; doing list only after all local file work meant
 	// a tight deadline could expire without starting virsh (TestReportBoundsManagedLibvirtObservation).
@@ -1910,6 +2344,10 @@ func managedIdentity(c protocol.Command) (string, string) {
 		if c.StorageLifecycle != nil {
 			return c.StorageLifecycle.RepositoryID, ""
 		}
+	case "network-remove", "network-update", "media-remove":
+		if c.ResourceLifecycle != nil {
+			return c.ResourceLifecycle.ResourceID, c.ResourceLifecycle.Name
+		}
 	case "storage-credential-retire":
 		if c.CredentialRetire != nil {
 			return c.CredentialRetire.Receipt, ""
@@ -2126,6 +2564,11 @@ func managedRepositorySubdir(ctx context.Context, js []managedJournal, id, path 
 		return managedSubdir(path)
 	}
 	root := remoteMountPath(s)
+	// A Core-provisioned ZFS dataset mounts directly beneath storageMountRoot;
+	// it has no bind alias. Existing imported ZFS records keep their legacy path.
+	if s.StorageKind() == protocol.StorageKindZFS && s.Source.ZFS != nil && s.Path == s.Source.ZFS.MountPath {
+		root = s.Path
+	}
 	if !strings.HasPrefix(path, root+"/") || filepath.Clean(path) != path {
 		return errors.New("managed storage directory escapes its repository mount")
 	}
@@ -2295,6 +2738,62 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 			j.AppliedStorage = &next
 			return nil
 		}
+	case "network-remove", "network-update":
+		v := c.ResourceLifecycle
+		current, err := managedNetwork(js, v.ResourceID)
+		if err != nil {
+			return err
+		}
+		if !protocol.IsPoolSharedNetwork(current) {
+			return errors.New("only pool VLAN networks can be removed")
+		}
+		if protocol.NetworkGeneration(current) != v.ExpectedGeneration {
+			return errors.New("network generation is no longer current; refresh and retry")
+		}
+		if c.Kind == "network-update" {
+			// Rename only: the payload cannot carry an uplink, VLAN or source, and the
+			// projection copies only the name, so no link is ever touched.
+			current.Name = v.Name
+			return writeGuestBridgeFile(current, e.networkDir)
+		}
+		// The same refusals CheckNetworkRemoval reports, so a converge precheck that let
+		// this operation through and the operation itself cannot disagree.
+		if err = e.networkRemovalRefusal(js, current); err != nil {
+			return err
+		}
+		j.Stage = "removing"
+		if err = e.save(*j); err != nil {
+			return err
+		}
+		return removeGuestBridge(ctx, current, e.networkDir)
+	case "media-remove":
+		v := c.ResourceLifecycle
+		current, path, err := managedMedia(js, v.ResourceID)
+		if err != nil {
+			return err
+		}
+		if protocol.MediaGeneration(current) != v.ExpectedGeneration {
+			return errors.New("ISO generation is no longer current; refresh and retry")
+		}
+		if err = mediaRemovalRefusal(js, v.ResourceID); err != nil {
+			return err
+		}
+		j.Stage = "removing"
+		if err = e.save(*j); err != nil {
+			return err
+		}
+		// On pool-shared storage the published file is the pool's only copy, so only the
+		// host that imported it unlinks it. A member's record is an adoption of that same
+		// file: it drops its own journal record and leaves the file to the importing host,
+		// because one member reaching a wrong conclusion must not destroy the ISO for
+		// everyone. The distinction comes from the journal, not from the caller.
+		if path == "" || mediaAdopted(js, v.ResourceID) {
+			return nil
+		}
+		if err = os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
 	case "network-register":
 		if err := registrationConflict(js, c); err != nil {
 			return err
@@ -2432,6 +2931,12 @@ func syncManagedDir(path string) error {
 	return d.Sync()
 }
 func verifyISO(path string, m protocol.Media) error {
+	return verifyISOContext(context.Background(), path, m)
+}
+
+// verifyISOContext is verifyISO with a cancellable digest read: a shared ISO on a hung
+// remote mount must not pin the caller's goroutine past its deadline.
+func verifyISOContext(ctx context.Context, path string, m protocol.Media) error {
 	real, err := filepath.EvalSymlinks(path)
 	if err != nil || real != path {
 		return errors.New("ISO missing or replaced by a symlink")
@@ -2448,7 +2953,7 @@ func verifyISO(path string, m protocol.Media) error {
 		return errors.New("ISO size changed or is not a regular file")
 	}
 	h := sha256.New()
-	if _, err = io.Copy(h, io.LimitReader(f, m.SizeBytes+1)); err != nil {
+	if _, err = io.Copy(h, &managedContextReader{ctx: ctx, r: io.LimitReader(f, m.SizeBytes+1)}); err != nil {
 		return err
 	}
 	if hex.EncodeToString(h.Sum(nil)) != m.SHA256 {
@@ -3154,6 +3659,12 @@ func registrationConflict(js []managedJournal, c protocol.Command) error {
 			}
 		}
 	}
+	removedNetworks := map[string]bool{}
+	if c.Network != nil {
+		for id := range networkTombstones(js) {
+			removedNetworks[id] = true
+		}
+	}
 	for _, old := range js {
 		if old.Command.OperationID == c.OperationID || old.Result.Status == "failed" {
 			continue
@@ -3175,8 +3686,23 @@ func registrationConflict(js []managedJournal, c protocol.Command) error {
 				return errors.New("storage source is already registered on this host as " + old.Command.Storage.Name)
 			}
 		}
+		// A removed network released its bridge name: its registration is still in the
+		// journal, but the host tore the bridge down, so it must not hold the namespace
+		// against a fresh registration of the same uplink and VLAN.
+		if c.Network != nil && old.Command.Network != nil && removedNetworks[old.Command.Network.ID] {
+			continue
+		}
 		if c.Network != nil && old.Command.Network != nil && old.Command.Network.Source == c.Network.Source && (old.Command.Network.Kind == "network") == (c.Network.Kind == "network") {
-			return errors.New("network " + c.Network.Source + " is already registered on this host as " + old.Command.Network.Name)
+			// A host that was master of its own pool keeps that pool's registration for
+			// the same uplink and VLAN. Re-registering the identical network under the
+			// joined pool's ID configures nothing new, so refusing it would leave the
+			// member unable to converge, and unable to resolve the pool network for a
+			// VM NIC, for as long as it stays in the pool. Only a different definition,
+			// or a duplicate inside one pool, still holds the bridge namespace.
+			if old.Command.Network.PoolID == c.Network.PoolID || !protocol.IsPoolSharedNetwork(*c.Network) || old.Command.Network.Kind != c.Network.Kind ||
+				old.Command.Network.Uplink != c.Network.Uplink || old.Command.Network.VLAN != c.Network.VLAN {
+				return errors.New("network " + c.Network.Source + " is already registered on this host as " + old.Command.Network.Name)
+			}
 		}
 	}
 	return nil
@@ -4036,7 +4562,9 @@ func (e *ManagedEngine) finishFirmwareRemoval(ctx context.Context, j *managedJou
 func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (r protocol.Result, err error) {
 	j.Result.Status, j.Result.Error = "pending", ""
 	defer func() { r = unsettledNeedsAttention(r) }()
-	if j.Command.Kind == "storage-register" || j.Command.Kind == "storage-update" || j.Command.Kind == "storage-recheck" || j.Command.Kind == "storage-detach" || j.Command.Kind == "storage-credential-retire" || j.Command.Kind == "network-register" {
+	// Network and media removal teardown is idempotent (absent bridge, absent file, absent
+	// ISO all mean done), so an interrupted removal settles by re-running it.
+	if slices.Contains([]string{"storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "network-remove", "network-update", "media-remove"}, j.Command.Kind) {
 		js, err := e.journals()
 		if err != nil {
 			return j.Result, err

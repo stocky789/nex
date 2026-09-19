@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -19,6 +20,63 @@ const ManagedVMCapability = "managed-vm-v1"
 // VM definition placement using a fresh authenticated target-host preflight.
 const PoolVMPlacementCapability = "pool-vm-placement-v1"
 const CPUBaselineCapability = "vm-cpu-baseline-v1"
+
+// PoolResourceRemovalCapability means Core accepts network-remove, network-update and
+// media-remove: pool VLAN networks and imported ISOs can be removed (and networks renamed)
+// on the pool master, with a durable tombstone members converge to.
+const PoolResourceRemovalCapability = "pool-resource-removal-v1"
+
+// ResourceLifecycleRequest removes an existing pool VLAN network or imported ISO, or renames
+// a network. Registration deliberately remains the legacy Command.Network/Command.Media shape,
+// whose resource ID is reserved permanently; a lifecycle change gets its own operation slot.
+type ResourceLifecycleRequest struct {
+	Resource           string `json:"resource"`
+	Action             string `json:"action"`
+	ResourceID         string `json:"resource_id"`
+	PoolID             string `json:"pool_id"`
+	HostID             string `json:"host_id"`
+	ExpectedGeneration uint64 `json:"expected_generation,omitempty"`
+	// Name is the new network name; update only. Nothing else about a network can change:
+	// the bridge name is derived from the uplink and VLAN and is in every VM's domain XML,
+	// so changing either is a removal and a fresh registration.
+	Name string `json:"name,omitempty"`
+}
+
+// ValidateResourceLifecycle checks the shape Controller and Core enforce identically.
+func ValidateResourceLifecycle(v ResourceLifecycleRequest) error {
+	if v.Resource != "network" && v.Resource != "media" {
+		return errors.New("resource lifecycle applies to a network or media")
+	}
+	if v.ResourceID == "" || v.PoolID == "" || v.HostID == "" {
+		return errors.New("resource lifecycle needs resource, pool and host IDs")
+	}
+	if v.ExpectedGeneration == 0 {
+		return errors.New("resource lifecycle needs the expected generation")
+	}
+	switch v.Action {
+	case "remove":
+		if v.Name != "" {
+			return errors.New("resource removal must not carry a name")
+		}
+	case "update":
+		if v.Resource != "network" {
+			return errors.New("only a network can be renamed")
+		}
+		if !ValidResourceName(v.Name) {
+			return errors.New("a network name must be nonblank, at most 200 UTF-8 bytes, without slashes or control characters")
+		}
+	default:
+		return errors.New("resource lifecycle action must be remove or update")
+	}
+	return nil
+}
+
+// ValidResourceName is the shared name rule for operator-named pool resources.
+func ValidResourceName(name string) bool {
+	return utf8.ValidString(name) && len(name) <= 200 && strings.TrimSpace(name) != "" && !strings.ContainsFunc(name, func(r rune) bool {
+		return r == '/' || unicode.IsControl(r) || r == '￾' || r == '￿'
+	})
+}
 
 // Appliance is a Controller appliance VM the host deployed through its local engine, reported
 // from that engine's deploy journal so a replaced Controller re-adopts it as protected.
@@ -62,19 +120,49 @@ type StorageRegistration struct {
 	// MemberAccess is master-reported, per-host observed access for a pool remote
 	// repository. It remains empty for host-local repositories and iSCSI single-writer use.
 	MemberAccess []PoolStorageAccess `json:"member_access,omitempty"`
+	// ZFSHostAccess is the master-owned observation for a pool-scoped local
+	// ZFS repository. It is explicitly not shared storage: each host has its
+	// own pool/dataset identity and placement probes the selected host again.
+	ZFSHostAccess []ZFSHostAccess `json:"zfs_host_access,omitempty"`
+	// ZFSProvisioned marks a local registration created from a Core-owned ZFS
+	// provision record. Scope is host or pool; Controller mirrors this resource
+	// only from the pool master, independent of report order.
+	ZFSProvisioned bool   `json:"zfs_provisioned,omitempty"`
+	ZFSScope       string `json:"zfs_scope,omitempty"`
+}
+
+type ZFSHostAccess struct {
+	HostID         string    `json:"host_id"`
+	PoolGUID       string    `json:"pool_guid,omitempty"`
+	DatasetGUID    string    `json:"dataset_guid,omitempty"`
+	Path           string    `json:"path,omitempty"`
+	Readable       bool      `json:"readable"`
+	Writable       bool      `json:"writable"`
+	TotalBytes     uint64    `json:"total_bytes,omitempty"`
+	AvailableBytes *uint64   `json:"available_bytes,omitempty"`
+	ObservedAt     time.Time `json:"observed_at,omitempty"`
+	Error          string    `json:"error,omitempty"`
 }
 type NetworkRegistration struct {
-	ID          string `json:"id"`
-	PoolID      string `json:"pool_id"`
-	HostID      string `json:"host_id"`
-	Name        string `json:"name"`
-	Kind        string `json:"kind"`
-	Source      string `json:"source"`
-	Uplink      string `json:"uplink,omitempty"`
-	VLAN        int    `json:"vlan,omitempty"`
+	ID     string `json:"id"`
+	PoolID string `json:"pool_id"`
+	HostID string `json:"host_id"`
+	Name   string `json:"name"`
+	Kind   string `json:"kind"`
+	Source string `json:"source"`
+	Uplink string `json:"uplink,omitempty"`
+	VLAN   int    `json:"vlan,omitempty"`
+	// Generation is the master's desired revision for pool-shared (VLAN) networks.
+	// Host-local bridge/libvirt registrations leave it zero; members treat zero as 1.
+	Generation  uint64 `json:"generation,omitempty"`
 	OperationID string `json:"operation_id"`
 	Status      string `json:"status"`
 	Error       string `json:"error,omitempty"`
+	// MemberAccess is master-reported, per-host apply status for pool-shared VLAN networks.
+	MemberAccess []PoolNetworkAccess `json:"member_access,omitempty"`
+	// Tombstone marks a network the host durably removed, so a Controller drops its mirror
+	// row and never re-adopts the registration it still holds in an older report.
+	Tombstone bool `json:"tombstone,omitempty"`
 }
 
 type Media struct {
@@ -89,6 +177,13 @@ type Media struct {
 	OperationID string `json:"operation_id"`
 	Status      string `json:"status"`
 	Error       string `json:"error,omitempty"`
+	// MemberAccess is master-reported verification that a member sees this ISO on shared storage.
+	MemberAccess []PoolMediaAccess `json:"member_access,omitempty"`
+	// Generation fences removal, as it does for storage and networks. Imports leave it zero;
+	// every reader treats zero as 1.
+	Generation uint64 `json:"generation,omitempty"`
+	// Tombstone marks an ISO the host durably removed.
+	Tombstone bool `json:"tombstone,omitempty"`
 }
 
 // CPUFeature pins a native feature requirement or exclusion in a named CPU definition.
@@ -500,4 +595,27 @@ func ValidateVLAN(n NetworkRegistration) error {
 		return errors.New("VLAN networks need an uplink NIC name of at most 10 characters, a VLAN ID 0–4094 and the derived bridge name")
 	}
 	return nil
+}
+
+// IsPoolSharedNetwork identifies guest networks the pool master owns and members must
+// materialize. VLAN registrations are pool-wide; bridge and libvirt network registrations
+// stay host-local (including each host's automatic untagged defaults).
+func IsPoolSharedNetwork(n NetworkRegistration) bool {
+	return n.Kind == "vlan"
+}
+
+// NetworkGeneration returns the effective desired generation for member reconcile.
+func NetworkGeneration(n NetworkRegistration) uint64 {
+	if n.Generation == 0 {
+		return 1
+	}
+	return n.Generation
+}
+
+// MediaGeneration is the same rule for an imported ISO, whose imports predate the field.
+func MediaGeneration(m Media) uint64 {
+	if m.Generation == 0 {
+		return 1
+	}
+	return m.Generation
 }

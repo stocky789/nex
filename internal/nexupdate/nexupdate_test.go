@@ -269,6 +269,62 @@ func TestApplyLocalUpgradesViaApt(t *testing.T) {
 	}
 }
 
+// OpenZFS is recommended, not depended on, so an upgrade from a release whose host
+// has no contrib component still succeeds. The apply that follows must install the
+// recommended packages that are missing, and must leave installed ones alone.
+func TestApplyLocalInstallsMissingRecommendedPackages(t *testing.T) {
+	isolatePaths(t)
+	installed := "0.1.0"
+	calls := fakeCommands(t, func(line string) (string, int) {
+		switch {
+		case strings.HasPrefix(line, "dpkg-query -W -f=${db:Status-Status} zfsutils-linux"):
+			return "installed", 0
+		case strings.HasPrefix(line, "dpkg-query -W -f=${db:Status-Status}"):
+			return "", 1
+		case strings.HasPrefix(line, "dpkg-query"):
+			return installed, 0
+		case strings.Contains(line, "install -y nex-core-local"):
+			installed = "0.2.0"
+			return "Setting up nex-core-local (0.2.0)", 0
+		}
+		return "", 0
+	})
+
+	if res, err := ApplyLocal(context.Background(), "https://mirror.example/apt", "nex-core-local", t.TempDir()); err != nil {
+		t.Fatalf("%v (%+v)", err, res)
+	}
+	got := joined(calls)
+	if !strings.Contains(got, "install -y linux-headers-amd64 zfs-dkms\n") &&
+		!strings.HasSuffix(got, "install -y linux-headers-amd64 zfs-dkms") {
+		t.Fatalf("missing recommended packages not installed (or an installed one reinstalled):\n%s", got)
+	}
+	if !strings.Contains(got, "systemctl restart nex-core-local.service") {
+		t.Fatalf("service not restarted:\n%s", got)
+	}
+}
+
+// A Controller apply must not drag a host's ZFS packages onto the appliance.
+func TestApplyLocalControllerSkipsCoreRecommendations(t *testing.T) {
+	isolatePaths(t)
+	installed := "0.1.0"
+	calls := fakeCommands(t, func(line string) (string, int) {
+		switch {
+		case strings.HasPrefix(line, "dpkg-query"):
+			return installed, 0
+		case strings.Contains(line, "install -y nex-controller"):
+			installed = "0.2.0"
+			return "Setting up nex-controller (0.2.0)", 0
+		}
+		return "", 0
+	})
+	if res, err := ApplyLocal(context.Background(), "https://mirror.example/apt", "nex-controller", t.TempDir()); err != nil {
+		t.Fatalf("%v (%+v)", err, res)
+	}
+	if strings.Contains(joined(calls), "zfs-dkms") {
+		t.Fatalf("controller apply touched ZFS packages:\n%s", joined(calls))
+	}
+}
+
 // apt exits 0 when nothing needed upgrading, so the version must be re-read rather
 // than reporting a successful update that never happened.
 func TestApplyLocalRejectsUnchangedVersion(t *testing.T) {

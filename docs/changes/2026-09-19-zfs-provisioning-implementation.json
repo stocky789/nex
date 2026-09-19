@@ -1,0 +1,110 @@
+{
+  "summary": "Implement ZFS disk discovery, Core-owned provisioning and per-host local repositories, the Controller wizard and OpenZFS delivery recipe. API impact: new contract. Acceptance remains open as recorded in the QA report.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/API.md",
+    "docs/LICENSING.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/README.md",
+    "docs/guide/storage-repositories.md",
+    "docs/plans/2026-09-19-zfs-repository-provisioning.md",
+    "docs/qa/2026-09-19-zfs-provisioning.md",
+    "website/src/routes/roadmap/+page.svelte",
+    "installer/Dockerfile",
+    "installer/late-install.sh",
+    "installer/packages.txt",
+    "packaging/core-local/build-inside.sh",
+    "scripts/gitea-release.py",
+    "scripts/release-publish.py",
+    "tests/test_gitea_release.py",
+    "tests/test_release_publish.py",
+    "tests/test_storage_packaging.py",
+    ".github/workflows/phase1.yml",
+    ".gitea/workflows/phase1.yml",
+    "internal/controller/controller.go",
+    "internal/controller/identity.go",
+    "internal/controller/managed.go",
+    "internal/controller/storage.go",
+    "internal/controller/storage_protocol_test.go",
+    "internal/controller/storage_test.go",
+    "internal/protocol/managed.go",
+    "internal/protocol/protocol.go",
+    "internal/protocol/storage.go",
+    "internal/agent/client.go",
+    "internal/agent/managed.go",
+    "internal/agent/peer.go",
+    "internal/agent/run.go",
+    "internal/agent/state.go",
+    "internal/agent/zfs_discovery.go",
+    "internal/agent/zfs_pool.go",
+    "internal/agent/zfs_pool_test.go",
+    "internal/agent/zfs_provision.go",
+    "internal/agent/zfs_provision_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/provision_zfs.go",
+    "internal/vmhost/provision_zfs_test.go",
+    "internal/vmhost/zfs_device_discovery.go",
+    "internal/vmhost/zfs_device_discovery_test.go",
+    "web/src/storage.tsx",
+    "web/src/storage.test.mjs",
+    "web/src/zfs.tsx",
+    "web/src/zfs.test.mjs",
+    "tests/integration/zfs_provisioning_browser.py",
+    "tests/integration/zfs_provisioning_lab.py",
+    "docs/api/peer.html",
+    "internal/vmhost/vlan_test.go",
+    "tests/test_api_contract.py",
+    "docs/BUG_LEDGER.md",
+    "docs/api/peer-openapi.json",
+    "internal/agent/zfs_lifecycle.go",
+    "internal/agent/zfs_lifecycle_test.go",
+    "internal/vmhost/provision_zfs_vdev_test.go",
+    "packaging/controller/build-inside.sh",
+    "packaging/core-local/storage-downgrade-guard.py",
+    "web/src/managed.tsx",
+    "internal/agent/storage_protocol_test.go",
+    "internal/controller/media.go",
+    "web/src/style.css",
+    "internal/agent/managed_test.go",
+    "internal/controller/identity_test.go",
+    "tests/integration/iso-smoke.py"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators select devices, confirm erasure and inspect per-host ZFS outcomes; existing-dataset registration remains available.",
+    "pages": [
+      "docs/guide/storage-repositories.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "New capability-gated zfs-device discovery and storage-zfs-provision operation, Core-owned per-host results and peer execution; Controller relays authenticated intent.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html",
+      "docs/api/peer-openapi.json",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "Record ZFS provisioning in development while master-change and external delivery acceptance remain open; completed native, kernel upgrade/recovery and offline image checks are recorded in QA.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Pool repository identity, device selections, layout and outcomes remain recoverable independently of Controller.",
+    "record": "The pool master keeps zfs-pool.json, zfs-lifecycle.json and its accepted command journal; each target Core keeps zfs-provision receipts and managed-vms registration records. Each native pool root filesystem carries nex:repository. A fresh Controller adopts master Inventory.managed storage and zfs_provisions, with per-host access; it does not derive or own repository identity."
+  },
+  "verification": {
+    "method": "Executed checks and limitations are recorded in the rollout QA report; combined acceptance is still in progress, not inferred from test source or packaging configuration.",
+    "evidence": [
+      "docs/qa/2026-09-19-zfs-provisioning.md"
+    ]
+  }
+}

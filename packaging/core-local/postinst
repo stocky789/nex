@@ -31,6 +31,22 @@ Components: main
 Architectures: amd64
 Signed-By: /usr/share/keyrings/nex-archive-keyring.gpg
 APT
+    # OpenZFS is in Debian contrib, which hosts installed before Nex enabled it do
+    # not have. Add only that component, only to the Debian source Nex itself wrote,
+    # and only to Components lines that lack it, so operator edits survive. apt
+    # cannot run here (dpkg holds its lock); the next update applies the change.
+    debian_sources=$root/etc/apt/sources.list.d/debian.sources
+    if [ ! -f "$debian_sources" ]; then
+        echo "nex-core-local: $debian_sources not found; enable the Debian contrib component yourself to install OpenZFS"
+    elif grep -E '^Components:.*[[:space:]]main([[:space:]]|$)' "$debian_sources" |
+         grep -qvE '[[:space:]]contrib([[:space:]]|$)'; then
+        # A sources file that cannot be edited costs ZFS support, never the update.
+        if sed -i -E '/^Components:.*[[:space:]]main([[:space:]]|$)/{/[[:space:]]contrib([[:space:]]|$)/!s/$/ contrib/}' "$debian_sources"; then
+            echo "nex-core-local: enabled the Debian contrib component in $debian_sources for OpenZFS"
+        else
+            echo "nex-core-local: could not enable the Debian contrib component in $debian_sources; OpenZFS stays unavailable"
+        fi
+    fi
     # Cluster packages are installed with Core so an explicit pool configuration
     # has every native binary available. Only a host with no Corosync configuration
     # at all is safe to disable here; an administrator or already configured Nex

@@ -89,3 +89,26 @@ type PoolStorageAccess struct {
 	ObservedAt   time.Time `json:"observed_at"`
 	Error        string    `json:"error,omitempty"`
 }
+
+// PoolNetworkAccess is a member's observed apply of a master-owned VLAN network. It is not
+// a placement grant: Core checks the bridge again before attaching a guest NIC.
+type PoolNetworkAccess struct {
+	NetworkID     string    `json:"network_id"`
+	HostID        string    `json:"host_id"`
+	Generation    uint64    `json:"generation"`
+	Bridge        string    `json:"bridge,omitempty"`
+	UplinkPresent bool      `json:"uplink_present"`
+	ObservedAt    time.Time `json:"observed_at"`
+	Error         string    `json:"error,omitempty"`
+}
+
+// PoolMediaAccess is a member's verification that a master-owned ISO on shared storage is
+// present with the recorded digest. Bytes ride the shared repository; this is metadata only.
+type PoolMediaAccess struct {
+	MediaID    string    `json:"media_id"`
+	HostID     string    `json:"host_id"`
+	StorageID  string    `json:"storage_id"`
+	SHA256     string    `json:"sha256,omitempty"`
+	ObservedAt time.Time `json:"observed_at"`
+	Error      string    `json:"error,omitempty"`
+}

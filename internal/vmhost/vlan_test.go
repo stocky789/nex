@@ -167,6 +167,58 @@ func TestGuestVLANNetns(t *testing.T) {
 	if err := ensureGuestBridge(ctx, vlanNet("d3", 0), dir); err != nil || !exists("/sys/class/net/d3v0/brif/d3") {
 		t.Fatal("untagged guest bridge:", err)
 	}
+	// Removal tears down exactly what registration built, and nothing else.
+	ip("link", "add", "d5", "type", "dummy")
+	second := vlanNet("d0", 100)
+	second.ID, second.Name, second.PoolID, second.HostID = "net-2", "Second", "pool", "host"
+	if err := ensureGuestBridge(ctx, vlanNet("d5", 100), dir); err != nil {
+		t.Fatal("bystander bridge:", err)
+	}
+	// A bridge with a port Nex did not attach is refused: it could be a live VM's tap.
+	ip("link", "add", "extra", "type", "dummy")
+	ip("link", "set", "extra", "master", "d0v100")
+	if err := removeGuestBridge(ctx, n, dir); err == nil || !strings.Contains(err.Error(), "still has attached interfaces") {
+		t.Fatal("bridge with an extra port accepted:", err)
+	}
+	ip("link", "set", "extra", "nomaster")
+	// A second Nex stanza on the same VLAN device keeps that device alive.
+	os.WriteFile(filepath.Join(dir, "interfaces.d", "nex-other"), []byte(interfacesFile(second)), 0644)
+	if err := removeGuestBridge(ctx, n, dir); err != nil {
+		t.Fatal("remove:", err)
+	}
+	if exists("/sys/class/net/d0v100") || exists(filepath.Join(dir, "interfaces.d", "nex-d0v100")) {
+		t.Fatal("bridge or stanza survived removal")
+	}
+	if !exists("/sys/class/net/d0.100") {
+		t.Fatal("VLAN device named by another Nex stanza must survive")
+	}
+	os.Remove(filepath.Join(dir, "interfaces.d", "nex-other"))
+	// Removing again is a no-op, and now nothing keeps the VLAN device.
+	if err := removeGuestBridge(ctx, n, dir); err != nil {
+		t.Fatal("second removal:", err)
+	}
+	if exists("/sys/class/net/d0.100") {
+		t.Fatal("unused VLAN device survived")
+	}
+	// A bridge with no Nex stanza is never touched, even when it carries the name Nex
+	// would derive for that uplink and VLAN.
+	ip("link", "add", "d0v300", "type", "bridge")
+	if err := removeGuestBridge(ctx, vlanNet("d0", 300), dir); err == nil || !strings.Contains(err.Error(), "was not created by Nex") {
+		t.Fatal("foreign bridge accepted:", err)
+	}
+	if !exists("/sys/class/net/d0v300") || !exists("/sys/class/net/other") || master("d0.200") != "other" {
+		t.Fatal("refused removal disturbed an operator's bridge")
+	}
+	// The uplink, the bystander guest bridge and the interfaces file are all untouched.
+	if !exists("/sys/class/net/d0") {
+		t.Fatal("uplink disturbed")
+	}
+	if !exists("/sys/class/net/d5v100/brif/d5.100") {
+		t.Fatal("another host's guest bridge was torn down")
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "interfaces")); !strings.HasPrefix(string(b), installer) || !strings.Contains(string(b), "source /etc/network/interfaces.d/*") {
+		t.Fatalf("interfaces file changed by removal:\n%s", b)
+	}
 	// A bond member is refused; the bond itself must be the uplink.
 	if out, err := exec.Command("ip", "link", "add", "bond0", "type", "bond").CombinedOutput(); err != nil {
 		t.Logf("bonding unavailable in this namespace, member check not exercised: %s", out)
@@ -210,7 +262,7 @@ func TestAppliedFromJournal(t *testing.T) {
 	if !reflect.DeepEqual(got.Storage[0], protocol.StorageRegistration{ID: "st-1", PoolID: "pool", HostID: "host", Name: "Local", Path: "/srv/vms", Generation: 1}) {
 		t.Fatalf("storage %+v", got.Storage[0])
 	}
-	if got.Networks[0] != (protocol.NetworkRegistration{ID: "net-1", PoolID: "pool", HostID: "host", Name: "Servers", Kind: "vlan", Source: "nex0v15", Uplink: "nex0", VLAN: 15}) {
+	if !reflect.DeepEqual(got.Networks[0], protocol.NetworkRegistration{ID: "net-1", PoolID: "pool", HostID: "host", Name: "Servers", Kind: "vlan", Source: "nex0v15", Uplink: "nex0", VLAN: 15}) {
 		t.Fatalf("network %+v", got.Networks[0])
 	}
 	if got.Media[0].OperationID != "" || got.Media[0].Status != "" || got.Media[0].ID != "iso-1" || !reflect.DeepEqual(got.VMs[0], v) {

@@ -207,6 +207,14 @@ func PoolPeerHandler(s *Store) http.Handler {
 			PoolPlacementHandler(s).ServeHTTP(w, r)
 			return
 		}
+		if r.URL.Path == poolZFSLifecyclePath {
+			PoolZFSLifecycleHandler(s).ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == poolZFSPath || strings.HasPrefix(r.URL.Path, poolZFSPath+"/") {
+			PoolZFSHandler(s).ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path == poolStorageClusterPath || strings.HasPrefix(r.URL.Path, poolStorageClusterPath+"/") {
 			PoolStorageClusterHandler(s).ServeHTTP(w, r)
 			return
@@ -217,6 +225,14 @@ func PoolPeerHandler(s *Store) http.Handler {
 		}
 		if r.URL.Path == strings.TrimSuffix(poolStoragePath, "/") || strings.HasPrefix(r.URL.Path, poolStoragePath) {
 			PoolStorageHandler(s).ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == strings.TrimSuffix(poolNetworkPath, "/") || strings.HasPrefix(r.URL.Path, poolNetworkPath) {
+			PoolNetworkHandler(s).ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == strings.TrimSuffix(poolMediaPath, "/") || strings.HasPrefix(r.URL.Path, poolMediaPath) {
+			PoolMediaHandler(s).ServeHTTP(w, r)
 			return
 		}
 		if r.URL.Path != poolJoinPath {

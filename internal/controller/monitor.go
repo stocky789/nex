@@ -76,11 +76,19 @@ func validateInventory(v *protocol.Inventory) error {
 				fields = append(fields, s.Name)
 			}
 		}
+		// A removal tombstone retains only stable identity and generation, exactly as a
+		// storage detach does above; it has no operator-visible name.
 		for _, n := range m.Networks {
-			fields = append(fields, n.ID, n.Name)
+			fields = append(fields, n.ID)
+			if !n.Tombstone {
+				fields = append(fields, n.Name)
+			}
 		}
 		for _, md := range m.Media {
-			fields = append(fields, md.ID, md.Name)
+			fields = append(fields, md.ID)
+			if !md.Tombstone {
+				fields = append(fields, md.Name)
+			}
 		}
 		for _, vm := range m.VMs {
 			fields = append(fields, vm.ID, vm.Name)

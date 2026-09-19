@@ -28,7 +28,7 @@ publish or rollback.
   sudo NEX_PUBLISH_USER=<publishing-user> packaging/website/bootstrap-publish.sh
   ```
 
-- An existing Pangolin HTTPS route and the maintainer-approved private access policy.
+- An existing Pangolin HTTPS route and the operator-approved private access policy.
 - A prior verified release retained under `/srv/nex-website/releases` before replacing
   `current`. Use the installed release tool, not a source checkout on the server.
 - Optional: root once to bootstrap the private APT tree (`packaging/apt/bootstrap.sh`) so

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useRef, useState, type FormEvent } from "react";
 import type { Host, Media, Network, Storage, VM, VMSpec } from "./managed";
-import { adapterNames, adapterNotes, applyTopology, autoDiskName, busNames, cpuName, availableBaseline, baselineSupported, baselineUnavailable, fixedCPU, selectCPU, cpuSelectionIssue, cpuMigrationHelp, describeNetwork, driversDriveReady, effectiveBoot, readyHost, topologyIssue, vmNameIssue, type DiskRow, type NICRow } from "./vm-create";
+import { adapterNames, adapterNotes, applyTopology, autoDiskName, busNames, cpuName, availableBaseline, baselineSupported, baselineUnavailable, fixedCPU, recommendedCPU, selectCPU, cpuSelectionIssue, cpuMigrationHelp, describeNetwork, driversDriveReady, effectiveBoot, mediaUsable, networkUsable, readyHost, topologyIssue, vmNameIssue, type DiskRow, type NICRow } from "./vm-create";
 import { storageUsable } from "./storage";
 
 type API = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
@@ -67,10 +67,13 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
   const setDisk = (i: number, patch: Partial<DiskRow>) => edit({ disks: draft.disks.map((d, n) => n === i ? { ...d, ...patch } : d) });
   const setNIC = (i: number, patch: Partial<NICRow>) => edit({ nics: draft.nics.map((n, x) => x === i ? { ...n, ...patch } : n) });
   const hostStorage = storage.filter(s => storageUsable(s, vm.host_id));
-  const hostNetworks = networks.filter(n => n.host_id === vm.host_id && n.status === "succeeded").sort((a, b) => (a.vlan || 0) - (b.vlan || 0) || a.name.localeCompare(b.name));
-  const availableMedia = media.filter(m => m.host_id === vm.host_id && m.status === "succeeded");
+  const hostNetworks = networks.filter(n => networkUsable(n, vm.host_id)).sort((a, b) => (a.vlan || 0) - (b.vlan || 0) || a.name.localeCompare(b.name));
+  const availableMedia = media.filter(m => mediaUsable(m, vm.host_id, storage));
   const driversReady = driversDriveReady(host);
   const baseline = availableBaseline(host);
+  // Only one option is the recommendation: a saved fixed CPU that already matches the pool
+  // baseline carries it, so the pool baseline option does not repeat it.
+  const savedRecommended = fixedCPU(draft.cpu) && recommendedCPU(draft.cpu, draft.boot.machine, host);
   const baselineWarning = baselineUnavailable(host);
   const cpuIssue = cpuSelectionIssue(draft.cpu, host);
   const uefi = draft.boot.firmware === "uefi";
@@ -144,8 +147,8 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
           const selection = e.target.value;
           edit({ cpu: selectCPU(draft.cpu, selection, host), ...(selection === "__pool-baseline" && baseline ? { boot: { ...draft.boot, machine: baseline.machine } } : {}) });
         }}>
-          {fixedCPU(draft.cpu) && <option value="__saved-baseline">Saved fixed CPU baseline · {draft.cpu.model}</option>}
-          {baselineSupported(host) && <option value="__pool-baseline" disabled={!baseline}>Pool CPU baseline{baseline ? ` · ${baseline.model}` : " · unavailable"}</option>}
+          {fixedCPU(draft.cpu) && <option value="__saved-baseline">Saved fixed CPU baseline · {draft.cpu.model}{savedRecommended ? " (Recommended)" : ""}</option>}
+          {baselineSupported(host) && <option value="__pool-baseline" disabled={!baseline}>Pool CPU baseline{baseline ? ` · ${baseline.model}${savedRecommended ? "" : " (Recommended)"}` : " · unavailable"}</option>}
           <option value="host-passthrough">Host passthrough</option><option value="host-model">Host model</option>
           {host?.inventory?.cpu_models?.filter(m => m !== "host-passthrough" && m !== "host-model").map(m => <option key={m} value={m}>{cpuName(m)}</option>)}
           {!fixedCPU(draft.cpu) && !["host-passthrough", "host-model", ...host?.inventory?.cpu_models || []].includes(draft.cpu.model) && <option value={draft.cpu.model} disabled>{cpuName(draft.cpu.model)} · saved model not reported by this host</option>}
@@ -153,7 +156,6 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
         <label>Memory mode<select value={draft.memory.mode} {...lock()} onChange={e => edit({ memory: { ...draft.memory, mode: e.target.value } })}><option value="dedicated">Dedicated · lock RAM while running</option><option value="maximum">Maximum · a ceiling only</option></select></label>
         <label>Memory (MiB)<input type="number" required min={512} max={maxMiB} step={1} value={num(draft.memory.size_mib)} {...lock()} onChange={e => edit({ memory: { ...draft.memory, size_mib: e.target.valueAsNumber } })} /></label>
       </div>
-      {fixedCPU(draft.cpu) && <p className="help">Fixed features: {draft.cpu.features?.map(f => `${f.policy} ${f.name}`).join(", ") || "none added"}. Machine: {draft.boot.machine || "q35"}.</p>}
       {baselineWarning && <p className="warning">{baselineWarning} Existing CPU selections are kept.</p>}
       {cpuIssue && <p className="task-error" role="alert">{cpuIssue}</p>}
       <p className="help">{cpuMigrationHelp}</p>
@@ -190,7 +192,7 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
         return <fieldset key={i}>
           <legend>Network interface {i + 1}{existing ? "" : " · new"}</legend>
           <div className="vm-fields">
-            <label>Network<select required value={n.network_id} {...fixed} onChange={e => setNIC(i, { network_id: e.target.value })}><option value="">Select validated network</option>{networks.filter(x => x.host_id === vm.host_id && (x.status === "succeeded" || x.id === n.network_id)).map(x => <option key={x.id} value={x.id}>{x.name} · {describeNetwork(x)}</option>)}</select></label>
+            <label>Network<select required value={n.network_id} {...fixed} onChange={e => setNIC(i, { network_id: e.target.value })}><option value="">Select validated network</option>{networks.filter(x => networkUsable(x, vm.host_id) || x.id === n.network_id).map(x => <option key={x.id} value={x.id}>{x.name} · {describeNetwork(x)}</option>)}</select></label>
             <label>Adapter model<select value={n.model} {...fixed} onChange={e => setNIC(i, { model: e.target.value, ...(e.target.value === "virtio" ? {} : { mtu: 0 }) })}>{Object.entries(adapterNames).map(([v, t]) => <option key={v} value={v}>{t}</option>)}</select><small>{adapterNotes[n.model]}</small></label>
             <label>MAC address<input placeholder="Automatic" pattern={macPattern} value={n.mac} {...fixed} onChange={e => setNIC(i, { mac: e.target.value.trim().toLowerCase().replace(/-/g, ":") })} /></label>
             {n.model === "virtio" && <label>MTU<input type="number" min={1280} max={9216} step={1} placeholder="Network default" value={n.mtu || ""} {...fixed} onChange={e => setNIC(i, { mtu: e.target.valueAsNumber || 0 })} /></label>}

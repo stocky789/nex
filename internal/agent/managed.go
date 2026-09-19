@@ -21,7 +21,7 @@ import (
 
 func managedCommand(kind string) bool {
 	switch kind {
-	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "iso-import", "vm-create", "vm-update", "vm-power", "vm-delete", "vm-media", "pool-member-join", "pool-storage-reconcile":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "storage-zfs-provision", "network-register", "network-remove", "network-update", "media-remove", "iso-import", "vm-create", "vm-update", "vm-power", "vm-delete", "vm-media", "pool-member-join", "pool-storage-reconcile":
 		return true
 	}
 	return false
@@ -82,8 +82,18 @@ func startBundledSeed(running *atomic.Bool, seed func()) {
 }
 
 type managedCompletion struct {
-	result protocol.Result
-	err    error
+	result     protocol.Result
+	err        error
+	background bool
+}
+
+func sendManagedCompletion(ctx context.Context, completed chan<- managedCompletion, result managedCompletion) bool {
+	select {
+	case completed <- result:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // defaultsInterval is how often the worker retries default storage/network registration
@@ -130,6 +140,18 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 		case <-ticker.C:
 			defaults()
 			memberStore := &Store{dir: dir, State: identity}
+			// Pool ZFS provisioning survives Controller loss. Resume only the
+			// master-owned durable record; its provisioner re-adopts tagged pools
+			// and skips successful hosts, so this cannot repeat a wipe.
+			if resumed, err := ResumePoolZFSOperations(ctx, memberStore); err != nil && ctx.Err() == nil {
+				log.Printf("pool ZFS provisioning did not complete; inspect the Core journal")
+			} else {
+				for _, result := range resumed {
+					if !sendManagedCompletion(ctx, completed, managedCompletion{result: result, background: true}) {
+						return
+					}
+				}
+			}
 			// Settle an unresolved remote-storage VM update from native observation on every
 			// pool host, single-host pools included, before publishing: an applied revision
 			// then reaches the master's commit through this round's inventory evidence.
@@ -158,7 +180,10 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 		case cmd := <-commands:
 			result := protocol.Result{OperationID: cmd.OperationID, Status: "failed", ObservedAt: time.Now().UTC()}
 			var err error
-			if commandHost(cmd) != identity.HostID || identity.HostID == "" {
+			if lifecycleResult, handled, lifecycleErr := ExecutePoolZFSLifecycle(ctx, &Store{dir: dir, State: identity}, cmd); handled {
+				result = lifecycleResult
+				err = lifecycleErr
+			} else if (cmd.Kind != "storage-zfs-provision" && commandHost(cmd) != identity.HostID) || identity.HostID == "" {
 				result.Error = "managed command host identity does not match enrolled host"
 			} else {
 				if cmd.Pool != nil {
@@ -175,6 +200,8 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 					if err == nil {
 						result = protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: time.Now().UTC()}
 					}
+				} else if cmd.Kind == "storage-zfs-provision" {
+					result, err = ExecutePoolZFSProvision(ctx, &Store{dir: dir, State: identity}, cmd)
 				} else {
 					memberStore := &Store{dir: dir, State: identity}
 					// Core decides from its own journal how a media change is applied: on a
@@ -199,6 +226,9 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 					replayBlocked := false
 					if err == nil {
 						finishMutation, err = BeginPoolStorageMutation(ctx, memberStore, cmd)
+					}
+					if err == nil {
+						err = BeginPoolResourceRemoval(ctx, memberStore, cmd)
 					}
 					if err == nil {
 						finishVMExecution, err = AdmitPoolVMExecution(ctx, memberStore, cmd)
@@ -251,13 +281,83 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 					}
 				}
 			}
-			select {
-			case completed <- managedCompletion{result, err}:
-			case <-ctx.Done():
+			if !sendManagedCompletion(ctx, completed, managedCompletion{result: result, err: err}) {
 				return
 			}
 		}
 	}
+}
+
+// BeginPoolResourceRemoval is the master-side, pool-wide refusal for a Controller-issued
+// pool network or ISO removal or rename. Core's own dependency check sees only this host's
+// VM definitions, so the master also reads the pool's durable VM inventory in pool-vms.json
+// and refuses while any VM on any other host still references the resource. It fails closed
+// on anything it cannot prove: no membership, no inventory, or a ready member that has not
+// published at the current membership generation. Only the master accepts these commands;
+// a member's own converge loop applies the master's decision through the engine directly
+// and is deliberately not fenced here.
+func BeginPoolResourceRemoval(ctx context.Context, s *Store, cmd protocol.Command) error {
+	v := cmd.ResourceLifecycle
+	if v == nil {
+		return nil
+	}
+	noun := "network"
+	if v.Resource == "media" {
+		noun = "ISO"
+	}
+	membership, err := Membership(s)
+	if err != nil {
+		return errors.New("pool membership is unavailable for a pool " + noun + " change")
+	}
+	if membership.MasterHostID != s.State.HostID {
+		return errors.New("only the pool master may remove or rename a pool " + noun)
+	}
+	if v.Action != "remove" {
+		// A rename moves a name and a generation; no VM definition references it.
+		return nil
+	}
+	incomplete := errors.New("pool VM inventory is incomplete; wait for every member to report before removing this " + noun)
+	poolVMMu.Lock()
+	state, err := loadPoolVMs(s)
+	poolVMMu.Unlock()
+	if err != nil {
+		return incomplete
+	}
+	for _, member := range membership.Members {
+		// This host's own VMs are covered by Core's local dependency check inside Execute;
+		// a single-host pool therefore needs no published inventory at all.
+		if member.HostID == s.State.HostID {
+			continue
+		}
+		// A member that is not ready still runs the VMs it last published, so its snapshot
+		// keeps holding the resource; only a ready member must also be current.
+		if member.Status == "ready" && state.Inventory[member.HostID].Generation != membership.Generation {
+			return incomplete
+		}
+		// The durable per-member snapshot, not the never-pruned owner records: a VM that
+		// was deleted must stop holding its network or ISO.
+		for _, vm := range state.Inventory[member.HostID].VMs {
+			if poolVMUsesResource(vm, v.Resource, v.ResourceID) {
+				if noun == "network" {
+					return errors.New("network cannot be removed while used by VM " + vm.ID + " on host " + member.HostID)
+				}
+				return errors.New("ISO cannot be removed while attached to VM " + vm.ID + " on host " + member.HostID)
+			}
+		}
+	}
+	return nil
+}
+
+func poolVMUsesResource(vm protocol.VMCreateSpec, resource, id string) bool {
+	if resource == "media" {
+		return vm.MediaID == id || vm.DriversMediaID == id
+	}
+	for _, nic := range vm.NICs {
+		if nic.NetworkID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // reconcileRemoteVMCreateStopped is intentionally a Core worker path, not a Controller
@@ -359,6 +459,10 @@ func commandHost(cmd protocol.Command) string {
 	case "network-register":
 		if cmd.Network != nil {
 			return cmd.Network.HostID
+		}
+	case "network-remove", "network-update", "media-remove":
+		if cmd.ResourceLifecycle != nil {
+			return cmd.ResourceLifecycle.HostID
 		}
 	case "iso-import":
 		if cmd.Media != nil {

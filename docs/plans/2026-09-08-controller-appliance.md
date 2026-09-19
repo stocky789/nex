@@ -1,7 +1,7 @@
 # Host-local Controller appliance bootstrap
 
 Date: 2026-09-08
-Status: Bounded appliance development slice accepted in disposable nested KVM, including clean package deployment, separate-host manual recovery and replacement-host reboot; Core installation-media integration remains open.
+Status: Historical bounded appliance slice accepted in disposable nested KVM, including clean package deployment, separate-host manual recovery and replacement-host reboot. Core installation-media integration was initially open; the later recorded 0.3.2 artifact check covers package/ISO inclusion, while the complete deploy-to-enrollment chain remains open.
 
 ## Authorized scope
 
@@ -10,7 +10,7 @@ and a Deploy Controller action that automatically provisions a Debian virtual
 appliance and reports progress. Controller has no installation ISO. project owner authorized
 parallel implementation and delegated the appliance mechanism and resource defaults.
 
-This prioritizes a bounded appliance bootstrap slice from Phase 3, including its
+This historical plan prioritized a bounded appliance bootstrap slice from Phase 3, including its
 required local VM execution foundation, before the rest of Phase 2. It does not
 mark general VM creation, uploaded installation media, browser consoles, shared
 storage, migration, or either complete phase as delivered. The

@@ -1,0 +1,30 @@
+{
+  "summary": "Plan ZFS repository provisioning: pool-wide or single-host scope, operator-selected devices with Core-chosen defaults, and OpenZFS in the Core distribution. Planning only. API impact: new contract (planned, not implemented).",
+  "paths": [
+    "docs/plans/2026-09-19-zfs-repository-provisioning.md",
+    "docs/plans/2026-09-11-vm-storage-repositories.md",
+    "docs/LICENSING.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No behaviour changes; the storage guide is updated in the implementing slices."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Planning only. The plan declares a new contract (device discovery kind and ZFS provision operation) for the implementing slices; docs/API.md lists no unimplemented interface as implemented."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The published roadmap still describes shipped behaviour (existing OpenZFS datasets); it changes in the implementing slice. The scope decision is recorded in docs/plans."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No state changes in this record. The planned feature is Core-owned: pool master journal plus a ZFS user property on each host's zpool, recovered through master inventory."
+  },
+  "verification": {
+    "method": "Documentation link and scope review; documentation and privacy gates run.",
+    "evidence": [
+      "docs/plans/2026-09-19-zfs-repository-provisioning.md"
+    ]
+  }
+}

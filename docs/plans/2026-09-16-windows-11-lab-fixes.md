@@ -135,6 +135,7 @@ The historical manual-import lab evidence remains valid; it does not verify the 
 bundled-media rollout.
 
 Driver disc from the console, 2026-09-17: console insert and eject of the driver disc failed with
-400 (BUG-0235, fixed for 0.3.0; not in the published 0.2.9 release). A review follow-up in the uncommitted working tree also makes
-Nex Core refuse inserting the same ISO into both drives itself; it has unit regression tests only
-and awaits the project owner's code review and commit.
+400 (BUG-0235, fixed for 0.3.0; not in the published 0.2.9 release). The same-ISO refusal was
+also included in 0.3.0: Controller and Core validate that the driver disc differs from install
+media. Its focused regression tests establish the refusal; this historical lab did not rerun a
+native driver-disc insert after that follow-up.

@@ -1,7 +1,7 @@
 # Fresh local Core and Controller installation
 
 Date: 2026-09-09
-Status: Fresh installation and runtime checks passed with independent review.
+Status: Historical fresh-installation and runtime checks passed with independent review.
 
 ## Scope
 
@@ -43,6 +43,7 @@ and correct any instructions contradicted by that walkthrough.
 
 This is disposable virtual-machine verification, not physical hardware testing,
 external release certification, or completion of the remaining Phase 2 lifecycle.
+It does not cover the later ZFS-enabled `0.3.5` internal QA image.
 
 ## Executed evidence
 

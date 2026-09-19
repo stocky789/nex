@@ -1,0 +1,122 @@
+{
+  "summary": "Corrections from an independent review of the uncommitted 0.3.5 batch: shared-ISO adoption no longer writes an unreadable managed journal entry, members stop re-hashing adopted ISOs and honour cancellation, ZFS lifecycle dispatch failures no longer poison the lifecycle journal, the ZFS wizard never remembers an erase confirmation and keeps the chosen host, pool VLAN retries replay, OpenZFS packages become recommendations with contrib enabled on upgrade, and documentation/evidence statements were corrected. API impact: existing contract; no endpoint, field or status was added or removed.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/managed_media_test.go",
+    "internal/vmhost/provision_zfs.go",
+    "internal/vmhost/provision_zfs_test.go",
+    "internal/vmhost/provision_zfs_vdev_test.go",
+    "internal/vmhost/zfs_device_discovery.go",
+    "internal/vmhost/zfs_device_discovery_test.go",
+    "internal/protocol/storage.go",
+    "internal/agent/pool_media.go",
+    "internal/agent/pool_network.go",
+    "internal/agent/pool_network_test.go",
+    "internal/agent/run.go",
+    "internal/agent/state.go",
+    "internal/agent/zfs_lifecycle.go",
+    "internal/agent/zfs_lifecycle_test.go",
+    "internal/agent/zfs_pool.go",
+    "internal/agent/zfs_pool_test.go",
+    "internal/agent/zfs_provision.go",
+    "internal/controller/identity.go",
+    "internal/controller/identity_test.go",
+    "internal/controller/managed.go",
+    "internal/controller/managed_test.go",
+    "internal/controller/storage.go",
+    "internal/controller/storage_test.go",
+    "internal/nexupdate/nexupdate.go",
+    "internal/nexupdate/nexupdate_test.go",
+    "packaging/core-local/build-inside.sh",
+    "packaging/core-local/postinst",
+    "packaging/core-local/storage-downgrade-guard.py",
+    "scripts/gitea-release.py",
+    "tests/test_api_contract.py",
+    "tests/test_gitea_release.py",
+    "tests/test_storage_packaging.py",
+    "tests/integration/managed_vm_browser.py",
+    "tests/integration/website_hardening_browser.py",
+    "tests/integration/zfs_provisioning_browser.py",
+    "tests/integration/zfs_provisioning_lab.py",
+    "web/src/zfs.tsx",
+    "web/src/zfs.test.mjs",
+    "web/src/storage.tsx",
+    "web/src/storage.test.mjs",
+    "web/src/style.css",
+    "web/src/vm-create.tsx",
+    "web/src/vm-create.test.mjs",
+    "web/src/vm-edit.tsx",
+    "web/src/vm-edit.test.mjs",
+    "website/src/routes/roadmap/+page.svelte",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer.html",
+    "docs/BUG_LEDGER.md",
+    "docs/DOCUMENTATION.md",
+    "docs/LICENSING.md",
+    "docs/guide/storage-repositories.md",
+    "docs/guide/software-updates.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/join-a-pool.md",
+    "docs/plans/2026-09-09-pool-master-model.md",
+    "docs/plans/2026-09-10-vm-creation-system.md",
+    "docs/plans/2026-09-19-zfs-repository-provisioning.md",
+    "docs/qa/2026-09-19-cpu-recommendation-label.md",
+    "docs/qa/2026-09-19-documentation-sweep.md",
+    "docs/qa/2026-09-19-pool-member-config-converge.md",
+    "docs/qa/website-gallery-vms/checks.md",
+    "docs/qa/website-roadmap/checks.md",
+    "docs/changes/2026-09-19-documentation-sweep.json",
+    "docs/changes/2026-09-19-historical-screenshot-exception.json",
+    "docs/changes/2026-09-19-pool-member-config-roadmap-reconcile.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The ZFS wizard now reopens at the scope step, never remembers an erase confirmation, preselects the chosen host and tolerates a host that cannot report devices; provisioned ZFS Update is rename-only on the pool master; hosts installed before contrib was enabled receive OpenZFS one update later.",
+    "pages": [
+      "docs/guide/storage-repositories.md",
+      "docs/guide/software-updates.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Pool VLAN registration replays an identical retry as documented; ZFS provisioning refuses a stale or incapable selected host with an earlier 409; only storage-zfs-provision results recover from needs_attention through the transport result path; acknowledged result IDs are shape-checked. Members expose pool-network-reconciliation and pool-media-reconciliation checks through the existing checks list. The reference now states that host_id selects only the pool for kind=vlan.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/api/index.html",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "The roadmap page no longer calls guest VLAN copy-on-join built while its native two-host walkthrough is open, and its provenance sentence matches the list; no milestone is marked complete.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable record. Existing Core-owned records (managed journal, zfs-pool.json, zfs-lifecycle.json, zfs-provision receipts) keep their owners; the Controller gains no table, cache or file, and the wizard's sessionStorage holds only an unsent draft and its request identity."
+  },
+  "verification": {
+    "method": "Each fix lane confirmed its regression tests failing against the staged code and passing after the fix, then ran go vet, go build and package-scoped go test (with -race for agent and vmhost), the web typecheck and unit tests, the Python release/packaging/API-contract suites, the documentation gate and the repository privacy check. The ZFS wizard browser check ran against a scratch build outside web/dist. Independent reviewers then re-examined the corrections. Not executed: any native ZFS provisioning, package or ISO build, real 0.3.4 to 0.3.5 upgrade (apt's handling of an unsatisfiable recommendation is reasoned from Debian Policy, not observed), DKMS or Secure Boot behaviour, the ZFS lab fixture script, and the managed-VM browser check; OpenZFS's exit behaviour with no imported pools was not observed locally. A disposable two-host lab later showed device discovery offering an imported pool's disk as erasable (BUG-0315); and a member's ZFS access going stale (BUG-0316); both fixes have unit regression tests and were rechecked natively in that lab, on simulated virtio disks only.",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "internal/vmhost/managed_media_test.go",
+      "internal/vmhost/provision_zfs_test.go",
+      "internal/agent/zfs_lifecycle_test.go",
+      "internal/agent/pool_network_test.go",
+      "internal/controller/managed_test.go",
+      "internal/nexupdate/nexupdate_test.go",
+      "tests/test_storage_packaging.py",
+      "tests/test_gitea_release.py",
+      "web/src/zfs.test.mjs",
+      "tests/integration/zfs_provisioning_browser.py"
+    ]
+  }
+}

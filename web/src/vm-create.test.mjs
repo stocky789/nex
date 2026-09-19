@@ -19,7 +19,7 @@ const stubbed = code
   .replace('from "./managed"', 'from "data:text/javascript,"')
   .replace('from "./storage"', 'from "data:text/javascript,export const storageUsable=()=>true;"');
 writeFileSync(file, stubbed);
-const { availableBaseline, baselineUnavailable, fixedCPU, selectCPU, cpuSelectionIssue, restoredNICs, autoDiskName, topologyIssue, vmNameIssue, bootKeys, renumber, defaultTPM, defaultDriversMedia, nextDriversMedia, effectiveBoot, secureBootText, tpmText, driversDriveReady } = await import(`file://${file}`);
+const { recommendedCPU, availableBaseline, baselineUnavailable, fixedCPU, selectCPU, cpuSelectionIssue, restoredNICs, autoDiskName, topologyIssue, vmNameIssue, bootKeys, renumber, defaultTPM, defaultDriversMedia, nextDriversMedia, effectiveBoot, secureBootText, tpmText, driversDriveReady } = await import(`file://${file}`);
 
 // BUG-0196: Windows 11 refuses to install without a TPM 2.0, so a Windows guest is drafted with
 // one and every other guest is not. The wizard applies this to a new draft and whenever the
@@ -154,3 +154,18 @@ assert.equal(savedCPU.model, "SyntheticCPU-v8");
 console.log("vm-create pool CPU baseline check ok");
 
 assert.equal(selectCPU(savedCPU, "__saved-baseline", baselineHost), savedCPU, "reselecting a saved snapshot never sends a UI sentinel as model");
+
+assert.equal(recommendedCPU(savedCPU, baselineHost.inventory.cpu_baseline.machine, baselineHost), true);
+assert.equal(recommendedCPU({ ...savedCPU, features: [...savedCPU.features].reverse() }, baselineHost.inventory.cpu_baseline.machine, baselineHost), true);
+assert.equal(recommendedCPU({ ...savedCPU, model: "OldBaseline" }, baselineHost.inventory.cpu_baseline.machine, baselineHost), false);
+assert.equal(recommendedCPU({ ...savedCPU, features: [] }, baselineHost.inventory.cpu_baseline.machine, baselineHost), false);
+assert.equal(recommendedCPU(savedCPU, "other-machine", baselineHost), false);
+assert.equal(recommendedCPU(savedCPU, baselineHost.inventory.cpu_baseline.machine, undefined), false);
+
+assert.equal(recommendedCPU({ ...savedCPU, features: [savedCPU.features[0], savedCPU.features[0]] }, baselineHost.inventory.cpu_baseline.machine, baselineHost), false);
+
+// Exactly one CPU option is the recommendation. When the saved fixed CPU already matches the pool
+// baseline it carries the label, so the pool baseline option must not repeat it. This wizard has no
+// renderer in this check; vm-edit.test.mjs asserts the rendered markup of the identical expression.
+assert.match(src, /savedRecommended \? " \(Recommended\)" : ""/);
+assert.match(src, /\$\{savedRecommended \? "" : " \(Recommended\)"\}/);

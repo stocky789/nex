@@ -25,6 +25,8 @@ workflow on pushes that change `website/`; see [operate the website](operate-web
 - The exact release has completed every external-distribution requirement in
   [Nex licensing](../LICENSING.md#release-evidence), with reviewable evidence. A successful build,
   existing website content or a configured deployment secret does not satisfy this prerequisite.
+  The current working version, `0.3.5`, has not thereby been released. Its ZFS-enabled manifest
+  is rejected by both publication scripts until the ZFS external-distribution gates are closed.
 - Maintainer access to the Nex repository on the configured Git forge. The runner needs Docker;
   it may execute jobs inside a container, since the build locates the workspace on the Docker
   host itself.
@@ -70,7 +72,8 @@ workflow on pushes that change `website/`; see [operate the website](operate-web
    (`0.1.6-alpha1 0.1.6~alpha1`).
 3. After the exact-artifact evidence is complete, push to `main`. Watch the **Release** workflow: it resolves the version, builds the
    appliance, both packages and the ISO, checks each artifact declares the released version,
-   then creates the release. A second push at the same version runs again and replaces the
+   then creates the release. A ZFS-enabled manifest stops at the publisher before a forge or
+   download-tree release is created until its external-distribution gates are closed. A second push at the same version runs again and replaces the
    release; a newer push cancels a release build still in progress.
    The artifact verification step prints each output's byte size so packaging growth
    is visible before publication. Transfer compression of bundled Windows media

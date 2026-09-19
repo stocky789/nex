@@ -1,0 +1,110 @@
+{
+  "summary": "Sweep project documentation against current code and retained evidence; correct stale status, recovery ownership, ZFS capability, delivery and website claims while preserving historical limits. API impact: existing contract; reference descriptions clarified without changing runtime behaviour.",
+  "paths": [
+    ".gitea/pull_request_template.md",
+    ".github/pull_request_template.md",
+    "CHANGELOG.md",
+    "README.md",
+    "docs/ACTIVITY_LOG.md",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/DOCUMENTATION.md",
+    "docs/LICENSING.md",
+    "docs/api/index.html",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/brand/README.md",
+    "docs/development.md",
+    "docs/guide/README.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/manage-controller.md",
+    "docs/guide/operate-website.md",
+    "docs/guide/publish-a-release.md",
+    "docs/guide/software-updates.md",
+    "docs/guide/storage-repositories.md",
+    "docs/guide/verify-nex-core.md",
+    "docs/guide/website-preview.md",
+    "docs/plans/2026-09-08-controller-appliance.md",
+    "docs/plans/2026-09-08-controller-foundation.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-09-controller-desktop-layout.md",
+    "docs/plans/2026-09-09-fresh-local-install.md",
+    "docs/plans/2026-09-09-package-updates.md",
+    "docs/plans/2026-09-09-pool-master-model.md",
+    "docs/plans/2026-09-09-pool-vlan-networks.md",
+    "docs/plans/2026-09-10-vm-creation-system.md",
+    "docs/plans/2026-09-11-vm-storage-repositories.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "docs/plans/2026-09-16-usage-history.md",
+    "docs/plans/2026-09-16-windows-11-batch-handover.md",
+    "docs/plans/2026-09-16-windows-11-lab-fixes.md",
+    "docs/plans/2026-09-18-iso-packaging-efficiency.md",
+    "docs/plans/2026-09-19-zfs-repository-provisioning.md",
+    "docs/qa/2026-09-18-release-artifact-lab.md",
+    "docs/qa/2026-09-19-cpu-recommendation-label.md",
+    "docs/qa/2026-09-19-documentation-sweep.md",
+    "docs/qa/2026-09-19-pool-member-config-converge.md",
+    "docs/qa/2026-09-19-zfs-provisioning.md",
+    "docs/qa/apt-downgrade-guard/checks.md",
+    "docs/qa/iso/2026-09-15-core-0.2.4-build.md",
+    "docs/qa/website-gallery-vms/checks.md",
+    "docs/qa/website-roadmap/checks.md",
+    "docs/qa/website-security/browser/results.json",
+    "installer/README.md",
+    "packaging/apt/README.md",
+    "tests/integration/website_hardening_browser.py",
+    "website/README.md",
+    "website/src/routes/+page.svelte",
+    "website/src/routes/roadmap/+page.svelte"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Correct current scope, driver media, storage capabilities, pool/recovery availability and delivery instructions against implementation; prior walkthrough limits retained.",
+    "pages": [
+      "docs/guide/README.md",
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/edit-virtual-machine.md",
+      "docs/guide/install-nex-core.md",
+      "docs/guide/join-a-pool.md",
+      "docs/guide/manage-controller.md",
+      "docs/guide/operate-website.md",
+      "docs/guide/publish-a-release.md",
+      "docs/guide/software-updates.md",
+      "docs/guide/storage-repositories.md",
+      "docs/guide/verify-nex-core.md",
+      "docs/guide/website-preview.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Clarify existing ZFS provisioned/shared/per-host/outcome semantics against current Controller/Core handlers and protocol types. No endpoint, payload validation, authentication, authorization, command or result behaviour changed.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/index.html",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "Keep incomplete convergence and master-recovery work open and distinguish bounded development checks from publication.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation, reference descriptions and static website text only; no runtime state added. Existing pool records remain Core-owned; Controller remains a relay and observed-state projection."
+  },
+  "verification": {
+    "method": "Parallel source/evidence review, API contract/generation checks, website check/build and real local browser walkthrough, local link inspection and documentation/privacy gates. The website hardening browser script now reads its optional host-resolver address from NEX_WEBSITE_RESOLVE_IP with a reserved documentation default instead of a hard-coded deployment address; verified with python3 -m py_compile and git grep for the removed literal, and the script is not run with --resolve in either workflow. Independent review and exact results/limits are recorded in the sweep report.",
+    "evidence": [
+      "docs/qa/2026-09-19-documentation-sweep.md"
+    ]
+  }
+}

@@ -301,3 +301,38 @@ func TestExplicitCPUFeaturesAreGenericBoundedAndRequireStop(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateResourceLifecycle(t *testing.T) {
+	good := ResourceLifecycleRequest{Resource: "network", Action: "remove", ResourceID: "net-1", PoolID: "p", HostID: "h", ExpectedGeneration: 1}
+	rename := ResourceLifecycleRequest{Resource: "network", Action: "update", ResourceID: "net-1", PoolID: "p", HostID: "h", ExpectedGeneration: 2, Name: "Servers"}
+	media := ResourceLifecycleRequest{Resource: "media", Action: "remove", ResourceID: "iso-1", PoolID: "p", HostID: "h", ExpectedGeneration: 1}
+	for _, v := range []ResourceLifecycleRequest{good, rename, media} {
+		if err := ValidateResourceLifecycle(v); err != nil {
+			t.Fatalf("%+v: %v", v, err)
+		}
+	}
+	bad := map[string]ResourceLifecycleRequest{
+		"unknown resource":     {Resource: "storage", Action: "remove", ResourceID: "s", PoolID: "p", HostID: "h", ExpectedGeneration: 1},
+		"unknown action":       {Resource: "network", Action: "detach", ResourceID: "n", PoolID: "p", HostID: "h", ExpectedGeneration: 1},
+		"no resource ID":       {Resource: "network", Action: "remove", PoolID: "p", HostID: "h", ExpectedGeneration: 1},
+		"no pool":              {Resource: "network", Action: "remove", ResourceID: "n", HostID: "h", ExpectedGeneration: 1},
+		"no host":              {Resource: "network", Action: "remove", ResourceID: "n", PoolID: "p", ExpectedGeneration: 1},
+		"no generation":        {Resource: "network", Action: "remove", ResourceID: "n", PoolID: "p", HostID: "h"},
+		"remove with a name":   {Resource: "network", Action: "remove", ResourceID: "n", PoolID: "p", HostID: "h", ExpectedGeneration: 1, Name: "x"},
+		"rename without name":  {Resource: "network", Action: "update", ResourceID: "n", PoolID: "p", HostID: "h", ExpectedGeneration: 1},
+		"rename blank name":    {Resource: "network", Action: "update", ResourceID: "n", PoolID: "p", HostID: "h", ExpectedGeneration: 1, Name: "  "},
+		"rename slash in name": {Resource: "network", Action: "update", ResourceID: "n", PoolID: "p", HostID: "h", ExpectedGeneration: 1, Name: "a/b"},
+		"rename control name":  {Resource: "network", Action: "update", ResourceID: "n", PoolID: "p", HostID: "h", ExpectedGeneration: 1, Name: "a\nb"},
+		"rename long name":     {Resource: "network", Action: "update", ResourceID: "n", PoolID: "p", HostID: "h", ExpectedGeneration: 1, Name: strings.Repeat("x", 201)},
+		"media rename":         {Resource: "media", Action: "update", ResourceID: "iso", PoolID: "p", HostID: "h", ExpectedGeneration: 1, Name: "x"},
+	}
+	for name, v := range bad {
+		if err := ValidateResourceLifecycle(v); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	// Zero generations are the pre-field records every reader treats as 1.
+	if NetworkGeneration(NetworkRegistration{}) != 1 || MediaGeneration(Media{}) != 1 || MediaGeneration(Media{Generation: 4}) != 4 {
+		t.Fatal("zero generation must read as 1")
+	}
+}

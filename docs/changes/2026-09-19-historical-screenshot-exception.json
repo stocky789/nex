@@ -1,0 +1,34 @@
+{
+  "summary": "Record the project owner's acceptance of three missing historical website screenshots, and correct the surrounding claim: .gitignore excludes every QA raster capture, so cited capture filenames are generally absent from a checkout and evidence reviewability stays a standing limitation reviewers may raise. API impact: none; documentation disposition only.",
+  "paths": [
+    "docs/DOCUMENTATION.md",
+    "docs/qa/2026-09-19-documentation-sweep.md",
+    "docs/qa/website-gallery-vms/checks.md",
+    "docs/qa/website-roadmap/checks.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No operator workflow or feature behaviour changes.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Historical evidence disposition has no client API, Controller operation, Core command or observed-state flow.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No capability or milestone changes status; only this explicitly scoped historical evidence finding is closed.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation decision only; no runtime or pool state is created."
+  },
+  "verification": {
+    "method": "Read .gitignore and scripted a scan of docs/changes/*.json image paths against the checkout: no QA raster capture is tracked and 374 of 412 cited image paths across 39 records are absent. Checked that the recorded project-owner decision still covers only the three website screenshots, that the surrounding text no longer claims they are the only missing captures or forbids reviewers from raising evidence reviewability, and that new-change verification remains required. Ran the documentation gate and repository privacy check.",
+    "evidence": [
+      "docs/qa/2026-09-19-documentation-sweep.md"
+    ]
+  }
+}

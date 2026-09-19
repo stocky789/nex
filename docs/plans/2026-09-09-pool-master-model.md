@@ -51,11 +51,85 @@ single-host case trivial, and gives Phase 4 a defined starting point for joining
 
 ## Not in this change (planned, Phase 4)
 
-Joining a second host to an existing pool as a member under its master (“Add host to pool”),
-changing the pool master, and ejecting a member are
+At the time of this change, joining a second host to an existing pool as a member under its
+master (“Add host to pool”), changing the pool master, and ejecting a member were
 [Phase 4 multi-host pool work](2026-09-08-nex-platform.md#4-multi-host-pools-and-shared-storage).
-Until then every enrolled host remains the master of its own pool. Do not present these as
+Core peer join and configuration convergence are now implemented with bounded evidence, but the
+Controller join UI, master change and eject remain unavailable. Do not present those controls as
 available.
+
+Member convergence was add-only when this was written (found in review, 2026-09-19) and is no
+longer. Decision: project owner, 2026-09-19 — pool-wide changes received by the master propagate
+to members. Implemented in the same review cycle: the pool master removes a guest VLAN network,
+renames one, and removes an imported ISO as durable Core operations
+(`network-remove`, `network-update`, `media-remove`, capability `pool-resource-removal-v1`), and
+members converge on their existing pull pass. A changed VLAN definition now has its journal-update
+path: a member applies a higher master generation one step at a time, so it never reports a
+generation it did not apply.
+
+Two implementation choices carry that design; they are engineering decisions, not product ones,
+and both follow the shared-storage detach path rather than inventing a second mechanism:
+
+- **Rename only.** `network-update` changes the name and nothing else. The bridge name is derived
+  from the uplink and VLAN tag and appears in every VM's domain XML, so changing either is a
+  removal plus a fresh registration with a new identity; the payload cannot even express a
+  re-plumb, and a member whose journalled uplink or VLAN differs reports
+  `pool network <id> changed uplink or VLAN; remove and re-add it`.
+- **Absence-based removal.** Tombstones stay off the peer wire; a member infers a removal from the
+  resource's absence from an authoritative master list, as it already does for shared storage.
+  What makes that safe is the authoritative-list gate (HTTP 200, decodable body, unexpired list
+  context, every entry belonging to this pool) — any failure returns before the orphan loop, and
+  teardown is refused while a local VM uses the resource.
+
+Still open after that work:
+
+- No native two-host walkthrough of a removal or a rename. Unit, race and namespace tests and a
+  stubbed-API browser check are the only evidence
+  ([QA](../qa/2026-09-19-pool-removal-convergence.md)).
+- **Ejected-member cleanup remains out of scope**, unchanged: an ejected member loses membership,
+  so its converge pass returns before any teardown and it keeps what it applied.
+- An **older member** silently keeps a removed bridge or ISO until it is upgraded; the master
+  cannot detect it. Documented in the guide, not engineered around.
+- A master **restored from a backup older than the removal** lists the resource again, so members
+  re-apply it. That is the same exposure class as shared-storage detach and is accepted with the
+  same default; removal is always dependency-checked, so it cannot orphan a running VM's bridge.
+- **Pool VM owner records on the master are never pruned** (`state.VMs` in `pool-vms.json` keeps a
+  deleted VM's record). The pool-wide removal check deliberately reads each host's published
+  inventory (`state.Inventory[host].VMs`, replaced whole on every publication and
+  generation-gated) instead, so it is correct today, but the unpruned owner records are a latent
+  issue that needs its own slice.
+- **No per-host "removal in progress" view.** Once the master's tombstone deletes the row there is
+  nothing to hang one on, as with storage detach; a member that cannot finish reports through its
+  existing `pool-network-reconciliation` / `pool-media-reconciliation` health check.
+- **Repairing a damaged managed journal is undocumented.** A host that cannot read its managed
+  journal whole refuses every managed operation and, since 2026-09-19, answers its pool network and
+  media peer lists with `503`; its `managed-journal` health check names the entry it could not
+  read. What an operator then does on the host is manual and has no documented procedure; the guide
+  says so plainly rather than improvising one. Open.
+- **Absence-as-removal across a master change needs design (Phase 4).** Raised in independent
+  review, 2026-09-19. Two effects, both after a promotion: a promoted member holds an *adopted*
+  ISO record, and an adopted record never unlinks the file, so removing that ISO on the new master
+  would drop the pool's record while leaving the file on shared storage — a leak, never a loss.
+  And the Controller's mirror row for a pool VLAN is refreshed and tombstoned only by the pool's
+  recorded master, so the ex-master's row can neither refresh nor be tombstoned and goes stale;
+  a fresh Controller re-adopts correctly, so this is display only. Resolve both in the
+  master-change design rather than discovering them there.
+- **The managed journal has no pruning.** Raised in independent review, 2026-09-19. The hourly
+  converge operation IDs bound a permanently stuck resource to at most 24 journal entries a day
+  (from 8 640), and the read-only dry runs write none at all, but nothing bounds the total: at the
+  10 000-entry retention cap every managed operation on that host fails with
+  `managed journal full; manual recovery required` and its pool network and media peer lists answer
+  `503` permanently. Retained-entry pruning or a capacity health check needs its own slice.
+- **The storage peer list is asymmetric with networks and media.** Raised in independent review,
+  2026-09-19. `pool_storage.go` still discards `AppliedStorage`'s `managed-journal` check, so the
+  repository peer list can be served short while an unrelated journal file is unreadable, and a
+  test encodes that behaviour. The residual risk is lower — a member's detach is non-destructive,
+  is refused while the repository is in use, and re-attaches on the next healthy list — but it can
+  stop member VMs starting on that storage until the master is repaired. Whether to make it
+  fail closed like networks and media is a project-owner decision, not an implementation choice.
+- **Pool VM owner records on the master are never pruned**, as noted above: `state.VMs` in
+  `pool-vms.json` keeps a deleted VM's record. Nothing reads it for the removal check, which uses
+  each host's published inventory, so it is correct today and remains a latent issue.
 
 ## API impact
 

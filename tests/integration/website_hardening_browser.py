@@ -3,6 +3,7 @@
 """Exercise the deployed static website through Chromium without weakening CSP."""
 import argparse
 import json
+import os
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -18,7 +19,11 @@ HEADERS = {
     'x-content-type-options': 'nosniff',
     'x-frame-options': 'DENY',
 }
-RESOLVE_RULE = 'MAP nexvirtualization.com 103.96.7.90'
+SITE_HOST = 'nexvirtualization.com'
+# The deployment address is supplied by configuration, never hard-coded here. The
+# default is a reserved documentation address (RFC 5737), so an unconfigured run
+# fails to connect instead of reaching an unintended host.
+RESOLVE_IP = os.environ.get('NEX_WEBSITE_RESOLVE_IP', '198.51.100.10')
 
 
 def page_url(base, path):
@@ -38,7 +43,8 @@ def main():
     parser.add_argument('--url', required=True, help='deployed website base URL')
     parser.add_argument('--evidence', type=Path, required=True)
     parser.add_argument('--resolve', action='store_true',
-                        help='resolve nexvirtualization.com to 103.96.7.90 in Chromium')
+                        help=(f'resolve {SITE_HOST} in Chromium to NEX_WEBSITE_RESOLVE_IP '
+                              f'(currently {RESOLVE_IP})'))
     args = parser.parse_args()
     args.evidence.mkdir(parents=True, exist_ok=True)
     parsed = urlparse(args.url)
@@ -47,7 +53,8 @@ def main():
     errors, requests, responses, results = [], [], [], []
 
     with sync_playwright() as pw:
-        launch_args = [f'--host-resolver-rules={RESOLVE_RULE}'] if args.resolve else []
+        launch_args = ([f'--host-resolver-rules=MAP {SITE_HOST} {RESOLVE_IP}']
+                       if args.resolve else [])
         browser = pw.chromium.launch(headless=True, args=launch_args)
         for width in (1440, 360):
             context = browser.new_context(viewport={'width': width, 'height': 1000},

@@ -44,17 +44,24 @@ expands it. Existing local directory storage remains supported.
 | Backend | First supported repository layout | Access and limits |
 |---|---|---|
 | NFS | Existing external NFSv4 export, mounted by Core; existing qcow2 disk layout | One selected Core initially; shared filesystem access/placement only after Phase 4 exclusion and per-host checks |
-| OpenZFS / ZFS | Existing imported, mounted local ZFS filesystem dataset; qcow2 files | Local to its Core host; a ZFS pool is a disk aggregate, distinct from a Nex management pool |
+| OpenZFS / ZFS | Existing imported/mounted dataset, or a Core-provisioned local zpool and `vms` dataset; qcow2 files | Local to its Core host; a ZFS pool is a disk aggregate, distinct from a Nex management pool |
 | SMB | Existing external SMB3 share, mounted by Core; qcow2 files | One selected Core initially; exact client/server dialect, permissions, locking and durability must pass VM-I/O tests |
 | iSCSI | Existing external target/LUN with an existing ext4 or XFS filesystem; Core logs in and mounts it for qcow2 files | Exactly one Core initiator has writable target access; ordinary filesystems must never be mounted by two hosts |
 
 This is repository consumption, not a NAS/SAN administration product. Initial registration
-never formats a LUN, creates/imports a zpool, changes vdev topology, creates a target/export,
-or destroys storage. ZFS dataset provisioning, zvol/raw block VM disks, LVM-on-iSCSI,
+never formats a LUN, imports a zpool, changes vdev topology, creates a target/export,
+or destroys storage. The later Core-owned ZFS provisioning slice creates a new zpool only from
+operator-selected devices with its own erase/retry gates; see the current ZFS plan below.
+zvol/raw block VM disks, LVM-on-iSCSI,
 multipath, SMB multi-host placement and target administration are follow-on slices with their
 own checks. Native ZFS snapshot UI, replication, encryption-key management and deduplication
 are also outside this first integration. These are proposed implementation boundaries, not
 claims that the user requested their permanent exclusion.
+
+Decision: project owner, 2026-09-19 — ZFS pool/dataset provisioning from operator-selected
+devices, a pool-wide or single-host scope, and OpenZFS in the Core distribution are implemented
+in the working tree with bounded lab evidence. [ZFS repository provisioning](2026-09-19-zfs-repository-provisioning.md)
+supersedes the earlier ZFS boundaries here; its master-transfer and external-distribution gates remain open.
 
 ## What exists and what must change
 
@@ -375,8 +382,10 @@ Backend availability remains qualified by the open acceptance gates.
 Use native Debian packages and existing Go/process integration. Assess `nfs-common`, `cifs-utils`,
 `open-iscsi` and `zfsutils-linux`/`zfs-dkms` plus matching headers against the actual Nex package,
 ISO and systemd sandbox rules. The installer package list and Core package dependencies now
-include `nfs-common`, `cifs-utils` and `open-iscsi`. OpenZFS remains an optional host prerequisite,
-not a bundled installer component. Verify the installed host-package path separately.
+include `nfs-common`, `cifs-utils`, `open-iscsi`, `zfsutils-linux` and `zfs-dkms` with matching
+kernel headers. OpenZFS is bundled for the internal ZFS delivery slice; its installed-host and
+kernel-upgrade paths have bounded disposable-lab evidence. External distribution remains blocked
+by the licensing and Secure Boot evidence below.
 Do not assume service permissions allow mounting/device discovery just because tools exist.
 
 OpenZFS adds a specific kernel-module delivery gate: exact Debian package/source licenses,

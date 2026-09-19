@@ -13,8 +13,9 @@ dense property content, including rebuilding the existing shell where needed.
 This supersedes the earlier browser-shell direction in the
 [feature and interface review](2026-09-08-feature-and-ux-review.md).
 
-Retain Nex identity and the Sites → Pools → Hosts → VMs product hierarchy. The
-current implemented inventory ends at hosts; VM controls arrive with Phase 2.
+Retain Nex identity and the Sites → Pools → Hosts → VMs product hierarchy. At the
+time of this frontend slice, the implemented inventory ended at hosts and VM controls
+were Phase 2 work.
 This changes presentation and navigation of available Controller features, not
 phase order, backend capability, or completion of any outstanding platform gate.
 The Nex Core host-local UI and installer are outside this redesign.
@@ -23,6 +24,10 @@ The Nex Core host-local UI and installer are outside this redesign.
 to site creation by the [pool master model correction](2026-09-09-pool-master-model.md);
 **Create pool** no longer exists and each enrolling host becomes the master of its
 automatically created pool. The checklists remain as recorded for this slice.
+
+**Superseded scope:** Phase 2 subsequently delivered VM creation, console, power and
+editing controls. Their behavior and evidence belong to their own plans; this layout
+slice's recorded browser evidence does not verify those later workflows.
 
 ## Layout and behavior
 

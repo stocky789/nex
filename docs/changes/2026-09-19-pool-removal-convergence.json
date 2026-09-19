@@ -1,0 +1,80 @@
+{
+  "summary": "The pool master removes a guest VLAN network, renames one, and removes an imported ISO as durable Core operations, and members converge to it; the Controller only relays to the master and the pool views gain Rename/Remove with a typed-name confirmation. API impact: new contract — command kinds network-remove, network-update and media-remove with ResourceLifecycleRequest, capability pool-resource-removal-v1, client routes DELETE/PATCH /api/v1/networks/{id} and a relaying succeeded branch on DELETE /api/v1/media/{id}, and tombstone/generation fields on reported networks and media. Peer routes keep their shapes and gain a 503 response on the six pool network and media peer operations when the serving host cannot read its managed journal whole.",
+  "paths": [
+    "internal/protocol/managed.go",
+    "internal/protocol/protocol.go",
+    "internal/protocol/managed_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/vlan.go",
+    "internal/vmhost/vlan_test.go",
+    "internal/vmhost/managed_removal_test.go",
+    "internal/agent/managed.go",
+    "internal/agent/pool_network.go",
+    "internal/agent/pool_media.go",
+    "internal/agent/peer.go",
+    "internal/agent/run.go",
+    "internal/agent/pool_removal_test.go",
+    "internal/agent/pool_media_test.go",
+    "internal/vmhost/managed_media_test.go",
+    "internal/controller/controller.go",
+    "internal/controller/managed.go",
+    "internal/controller/media.go",
+    "internal/controller/monitor.go",
+    "internal/controller/resource_removal_test.go",
+    "web/src/managed.tsx",
+    "web/src/managed.test.mjs",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer.html",
+    "docs/guide/README.md",
+    "docs/guide/remove-pool-network-or-iso.md",
+    "docs/guide/join-a-pool.md",
+    "docs/plans/2026-09-09-pool-master-model.md",
+    "docs/plans/2026-09-09-pool-vlan-networks.md",
+    "docs/plans/2026-09-19-zfs-repository-provisioning.md",
+    "docs/qa/2026-09-19-pool-removal-convergence.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "New operator workflows: renaming and removing a pool VLAN network and removing an imported ISO, with the refusals, member convergence and recovery an operator meets. The join page's claim that removal from members is unavailable, and that a hand-removed bridge is always re-created, is corrected.",
+    "pages": [
+      "docs/guide/remove-pool-network-or-iso.md",
+      "docs/guide/join-a-pool.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "Three new Core command kinds carrying the new ResourceLifecycleRequest payload under capability pool-resource-removal-v1, two new client routes (DELETE and PATCH /api/v1/networks/{id}, no host_id accepted — the master is always the target), a relaying succeeded branch on DELETE /api/v1/media/{id} taking {request_id}, and tombstone on NetworkRegistration/Media plus generation on Media, mirrored into peer-openapi.json because the contract test requires the shared NetworkRegistration and Media schemas verbatim there. The peer contract also changed in behaviour: after the safety fixes, GET /api/v1/pool/networks, GET /api/v1/pool/networks/{network_id}, POST /api/v1/pool/networks/{network_id}/access, GET /api/v1/pool/media, GET /api/v1/pool/media/{media_id} and POST /api/v1/pool/media/{media_id}/access answer 503 with the fixed body 'pool resource list unavailable: managed journal is incomplete' when the serving host cannot read its managed journal whole (an unreadable entry, or the 10000-entry retention cap), so a master can never serve a short list that a member would read as removals. Routes, methods, authentication and success shapes are unchanged; members treat any non-200 as 'remove nothing'. Documented in docs/API.md and on all six operations in docs/api/peer-openapi.json, with docs/api/peer.html regenerated.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/api/index.html",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone changes status. The multi-host board item already describes member convergence of pool VLANs and ISO entries as in testing with a native two-host walkthrough open, which remains exactly true: removal and rename convergence has unit, race, namespace and stubbed-browser evidence only, so nothing may move to built.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Removals and renames are durable Core operations on the pool master; the Controller adds no state beyond its own request/operation relay rows and a disposable mirror.",
+    "record": "The pool master's managed-vms journal (/var/lib/nex/managed) records each network-remove, network-update and media-remove entry; its projection reports live rows with renames applied and one Tombstone row per removed resource, and Media now carries a generation. A fresh Controller re-adopts the pool from the master's Inventory.managed report alone: live networks and ISOs come back under their Core IDs, names and generations, and mirror rows are deleted only on a host-reported tombstone for that same host, so nothing is re-entered and a member's tombstone cannot delete the master's row."
+  },
+  "verification": {
+    "method": "The slice went through two independent review rounds before release. Between them the reviews found, and the implementation lanes fixed with a regression test each: a master serving a short pool list from an incomplete managed journal (now 503 on the six peer operations); members unlinking the pool's single shared ISO file on removal (only the importing host unlinks it now); a substring ownership proof that let a crafted network name pass another network's interfaces.d proof (now an exact tail match); a permanent tombstone causing endless retries when a master re-lists a removed resource (now refused before Execute, with no journal entry); unbounded journal growth from per-tick operation IDs (now one deterministic ID per UTC hour, plus read-only removal dry runs that write nothing); a Controller mirror row a member without membership could hijack (adoption now checks the recorded master); and a failed pool VLAN registration reserving its network ID for ever (BUG-0317: a failed network-register for a pool VLAN no longer reserves the ID, so a member converges after its uplink is fixed; needs_attention stays reserved). Re-ran after the fixes, with results recorded as observed: /usr/bin/go test -race ./internal/protocol/... ./internal/vmhost/... ./internal/agent/... -count=1 (ok, protocol 1.037 s, vmhost 12.697 s, agent 8.539 s); npm --prefix web test (all seven suites pass); python3 -m unittest tests.test_api_contract (30 tests, OK); python3 scripts/generate_api.py --check; python3 scripts/check_docs.py --worktree; the repository privacy test. Quoted from the implementation and review lanes, not re-run here: the Controller package -race run, go build/vet/gofmt, tsc, the network-namespace VLAN teardown test (ran on the developer workstation and still skips where unshare is unavailable) and the stubbed-API browser check whose captures live outside the repository. NO native two-host walkthrough has run: no native host, no two-host lab and no version-skew test.",
+    "evidence": [
+      "docs/qa/2026-09-19-pool-removal-convergence.md",
+      "internal/vmhost/managed_removal_test.go",
+      "internal/agent/pool_removal_test.go",
+      "internal/controller/resource_removal_test.go",
+      "web/src/managed.test.mjs"
+    ]
+  }
+}

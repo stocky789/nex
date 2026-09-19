@@ -11,6 +11,9 @@ openssh-server
 nftables
 chrony
 linux-image-amd64
+linux-headers-amd64
+zfs-dkms
+zfsutils-linux
 nfs-common
 libnfs-utils
 cifs-utils

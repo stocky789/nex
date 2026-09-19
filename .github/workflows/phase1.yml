@@ -100,6 +100,8 @@ jobs:
         run: .cache/phase1-qa-venv/bin/python tests/integration/iso_url_browser.py --evidence .cache/iso-url-browser
       - name: Verify storage repository browser workflows with simulated host
         run: .cache/phase1-qa-venv/bin/python tests/integration/storage_repositories_browser.py --evidence .cache/storage-browser
+      - name: Verify ZFS provisioning browser workflow with simulated Core replies
+        run: .cache/phase1-qa-venv/bin/python tests/integration/zfs_provisioning_browser.py --evidence .cache/zfs-provisioning-browser
       - name: Verify clustered storage controls with simulated Core replies
         run: .cache/phase1-qa-venv/bin/python tests/integration/cluster_storage_browser.py
       - name: Capture Controller gallery with neutral demo inventory

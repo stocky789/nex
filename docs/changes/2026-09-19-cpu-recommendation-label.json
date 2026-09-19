@@ -1,0 +1,41 @@
+{
+  "summary": "Hide raw CPU feature text and label the currently verified pool baseline Recommended in create/edit forms. API impact: none; existing CPU payload unchanged.",
+  "paths": [
+    "web/src/vm-create.tsx",
+    "web/src/vm-edit.tsx",
+    "web/src/vm-create.test.mjs",
+    "web/src/vm-edit.test.mjs",
+    "tests/integration/managed_vm_browser.py",
+    "tests/integration/vm_edit_browser.py",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/edit-virtual-machine.md",
+    "CHANGELOG.md",
+    "docs/qa/2026-09-19-cpu-recommendation-label.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Document recommendation label and hidden feature details.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/edit-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Selectors preserve the existing model, machine and feature payloads through creation/update commands and Core inventory; no API behavior changes."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Presentation refinement does not change milestone scope or acceptance."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable state; existing CPU definitions remain stored on Core and recovered through inventory."
+  },
+  "verification": {
+    "method": "Typecheck/build and focused CPU unit checks passed. Simulated Controller/Core create/edit browser walkthroughs and visual captures cover recommendation and hidden details; see QA for scope and limits.",
+    "evidence": [
+      "docs/qa/2026-09-19-cpu-recommendation-label.md"
+    ]
+  }
+}

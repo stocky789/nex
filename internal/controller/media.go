@@ -62,8 +62,8 @@ type mediaRequest struct {
 }
 
 // Media uses Core's current ISO capability, independently of VM-disk capability.
-func storageReadyForMedia(tx *sql.Tx, id, pool, host string) error {
-	cmd, err := readyResource(tx, id, "storage-register", pool, host)
+func (c *Controller) storageReadyForMedia(tx *sql.Tx, id, pool, host string) error {
+	cmd, err := c.readyStorageForHost(tx, id, pool, host)
 	if err != nil {
 		return err
 	}
@@ -71,6 +71,12 @@ func storageReadyForMedia(tx *sql.Tx, id, pool, host string) error {
 		return fmt.Errorf("storage repository is unavailable")
 	}
 	s := cmd.Storage
+	if s.ZFSProvisioned {
+		if s.Tombstone || !s.Capabilities.ISO {
+			return fmt.Errorf("storage repository is not writable for ISO media")
+		}
+		return nil
+	}
 	if s.Kind != "" && (s.Tombstone || !s.Access.Readable || !s.Access.Writable || !s.Capabilities.ISO) {
 		return fmt.Errorf("storage repository is not writable for ISO media")
 	}
@@ -105,7 +111,7 @@ func (c *Controller) media(w http.ResponseWriter, r *http.Request, user, csrf st
 	}
 	err = c.managedHost(tx, pool, host)
 	if err == nil {
-		err = storageReadyForMedia(tx, v.StorageID, pool, host)
+		err = c.storageReadyForMedia(tx, v.StorageID, pool, host)
 	}
 	tx.Rollback()
 	if err != nil {
@@ -184,7 +190,7 @@ func (c *Controller) media(w http.ResponseWriter, r *http.Request, user, csrf st
 		fail(w, 409, err.Error())
 		return
 	}
-	if err = storageReadyForMedia(tx, v.StorageID, pool, host); err != nil {
+	if err = c.storageReadyForMedia(tx, v.StorageID, pool, host); err != nil {
 		fail(w, 409, err.Error())
 		return
 	}
@@ -222,12 +228,13 @@ func (c *Controller) media(w http.ResponseWriter, r *http.Request, user, csrf st
 	write(w, 201, resourceResponse(cmd, op))
 }
 
-// deleteMedia clears an import that never became pool content. An imported ISO belongs to
-// its host: the file and the durable record live in the pool master's Core journal, which
-// re-adopts the entry on every report, so the Controller must not pretend to delete one and
-// refuses. A failed or abandoned import published nothing on the host, so the only thing
+// deleteMedia clears an import that never became pool content, or relays the removal of an
+// imported one. A failed or abandoned import published nothing on the host, so the only thing
 // left is this Controller's own request row; the host's journal outcome and the task and
-// audit history stay untouched. Should the host later report the ISO as applied after all,
+// audit history stay untouched, and the call takes no body. An imported ISO belongs to its
+// host: the file and the durable record live in that Core's journal, so removal is a relayed
+// media-remove command taking a stable request_id, and the mirror row disappears only when
+// the host reports the tombstone. Should a host report the ISO as applied after all,
 // adoption recreates the entry from Core's record, which remains the only source of truth.
 func (c *Controller) deleteMedia(w http.ResponseWriter, r *http.Request, user, csrf string) {
 	id := r.PathValue("id")
@@ -247,15 +254,15 @@ func (c *Controller) deleteMedia(w http.ResponseWriter, r *http.Request, user, c
 		return
 	}
 	defer tx.Rollback()
-	var status string
-	if tx.QueryRow("SELECT o.status FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.id=? AND r.kind='iso-import'", id).Scan(&status) != nil {
+	var status, pool, host, raw string
+	if tx.QueryRow("SELECT o.status,r.pool_id,r.host_id,r.command FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.id=? AND r.kind='iso-import'", id).Scan(&status, &pool, &host, &raw) != nil {
 		fail(w, 404, "media not found")
 		return
 	}
 	switch status {
 	case "failed", "needs_attention":
 	case "succeeded":
-		fail(w, 409, "this ISO is stored on its host; Nex Core cannot remove imported media yet, so it cannot be removed from the library here")
+		c.removeMedia(w, r, tx, user, id, pool, host, raw)
 		return
 	default:
 		fail(w, 409, "this import is still running; wait for its task to finish")
@@ -273,6 +280,54 @@ func (c *Controller) deleteMedia(w http.ResponseWriter, r *http.Request, user, c
 	os.Remove(filepath.Join(c.cfg.DataDir, "media", id))
 	write(w, 200, map[string]any{"id": id, "deleted": true})
 }
+
+// removeMedia relays an imported ISO's removal to the Core that stores it. Core unlinks the
+// published file, journals the tombstone and propagates it; the Controller only asks, and its
+// mirror row is dropped by the host's next report, not here.
+func (c *Controller) removeMedia(w http.ResponseWriter, r *http.Request, tx *sql.Tx, user, id, pool, host, raw string) {
+	// A Core that cannot remove imported media is answered before the body is read: the old
+	// library called this route without one, and "upgrade Nex Core" is the useful answer.
+	if !hostSupportsCapability(tx, host, protocol.PoolResourceRemovalCapability) {
+		fail(w, 409, "the host that stores this ISO does not support removing imported ISOs yet; upgrade Nex Core")
+		return
+	}
+	var body struct {
+		RequestID string `json:"request_id"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if !nameValid(body.RequestID) {
+		fail(w, 400, "stable request_id required to remove an imported ISO")
+		return
+	}
+	if c.replayResource(w, tx, body.RequestID, "media-remove", body) {
+		return
+	}
+	if err := c.managedHost(tx, pool, host); err != nil {
+		fail(w, 409, err.Error())
+		return
+	}
+	var registered protocol.Command
+	if json.Unmarshal([]byte(raw), &registered) != nil || registered.Media == nil {
+		fail(w, 404, "media not found")
+		return
+	}
+	v := protocol.ResourceLifecycleRequest{Resource: "media", Action: "remove", ResourceID: id, PoolID: pool, HostID: host, ExpectedGeneration: protocol.MediaGeneration(*registered.Media)}
+	if err := protocol.ValidateResourceLifecycle(v); err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	opID := random()
+	cmd := protocol.Command{OperationID: opID, Kind: "media-remove", ResourceLifecycle: &v}
+	op, err := c.saveResource(tx, user, body.RequestID, pool, host, registered.Media.Name, "media-operation-"+opID, cmd, body)
+	if err != nil || tx.Commit() != nil {
+		fail(w, 500, "ISO removal request storage failed")
+		return
+	}
+	write(w, 202, resourceResponse(cmd, op))
+}
+
 func (c *Controller) agentMedia(w http.ResponseWriter, r *http.Request, host string) {
 	id := r.PathValue("id")
 	if len(id) != 64 {
@@ -359,7 +414,7 @@ func (c *Controller) downloadMedia(w http.ResponseWriter, r *http.Request, user,
 		fail(w, 409, err.Error())
 		return
 	}
-	if err = storageReadyForMedia(tx, v.StorageID, pool, host); err != nil {
+	if err = c.storageReadyForMedia(tx, v.StorageID, pool, host); err != nil {
 		fail(w, 409, err.Error())
 		return
 	}

@@ -175,6 +175,17 @@ class PublishTests(unittest.TestCase):
             with self.assertRaisesRegex(publish.ReleasePublishError, "source_bundle binding"):
                 publish.publish(Path(tmp) / "downloads", iso, source, manifest, keep=3)
 
+    def test_rejects_zfs_enabled_iso_without_release_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            iso = make_iso(tmp, "0.1.6")
+            source = make_source(tmp, "0.1.6")
+            manifest = make_manifest(tmp, "0.1.6")
+            data = json.loads(manifest.read_text())
+            data["components"] = [{"package": "zfs-dkms"}]
+            manifest.write_text(json.dumps(data) + "\n")
+            with self.assertRaisesRegex(publish.ReleasePublishError, "ZFS-enabled ISO publishing is blocked"):
+                publish.publish(Path(tmp) / "downloads", iso, source, manifest, keep=3)
+
 
 if __name__ == "__main__":
     unittest.main()

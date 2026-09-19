@@ -89,7 +89,7 @@ func (c *Controller) mediaVM(w http.ResponseWriter, r *http.Request, user, csrf 
 		if v.Drive == protocol.DriversDrive {
 			what = "the driver disc ISO"
 		}
-		if _, e := readyResource(tx, v.MediaID, "iso-import", pool, host); e != nil {
+		if _, e := c.readyMediaForHost(tx, v.MediaID, pool, host); e != nil {
 			fail(w, 404, what+" is not registered and verified on the VM's host and pool")
 			return
 		}

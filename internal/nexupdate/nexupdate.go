@@ -565,6 +565,8 @@ func ApplyLocal(ctx context.Context, repoURL, packageName, stateDir string) (App
 	unit := "nex-core-local.service"
 	if packageName == "nex-controller" {
 		unit = "nex-controller.service"
+	} else {
+		installRecommended(ctx, stateDir)
 	}
 	_ = WriteProgress(stateDir, Progress{Phase: "restarting", Percent: 98, Message: "Restarting service"})
 	restart := Command(ctx, "systemd-run", "--unit=nex-update-restart", "--no-block", "/bin/systemctl", "restart", unit)
@@ -582,6 +584,43 @@ func ApplyLocal(ctx context.Context, repoURL, packageName, stateDir string) (App
 		Message:   unit + " will restart shortly",
 		Operation: "systemd-run restart",
 	}, nil
+}
+
+// recommendedCorePackages are OpenZFS and the headers DKMS builds it against.
+// nex-core-local recommends rather than depends on them: they live in Debian
+// contrib, which a host installed before Nex enabled contrib cannot resolve, and
+// a hard dependency there would make every in-product update fail permanently on
+// exactly those hosts. The package's postinst enables contrib, so the first apply
+// after that one can install them here without an operator shell step.
+var recommendedCorePackages = []string{"linux-headers-amd64", "zfs-dkms", "zfsutils-linux"}
+
+// packageInstalled reports whether dpkg has the package unpacked and configured.
+// InstalledVersion is not usable here: it falls back to this binary's own version
+// when dpkg-query reports nothing, so it never reports a package as absent.
+func packageInstalled(ctx context.Context, name string) bool {
+	out, err := Command(ctx, "dpkg-query", "-W", "-f=${db:Status-Status}", name).Output()
+	return err == nil && strings.TrimSpace(string(out)) == "installed"
+}
+
+// installRecommended installs the recommended packages that are still missing.
+// It is best effort: a host with no route to Debian contrib, or a DKMS build that
+// fails on its kernel, loses ZFS support and reports discovery as unavailable,
+// which must not fail an update that has already been applied.
+func installRecommended(ctx context.Context, stateDir string) {
+	var missing []string
+	for _, name := range recommendedCorePackages {
+		if !packageInstalled(ctx, name) {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	_ = WriteProgress(stateDir, Progress{Phase: "installing", Percent: 80, Message: "Installing ZFS support"})
+	// The Core package's postinst may have just enabled Debian contrib; the index
+	// fetched before the upgrade does not list it yet.
+	_, _ = apt(ctx, "update").CombinedOutput()
+	_, _ = apt(ctx, append([]string{"install", "-y"}, missing...)...).CombinedOutput()
 }
 
 // StartApplyLocal runs ApplyLocal in the background once. Concurrent applies are rejected.

@@ -1,5 +1,9 @@
 # Gallery virtual-machine captures
 
+Decision: project owner, 2026-09-19 — `gallery-1440.png` is an accepted historical evidence limitation and is not to be recreated. This does not claim the file exists or waive verification for new changes.
+
+Historical-evidence audit, 2026-09-19: no QA raster capture is tracked in this repository — `.gitignore` excludes `docs/qa/**/*.png` and the other image extensions — so every capture named below (`desktop-shell.png`, `vms-desktop.png`, `vm-general-desktop.png`, `create-vm-desktop.png`, `networking-desktop.png`, `storage-desktop.png`, `activity-desktop.png`) is likewise absent from a fresh checkout and cannot be re-inspected here. The report/results below retain the original run's scope. No replacement images or new run are claimed. See [QA raster captures are untracked](../../DOCUMENTATION.md#qa-raster-captures-are-untracked).
+
 Recapture of the website gallery from a local Controller, adding managed-VM views.
 
 ## Environment

@@ -239,7 +239,13 @@ class PeerAPIContractTests(APIContractTests):
     def test_all_runtime_api_routes_are_documented_and_implemented(self):
         # Peer routes use prefix/suffix dispatch: path shapes come from handlers, methods from Core callers.
         source = self.go_source('internal/agent', 'internal/localcore')
-        consts = dict(re.findall(r'const (\w+Path) = "([^"]+)"', source))
+        consts = dict(re.findall(r'(\w+Path)\s*=\s*"([^"]+)"', source))
+        # Some peer routes are declared from a stable route prefix plus a literal
+        # suffix. Resolve those constants so the route coverage still compares
+        # their concrete API shapes rather than treating them as undocumented.
+        for name, base, suffix in re.findall(r'(\w+Path)\s*=\s*(\w+Path)\s*\+\s*"([^"]+)"', source):
+            if base in consts:
+                consts[name] = consts[base] + suffix
         handled = set()
         for line in source.splitlines():
             if 'r.URL.Path' not in line or '|| strings.HasPrefix(r.URL.Path' in line:
@@ -278,11 +284,23 @@ class PeerAPIContractTests(APIContractTests):
         if cpu_handler:
             prefix = consts['poolCPUPath']
             handled.discard(prefix + '{}')
+            handled.discard(prefix + '/{}')
             for labels, body in re.findall(r'case ([^:]+):(.*?)(?=\n\t\tcase |\n\t\tdefault:)', cpu_handler[0], re.S):
                 if re.search(r'r.Method != http.Method(Get|Post)', body):
                     handled.update(prefix + suffix for suffix in re.findall(r'"([a-z]+)"', labels))
             called.update((method.lower(), prefix + suffix) for method, suffix in
                           re.findall(r'poolCPURequest\([^\n]+http.Method(Get|Post), "([a-z]+)(?:\?|"|\+)', source))
+        zfs_handler = re.search(r'func PoolZFSHandler\(.*?(?=\nfunc |\Z)', source, re.S)
+        if zfs_handler:
+            prefix = consts['poolZFSPath']
+            # The handler's generic prefix parser hides the real shapes: the bare
+            # prefix takes the provision POST, and every per-repository route comes
+            # from the handler's own suffix dispatch, so read those from its source.
+            handled.discard(prefix + '{}')
+            handled.discard(prefix + '/{}')
+            handled.add(prefix)
+            handled.update(prefix + '/{}' + suffix for suffix in
+                           re.findall(r'strings\.HasSuffix\(r\.URL\.Path, "([\w/-]+)"\)', zfs_handler[0]))
         documented = {(method, re.sub(r'{\w+}', '{}', path)) for path, methods in self.api['paths'].items()
                       for method in methods}
         self.assertTrue(handled and called, 'No peer routes found: update the coverage adapter if dispatch changes')
@@ -397,6 +415,33 @@ class ManagedVMContractTests(unittest.TestCase):
                 self.assertEqual(schemas[name]['properties'][field]['maxItems'], upper)
         self.assertEqual(schemas['VMCreateSpec']['properties']['disks']['minItems'],
                          int(re.search(r'len\(v\.Disks\) < (\d+)', shared)[1]))
+
+    def test_zfs_provision_request_and_outcomes_match_runtime(self):
+        api = json.loads((ROOT / 'docs/api/openapi.json').read_text())
+        schemas = api['components']['schemas']
+        source = (ROOT / 'internal/controller/storage.go').read_text()
+        body = re.search(r'type zfsProvisionAPIRequest struct\s*{(.*?)}', source, re.S)[1]
+        fields = set(re.findall(r'`json:"([^",]+)', body))
+        request = schemas['ZFSProvisionAPIRequest']
+        self.assertEqual(set(request['properties']), fields)
+        self.assertEqual(set(request['required']), fields - {'repository_id'})
+        self.assertEqual(api['paths']['/api/v1/storage/zfs/provision']['post']['requestBody']
+                         ['content']['application/json']['schema']['$ref'],
+                         '#/components/schemas/ZFSProvisionAPIRequest')
+        self.assertEqual(set(request['properties']['scope']['enum']), {'host', 'pool'})
+
+        provision = schemas['ZFSProvisionRequest']
+        self.assertIn('repository_id', provision['properties'])
+        self.assertNotIn('repository_id', provision['required'])
+        self.assertEqual(set(schemas['ZFSProvisionDevice']['properties']),
+                         {'by_id', 'serial', 'fingerprint', 'size_bytes', 'erase_confirmation'})
+        self.assertEqual(set(schemas['ZFSProvisionDevice']['required']),
+                         {'by_id', 'serial', 'fingerprint', 'size_bytes'})
+        result = schemas['ZFSProvisionHostResult']
+        self.assertEqual(set(result['properties']),
+                         {'repository_id', 'pool_id', 'name', 'scope', 'host_id', 'layout',
+                          'devices', 'status', 'error', 'pool_guid', 'dataset_guid'})
+        self.assertTrue({'repository_id', 'host_id', 'devices', 'status'} <= set(result['required']))
 
 
 if __name__ == '__main__':

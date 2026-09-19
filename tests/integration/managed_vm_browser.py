@@ -301,13 +301,17 @@ def acceptance(config, password, iso, evidence, mode):
             cpu = page.get_by_label('CPU model')
             expect(cpu).to_have_value('__saved-baseline')
             expect(cpu.locator('option:checked')).to_contain_text('SyntheticBaseline')
-            expect(page.get_by_text('Fixed features:', exact=False)).to_contain_text('require sse4.2')
+            expect(page.get_by_text('Fixed features:', exact=False)).to_have_count(0)
+            expect(cpu.locator('option:checked')).to_contain_text('(Recommended)')
+            # The saved fixed CPU already matches the pool baseline, so it is the only recommendation.
+            expect(cpu.locator('option[value="__pool-baseline"]')).not_to_contain_text('(Recommended)')
             assert 'qemu64' in cpu.locator('option').evaluate_all('(options) => options.map(o => o.value)')
             capture('pool-cpu-baseline')
             original_baseline = config['control']['cpu_baseline']
             config['control']['cpu_baseline'] = {'error': 'Simulated member unavailable'}
             warning = page.get_by_text('Pool CPU baseline unavailable.', exact=False)
             expect(warning).to_contain_text('Simulated member unavailable', timeout=30000)
+            expect(cpu.locator('option:checked')).not_to_contain_text('(Recommended)')
             expect(cpu).to_have_value('__saved-baseline')
             expect(cpu.locator('option:checked')).to_contain_text('SyntheticBaseline')
             expect(page.get_by_role('button', name='Next', exact=True)).to_be_enabled()

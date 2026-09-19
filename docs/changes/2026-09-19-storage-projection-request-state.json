@@ -1,0 +1,31 @@
+{
+  "summary": "Core storage projection no longer echoes the Controller's queued request state, which made a pool master refuse VM creation when it had an SMB/NFS repository. API impact: none.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Documented VM creation workflow is unchanged; this removes a wrongful refusal."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No contract, payload or journal format change; Core's placement observation omits request-state fields that the master's applied-storage list and member replication already omit."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fix within existing placement scope."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable state; storage registrations remain in Core's managed journal."
+  },
+  "verification": {
+    "method": "Regression unit test failed before and passes after; vmhost, agent, controller and protocol Go packages pass. Not deployed to or re-tested on the affected lab host.",
+    "evidence": [
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

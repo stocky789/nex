@@ -74,7 +74,7 @@
       ],
       open: [
         "The complete release-candidate ISO to Controller deployment or enrollment and first managed VM, including interrupted installation/bootstrap and recovery; separate package and appliance tests do not close this chain",
-        "Green hosted checks and release verification for the final source; the local development lab excludes later storage edits",
+        "Green hosted checks and release verification for the final source; internal ZFS image checks do not clear external distribution gates",
         "Secure Boot installation of the host — earlier UEFI installation passed in emulation; the local 0.3.2 snapshot has UEFI menu coverage only",
         "Real Intel and AMD hardware — every installation so far has been a disposable virtual machine",
         "Machines with several disks, and the safety of that choice",
@@ -97,13 +97,17 @@
       ],
       open: [
         "A Controller screen for joining a host to a pool; today the join runs through each host's local interface",
+        "Implemented in development: after join, members pull the master's pool-wide guest VLANs and ISO library entries that live on shared storage, materialize them locally and report per-host status — unit and peer checks passed; a full two-host native walkthrough remains open",
         "Changing which host is the master, and ejecting a member — one authority handover design with its own safety checks",
         "Every member keeps a signed, versioned copy of the master's pool records, so a surviving member can become master without losing VM ownership, membership or storage settings",
-        "Automatic master succession when the master is lost: only with a majority of the pool and proof the old master is powered off, never from a missed heartbeat; two-host pools promote manually",
+        "Manual master recovery first: select a surviving member, verify the old master is fenced, and preserve the same pool, VM and repository identities",
+        "The old master automatically rejoins as a member only after authority and VM ownership are reconciled; stale starts and duplicate writers stay blocked",
+        "Automatic master succession later: requires a quorum majority and verified fencing; it is separate from VM restart and return policies",
         "Master approval of VM placement: implemented for development; native multi-host fault and recovery acceptance remains open",
         "Clustered iSCSI storage shared by several hosts with fencing: built for development and not yet for real use",
+        "ZFS provisioning from selected disks, on one host or locally on every pool host: in development; external image delivery and master-change acceptance remain open",
         "Fault testing that proves a host which stopped reporting never leads to a second writer: failed fencing, network partitions, lost quorum, larger pools, long-running load and physical storage",
-        "Copying pool networks to member hosts, mapping them to host bridges and VLANs with compatibility checks, applying remote network changes in stages, and rolling them back automatically if management access is lost",
+        "Editing a host's own management networking remotely, with staged apply and automatic rollback if management access is lost — guest VLAN copy-on-join is separate and covered by unit and peer checks; its native two-host walkthrough remains open",
         "Maintenance mode, which blocks new placements and reports what is still running on the host"
       ]
     },
@@ -218,8 +222,8 @@
       <h1 id="roadmap-title">Roadmap.</h1>
       <p class="roadmap-description">
         Built in order — no milestone counts as done until it works end to end. No
-        dates. Ticked items are in published releases through 0.3.1 unless a note says
-        otherwise.
+        dates. Where an item has release or development evidence, it says so.
+        Development checks do not establish publication.
       </p>
     </div>
     <dl class="counts">
@@ -236,7 +240,7 @@
     <dl>
       <div>
         <dt><span class="mark shipped" aria-hidden="true">●</span> Built</dt>
-        <dd>Shipped, checks recorded</dd>
+        <dd>Checks passed for the stated scope</dd>
       </div>
       <div>
         <dt><span class="mark testing" aria-hidden="true">◐</span> In testing</dt>

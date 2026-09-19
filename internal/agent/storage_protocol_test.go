@@ -33,6 +33,34 @@ func TestStorageRepositoryCommandRequiresPreflight(t *testing.T) {
 	}
 }
 
+func TestZFSProvisionCommandRequiresZFSPreflight(t *testing.T) {
+	s := testStore(t)
+	s.State.StorageProtocolReady = true
+	cmd := zfsPoolCommand("host-1")
+	if err := applyResponse(s, protocol.ReportResponse{Commands: []protocol.Command{cmd}}); err == nil {
+		t.Fatal("ZFS provision command accepted before ZFS preflight")
+	}
+	s.State.ZFSProvisionProtocolReady = true
+	if err := applyResponse(s, protocol.ReportResponse{Commands: []protocol.Command{cmd}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestZFSLegacyPreflightOmitsPoolLocalRegistrationFields(t *testing.T) {
+	managed := &protocol.ManagedState{Storage: []protocol.StorageRegistration{
+		{ID: "local", Kind: protocol.StorageKindLocal},
+		{ID: "zfs-owned", Kind: protocol.StorageKindZFS, ZFSProvisioned: true, ZFSScope: "pool", ZFSHostAccess: []protocol.ZFSHostAccess{{HostID: "host-1", Readable: true}}},
+	}, ZFSProvisions: []protocol.ZFSProvisionHostResult{{RepositoryID: "zfs-owned", HostID: "host-1", Status: "succeeded"}}}
+	projected := zfsLegacyManagedProjection(managed)
+	if len(projected.Storage) != 1 || projected.Storage[0].ID != "local" || len(projected.ZFSProvisions) != 0 {
+		t.Fatalf("legacy projection retained pool-local ZFS state: %#v", projected)
+	}
+	raw, err := json.Marshal(projected)
+	if err != nil || bytes.Contains(raw, []byte(`"zfs_`)) {
+		t.Fatalf("legacy managed JSON contains ZFS extension fields: %s (%v)", raw, err)
+	}
+}
+
 func TestCredentialRetirementRequiresPreflight(t *testing.T) {
 	s := testStore(t)
 	cmd := protocol.Command{OperationID: "retire-1", Kind: "storage-credential-retire", CredentialRetire: &protocol.StorageCredentialRetireRequest{Receipt: "receipt-1", PoolID: "pool-1", HostID: "host-1"}}

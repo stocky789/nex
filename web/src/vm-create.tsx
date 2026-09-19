@@ -6,6 +6,23 @@ import { storageUsable } from "./storage";
 export const describeNetwork = (n: Network) => n.kind === "network" ? `libvirt network ${n.source}` : n.uplink ? (n.vlan ? `VLAN ${n.vlan} on ${n.uplink}` : `Untagged on ${n.uplink}`) : `Existing bridge ${n.source}`;
 export const readyHost = (h: Host) => !h.revoked && h.connection === "fresh" && Boolean(h.capabilities?.includes("managed-vm-v1"));
 
+/** Pool VLAN usable on a host when registered there, or when the master reported member apply. */
+export const networkUsable = (n: Network, hostID: string) => {
+  if (n.status !== "succeeded") return false;
+  if (n.kind !== "vlan") return n.host_id === hostID;
+  if (n.host_id === hostID) return true;
+  return n.member_access?.some(a => a.host_id === hostID && a.uplink_present && !a.error && a.bridge === n.source) === true;
+};
+
+/** ISO usable on a host when imported there, or verified on shared storage for that member. */
+export const mediaUsable = (m: Media, hostID: string, storage: Storage[]) => {
+  if (m.status !== "succeeded") return false;
+  if (m.host_id === hostID) return true;
+  const repo = storage.find(s => s.id === m.storage_id);
+  if (!repo || (repo.kind !== "nfs" && repo.kind !== "smb" && !(repo.kind === "iscsi" && repo.source?.iscsi?.mode === "clustered_gfs2"))) return false;
+  return m.member_access?.some(a => a.host_id === hostID && a.storage_id === m.storage_id && a.sha256 === m.sha256 && !a.error) === true;
+};
+
 export type DiskRow = { storage_id: string; name: string; size_gib: number; bus: string; thin: boolean; boot_order: number };
 export type NICRow = { network_id: string; model: string; mac: string; mtu: number };
 export type BootRow = { firmware: string; machine: string; media_boot_order: number; secure_boot: string; tpm: string };
@@ -57,6 +74,12 @@ export function baselineUnavailable(h?: Host): string {
   return availableBaseline(h) ? "" : `Pool CPU baseline unavailable. ${h?.inventory?.cpu_baseline?.error || "Wait for a fresh report from all pool members, or explicitly choose a CPU model."}`;
 }
 export const fixedCPU = (cpu: VMCPU) => cpu.features != null;
+export function recommendedCPU(cpu: VMCPU, machine: string | undefined, host?: Host): boolean {
+  const baseline = availableBaseline(host);
+  const signature = (features: NonNullable<VMCPU["features"]>) => features.map(f => `${f.policy}:${f.name}`).sort().join(",");
+  return Boolean(baseline && cpu.model === baseline.model && (machine || "q35") === baseline.machine && cpu.features
+    && signature(cpu.features) === signature(baseline.features || []));
+}
 export function selectCPU(cpu: VMCPU, selection: string, h?: Host): VMCPU {
   if (selection === "__saved-baseline") return cpu;
   if (selection === "__pool-baseline") {
@@ -223,13 +246,16 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
   const selectedHost = hosts.find(h => h.id === draft.host_id);
   const hostName = (id: string) => hosts.find(h => h.id === id)?.hostname || id;
   const hostStorage = storage.filter(s => storageUsable(s, draft.host_id));
-  const readyNetworks = (id: string) => networks.filter(n => n.host_id === id && n.status === "succeeded").sort((a, b) => (a.vlan || 0) - (b.vlan || 0) || a.name.localeCompare(b.name));
+  const readyNetworks = (id: string) => networks.filter(n => networkUsable(n, id)).sort((a, b) => (a.vlan || 0) - (b.vlan || 0) || a.name.localeCompare(b.name));
   const hostNetworks = readyNetworks(draft.host_id);
-  const hostMedia = media.filter(m => m.host_id === draft.host_id && m.status === "succeeded");
+  const hostMedia = media.filter(m => mediaUsable(m, draft.host_id, storage));
   const selectedMedia = media.find(m => m.id === draft.media_id);
   const selectedDrivers = media.find(m => m.id === draft.drivers_media_id);
   const driversReady = driversDriveReady(selectedHost);
   const baseline = availableBaseline(selectedHost);
+  // Only one option is the recommendation: a saved fixed CPU that already matches the pool
+  // baseline carries it, so the pool baseline option does not repeat it.
+  const savedRecommended = fixedCPU(draft.cpu) && recommendedCPU(draft.cpu, draft.boot.machine, selectedHost);
   const baselineWarning = baselineUnavailable(selectedHost);
   const cpuIssue = cpuSelectionIssue(draft.cpu, selectedHost);
   const uefi = draft.boot.firmware === "uefi";
@@ -262,7 +288,7 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
   function chooseHost(id: string) {
     const s = storage.filter(x => storageUsable(x, id));
     const n = readyNetworks(id);
-    const mediaForHost = media.filter(m => m.host_id === id && m.status === "succeeded");
+    const mediaForHost = media.filter(m => mediaUsable(m, id, storage));
     const host = hosts.find(h => h.id === id);
     const hostBaseline = availableBaseline(host);
     if (!cpuChosen && hostBaseline) setCPUChosen(true);
@@ -325,13 +351,12 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
           edit({ cpu: selectCPU(draft.cpu, selection, selectedHost), ...(selection === "__pool-baseline" && baseline ? { boot: { ...draft.boot, machine: baseline.machine } } : {}) });
         }}>
           {!draft.cpu.model && <option value="" disabled>Select a CPU baseline or model</option>}
-          {fixedCPU(draft.cpu) && <option value="__saved-baseline">Saved fixed CPU baseline · {draft.cpu.model}</option>}
-          {baselineSupported(selectedHost) && <option value="__pool-baseline" disabled={!baseline}>Pool CPU baseline{baseline ? ` · ${baseline.model}` : " · unavailable"}</option>}
+          {fixedCPU(draft.cpu) && <option value="__saved-baseline">Saved fixed CPU baseline · {draft.cpu.model}{savedRecommended ? " (Recommended)" : ""}</option>}
+          {baselineSupported(selectedHost) && <option value="__pool-baseline" disabled={!baseline}>Pool CPU baseline{baseline ? ` · ${baseline.model}${savedRecommended ? "" : " (Recommended)"}` : " · unavailable"}</option>}
           <option value="host-passthrough">Host passthrough</option><option value="host-model">Host model</option>
           {selectedHost?.inventory?.cpu_models?.filter(m => m !== "host-passthrough" && m !== "host-model").map(m => <option key={m} value={m}>{cpuName(m)}</option>)}
           {!fixedCPU(draft.cpu) && draft.cpu.model && !["host-passthrough", "host-model", ...selectedHost?.inventory?.cpu_models || []].includes(draft.cpu.model) && <option value={draft.cpu.model} disabled>{cpuName(draft.cpu.model)} · saved model not reported by this host</option>}
         </select></label>
-        {fixedCPU(draft.cpu) && <p className="help">Fixed features: {draft.cpu.features?.map(f => `${f.policy} ${f.name}`).join(", ") || "none added"}. Machine: {draft.boot.machine || "q35"}.</p>}
         {baselineWarning && <p className="warning">{baselineWarning} Existing CPU selections are kept.</p>}
         <p className="help">{cpuMigrationHelp}</p>
         <fieldset>

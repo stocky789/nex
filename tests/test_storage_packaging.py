@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Storage client delivery stays native and does not install ZFS modules."""
+"""Storage client delivery uses Debian-native clients and OpenZFS DKMS."""
 from pathlib import Path
 import hashlib
 import importlib.util
@@ -180,15 +180,70 @@ class StoragePackagingTests(unittest.TestCase):
             self.assertEqual(admin.read_text(), "totem { version: 2 }\n")
             self.assertNotIn("corosync.service", calls.read_text() if calls.exists() else "")
 
+    def test_postinst_enables_contrib_for_openzfs_and_keeps_operator_sources(self):
+        for tool in ("dpkg-divert", "dpkg-query"):
+            if not shutil.which(tool):
+                self.skipTest(f"{tool} missing: Debian dpkg tools are required for this check")
+        with tempfile.TemporaryDirectory(prefix="nex-contrib-postinst-") as directory:
+            root = Path(directory)
+            for sub in ("usr/lib", "var/lib/dpkg", "bin", "etc/apt/sources.list.d"):
+                (root / sub).mkdir(parents=True)
+            (root / "usr/lib/os-release").write_text("ID=debian\nVERSION_CODENAME=trixie\n")
+            (root / "etc/os-release").symlink_to("../usr/lib/os-release")
+            helper = root / "bin/deb-systemd-helper"
+            helper.write_text("#!/bin/sh\nexit 0\n")
+            helper.chmod(0o755)
+            (root / "var/lib/dpkg/status").write_text(
+                "Package: nex-core-local\nStatus: install ok half-configured\nArchitecture: amd64\nVersion: 0.3.5\n\n")
+            sources = root / "etc/apt/sources.list.d/debian.sources"
+            sources.write_text(
+                "Types: deb\nURIs: https://deb.debian.org/debian\nSuites: trixie\n"
+                "Components: main non-free-firmware\n\n"
+                "Types: deb\nURIs: https://mirror.example/debian\nSuites: trixie-security\n"
+                "Components: main contrib\n\n"
+                "Types: deb\nURIs: https://mirror.example/operator\nSuites: local\n"
+                "Components: operator\n")
+            env = dict(os.environ, DPKG_ROOT=str(root), DPKG_ADMINDIR=str(root / "var/lib/dpkg"),
+                       PATH=f"{root / 'bin'}:{os.environ['PATH']}")
+
+            def configure():
+                return subprocess.run(["sh", str(ROOT / "packaging/core-local/postinst"), "configure"],
+                                      env=env, check=True, capture_output=True, text=True)
+
+            first = configure()
+            text = sources.read_text()
+            self.assertIn("Components: main non-free-firmware contrib\n", text)
+            # An already-enabled stanza and a source that is not Debian's stay as written.
+            self.assertIn("Components: main contrib\n", text)
+            self.assertIn("Components: operator\n", text)
+            self.assertEqual(text.count("contrib"), 2)
+            self.assertIn("contrib", first.stdout)
+            second = configure()
+            self.assertEqual(sources.read_text(), text)
+            self.assertNotIn("contrib", second.stdout)
+
     def test_storage_lab_installs_discovery_clients(self):
         lab = (ROOT / "tests/integration/bug_ledger_lab.py").read_text()
         self.assertTrue(all(client in lab for client in CLIENTS))
 
-    def test_zfs_stays_an_optional_host_capability(self):
+    def test_zfs_is_shipped_with_matching_headers_and_offline_repository(self):
         package = (ROOT / "packaging/core-local/build-inside.sh").read_text()
         installer = (ROOT / "installer/packages.txt").read_text()
-        self.assertNotIn("zfs", package.lower())
-        self.assertNotIn("zfs", installer.lower())
+        dockerfile = (ROOT / "installer/Dockerfile").read_text()
+        late_install = (ROOT / "installer/late-install.sh").read_text()
+        self.assertTrue({"linux-image-amd64", "linux-headers-amd64", "zfs-dkms", "zfsutils-linux"} <= set(installer.split()))
+        # OpenZFS is in Debian contrib, which a host installed before Nex enabled it
+        # cannot resolve. As a hard dependency it makes the built-in updater fail
+        # permanently on those hosts, so it is recommended and installed explicitly.
+        depends = next(line for line in package.splitlines() if line.startswith("Depends:"))
+        recommends = next(line for line in package.splitlines() if line.startswith("Recommends:"))
+        for dependency in ("linux-headers-amd64", "zfs-dkms", "zfsutils-linux"):
+            self.assertNotIn(dependency, depends)
+            self.assertIn(dependency, recommends)
+            self.assertIn(dependency, (ROOT / "internal/nexupdate/nexupdate.go").read_text())
+        self.assertIn("Components: main contrib", dockerfile)
+        self.assertIn("deb-src http://deb.debian.org/debian trixie main contrib", dockerfile)
+        self.assertEqual(late_install.count("Components: main contrib non-free-firmware"), 2)
 
     def test_agent_sandbox_allows_only_core_owned_storage_recovery_paths(self):
         unit = (ROOT / "packaging/systemd/nex-core-agent.service").read_text()
@@ -356,7 +411,20 @@ echo "live=$apparmor_live"
             binary = root / "bin"
             binary.mkdir()
             dpkg_deb = binary / "dpkg-deb"
-            dpkg_deb.write_text("#!/bin/sh\ncase $2 in *v2.deb) echo storage-format-v2;; esac\n")
+            # Real `dpkg-deb -c` output: the marker is a member path, not a word
+            # somewhere in the listing. A decoy archive ships a file whose name
+            # merely contains the marker and must not pass for it.
+            dpkg_deb.write_text(
+                "#!/bin/sh\n"
+                "member() { printf -- '-rw-r--r-- root/root 2 2026-09-19 10:00 ./%s\\n' \"$1\"; }\n"
+                "printf -- 'drwxr-xr-x root/root 0 2026-09-19 10:00 ./usr/share/nex/core-local/\\n'\n"
+                "case $2 in\n"
+                "  *v2.deb) member usr/share/nex/core-local/storage-format-v2;;\n"
+                "  *v3.deb) member usr/share/nex/core-local/storage-format-v2\n"
+                "           member usr/share/nex/core-local/storage-format-v3;;\n"
+                "  *decoy.deb) member usr/share/doc/nex-core-local/storage-format-v3.txt\n"
+                "              member usr/share/nex/core-local/storage-format-v2;;\n"
+                "esac\n")
             dpkg_deb.chmod(0o755)
             env = dict(os.environ, DPKG_ROOT=str(root), PATH=str(binary) + ":" + os.environ["PATH"])
             def guard_result(mode, archive):
@@ -367,7 +435,11 @@ echo "live=$apparmor_live"
             journals.mkdir(parents=True)
             (journals / "storage.json").write_text('{"command":{"storage":{"kind":"nfs"}}}')
             self.assertNotEqual(guard_result("--core", "/legacy.deb").returncode, 0)
+            # Existing v2 state remains compatible with a v2 decoder. New Core
+            # packages retain the v2 marker so this current guard also lets the
+            # old installed guard accept an upgrade to the new archive.
             self.assertEqual(guard_result("--core", "/v2.deb").returncode, 0)
+            self.assertEqual(guard_result("--core", "/v3.deb").returncode, 0)
             # Real APT sends one line per dpkg action: the unpack names the .deb and the
             # matching configure of the same package carries **CONFIGURE**, with a removal
             # carrying **REMOVE**. Captured from apt 3.0 on Debian 13; reading those pseudo
@@ -386,11 +458,35 @@ echo "live=$apparmor_live"
             self.assertNotEqual(apt_hook("/legacy.deb", "**CONFIGURE**").returncode, 0)
             # An action naming neither an archive nor a known pseudo-file stays fail-closed.
             self.assertNotEqual(apt_hook("**SOMETHING-NEW**").returncode, 0)
+            (journals / "storage.json").unlink()
+            journals.rmdir()
+            zfs_pool = root / "var/lib/nex-core-agent/zfs-pool.json"
+            zfs_pool.write_text("{}")
+            self.assertNotEqual(guard_result("--core", "/v2.deb").returncode, 0)
+            self.assertEqual(guard_result("--core", "/v3.deb").returncode, 0)
+            # A path merely containing the marker name is not the marker itself.
+            self.assertNotEqual(guard_result("--core", "/decoy.deb").returncode, 0)
+            zfs_pool.unlink()
+            # The other durable ZFS record on its own is equally v3 state.
+            lifecycle = root / "var/lib/nex-core-agent/zfs-lifecycle.json"
+            lifecycle.write_text("{}")
+            self.assertNotEqual(guard_result("--core", "/v2.deb").returncode, 0)
+            self.assertEqual(guard_result("--core", "/v3.deb").returncode, 0)
+            lifecycle.unlink()
+            receipt_dir = root / "var/lib/nex-core-agent/zfs-provision"
+            receipt_dir.mkdir()
+            # A live Nex-created zpool need not have kept a .json receipt; any
+            # retained provisioning state still requires a v3-capable package.
+            (receipt_dir / "provision.log").write_text("")
+            self.assertNotEqual(guard_result("--core", "/v2.deb").returncode, 0)
+            (receipt_dir / "provision.log").unlink()
+            (receipt_dir / "provision.json").write_text("{}")
+            self.assertNotEqual(guard_result("--core", "/v2.deb").returncode, 0)
+            (receipt_dir / "provision.json").unlink()
+            receipt_dir.rmdir()
             receipt = root / "var/lib/nex-core-agent/storage-credentials/receipt.json"
             receipt.parent.mkdir(parents=True)
             receipt.write_text('{}')
-            (journals / "storage.json").unlink()
-            journals.rmdir()
             self.assertNotEqual(subprocess.run([sys.executable, str(guard), "--core", "--check"], text=True, capture_output=True, env=env).returncode, 0)
             receipt.unlink()
             self.assertEqual(subprocess.run([sys.executable, str(guard), "--core", "--check"], text=True, capture_output=True, env=env).returncode, 0)
@@ -403,6 +499,14 @@ echo "live=$apparmor_live"
                 connection.close()
             self.assertNotEqual(guard_result("--controller", "/legacy.deb").returncode, 0)
             self.assertEqual(guard_result("--controller", "/v2.deb").returncode, 0)
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute("UPDATE host_capabilities SET capabilities='[\"storage-zfs-provision-v1\"]'")
+                connection.commit()
+            finally:
+                connection.close()
+            self.assertNotEqual(guard_result("--controller", "/v2.deb").returncode, 0)
+            self.assertEqual(guard_result("--controller", "/v3.deb").returncode, 0)
             self.assertNotEqual(subprocess.run([sys.executable, str(guard), "--controller", "--check"], text=True, capture_output=True, env=env).returncode, 0)
 
     def test_packages_install_apt_downgrade_guards_and_v2_artifact_markers(self):
@@ -412,7 +516,9 @@ echo "live=$apparmor_live"
         controller_postinst = (ROOT / "packaging/controller/postinst").read_text()
         for build in (core_build, controller_build):
             self.assertIn("storage-downgrade-guard.py", build)
+        for build in (core_build, controller_build):
             self.assertIn("storage-format-v2", build)
+            self.assertIn("storage-format-v3", build)
         self.assertIn("storage-downgrade-guard --core", core_postinst)
         self.assertIn("storage-downgrade-guard --controller", controller_postinst)
         self.assertIn("storage-downgrade-guard --core --check", (ROOT / "packaging/core-local/prerm").read_text())

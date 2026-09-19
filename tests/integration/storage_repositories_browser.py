@@ -390,6 +390,7 @@ def main():
             checks.append("Detach requires a focused typed-name confirmation and does not erase data")
 
             cleanup = page.get_by_role("region", name="Unused storage credentials", exact=True)
+            cleanup.get_by_role("heading", name="Unused storage credentials", exact=True).click()
             cleanup.get_by_label("Host", exact=True).select_option("core-qa")
             cleanup.get_by_role("button", name="Find unused credentials", exact=True).click()
             receipt_row = cleanup.get_by_role("row").filter(has_text="core-unused-receipt")

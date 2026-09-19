@@ -106,13 +106,13 @@ cat > /etc/apt/sources.list.d/debian.sources <<'SOURCES'
 Types: deb
 URIs: https://deb.debian.org/debian
 Suites: trixie trixie-updates
-Components: main non-free-firmware
+Components: main contrib non-free-firmware
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 
 Types: deb
 URIs: https://security.debian.org/debian-security
 Suites: trixie-security
-Components: main non-free-firmware
+Components: main contrib non-free-firmware
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 SOURCES
 # Remove installation-media entries; explicit trixie sources above own updates.

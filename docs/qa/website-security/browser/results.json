@@ -1,6 +1,6 @@
 {
   "url": "https://nexvirtualization.com",
-  "resolve_rule": "MAP nexvirtualization.com 103.96.7.90",
+  "resolve_rule": "MAP nexvirtualization.com 198.51.100.90",
   "results": [
     "1440px homepage keyboard FAQ and gallery images",
     "360px homepage keyboard FAQ and gallery images",
@@ -187,5 +187,6 @@
       "status": 200
     }
   ],
-  "browser_errors": []
+  "browser_errors": [],
+  "evidence_note": "Sanitized historical evidence, 2026-09-19: the original resolver target was replaced with a reserved example address. Results retain their original run scope; this is not an untouched capture or a new execution."
 }

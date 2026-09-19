@@ -1,0 +1,42 @@
+{
+  "summary": "Simplify the ZFS storage wizard to a two-screen dialog and tidy the Storage page: repository list first, advanced panels folded. UI only. API impact: existing contract (storage/discover kind zfs-device and storage/zfs/provision are called with the same request shapes; scope is derived from the ticked hosts).",
+  "paths": [
+    "web/src/zfs.tsx",
+    "web/src/zfs.test.mjs",
+    "web/src/storage.tsx",
+    "web/src/style.css",
+    "tests/integration/zfs_provisioning_browser.py",
+    "tests/integration/storage_repositories_browser.py",
+    "docs/guide/storage-repositories.md",
+    "docs/qa/2026-09-19-zfs-wizard-simplification.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The operator steps, screen names and button labels for provisioning ZFS storage and adding a host to an existing repository changed.",
+    "pages": [
+      "docs/guide/storage-repositories.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No Controller, Core or peer operation changed. The dialog sends the same discovery and provisioning requests; an automatic layout is still omitted so Core chooses it.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Presentation of an already-listed capability; no milestone or status change."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state is added. The dialog keeps only a per-tab session draft of name, ticked hosts, layout choice and request identity; repository identity and outcomes remain Core-owned."
+  },
+  "verification": {
+    "method": "Typecheck, UI unit checks, four simulated browser harnesses and a read-only real-Controller walkthrough in a disposable lab; limits are recorded in the report.",
+    "evidence": [
+      "docs/qa/2026-09-19-zfs-wizard-simplification.md"
+    ]
+  }
+}

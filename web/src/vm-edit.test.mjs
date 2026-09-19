@@ -48,8 +48,15 @@ const savedVM = { ...listed, spec: { ...listed.spec, cpu: { ...listed.spec.cpu, 
 const renderCPU = (vm, host) => renderToStaticMarkup(createElement(VMEditor, { vm, host, poolName: "p", storage: [], networks: [], media: [], api: async () => ({}), reload: async () => {}, unavailable: false, onNotice() {}, onClose() {} }));
 const savedHTML = renderCPU(savedVM, baselineHost);
 assert.match(savedHTML, /value="__saved-baseline" selected="">Saved fixed CPU baseline · SavedBaseline/);
-assert.match(savedHTML, /Pool CPU baseline · NewBaseline/);
-assert.match(savedHTML, /disable avx/, "saved features are displayed without using refreshed report");
+assert.match(savedHTML, /Pool CPU baseline · NewBaseline \(Recommended\)/);
+// A saved fixed CPU that already matches the pool baseline is the only recommendation shown;
+// two options labelled "(Recommended)" told the operator to pick one of two identical CPUs.
+const matchingVM = { ...savedVM, spec: { ...savedVM.spec, cpu: { ...savedVM.spec.cpu, model: "NewBaseline", features: [{ name: "sse4.2", policy: "require" }] } } };
+const matchingHTML = renderCPU(matchingVM, baselineHost);
+assert.equal(matchingHTML.match(/\(Recommended\)/g).length, 1, "only one CPU option is the recommendation");
+assert.match(matchingHTML, /value="__saved-baseline" selected="">Saved fixed CPU baseline · NewBaseline \(Recommended\)/);
+assert.match(matchingHTML, /value="__pool-baseline">Pool CPU baseline · NewBaseline</);
+assert.doesNotMatch(savedHTML, /Fixed features:|disable avx/, "CPU feature details are not displayed");
 assert.match(savedHTML, /value="qemu64"/, "manual models remain available for every guest OS");
 assert.match(savedHTML, /value="FutureCPU-v7"/);
 const failedHTML = renderCPU(savedVM, { ...baselineHost, inventory: { ...baselineHost.inventory, cpu_baseline: { error: "member unreachable" } } });

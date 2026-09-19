@@ -1,7 +1,7 @@
 # ISO packaging efficiency
 
-Date: 2026-09-18. Status: implemented and locally verified; hosted CI/publication
-remain unexecuted. See [artifact and offline-install evidence](../qa/2026-09-18-iso-packaging-efficiency.md).
+Date: 2026-09-18. Status: historical 0.3.3 packaging result; hosted CI/publication
+were unexecuted for that slice. See [artifact and offline-install evidence](../qa/2026-09-18-iso-packaging-efficiency.md).
 
 ## Scope
 
@@ -27,6 +27,9 @@ All driver content and the requested installation package list are retained.
 
 No live infrastructure changes, publication, Git history changes, guest driver
 selection changes or reduced hardware support are authorized by this work.
+
+This plan does not establish the status of the later working `0.3.5` tree or a
+ZFS-enabled image. Its external release remains blocked by the current licensing gate.
 
 ## Acceptance
 

@@ -32,6 +32,7 @@
 <li><a href="#listStorageRegistration">GET /api/v1/storage</a></li>
 <li><a href="#createStorageRegistration">POST /api/v1/storage</a></li>
 <li><a href="#discoverStorage">POST /api/v1/storage/discover</a></li>
+<li><a href="#provisionZFSStorage">POST /api/v1/storage/zfs/provision</a></li>
 <li><a href="#getStorageCluster">GET /api/v1/storage/cluster</a></li>
 <li><a href="#applyStorageCluster">POST /api/v1/storage/cluster/apply</a></li>
 <li><a href="#verifyStorageClusterFence">POST /api/v1/storage/cluster/verify-fence</a></li>
@@ -47,6 +48,8 @@
 <li><a href="#acknowledgeStorageCredential">POST /api/v1/agent/storage/credentials/{handle}/ack</a></li>
 <li><a href="#listNetworkRegistration">GET /api/v1/networks</a></li>
 <li><a href="#createNetworkRegistration">POST /api/v1/networks</a></li>
+<li><a href="#removeNetworkRegistration">DELETE /api/v1/networks/{id}</a></li>
+<li><a href="#renameNetworkRegistration">PATCH /api/v1/networks/{id}</a></li>
 <li><a href="#listMedia">GET /api/v1/media</a></li>
 <li><a href="#uploadMedia">POST /api/v1/media</a></li>
 <li><a href="#downloadAgentMedia">GET /api/v1/agent/media/{id}</a></li>
@@ -123,6 +126,17 @@
   },
   &quot;semantics&quot;: &quot;Verify existing local directory access; no formatting. Refuse, as a failed result, a path another non-failed registration on this host already holds. The host self-registers /var/lib/libvirt/images as ISO through this same verification, with a host-generated ID, unless any journal entry already holds that path. Succeeded registrations are reported back in Inventory.managed.storage and adopted by a Controller that does not hold them (request_id adopt-storage:&lt;host&gt;:&lt;id&gt;) without redelivery.&quot;
 }</pre></section>
+<section><h2>storage-zfs-provision</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;capability&quot;: &quot;storage-zfs-provision-v1&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionRequest&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Master-directed durable ZFS provisioning. Core owns repository identity, validates stable selected devices immediately before destructive work, journals recovery and performs selected member work through authenticated Core-peer transport. Results are reported in Inventory.managed.zfs_provisions for adoption after Controller replacement.&quot;
+}</pre></section>
 <section><h2>storage-update</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
   &quot;capability&quot;: &quot;storage-repositories-v1&quot;,
@@ -178,6 +192,28 @@
   },
   &quot;semantics&quot;: &quot;Verify existing bridge or active libvirt network without edits; for kind vlan, idempotently create bridge &lt;uplink&gt;v&lt;vlan&gt; over the 802.1Q sub-interface, persist it under /etc/network/interfaces.d and refuse uplinks or VLAN devices already used by the host configuration. Refuse, as a failed result, a bridge (shared by kind bridge and vlan) or libvirt network another non-failed registration on this host already holds. The host self-registers &lt;port&gt; untagged for every bridge on a physical NIC or bond through this same verification, with host-generated IDs, unless any journal entry already holds that bridge. Succeeded registrations are reported back in Inventory.managed.networks and adopted by a Controller that does not hold them (request_id adopt-network:&lt;host&gt;:&lt;id&gt;) without redelivery.&quot;
 }</pre></section>
+<section><h2>network-remove</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;capability&quot;: &quot;pool-resource-removal-v1&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/ResourceLifecycleRequest&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Remove a pool VLAN guest network (kind vlan only; anything else is the failed result \&quot;only pool VLAN networks can be removed\&quot;). Core checks the expected generation, then refuses while any VM definition on that host references the network, running or stopped (\&quot;network cannot be removed while used by VM &lt;uuid&gt;\&quot;). On the pool master the agent additionally refuses while any VM in any member&#x27;s published inventory uses it (\&quot;\u2026 on host &lt;host&gt;\&quot;), and fails closed when membership or that inventory cannot be read or a ready member has not published at the current membership generation (\&quot;pool VM inventory is incomplete; wait for every member to report before removing this network\&quot;). Teardown proves ownership from the /etc/network/interfaces.d/nex-&lt;bridge&gt; stanza Nex itself wrote (\&quot;bridge &lt;b&gt; was not created by Nex; remove it by hand\&quot;), refuses a bridge carrying any port but its own guest port (\&quot;network still has attached interfaces\&quot;), deletes the bridge, deletes &lt;uplink&gt;.&lt;vlan&gt; only when it is a VLAN device with no master that no other Nex stanza names, and removes the stanza. The uplink, the management bridge, host addresses, routes and /etc/network/interfaces are never touched. Teardown is idempotent, so an interrupted removal settles on replay and there is no needs_attention outcome. Success journals a tombstone: the network leaves Inventory.managed.networks as a tombstone row, the host stops rebuilding the bridge, and the Core ID can never be re-registered \u2014 re-adding the same uplink and VLAN mints a new network with a new identity, so VM NICs must be re-pointed.&quot;
+}</pre></section>
+<section><h2>network-update</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;capability&quot;: &quot;pool-resource-removal-v1&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/ResourceLifecycleRequest&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Rename a pool VLAN guest network. The payload carries no uplink, VLAN or source, and the projection copies only the name, so a rename structurally cannot re-plumb a bridge; kind, source, uplink and VLAN are unchanged and the single native effect is one atomic rewrite of the /etc/network/interfaces.d/nex-&lt;bridge&gt; stanza, whose header comment carries the name. The generation becomes expected_generation + 1. A member applies the master&#x27;s name one generation at a time, so a member several renames behind steps through each one and never reports a generation it did not apply; a member whose journalled source, uplink or VLAN differs reports \&quot;pool network &lt;id&gt; changed uplink or VLAN; remove and re-add it\&quot; instead. A stale expected generation is refused with \&quot;network generation is no longer current; refresh and retry\&quot;.&quot;
+}</pre></section>
 <section><h2>iso-import</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
   &quot;capability&quot;: &quot;managed-vm-v1&quot;,
@@ -188,6 +224,17 @@
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
   &quot;semantics&quot;: &quot;Without media.url, fetch assigned staged media over host mTLS and verify supplied size/hash/ISO. With media.url, require iso-download-v1 and zero initial size/hash; Core downloads public HTTP(S) destinations with DNS/redirect address checks, no credentials or environment proxies, capacity limits and ISO validation. Core records computed size/hash in its durable applied journal, then reports Inventory.managed.media without URL. Controller mirrors completion metadata and a fresh Controller re-adopts identities and names. Interrupted dispatched work is reconciled through the journal; ambiguous imports require attention.&quot;
+}</pre></section>
+<section><h2>media-remove</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;capability&quot;: &quot;pool-resource-removal-v1&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/ResourceLifecycleRequest&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Remove an imported ISO. Core checks the expected generation (\&quot;ISO generation is no longer current; refresh and retry\&quot;), refuses while any VM definition on that host names the ISO as media_id or drivers_media_id, running or stopped (\&quot;ISO cannot be removed while attached to VM &lt;uuid&gt;\&quot;), and on the pool master also refuses for any VM in a member&#x27;s published inventory (\&quot;\u2026 on host &lt;host&gt;\&quot;) and fails closed on incomplete member inventory. Teardown unlinks the published file &lt;storage&gt;/nex-media/&lt;id&gt;.iso and nothing else; a file already gone is success, which is also what the second host on shared storage observes. No VM disk is touched. Success journals a tombstone: the ISO leaves Inventory.managed.media as a tombstone row, and neither VM creation nor a member&#x27;s shared-media adoption resolves it any more.&quot;
 }</pre></section>
 <section><h2>vm-create</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -1568,12 +1615,12 @@
   }
 }</pre></details></section>
 <section id="reportHost"><h2>POST <code>/api/v1/agent/report</code></h2>
-<p>Report observations and reconcile commands</p><p>Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Versions 1 and 2 are accepted; version 2 starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Clustered storage has its own v2 acknowledgement: a Core sends neither clustered results nor storage-clustered-iscsi-v2 until it receives storage_clusters_support with that exact capability. The Controller sends that acknowledgement on every v2 preflight. A newly reconnected Core may offer the session-monitor preflight while withholding storage-clustered-iscsi-v2; before its acknowledged follow-up report, Controller clustered routes return retryable 503 negotiation pending without dispatching work or falling back. Core resets this readiness on start, Controller replacement/enrollment and report disconnect, so an older strict Controller sees only the clean preflight; queued Core results remain durable until a matching Controller acknowledges. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409, foreign/unknown operation IDs return 400. Terminal results are acknowledged without rewriting the original outcome. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects.</p>
+<p>Report observations and reconcile commands</p><p>Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Versions 1 and 2 are accepted; version 2 starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Clustered storage has its own v2 acknowledgement: a Core sends neither clustered results nor storage-clustered-iscsi-v2 until it receives storage_clusters_support with that exact capability. The Controller sends that acknowledgement on every v2 preflight. A newly reconnected Core may offer the session-monitor preflight while withholding storage-clustered-iscsi-v2; before its acknowledged follow-up report, Controller clustered routes return retryable 503 negotiation pending without dispatching work or falling back. Core resets this readiness on start, Controller replacement/enrollment and report disconnect, so an older strict Controller sees only the clean preflight; queued Core results remain durable until a matching Controller acknowledges. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409; known operation IDs belonging to another host return 400. Valid results for unknown operation IDs from a former Controller are acknowledged without creating operations or resource state. Terminal results are acknowledged without rewriting the original outcome, except an authoritative succeeded result for the same host and operation may settle a prior needs_attention outcome after Core recovery. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;reportHost&quot;,
   &quot;summary&quot;: &quot;Report observations and reconcile commands&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Versions 1 and 2 are accepted; version 2 starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Clustered storage has its own v2 acknowledgement: a Core sends neither clustered results nor storage-clustered-iscsi-v2 until it receives storage_clusters_support with that exact capability. The Controller sends that acknowledgement on every v2 preflight. A newly reconnected Core may offer the session-monitor preflight while withholding storage-clustered-iscsi-v2; before its acknowledged follow-up report, Controller clustered routes return retryable 503 negotiation pending without dispatching work or falling back. Core resets this readiness on start, Controller replacement/enrollment and report disconnect, so an older strict Controller sees only the clean preflight; queued Core results remain durable until a matching Controller acknowledges. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409, foreign/unknown operation IDs return 400. Terminal results are acknowledged without rewriting the original outcome. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects.&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Versions 1 and 2 are accepted; version 2 starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Clustered storage has its own v2 acknowledgement: a Core sends neither clustered results nor storage-clustered-iscsi-v2 until it receives storage_clusters_support with that exact capability. The Controller sends that acknowledgement on every v2 preflight. A newly reconnected Core may offer the session-monitor preflight while withholding storage-clustered-iscsi-v2; before its acknowledged follow-up report, Controller clustered routes return retryable 503 negotiation pending without dispatching work or falling back. Core resets this readiness on start, Controller replacement/enrollment and report disconnect, so an older strict Controller sees only the clean preflight; queued Core results remain durable until a matching Controller acknowledges. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409; known operation IDs belonging to another host return 400. Valid results for unknown operation IDs from a former Controller are acknowledged without creating operations or resource state. Terminal results are acknowledged without rewriting the original outcome, except an authoritative succeeded result for the same host and operation may settle a prior needs_attention outcome after Core recovery. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects.&quot;,
   &quot;tags&quot;: [
     &quot;Core agent \u2192 Controller&quot;
   ],
@@ -2502,6 +2549,141 @@
     }
   }
 }</pre></details></section>
+<section id="provisionZFSStorage"><h2>POST <code>/api/v1/storage/zfs/provision</code></h2>
+<p>Provision ZFS storage from selected devices</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. The Controller persists a stable request_id and relays one durable storage-zfs-provision command only to the selected pool master advertising storage-zfs-provision-v1. Every selected host must also be fresh, active, in the selected pool and advertise storage-zfs-provision-v1; otherwise the request is refused with 409 before Core is asked. Core owns the repository identity, validates each selected device immediately before destructive work, executes any selected member work through its authenticated peer channel, journals recovery, and reports the resulting Core-owned repository projection. An accepted request is not proof that devices were changed; poll operations and refreshed host inventory. Identical retries return the original request and operation; a changed payload conflicts.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;provisionZFSStorage&quot;,
+  &quot;summary&quot;: &quot;Provision ZFS storage from selected devices&quot;,
+  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. The Controller persists a stable request_id and relays one durable storage-zfs-provision command only to the selected pool master advertising storage-zfs-provision-v1. Every selected host must also be fresh, active, in the selected pool and advertise storage-zfs-provision-v1; otherwise the request is refused with 409 before Core is asked. Core owns the repository identity, validates each selected device immediately before destructive work, executes any selected member work through its authenticated peer channel, journals recovery, and reports the resulting Core-owned repository projection. An accepted request is not proof that devices were changed; poll operations and refreshed host inventory. Identical retries return the original request and operation; a changed payload conflicts.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Token returned by login or current session.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionAPIRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Provision request accepted; Core work is pending.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: {
+              &quot;repository_id&quot;: {
+                &quot;type&quot;: &quot;string&quot;
+              },
+              &quot;name&quot;: {
+                &quot;type&quot;: &quot;string&quot;
+              },
+              &quot;pool_id&quot;: {
+                &quot;type&quot;: &quot;string&quot;
+              },
+              &quot;scope&quot;: {
+                &quot;type&quot;: &quot;string&quot;
+              },
+              &quot;hosts&quot;: {
+                &quot;type&quot;: &quot;array&quot;,
+                &quot;items&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionHost&quot;
+                }
+              },
+              &quot;operation&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+              }
+            },
+            &quot;required&quot;: [
+              &quot;name&quot;,
+              &quot;pool_id&quot;,
+              &quot;scope&quot;,
+              &quot;hosts&quot;,
+              &quot;operation&quot;
+            ],
+            &quot;additionalProperties&quot;: false
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Existing provision request for identical request_id and payload.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: {
+              &quot;repository_id&quot;: {
+                &quot;type&quot;: &quot;string&quot;
+              },
+              &quot;name&quot;: {
+                &quot;type&quot;: &quot;string&quot;
+              },
+              &quot;pool_id&quot;: {
+                &quot;type&quot;: &quot;string&quot;
+              },
+              &quot;scope&quot;: {
+                &quot;type&quot;: &quot;string&quot;
+              },
+              &quot;hosts&quot;: {
+                &quot;type&quot;: &quot;array&quot;,
+                &quot;items&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionHost&quot;
+                }
+              },
+              &quot;operation&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+              }
+            },
+            &quot;required&quot;: [
+              &quot;name&quot;,
+              &quot;pool_id&quot;,
+              &quot;scope&quot;,
+              &quot;hosts&quot;,
+              &quot;operation&quot;
+            ],
+            &quot;additionalProperties&quot;: false
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed JSON, unknown field, invalid request ID, name, scope, host selection, layout, device identity or erase confirmation.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Administrator session required.&quot;
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Pool/master or selected host is unavailable or ineligible, the master lacks storage-zfs-provision-v1, or request_id conflicts.&quot;
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller persistence failure; no durable command was accepted.&quot;
+    }
+  }
+}</pre></details></section>
 <section id="getStorageCluster"><h2>GET <code>/api/v1/storage/cluster</code></h2>
 <p>Read Core-owned clustered iSCSI status</p><p>Administrator session required. pool_id selects its current active master, which must have acknowledged and advertise storage-clustered-iscsi-v2. During a new Core&#x27;s bounded v2 preflight, 503 means negotiation is pending: no status relay was sent, so retry after the acknowledged follow-up report. A Core that never offers clustered support remains 409. The Controller forwards one transient status request only after acknowledgement and retains no cluster configuration, job or secret. A 200 is the Core&#x27;s current durable operation projection; a 504 means the Core did not answer within 30 seconds and is ambiguous, so retry this GET rather than assuming setup stopped. The Controller HTTPS write deadline is 45 seconds only to leave delivery margin for this existing 30-second relay contract; it does not extend Core work.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
@@ -3407,12 +3589,12 @@
   }
 }</pre></details></section>
 <section id="createNetworkRegistration"><h2>POST <code>/api/v1/networks</code></h2>
-<p>Register pool guest network</p><p>Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. No disk formatting. kind vlan creates an additive guest bridge on the host without touching the management bridge; other kinds perform no network configuration. Unobserved or non-physical uplinks conflict with 409. Definite failed registrations can be revalidated using a new request_id; queued, dispatched and needs_attention reservations must be reconciled first.</p>
+<p>Register pool guest network</p><p>Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. No disk formatting. kind vlan creates an additive guest bridge on the host without touching the management bridge; other kinds perform no network configuration. For kind vlan the submitted host_id only selects the pool: the registration is master-owned, so the response and later reads carry the pool master as host_id, and resending the identical body (member host_id included) replays the same registration and operation. Unobserved or non-physical uplinks conflict with 409. Definite failed registrations can be revalidated using a new request_id; queued, dispatched and needs_attention reservations must be reconciled first.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;createNetworkRegistration&quot;,
   &quot;summary&quot;: &quot;Register pool guest network&quot;,
-  &quot;description&quot;: &quot;Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. No disk formatting. kind vlan creates an additive guest bridge on the host without touching the management bridge; other kinds perform no network configuration. Unobserved or non-physical uplinks conflict with 409. Definite failed registrations can be revalidated using a new request_id; queued, dispatched and needs_attention reservations must be reconciled first.&quot;,
+  &quot;description&quot;: &quot;Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. No disk formatting. kind vlan creates an additive guest bridge on the host without touching the management bridge; other kinds perform no network configuration. For kind vlan the submitted host_id only selects the pool: the registration is master-owned, so the response and later reads carry the pool master as host_id, and resending the identical body (member host_id included) replays the same registration and operation. Unobserved or non-physical uplinks conflict with 409. Definite failed registrations can be revalidated using a new request_id; queued, dispatched and needs_attention reservations must be reconciled first.&quot;,
   &quot;security&quot;: [
     {
       &quot;AdminSession&quot;: []
@@ -3524,6 +3706,264 @@
       &quot;application/json&quot;: {
         &quot;schema&quot;: {
           &quot;$ref&quot;: &quot;#/components/schemas/NetworkRegistrationRequest&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="removeNetworkRegistration"><h2>DELETE <code>/api/v1/networks/{id}</code></h2>
+<p>Remove a pool VLAN guest network</p><p>Implemented in development product 0.3.5, protocol v1. Administrator session, same HTTPS Origin and X-CSRF-Token required; JSON rejects unknown fields and bodies over 1 MiB. Controller only relays: the target host is always the pool master resolved from the pool record, so host_id is not accepted and a body carrying one is refused with 400 invalid JSON request. The pool master&#x27;s Core checks the expected generation, refuses while any VM on any host in the pool references the network (running or stopped) and while any ready member&#x27;s published VM inventory is stale, tears the guest bridge, its 802.1Q sub-interface when no other Nex stanza uses it and its /etc/network/interfaces.d stanza down, and journals a durable tombstone. Members converge on their next member pull pass, refusing locally while one of their own VMs uses the network. Only kind vlan networks are removable; a host-automatic bridge or libvirt network is refused with 409. 202 is acceptance, not teardown: the registration disappears from the library only when the master reports the tombstone. An identical request_id replays the same operation with 200; a different body under that request_id is 409. Requires the pool master to advertise pool-resource-removal-v1.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;removeNetworkRegistration&quot;,
+  &quot;summary&quot;: &quot;Remove a pool VLAN guest network&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.3.5, protocol v1. Administrator session, same HTTPS Origin and X-CSRF-Token required; JSON rejects unknown fields and bodies over 1 MiB. Controller only relays: the target host is always the pool master resolved from the pool record, so host_id is not accepted and a body carrying one is refused with 400 invalid JSON request. The pool master&#x27;s Core checks the expected generation, refuses while any VM on any host in the pool references the network (running or stopped) and while any ready member&#x27;s published VM inventory is stale, tears the guest bridge, its 802.1Q sub-interface when no other Nex stanza uses it and its /etc/network/interfaces.d stanza down, and journals a durable tombstone. Members converge on their next member pull pass, refusing locally while one of their own VMs uses the network. Only kind vlan networks are removable; a host-automatic bridge or libvirt network is refused with 409. 202 is acceptance, not teardown: the registration disappears from the library only when the master reports the tombstone. An identical request_id replays the same operation with 200; a different body under that request_id is 409. Requires the pool master to advertise pool-resource-removal-v1.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.3.5&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Core-owned network registration identifier.&quot;
+    },
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/NetworkLifecycleAPIRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Removal queued to the pool master.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ResourceLifecycleResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Replay of the same request_id and body; no second operation was queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ResourceLifecycleResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid JSON, unknown field such as host_id, bad identifier or request_id, or a name sent to a removal.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;No valid administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF token rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;The network is not a succeeded registration on this pool&#x27;s master.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;No pool master, master stale or lacking pool-resource-removal-v1, not a pool VLAN, stale expected_generation, or replay conflict.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller persistence failure; nothing was queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="renameNetworkRegistration"><h2>PATCH <code>/api/v1/networks/{id}</code></h2>
+<p>Rename a pool VLAN guest network</p><p>Implemented in development product 0.3.5, protocol v1. Administrator session, same HTTPS Origin and X-CSRF-Token required. Same relay and same body as the removal plus name, which must be nonblank, at most 200 UTF-8 bytes and free of slashes and control characters. Renaming is the only change this call makes: the bridge name is derived from the uplink and VLAN tag and appears in every VM&#x27;s domain XML, so changing an uplink or VLAN tag means removing the network and registering a new one, which gives it a new identity. The pool master records the new name at generation + 1 and rewrites its interfaces.d stanza; each member steps its own generation forward on its next pull pass, and a member whose uplink or VLAN differs reports pool network &lt;id&gt; changed uplink or VLAN; remove and re-add it instead of re-plumbing a bridge. Only kind vlan networks can be renamed (409 only pool VLAN networks can be removed). 202 is acceptance; the new name appears when the master reports it.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;renameNetworkRegistration&quot;,
+  &quot;summary&quot;: &quot;Rename a pool VLAN guest network&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.3.5, protocol v1. Administrator session, same HTTPS Origin and X-CSRF-Token required. Same relay and same body as the removal plus name, which must be nonblank, at most 200 UTF-8 bytes and free of slashes and control characters. Renaming is the only change this call makes: the bridge name is derived from the uplink and VLAN tag and appears in every VM&#x27;s domain XML, so changing an uplink or VLAN tag means removing the network and registering a new one, which gives it a new identity. The pool master records the new name at generation + 1 and rewrites its interfaces.d stanza; each member steps its own generation forward on its next pull pass, and a member whose uplink or VLAN differs reports pool network &lt;id&gt; changed uplink or VLAN; remove and re-add it instead of re-plumbing a bridge. Only kind vlan networks can be renamed (409 only pool VLAN networks can be removed). 202 is acceptance; the new name appears when the master reports it.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.3.5&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Core-owned network registration identifier.&quot;
+    },
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/NetworkLifecycleAPIRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Rename queued to the pool master.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ResourceLifecycleResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Replay of the same request_id and body; no second operation was queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ResourceLifecycleResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid JSON, unknown field, bad identifier or request_id, or a missing or invalid name.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;No valid administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF token rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;The network is not a succeeded registration on this pool&#x27;s master.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;No pool master, master stale or lacking pool-resource-removal-v1, not a pool VLAN, stale expected_generation, or replay conflict.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller persistence failure; nothing was queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
         }
       }
     }
@@ -5212,12 +5652,12 @@
   }
 }</pre></details></section>
 <section id="deleteMedia"><h2>DELETE <code>/api/v1/media/{id}</code></h2>
-<p>Remove a failed ISO import from the library</p><p>Implemented in development product 0.2.8, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Removes the library record of an iso-import whose operation is failed or needs_attention, so a download that failed does not occupy the library forever with no way to clear it (BUG-0203). Retrying a failed download is POST /api/v1/media/download again under a NEW request_id; there is no separate retry operation. 409 when the import is still queued or dispatched, and 409 when it SUCCEEDED: the ISO then lives on its host, Nex Core has no media-removal command, and Controller will not drop a record for bytes it cannot delete. 409 while another media transfer holds the staging lock. 404 for an unknown id. Only Controller-owned staging bytes of a failed upload are deleted; no Core command is issued and no host state is touched. The removal is audited as media.discard.</p>
+<p>Discard a failed ISO import, or remove an imported ISO</p><p>Implemented in development product 0.2.8, protocol v1; the succeeded-import branch added in 0.3.5. Requires an administrator session, same Origin and X-CSRF-Token. For an iso-import whose operation is failed or needs_attention the call takes NO body and removes only this Controller&#x27;s library record and its own staging bytes, so a download that failed does not occupy the library forever with no way to clear it (BUG-0203); no Core command is issued, no host state is touched, and the discard is audited as media.discard. For a SUCCEEDED import the call now relays a media-remove command to the host that stores the ISO (the pool master for pool-shared media) and requires a body {request_id}; no pool_id, host_id or expected_generation is accepted, because the pool, owner and current generation all come from the host-reported record. Core unlinks the published file, refuses while any VM on any host in the pool has the ISO in a CD drive (running or stopped) and while member VM inventory is stale, and journals a durable tombstone that members converge to; the library row disappears only when the host reports that tombstone. Retrying a failed download is POST /api/v1/media/download again under a NEW request_id; there is no separate retry operation. 409 when the import is still queued or dispatched, 409 while another media transfer holds the staging lock, and 409 when the owning host does not advertise pool-resource-removal-v1 (checked before the body is read, so an older client&#x27;s bodyless call still gets the upgrade answer). 404 for an unknown id.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;deleteMedia&quot;,
-  &quot;summary&quot;: &quot;Remove a failed ISO import from the library&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.2.8, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Removes the library record of an iso-import whose operation is failed or needs_attention, so a download that failed does not occupy the library forever with no way to clear it (BUG-0203). Retrying a failed download is POST /api/v1/media/download again under a NEW request_id; there is no separate retry operation. 409 when the import is still queued or dispatched, and 409 when it SUCCEEDED: the ISO then lives on its host, Nex Core has no media-removal command, and Controller will not drop a record for bytes it cannot delete. 409 while another media transfer holds the staging lock. 404 for an unknown id. Only Controller-owned staging bytes of a failed upload are deleted; no Core command is issued and no host state is touched. The removal is audited as media.discard.&quot;,
+  &quot;summary&quot;: &quot;Discard a failed ISO import, or remove an imported ISO&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.2.8, protocol v1; the succeeded-import branch added in 0.3.5. Requires an administrator session, same Origin and X-CSRF-Token. For an iso-import whose operation is failed or needs_attention the call takes NO body and removes only this Controller&#x27;s library record and its own staging bytes, so a download that failed does not occupy the library forever with no way to clear it (BUG-0203); no Core command is issued, no host state is touched, and the discard is audited as media.discard. For a SUCCEEDED import the call now relays a media-remove command to the host that stores the ISO (the pool master for pool-shared media) and requires a body {request_id}; no pool_id, host_id or expected_generation is accepted, because the pool, owner and current generation all come from the host-reported record. Core unlinks the published file, refuses while any VM on any host in the pool has the ISO in a CD drive (running or stopped) and while member VM inventory is stale, and journals a durable tombstone that members converge to; the library row disappears only when the host reports that tombstone. Retrying a failed download is POST /api/v1/media/download again under a NEW request_id; there is no separate retry operation. 409 when the import is still queued or dispatched, 409 while another media transfer holds the staging lock, and 409 when the owning host does not advertise pool-resource-removal-v1 (checked before the body is read, so an older client&#x27;s bodyless call still gets the upgrade answer). 404 for an unknown id.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -5249,7 +5689,7 @@
   ],
   &quot;responses&quot;: {
     &quot;200&quot;: {
-      &quot;description&quot;: &quot;The library record was removed.&quot;,
+      &quot;description&quot;: &quot;The failed import&#x27;s library record was removed, or a removal request replayed.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -5266,8 +5706,18 @@
         }
       }
     },
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Removal of an imported ISO queued to the host that stores it.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ResourceLifecycleResponse&quot;
+          }
+        }
+      }
+    },
     &quot;400&quot;: {
-      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;description&quot;: &quot;Invalid request, or a missing or blank request_id on a succeeded import.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -5310,7 +5760,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;The import is still running, or it succeeded and its ISO is stored on a host.&quot;,
+      &quot;description&quot;: &quot;The import is still running, another media transfer holds the staging lock, the owning host does not support pool-resource-removal-v1, or the request_id replays a different payload.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -6345,8 +6795,12 @@
         &quot;storage-recheck&quot;,
         &quot;storage-detach&quot;,
         &quot;storage-credential-retire&quot;,
+        &quot;storage-zfs-provision&quot;,
         &quot;network-register&quot;,
+        &quot;network-remove&quot;,
+        &quot;network-update&quot;,
         &quot;iso-import&quot;,
+        &quot;media-remove&quot;,
         &quot;vm-create&quot;,
         &quot;vm-update&quot;,
         &quot;vm-power&quot;,
@@ -6438,10 +6892,31 @@
         }
       ]
     },
+    &quot;resource_lifecycle&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/ResourceLifecycleRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;network-remove, network-update and media-remove payload.&quot;
+    },
     &quot;credential_retire&quot;: {
       &quot;anyOf&quot;: [
         {
           &quot;$ref&quot;: &quot;#/components/schemas/StorageCredentialRetireRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;zfs_provision&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionRequest&quot;
         },
         {
           &quot;type&quot;: &quot;null&quot;
@@ -7515,8 +7990,12 @@
         &quot;storage-recheck&quot;,
         &quot;storage-detach&quot;,
         &quot;storage-credential-retire&quot;,
+        &quot;storage-zfs-provision&quot;,
         &quot;network-register&quot;,
+        &quot;network-remove&quot;,
+        &quot;network-update&quot;,
         &quot;iso-import&quot;,
+        &quot;media-remove&quot;,
         &quot;vm-create&quot;,
         &quot;vm-update&quot;,
         &quot;vm-power&quot;,
@@ -9183,7 +9662,8 @@
       &quot;type&quot;: &quot;boolean&quot;
     },
     &quot;shared&quot;: {
-      &quot;type&quot;: &quot;boolean&quot;
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Core-observed shared-storage capability, never by itself permission to place or start a VM. Provisioned ZFS is always false because each selected host has an independent local zpool.&quot;
     },
     &quot;eligible_host_ids&quot;: {
       &quot;type&quot;: [
@@ -9304,6 +9784,54 @@
   ],
   &quot;x-go-type&quot;: &quot;protocol.StorageLifecycleRequest&quot;
 }</pre></details>
+<details id="ResourceLifecycleRequest"><summary>ResourceLifecycleRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;network-remove, network-update and media-remove payload. Registration keeps the Command.network/Command.media shape, whose resource ID is reserved permanently on the host; a lifecycle change takes its own operation slot (network-lifecycle:&lt;resource_id&gt;:&lt;operation_id&gt;, media-lifecycle:&lt;resource_id&gt;:&lt;operation_id&gt;), so a removal never collides with the registration that created the resource. kind is always resource + \&quot;-\&quot; + action, so media-update does not exist. Core validates the same shape Controller does.&quot;,
+  &quot;properties&quot;: {
+    &quot;resource&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;network&quot;,
+        &quot;media&quot;
+      ]
+    },
+    &quot;action&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;remove&quot;,
+        &quot;update&quot;
+      ],
+      &quot;description&quot;: &quot;update is a rename and applies to a network only.&quot;
+    },
+    &quot;resource_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The host Core applies this to: always the pool master for a pool VLAN, and the reported owner for an imported ISO. Controller resolves it; clients do not send it.&quot;
+    },
+    &quot;expected_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;Required and at least 1. Core refuses a request whose generation is no longer current; 0 on the wire is read as 1 for records written before generations existed.&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;New network name; update only, nonblank, at most 200 UTF-8 bytes, no slashes or control characters. A removal must not carry one.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;resource&quot;,
+    &quot;action&quot;,
+    &quot;resource_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ResourceLifecycleRequest&quot;
+}</pre></details>
 <details id="StorageCredentialOffer"><summary>StorageCredentialOffer</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;properties&quot;: {
@@ -9383,6 +9911,7 @@
         &quot;local&quot;,
         &quot;nfs&quot;,
         &quot;zfs&quot;,
+        &quot;zfs-device&quot;,
         &quot;smb&quot;,
         &quot;iscsi&quot;
       ]
@@ -9430,6 +9959,16 @@
     },
     &quot;existing&quot;: {
       &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;device&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/ZFSDevice&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
     }
   },
   &quot;required&quot;: [
@@ -9438,6 +9977,277 @@
     &quot;browsable&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.StorageDiscoveryCandidate&quot;
+}</pre></details>
+<details id="ZFSDevice"><summary>ZFSDevice</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;by_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;model&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;serial&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;fingerprint&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;size_bytes&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;rotational&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;eligibility&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;by_id&quot;,
+    &quot;fingerprint&quot;,
+    &quot;size_bytes&quot;,
+    &quot;rotational&quot;,
+    &quot;eligibility&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSDevice&quot;
+}</pre></details>
+<details id="ZFSProvisionDevice"><summary>ZFSProvisionDevice</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;by_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;serial&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;fingerprint&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;size_bytes&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;erase_confirmation&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;by_id&quot;,
+    &quot;serial&quot;,
+    &quot;fingerprint&quot;,
+    &quot;size_bytes&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSProvisionDevice&quot;
+}</pre></details>
+<details id="ZFSProvisionHost"><summary>ZFSProvisionHost</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;layout&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;devices&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionDevice&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;layout&quot;,
+    &quot;devices&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSProvisionHost&quot;
+}</pre></details>
+<details id="ZFSProvisionRequest"><summary>ZFSProvisionRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;scope&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;hosts&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionHost&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;name&quot;,
+    &quot;pool_id&quot;,
+    &quot;scope&quot;,
+    &quot;hosts&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSProvisionRequest&quot;
+}</pre></details>
+<details id="ZFSProvisionAPIRequest"><summary>ZFSProvisionAPIRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;scope&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;host&quot;,
+        &quot;pool&quot;
+      ]
+    },
+    &quot;hosts&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionHost&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;name&quot;,
+    &quot;pool_id&quot;,
+    &quot;scope&quot;,
+    &quot;hosts&quot;
+  ],
+  &quot;description&quot;: &quot;Core allocates repository_id when omitted. Supplying a Core-owned repository_id configures selected hosts for that existing pool-scoped repository.&quot;
+}</pre></details>
+<details id="ZFSProvisionHostResult"><summary>ZFSProvisionHostResult</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;scope&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;layout&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;devices&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionDevice&quot;
+      }
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_guid&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;dataset_guid&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;repository_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;name&quot;,
+    &quot;scope&quot;,
+    &quot;host_id&quot;,
+    &quot;layout&quot;,
+    &quot;devices&quot;,
+    &quot;status&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSProvisionHostResult&quot;,
+  &quot;description&quot;: &quot;Durable outcome for one selected host. pool_guid and dataset_guid identify that host&#x27;s independent native zpool and dataset after a successful provision; this outcome alone is not a current access observation.&quot;
+}</pre></details>
+<details id="ZFSHostAccess"><summary>ZFSHostAccess</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_guid&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;dataset_guid&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;path&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;readable&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;writable&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;total_bytes&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;available_bytes&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;type&quot;: &quot;integer&quot;,
+          &quot;minimum&quot;: 0
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;readable&quot;,
+    &quot;writable&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSHostAccess&quot;,
+  &quot;description&quot;: &quot;Current per-host observation for a Core-provisioned local ZFS repository. The GUIDs, path, capacity and read/write flags apply only to host_id; a missing or errored observation grants no placement permission.&quot;
 }</pre></details>
 <details id="StorageDiscoveryResult"><summary>StorageDiscoveryResult</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -9743,6 +10553,73 @@
   ],
   &quot;x-go-type&quot;: &quot;protocol.PoolStorageAccess&quot;
 }</pre></details>
+<details id="PoolNetworkAccess"><summary>PoolNetworkAccess</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;network_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;bridge&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;uplink_present&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;network_id&quot;,
+    &quot;host_id&quot;,
+    &quot;generation&quot;,
+    &quot;uplink_present&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolNetworkAccess&quot;
+}</pre></details>
+<details id="PoolMediaAccess"><summary>PoolMediaAccess</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;media_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;storage_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;media_id&quot;,
+    &quot;host_id&quot;,
+    &quot;storage_id&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolMediaAccess&quot;
+}</pre></details>
 <details id="PoolStorageReservationRequest"><summary>PoolStorageReservationRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;properties&quot;: {
@@ -9855,6 +10732,24 @@
       &quot;items&quot;: {
         &quot;$ref&quot;: &quot;#/components/schemas/PoolStorageAccess&quot;
       }
+    },
+    &quot;zfs_host_access&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ZFSHostAccess&quot;
+      },
+      &quot;description&quot;: &quot;Current local access observations for each configured host of a Core-provisioned ZFS repository.&quot;
+    },
+    &quot;zfs_provisioned&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;True only for a repository created through Core ZFS provisioning.&quot;
+    },
+    &quot;zfs_scope&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Requested ZFS scope (host or pool). Pool scope shares the Core repository identity across independent host-local zpools; it does not make storage shared.&quot;
     }
   },
   &quot;required&quot;: [
@@ -9867,7 +10762,7 @@
     &quot;status&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.StorageRegistration&quot;,
-  &quot;description&quot;: &quot;Core-owned repository configuration and observation. A repository has one selected host in this release; shared is a capability observation, never placement permission. Source identity, access, capacity and health are Core observations; a missing or replaced mount blocks writes and never falls back to a mountpoint. For ZFS, source.zfs.mount_path remains the existing dataset mount and path is the Core-owned /var/lib/nex-storage/&lt;repository-id&gt; bind alias used by VM disks; detach removes only that alias, never ZFS properties. Credentials remain Core-local and inventory reports only presence. A fresh Controller adopts these records from Inventory.managed.storage.&quot;
+  &quot;description&quot;: &quot;Core-owned repository configuration and observation. A repository has one selected host in this release; shared is a capability observation, never placement permission. Source identity, access, capacity and health are Core observations; a missing or replaced mount blocks writes and never falls back to a mountpoint. For existing-dataset ZFS registration, source.zfs.mount_path remains the existing dataset mount and path is the Core-owned /var/lib/nex-storage/&lt;repository-id&gt; bind alias used by VM disks; detach removes only that alias and never ZFS properties. Core ZFS provisioning creates its own tagged pool and vms dataset, then uses the same alias. Credentials remain Core-local and inventory reports only presence. A fresh Controller adopts these records from Inventory.managed.storage.&quot;
 }</pre></details>
 <details id="NetworkRegistration"><summary>NetworkRegistration</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -9916,11 +10811,30 @@
       &quot;type&quot;: &quot;string&quot;,
       &quot;description&quot;: &quot;Uplink NIC name: required for kind vlan; set on kind bridge when the registration was created automatically for the untagged network of a bridge on a physical port.&quot;
     },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;kind vlan: master-owned desired generation members reconcile against; 0 on host-local registrations.&quot;
+    },
     &quot;vlan&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
       &quot;minimum&quot;: 0,
       &quot;maximum&quot;: 4094,
       &quot;description&quot;: &quot;kind vlan only: 802.1Q tag, 0 untagged.&quot;
+    },
+    &quot;member_access&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;description&quot;: &quot;kind vlan: the master&#x27;s observations of each member&#x27;s applied bridge; absent on host-local registrations.&quot;,
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolNetworkAccess&quot;
+      }
+    },
+    &quot;tombstone&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;The host durably removed this network. The row carries only id, pool_id, host_id and the generation after the removal; name, kind, source and the rest are absent. A Controller deletes its mirror row for that host and never re-adopts the registration from an older report, and a peer list never carries one.&quot;
     }
   },
   &quot;required&quot;: [
@@ -9982,6 +10896,24 @@
     &quot;url&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;description&quot;: &quot;Command-only public HTTP(S) source URL. Omitted from client responses and applied host inventory. Requires iso-download-v1.&quot;
+    },
+    &quot;member_access&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolMediaAccess&quot;
+      }
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;Fences removal, as it does for storage and networks. Imports leave it zero and every reader treats zero as 1.&quot;
+    },
+    &quot;tombstone&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;The host durably removed this ISO and unlinked its published file. The row carries only id, pool_id, host_id and the generation after the removal; a Controller deletes its mirror row for that host and never re-adopts the import from an older report.&quot;
     }
   },
   &quot;required&quot;: [
@@ -10431,6 +11363,79 @@
   ],
   &quot;additionalProperties&quot;: false
 }</pre></details>
+<details id="NetworkLifecycleAPIRequest"><summary>NetworkLifecycleAPIRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Body of DELETE and PATCH /api/v1/networks/{id}. There is deliberately no host_id: the pool master owns pool VLANs and Controller resolves it, so a client-supplied host is rejected as an unknown field.&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Stable idempotency key. The same key with the same body replays the original operation; with a different body it is 409.&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;expected_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;The network generation the operator acted on. It must equal the mirrored registration&#x27;s generation, so a stale view is refused instead of changing a network that moved underneath it.&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;PATCH only: the new network name.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;expected_generation&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="MediaRemoveAPIRequest"><summary>MediaRemoveAPIRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Body of DELETE /api/v1/media/{id} for an import whose operation succeeded. The failed-import discard takes no body at all, and no pool, host or generation is accepted here: all three come from the host-reported record.&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="ResourceLifecycleResponse"><summary>ResourceLifecycleResponse</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Acceptance of a pool network or ISO lifecycle request. The resource stays in Controller&#x27;s projection until the owning host reports the tombstone or the new name.&quot;,
+  &quot;properties&quot;: {
+    &quot;resource&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;network&quot;,
+        &quot;media&quot;
+      ]
+    },
+    &quot;resource_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;action&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;remove&quot;,
+        &quot;update&quot;
+      ]
+    },
+    &quot;operation&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;resource&quot;,
+    &quot;resource_id&quot;,
+    &quot;action&quot;,
+    &quot;operation&quot;
+  ]
+}</pre></details>
 <details id="StorageCredentialRequest"><summary>StorageCredentialRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;properties&quot;: {
@@ -10783,6 +11788,16 @@
         &quot;$ref&quot;: &quot;#/components/schemas/StorageCredentialReceipt&quot;
       },
       &quot;description&quot;: &quot;Redacted Core-owned receipt metadata for adoption; it never contains credential bytes.&quot;
+    },
+    &quot;zfs_provisions&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionHostResult&quot;
+      },
+      &quot;description&quot;: &quot;Core-owned ZFS provisioning results for Controller adoption.&quot;
     },
     &quot;membership&quot;: {
       &quot;anyOf&quot;: [

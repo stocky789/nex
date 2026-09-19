@@ -26,6 +26,7 @@ install -m755 packaging/core-local/storage-downgrade-guard.py "$pkg/usr/lib/nex/
 install -d "$pkg/usr/lib/ocf/resource.d/nex"
 install -m755 packaging/cluster-storage/cluster-iscsi-session "$pkg/usr/lib/ocf/resource.d/nex/cluster-iscsi-session"
 printf '2\n' > "$pkg/usr/share/nex/core-local/storage-format-v2"
+printf '3\n' > "$pkg/usr/share/nex/core-local/storage-format-v3"
 install -m755 packaging/core-local/nex-storage-guard.sh "$pkg/etc/libvirt/hooks/qemu.d/nex-storage-guard"
 # Retain the wrapper for existing domain definitions; new VMs use libvirt's emulator.
 install -m755 packaging/core-local/qemu-vnc-lossy "$pkg/usr/lib/nex/"
@@ -52,12 +53,19 @@ install -m644 packaging/controller/nex-controller-update.path "$pkg/usr/share/ne
 install -m644 packaging/controller/nex-controller-update.service "$pkg/usr/share/nex/appliance/update/"
 printf 'repo_url=https://nexvirtualization.com/apt\n' > "$pkg/usr/share/nex/appliance/update/updates.conf"
 cp /input/trusted-key.raw "$pkg/usr/share/nex/appliance/release.pub"
+# OpenZFS lives in Debian contrib. A host installed before Nex enabled contrib has
+# no candidate for it, and a hard dependency there makes the in-product update fail
+# permanently on exactly those hosts. Recommends keeps it installed by default on
+# every host that can resolve it (apt skips an unsatisfiable recommendation), the
+# ISO installs it explicitly from installer/packages.txt, postinst enables contrib,
+# and Core reports ZFS discovery as unavailable until the packages are present.
 cat > "$pkg/DEBIAN/control" <<CONTROL
 Package: nex-core-local
 Version: ${NEX_VERSION}
 Architecture: amd64
 Maintainer: Nex contributors
 Depends: init-system-helpers, libc6 (>= 2.41), python3, python3-virt-firmware, openssl, libpam0g, libpam-modules, iproute2, libvirt-clients, libvirt-daemon-system, qemu-system-x86, qemu-utils, genisoimage, nfs-common, libnfs-utils, cifs-utils, smbclient, open-iscsi, corosync, dlm-controld, gfs2-utils, pacemaker, pacemaker-cli-utils, pcs, fence-agents-redfish, fence-agents-ipmilan, fence-agents-virsh
+Recommends: linux-headers-amd64, zfs-dkms, zfsutils-linux
 Section: admin
 Priority: optional
 Description: Nex Core local management and Controller virtual appliance

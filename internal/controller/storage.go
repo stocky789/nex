@@ -81,8 +81,13 @@ func (c *Controller) discoverStorage(w http.ResponseWriter, r *http.Request, use
 		return
 	}
 	var raw string
-	if err = tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", request.HostID).Scan(&raw); err != nil || !strings.Contains(raw, protocol.StorageDiscoveryCapability) {
+	var capabilities []string
+	if err = tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", request.HostID).Scan(&raw); err != nil || json.Unmarshal([]byte(raw), &capabilities) != nil || !contains(capabilities, protocol.StorageDiscoveryCapability) {
 		fail(w, http.StatusConflict, "host does not support storage discovery")
+		return
+	}
+	if request.Kind == "zfs-device" && !contains(capabilities, protocol.ZFSProvisionCapability) {
+		fail(w, http.StatusConflict, "host does not support ZFS provisioning; upgrade Nex Core")
 		return
 	}
 	if err = tx.Commit(); err != nil {
@@ -239,6 +244,87 @@ func (c *Controller) registerStorage(w http.ResponseWriter, r *http.Request, use
 	write(w, http.StatusCreated, resourceResponse(cmd, op))
 }
 
+type zfsProvisionAPIRequest struct {
+	RequestID    string                      `json:"request_id"`
+	RepositoryID string                      `json:"repository_id,omitempty"`
+	Name         string                      `json:"name"`
+	PoolID       string                      `json:"pool_id"`
+	Scope        string                      `json:"scope"`
+	Hosts        []protocol.ZFSProvisionHost `json:"hosts"`
+}
+
+// zfsProvisionMaster sends the durable request only to the pool master. Core owns the
+// repository ID and executes selected member work over its authenticated peer channel.
+func (c *Controller) zfsProvisionMaster(tx *sql.Tx, pool string) (string, error) {
+	var host, raw string
+	if err := tx.QueryRow(`SELECT p.master_host_id,coalesce(c.capabilities,'[]') FROM pools p LEFT JOIN host_capabilities c ON c.host_id=p.master_host_id WHERE p.id=?`, pool).Scan(&host, &raw); err != nil {
+		return "", fmt.Errorf("pool not found")
+	}
+	if err := c.managedHost(tx, pool, host); err != nil {
+		return "", err
+	}
+	var capabilities []string
+	if json.Unmarshal([]byte(raw), &capabilities) != nil || !contains(capabilities, protocol.ZFSProvisionCapability) {
+		return "", fmt.Errorf("pool master does not support ZFS provisioning; upgrade Nex Core")
+	}
+	return host, nil
+}
+
+func (c *Controller) provisionZFSStorage(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	var body zfsProvisionAPIRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	body.Name = strings.TrimSpace(body.Name)
+	request := protocol.ZFSProvisionRequest{RepositoryID: body.RepositoryID, Name: body.Name, PoolID: body.PoolID, Scope: body.Scope, Hosts: body.Hosts}
+	if !nameValid(body.RequestID) || !nameValid(body.Name) || !nameValid(body.PoolID) {
+		fail(w, http.StatusBadRequest, "name, pool_id and stable request_id required")
+		return
+	}
+	if err := protocol.ValidateZFSProvision(request); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	tx, err := c.db.Begin()
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "storage unavailable")
+		return
+	}
+	defer tx.Rollback()
+	if c.replayResource(w, tx, body.RequestID, "storage-zfs-provision", body) {
+		return
+	}
+	master, err := c.zfsProvisionMaster(tx, body.PoolID)
+	if err != nil {
+		fail(w, http.StatusConflict, err.Error())
+		return
+	}
+	// Core still decides the provisioning itself; refusing a stale or incapable selected
+	// host here only turns a delayed needs_attention into an immediate answer.
+	for _, selected := range request.Hosts {
+		if err := c.managedHost(tx, request.PoolID, selected.HostID); err != nil {
+			fail(w, http.StatusConflict, "selected host must be fresh, active and in the selected pool")
+			return
+		}
+		var raw string
+		var capabilities []string
+		if err := tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", selected.HostID).Scan(&raw); err != nil || json.Unmarshal([]byte(raw), &capabilities) != nil || !contains(capabilities, protocol.ZFSProvisionCapability) {
+			fail(w, http.StatusConflict, "selected host does not support ZFS provisioning; upgrade Nex Core")
+			return
+		}
+	}
+	opID := random()
+	cmd := protocol.Command{OperationID: opID, Kind: "storage-zfs-provision", ZFSProvision: &request}
+	// This row is only the Controller's idempotent request/operation relay. Core's master
+	// journal and its inventory projection remain the sole repository record.
+	op, err := c.saveResource(tx, user, body.RequestID, body.PoolID, master, body.Name, "pending-zfs-provision-"+opID, cmd, body)
+	if err != nil || tx.Commit() != nil {
+		fail(w, http.StatusInternalServerError, "ZFS provisioning request storage failed")
+		return
+	}
+	write(w, http.StatusAccepted, resourceResponse(cmd, op))
+}
+
 type storageLifecycleAPIRequest struct {
 	RequestID          string                        `json:"request_id"`
 	PoolID             string                        `json:"pool_id"`
@@ -341,7 +427,37 @@ func (c *Controller) mirrorStorageProjection(tx *sql.Tx, pool, host string, stor
 		if commandErr != nil {
 			return fmt.Errorf("storage projection encoding failed")
 		}
-		_, err = tx.Exec("UPDATE managed_resources SET pool_id=?,host_id=?,name=?,command=? WHERE id=? AND kind='storage-register'", pool, host, storage.Name, string(command), storage.ID)
+		if _, err = tx.Exec("UPDATE managed_resources SET pool_id=?,host_id=?,name=?,command=? WHERE id=? AND kind='storage-register'", pool, host, storage.Name, string(command), storage.ID); err != nil {
+			return err
+		}
+		// A fresh Core registration restores this disposable projection. This is
+		// the registration mirror's status, distinct from any prior provision
+		// operation result, which remains Core-owned under its original ID.
+		_, err = tx.Exec("UPDATE operations SET status='succeeded',error='',updated_at=? WHERE id=? AND status='needs_attention'", stamp(), opID)
+		return err
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+	// Older Controller projections could be removed while retaining their
+	// successful adopt-storage operation. A later Core report must reconnect that
+	// exact host-scoped operation rather than inserting the same request ID again.
+	adoptRequestID := "adopt-storage:" + host + ":" + storage.ID
+	if err = tx.QueryRow("SELECT id FROM operations WHERE request_id=? AND host_id=? AND kind='storage-register'", adoptRequestID, host).Scan(&opID); err == nil {
+		storage.OperationID, storage.Status, storage.Error = opID, "succeeded", ""
+		command, commandErr := json.Marshal(protocol.Command{OperationID: opID, Kind: "storage-register", Storage: &storage})
+		if commandErr != nil {
+			return fmt.Errorf("storage projection encoding failed")
+		}
+		payload := storageRegisterRequest{RequestID: adoptRequestID, PoolID: pool, HostID: host, Name: storage.Name, Path: storage.Path, Kind: storage.Kind, Source: storage.Source}
+		body, payloadErr := json.Marshal(payload)
+		if payloadErr != nil {
+			return fmt.Errorf("storage projection encoding failed")
+		}
+		if _, err = tx.Exec("INSERT INTO managed_resources VALUES(?,?,?,?,?,?,?,?,?)", storage.ID, "storage-register", pool, host, storage.Name, adoptRequestID, string(body), string(command), opID); err != nil {
+			return err
+		}
+		_, err = tx.Exec("UPDATE operations SET status='succeeded',error='',updated_at=? WHERE id=?", stamp(), opID)
 		return err
 	}
 	if err != sql.ErrNoRows {
@@ -350,7 +466,80 @@ func (c *Controller) mirrorStorageProjection(tx *sql.Tx, pool, host string, stor
 	opID = random()
 	storage.OperationID, storage.Status, storage.Error = opID, "succeeded", ""
 	cmd := protocol.Command{OperationID: opID, Kind: "storage-register", Storage: &storage}
-	payload := storageRegisterRequest{RequestID: "adopt-storage:" + host + ":" + storage.ID, PoolID: pool, HostID: host, Name: storage.Name, Path: storage.Path, Kind: storage.Kind, Source: storage.Source}
+	payload := storageRegisterRequest{RequestID: adoptRequestID, PoolID: pool, HostID: host, Name: storage.Name, Path: storage.Path, Kind: storage.Kind, Source: storage.Source}
 	_, err = c.saveResourceStatus(tx, "system", payload.RequestID, pool, host, storage.Name, storage.ID, "succeeded", cmd, payload)
 	return err
+}
+
+// reconcileZFSStorageProjections marks only disposable master mirrors that a
+// current master inventory no longer claims as unusable. ZFS provision outcomes
+// alone are not a registration: a failed create can retain an outcome while no
+// usable dataset or managed storage record exists on Core. Keep the mirror row
+// so a later authoritative registration can refresh it without colliding with
+// its retained adoption request/operation history.
+func (c *Controller) reconcileZFSStorageProjections(tx *sql.Tx, pool, host string, observed []protocol.StorageRegistration, checks []protocol.Check) error {
+	var master string
+	if err := tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", pool).Scan(&master); err != nil || master != host {
+		return err
+	}
+	// An empty projection proves removal only when Core could read its complete
+	// managed journal. A failed or unavailable journal can omit valid records;
+	// keep the prior mirror in that case, where target admission still requires
+	// a fresh native access observation.
+	journalHealthy := false
+	for _, check := range checks {
+		if check.Name == "managed-journal" && (check.Status == "healthy" || check.Status == "passed") {
+			journalHealthy = true
+			break
+		}
+	}
+	if !journalHealthy {
+		return nil
+	}
+	present := make(map[string]bool, len(observed))
+	for _, storage := range observed {
+		present[storage.ID] = true
+	}
+	rows, err := tx.Query("SELECT r.id,r.command FROM managed_resources r WHERE r.pool_id=? AND r.kind='storage-register'", pool)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type staleProjection struct {
+		id      string
+		command protocol.Command
+	}
+	stale := []staleProjection{}
+	for rows.Next() {
+		var id, raw string
+		if err = rows.Scan(&id, &raw); err != nil {
+			return err
+		}
+		var command protocol.Command
+		if json.Unmarshal([]byte(raw), &command) == nil && command.Storage != nil && command.Storage.ZFSProvisioned && !present[id] {
+			stale = append(stale, staleProjection{id: id, command: command})
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	for _, stale := range stale {
+		storage := stale.command.Storage
+		storage.Status, storage.Error = "unknown", "Core has no current ZFS repository registration"
+		storage.Capabilities.VMDisk, storage.Capabilities.ISO = false, false
+		storage.Access.Readable, storage.Access.Writable = false, false
+		storage.Access.Error = storage.Error
+		storage.ZFSHostAccess = nil
+		command, marshalErr := json.Marshal(stale.command)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		if _, err = tx.Exec("UPDATE managed_resources SET command=? WHERE id=? AND kind='storage-register' AND pool_id=?", string(command), stale.id, pool); err != nil {
+			return err
+		}
+		if _, err = tx.Exec("UPDATE operations SET status='needs_attention',error=?,updated_at=? WHERE id=(SELECT operation_id FROM managed_resources WHERE id=? AND kind='storage-register' AND pool_id=?)", storage.Error, stamp(), stale.id, pool); err != nil {
+			return err
+		}
+	}
+	return nil
 }

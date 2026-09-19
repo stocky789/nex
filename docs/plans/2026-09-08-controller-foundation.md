@@ -1,8 +1,9 @@
 # Phase 1: Controller foundation and host enrollment
 
 Date: 2026-09-08
-Status: Implemented; Phase 1 development acceptance passed. The full active
-working-tree documentation check remains blocked by concurrent installer evidence.
+Status: Implemented; Phase 1 development acceptance passed. The concurrent-installer
+documentation limitation below is a historical 2026-09-09 observation, not the status of
+the current working tree.
 
 ## Authorized scope
 
@@ -70,9 +71,10 @@ sites only and each enrolling host becomes the master of its automatically creat
 Acceptance is supported by [final checks and build evidence](../qa/phase1/checks.md),
 [process/browser walkthroughs](../qa/phase1/acceptance.md), [native Debian/libvirt
 checks](../qa/phase1/debian.md), and [independent review](../qa/phase1/review.md).
-The scoped documentation range passed for 69 changed paths. The complete active
-working tree still has the installer agent's missing wizard-QA link; this slice
-neither removes that requirement nor claims a green combined installer change.
+The scoped documentation range passed for 69 changed paths. At the time of this
+Phase 1 evidence, the complete active working tree still had the installer agent's
+missing wizard-QA link; this slice neither removed that requirement nor claimed a
+green combined installer change.
 
 The Controller and agent are development builds. Real systemd deployment,
 physical-host and guest-persistence proof, installer enrollment, hosted CI and

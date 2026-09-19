@@ -4,7 +4,10 @@
 
 Available in Nex Core / Controller development builds (alpha) that include
 the Updates APIs and packaged installers. Both packages ship the Nex archive signing
-key and configure the signed APT source, so updates are signature-verified.
+key and configure the signed APT source, so an available package is signature-verified.
+The working `0.3.5` version is not evidence of a published candidate. In particular,
+the publisher intentionally rejects ZFS-enabled ISO manifests while the external-release
+gates in [Licensing](../LICENSING.md) remain open.
 
 ## Prerequisites
 
@@ -42,6 +45,12 @@ Controller host page **Version** field; that package version is the only Nex Cor
 - Repo errors appear beside the version fields; a failed package-index refresh now says so directly. Fix connectivity or `repo_url` and check again.
 - "Package not available from …" means no configured APT source offers the package.
   Check `repo_url`, then `apt policy nex-core-local` on the host.
+- **ZFS storage reports "ZFS device discovery is unavailable" after updating a host installed
+  from 0.3.4 or earlier:** those hosts did not have Debian's `contrib` component enabled, which
+  carries the OpenZFS packages. The Core package only recommends them, so the update itself
+  succeeds; it then enables `contrib` in `/etc/apt/sources.list.d/debian.sources`, and the next
+  **Update** installs the OpenZFS packages when a Debian mirror offering `contrib` is reachable.
+  Without such a mirror, updates still apply and ZFS provisioning stays unavailable on that host.
 - "No newer … available" means apt found nothing to upgrade; the installed version is
   already the candidate.
 - **Controller shows Installed 0.2.9, Available 0.3.0, then says no newer package is

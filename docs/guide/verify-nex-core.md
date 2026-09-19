@@ -62,6 +62,22 @@ enrollment, which places the host in its own automatically created pool as pool 
 remains separate. No bridge/NAT network or persistent guest is
 created by this procedure.
 
+For an internal ZFS-enabled QA image, also inspect the installed module only after the
+ordinary host checks pass:
+
+```sh
+dkms status
+modprobe zfs
+zpool version
+zfs version
+systemctl --no-pager is-enabled zfs-import-cache.service
+systemctl --no-pager is-active zfs-mount.service
+```
+
+The internal `0.3.5~zfsqa4` image passed these checks after offline installation on first
+boot and reboot; see the [ZFS verification record](../qa/2026-09-19-zfs-provisioning.md).
+They do not certify Secure Boot, physical hardware, a published update, or external distribution.
+
 ## Troubleshooting
 
 - **Permission denied:** verify you are using the local root console; do not enable root SSH
@@ -93,4 +109,3 @@ local console. The Step 1–3 commands were also rehearsed earlier on a disposab
 [alpha1 QA report](../qa/iso/2026-09-08-alpha1.md) and the
 [single Nex Core version checks](../qa/single-nex-core-version.md). These checks do not establish
 guest OS installation, guest networking, SSH login, time synchronization or upgrades.
-

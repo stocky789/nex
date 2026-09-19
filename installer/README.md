@@ -64,6 +64,11 @@ against current `trixie` repositories and build timestamps change. Retain the ou
 manifest and cache for each tested build. A dated repository snapshot/package lock
 and complete source bundle are required before external release.
 
+The current working version is `0.3.5`; it is not a release merely because the build
+resolves that changelog version. The recipe now includes ZFS packages for internal QA,
+and both publication scripts reject a ZFS-containing manifest until the external
+distribution gates in [licensing](../docs/LICENSING.md) are closed.
+
 ## Install in a disposable VM first
 
 Boot the ISO with at least 2 virtual CPUs, 4 GB RAM and a blank 24 GB virtual disk.

@@ -8,6 +8,8 @@ Describe the behavior and affected operator workflow.
 - Guide: updated pages, or no impact with a reason.
 - API impact: none / existing contract / changed contract / new contract — name contracts and explain.
 - API reference/contracts: updated paths, or no documentation impact with a reason.
+- State owner: none / core / controller — name the durable record and fresh-Controller recovery path when applicable.
+- Roadmap: updated page, or no impact with a reason.
 
 ## Verification
 

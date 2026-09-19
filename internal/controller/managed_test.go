@@ -948,3 +948,105 @@ func TestVMOperationAuditsNameTheVM(t *testing.T) {
 		t.Fatalf("audit actions %v in %+v", seen, audits)
 	}
 }
+
+// A pool VLAN requested against a member is re-homed onto the master. The retry the UI sends
+// after a lost response carries the member host again and must replay, not burn the request ID.
+func TestPoolVLANRequestedOnMemberReplays(t *testing.T) {
+	a := newClient(t)
+	site := a.site()
+	master := a.enroll(a.token(site, ""), csr(t))
+	pool := a.poolOf(master.HostID)
+	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability},
+		Inventory: &protocol.Inventory{Hostname: "core", NICs: []protocol.NIC{{Name: "nex1", Kind: "physical"}}}})
+	member := a.enroll(a.token(site, ""), csr(t))
+	a.report(certificate(t, member.CertificatePEM), protocol.ReportRequest{Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}})
+	if _, err := a.c.db.Exec("UPDATE hosts SET pool_id=? WHERE id=?", pool, member.HostID); err != nil {
+		t.Fatal(err)
+	}
+	request := registrationRequest{RequestID: "vlan-member", PoolID: pool, HostID: member.HostID, Name: "Servers", Kind: "vlan", Uplink: "nex1", VLAN: 100}
+	var created, replayed protocol.NetworkRegistration
+	read(t, a.call("POST", "/api/v1/networks", request, nil, 201), &created)
+	if created.HostID != master.HostID || created.Source != "nex1v100" {
+		t.Fatalf("pool VLAN was not re-homed onto the master: %+v", created)
+	}
+	read(t, a.call("POST", "/api/v1/networks", request, nil, 200), &replayed)
+	if replayed.ID != created.ID || replayed.OperationID != created.OperationID {
+		t.Fatalf("identical retry did not replay the original registration: %+v", replayed)
+	}
+}
+
+// An entry the host reported as unusable gets one needs_attention operation. When the host
+// reports it repaired, adoption must close that operation instead of leaving it open forever.
+func TestRepairedNetworkClosesAdoptionAttention(t *testing.T) {
+	a := newClient(t)
+	host := a.enroll(a.token(a.site(), ""), csr(t))
+	cert := certificate(t, host.CertificatePEM)
+	report := func(sequence uint64, source string) {
+		a.report(cert, protocol.ReportRequest{Version: 1, Sequence: sequence, Capabilities: []string{protocol.ManagedVMCapability},
+			Inventory: &protocol.Inventory{Hostname: "core", Managed: &protocol.ManagedState{Networks: []protocol.NetworkRegistration{
+				{ID: "net-held", Name: "Held", Kind: "bridge", Source: "br0"},
+				{ID: "net-repaired", Name: "Repaired", Kind: "bridge", Source: source}}}}})
+	}
+	// The host first reports the entry claiming a bridge another registration already holds.
+	report(1, "br0")
+	attention := "adopt-attention:" + host.HostID + ":network:net-repaired"
+	status := func() string {
+		var ops []protocol.Operation
+		read(t, a.call("GET", "/api/v1/operations", nil, nil, 200), &ops)
+		for _, op := range ops {
+			if op.RequestID == attention {
+				return op.Status
+			}
+		}
+		return ""
+	}
+	if got := status(); got != "needs_attention" {
+		t.Fatalf("unadoptable network was not recorded as needing attention: %q", got)
+	}
+	report(2, "br1")
+	if got := status(); got != "succeeded" {
+		t.Fatalf("adopted network left its attention operation open: %q", got)
+	}
+}
+
+// One unusable master-reported VLAN must not fail the whole host report: it is recorded as
+// needing attention and the held projection is left as it was.
+func TestInvalidMasterVLANDoesNotFailHostReport(t *testing.T) {
+	a := newClient(t)
+	host := a.enroll(a.token(a.site(), ""), csr(t))
+	pool := a.poolOf(host.HostID)
+	cert := certificate(t, host.CertificatePEM)
+	inventory := &protocol.Inventory{Hostname: "core", NICs: []protocol.NIC{{Name: "nex1", Kind: "physical"}}}
+	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: inventory})
+	var network protocol.NetworkRegistration
+	read(t, a.call("POST", "/api/v1/networks", registrationRequest{RequestID: "vlan-held", PoolID: pool, HostID: host.HostID, Name: "Servers", Kind: "vlan", Uplink: "nex1", VLAN: 100}, nil, 201), &network)
+	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 2, Capabilities: []string{protocol.ManagedVMCapability},
+		Inventory: &protocol.Inventory{Hostname: "core", NICs: inventory.NICs, Managed: &protocol.ManagedState{Networks: []protocol.NetworkRegistration{
+			{ID: network.ID, Name: "Servers", Kind: "vlan", Source: "wrong", Uplink: "nex1", VLAN: 100}}}}})
+	var list []protocol.NetworkRegistration
+	read(t, a.call("GET", "/api/v1/networks", nil, nil, 200), &list)
+	if len(list) != 1 || list[0].Source != "nex1v100" {
+		t.Fatalf("invalid master row replaced the held projection: %+v", list)
+	}
+	var ops []protocol.Operation
+	read(t, a.call("GET", "/api/v1/operations", nil, nil, 200), &ops)
+	attention := func() string {
+		read(t, a.call("GET", "/api/v1/operations", nil, nil, 200), &ops)
+		for _, op := range ops {
+			if op.RequestID == "adopt-attention:"+host.HostID+":network:"+network.ID {
+				return op.Status
+			}
+		}
+		return ""
+	}
+	if attention() != "needs_attention" {
+		t.Fatalf("invalid master VLAN was not recorded as needing attention: %+v", ops)
+	}
+	// The repaired held row must close the attention it opened.
+	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 3, Capabilities: []string{protocol.ManagedVMCapability},
+		Inventory: &protocol.Inventory{Hostname: "core", NICs: inventory.NICs, Managed: &protocol.ManagedState{Networks: []protocol.NetworkRegistration{
+			{ID: network.ID, Name: "Servers", Kind: "vlan", Source: "nex1v100", Uplink: "nex1", VLAN: 100}}}}})
+	if got := attention(); got == "needs_attention" {
+		t.Fatalf("repaired held VLAN kept its attention operation open: %+v", ops)
+	}
+}

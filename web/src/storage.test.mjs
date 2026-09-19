@@ -14,9 +14,24 @@ assert.doesNotMatch(src, /Existing directory within share/);
 const { code } = transformSync(src, { loader: "tsx", format: "esm" });
 const dir = mkdtempSync(join(tmpdir(), "storage-check-"));
 const file = join(dir, "storage.mjs");
-const stubbed = code.replace('from "react"', 'from "data:text/javascript,export const useEffect=()=>{};export const useRef=()=>({});export const useState=()=>[undefined,()=>{}];"');
+const stubbed = code
+  .replace('from "react"', 'from "data:text/javascript,export const useEffect=()=>{};export const useRef=()=>({});export const useState=()=>[undefined,()=>{}];"')
+  .replace('from "./zfs"', 'from "data:text/javascript,export const ZFSProvisionWizard=()=>null;"');
 writeFileSync(file, stubbed);
-const { storageUsable, storageSource, storageChecked, storageLifecycleReady, storageOwnerFresh, clusterStatusView, clusterSetupAvailable } = await import(`file://${file}`);
+const { storageUsable, storageSource, storageChecked, storageLifecycleReady, storageOwnerFresh, storageObservationFresh, clusterStatusView, clusterSetupAvailable } = await import(`file://${file}`);
+
+// One freshness rule for every Core observation: undated, unparseable, older than 30 s or dated
+// in the future is not current access.
+assert.equal(storageObservationFresh(new Date().toISOString()), true);
+assert.equal(storageObservationFresh(new Date(Date.now() - 31_000).toISOString()), false);
+assert.equal(storageObservationFresh(new Date(Date.now() + 5_000).toISOString()), false);
+assert.equal(storageObservationFresh(undefined), false);
+assert.equal(storageObservationFresh("not-a-date"), false);
+// H6: "Configure this host" is an explicit target in a disk-erasing flow. It carries the clicked
+// host into the wizard and excludes the hosts Core already reports for that repository.
+assert.match(src, /setConfigureZFS\(\{ \.\.\.repository, host_id: host\.id \}\)/);
+assert.match(src, /initialHostID=\{configureZFS\?\.host_id\}/);
+assert.match(src, /excludeHostIDs=\{configureZFS \? zfsOutcomes\.filter/);
 
 assert.equal(clusterStatusView(true, "", undefined, 0), "checking");
 assert.equal(clusterStatusView(false, "pool master unavailable", undefined, 0), "unavailable");
@@ -37,6 +52,11 @@ assert.equal(storageOwnerFresh(ready, [{ ...hosts[0], capabilities: [] }]), fals
 assert.equal(storageUsable(ready, "host-1"), true);
 assert.equal(storageUsable({ ...ready, access: { ...ready.access, writable: false } }, "host-1"), false);
 assert.equal(storageUsable({ ...ready, capabilities: {} }, "host-1"), false);
+const zfsLocal = { ...ready, kind: "zfs", zfs_provisioned: true, zfs_scope: "pool", capabilities: { vm_disk: true, shared: false }, zfs_host_access: [{ host_id: "host-1", readable: false, writable: false, observed_at: new Date().toISOString() }, { host_id: "member", readable: true, writable: true, available_bytes: 7, observed_at: new Date().toISOString() }] };
+assert.equal(storageUsable(zfsLocal, "host-1"), false, "master can be unconfigured while another pool-local ZFS host is usable");
+assert.equal(storageUsable(zfsLocal, "member"), true);
+assert.equal(storageUsable({ ...zfsLocal, zfs_host_access: [{ ...zfsLocal.zfs_host_access[1], observed_at: new Date(Date.now() - 31_000).toISOString() }] }, "member"), false, "stale member access is not placement eligible");
+assert.equal(storageUsable({ ...zfsLocal, zfs_scope: "host", host_id: "host-1" }, "member"), true, "a host-scoped canonical ZFS repository follows Core's selected-member access");
 const member = { repository_id: "nfs-1", host_id: "host-1", generation: 2, identity: "nfs-id", readable: true, writable: true, qemu_writable: true, locking: true, observed_at: new Date().toISOString() };
 assert.equal(storageUsable({ ...ready, kind: "nfs", host_id: "master", generation: 2, capabilities: { vm_disk: true, eligible_host_ids: ["master"] }, member_access: [member] }, "host-1"), true);
 assert.equal(storageUsable({ ...ready, kind: "nfs", host_id: "master", capabilities: { vm_disk: true, eligible_host_ids: ["other-master"] } }, "master"), false);
@@ -51,6 +71,8 @@ assert.equal(storageUsable({ ...clustered, source: { iscsi: { ...clustered.sourc
 assert.match(storageSource(ready), /nfs\.example\.test/);
 assert.equal(storageSource({ ...ready, source: { smb: { server: "files.example.test", share: "vms" } } }), "//files.example.test/vms");
 assert.equal(storageSource({ ...ready, source: { zfs: { pool: "tank", dataset: "vms", mount_path: "/tank/vms" } } }), "tank/vms");
+assert.equal(storageSource({ ...ready, source: { zfs: { pool: "tank", dataset: "tank/vms", mount_path: "/tank/vms" } } }), "tank/vms");
+assert.equal(storageSource({ ...ready, source: { zfs: { pool: "tank", dataset: "tank", mount_path: "/tank" } } }), "tank");
 assert.equal(storageSource({ ...ready, source: { iscsi: { target_iqn: "iqn.2026-01.example.test:vms", lun: 2, portal: "storage.example.test:3260", wwid: "wwid", filesystem_uuid: "uuid", exclusive_target: true } } }), "iqn.2026-01.example.test:vms · LUN 2");
 assert.equal(storageSource({ ...ready, source: undefined, path: "" }), "Source unavailable");
 assert.equal(storageChecked("0001-01-01T00:00:00Z"), "Not checked");
@@ -60,4 +82,7 @@ assert.equal(storageLifecycleReady({ ...ready, kind: "nfs", generation: 0 }), fa
 assert.equal(storageLifecycleReady({ ...ready, kind: "nfs", generation: 1 }), true);
 assert.equal(storageLifecycleReady({ ...ready, kind: "nfs", generation: 1, status: "failed" }), false);
 assert.equal(storageLifecycleReady({ ...ready, kind: undefined }), true);
+assert.match(src, />Register storage</);
+assert.match(src, />Add ZFS storage</);
+assert.match(src, /kind: "zfs"/);
 console.log("storage.test.mjs: ok");

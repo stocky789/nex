@@ -186,7 +186,11 @@ aside nav a.selected { background: #d4e3ff; border-color: #7ea6ff; color: #10306
 .context-menu button.danger:disabled { color: #9aa3ad; }
 .context-menu button.danger:hover:not(:disabled) { background: #fef2f2; }
 .context-menu hr { margin: 5px 4px; border: 0; border-top: 1px solid #e5e7eb; }
-label.disk-wipe { display: flex; align-items: center; gap: 8px; font-weight: 400; }
+label.disk-wipe, label.zfs-scope { display: flex; align-items: center; gap: 8px; font-weight: 400; }
+.steps { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 0; padding: 8px 12px; border-bottom: 1px solid #e0e3e7; background: #f8f9fa; list-style: none; color: var(--muted); font-size: 12px; counter-reset: step; }
+.steps li { counter-increment: step; }
+.steps li::before { content: counter(step) ". "; }
+.steps li[aria-current="step"] { color: #202020; font-weight: 600; }
 .sidebar-foot { margin-top: auto; padding: 12px 10px; border-top: 1px solid #ddd; color: var(--muted); }
 .sidebar-foot p { margin: 5px 0 10px; font-size: 12px; }
 .sidebar-foot a { display: flex; align-items: center; gap: 6px; padding: 5px; font-size: 12px; margin-top: 2px; }
@@ -414,3 +418,26 @@ progress { width: 100%; accent-color: var(--blue); }
 .vm-editor fieldset fieldset { margin: 0; }
 .vm-editor textarea { width: 100%; max-width: 660px; }
 .vm-editor > .actions { margin-top: 12px; }
+/* Storage tab: advanced panels fold away; the ZFS wizard is a two-screen dialog. */
+.fold > summary { cursor: pointer; }
+.fold:not([open]) > summary { border-bottom: 0; }
+.fold-actions { margin: 8px 10px 0; }
+.storage-add { align-items: center; flex-wrap: wrap; }
+.storage-add small { flex-basis: 100%; }
+.zfs-dialog { width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; }
+.zfs-dialog .section-heading, .zfs-dialog .steps { margin: 0 -16px 10px; }
+.zfs-dialog .section-heading { margin-top: -14px; }
+.zfs-dialog form > label { display: grid; gap: 4px; max-width: 360px; }
+.zfs-host { margin: 0 0 10px; }
+.zfs-disks { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.zfs-disks label { padding: 4px 6px; }
+.zfs-disks label:hover { background: #eef3ff; }
+.zfs-disk { display: flex; flex: 1; align-items: center; gap: 8px; }
+.zfs-disk > span:last-child { margin-left: auto; }
+.zfs-old { color: #9a4a00; }
+.zfs-blocked { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+.zfs-blocked > summary { cursor: pointer; }
+.zfs-layout { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.zfs-layout label { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-weight: 400; }
+.zfs-existing { margin-right: auto; }
+.zfs-dialog .actions { margin-top: 12px; }

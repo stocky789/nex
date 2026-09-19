@@ -57,6 +57,35 @@ func TestReportKeepsV1ShapeAndPreflightsV2Storage(t *testing.T) {
 	}
 }
 
+func TestZFSCoreReceivesCapabilityAcknowledgementWithoutNewResponseFields(t *testing.T) {
+	a := newClient(t)
+	host := a.enroll(a.token(a.site(), ""), csr(t))
+	cert := certificate(t, host.CertificatePEM)
+	response := a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: []string{protocol.ZFSProvisionCapability}})
+	if response.StorageRepositories == nil || response.StorageRepositories.ProtocolVersion != protocol.Version || response.StorageRepositories.Capability != protocol.ZFSProvisionCapability {
+		t.Fatalf("missing ZFS capability acknowledgement: %+v", response.StorageRepositories)
+	}
+	// The support object predates ZFS. Its shape remains unchanged, so a strict Core
+	// can decode it while capability value selects the feature it understands.
+	type oldSupport struct {
+		ProtocolVersion int    `json:"protocol_version"`
+		Capability      string `json:"capability"`
+	}
+	raw, err := json.Marshal(response.StorageRepositories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var old oldSupport
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&old); err != nil {
+		t.Fatal(err)
+	}
+	if old.Capability != protocol.ZFSProvisionCapability || old.ProtocolVersion != protocol.Version {
+		t.Fatalf("ZFS support object changed shape: %+v", old)
+	}
+}
+
 func TestClusteredStorageV2AcknowledgementDispatchesAndAcceptsProofRequestID(t *testing.T) {
 	a := newClient(t)
 	host := a.enroll(a.token(a.site(), ""), csr(t))

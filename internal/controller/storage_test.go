@@ -117,6 +117,255 @@ func TestStorageDiscoveryResultMustMatchOriginalHostAndPool(t *testing.T) {
 	}
 }
 
+func TestZFSProvisionUsesMasterCommandAndReplays(t *testing.T) {
+	a := newClient(t)
+	master := a.enroll(a.token(a.site(), ""), csr(t))
+	pool := a.poolOf(master.HostID)
+	cert := certificate(t, master.CertificatePEM)
+	caps := []string{protocol.ManagedVMCapability, protocol.StorageRepositoryCapability, protocol.StorageDiscoveryCapability, protocol.ZFSProvisionCapability}
+	a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: caps})
+	body := zfsProvisionAPIRequest{RequestID: "zfs-create-1", Name: "Fast disks", PoolID: pool, Scope: "host", Hosts: []protocol.ZFSProvisionHost{{HostID: master.HostID, Layout: "single", Devices: []protocol.ZFSProvisionDevice{{ByID: "/dev/disk/by-id/scsi-test", Serial: "test-serial", Fingerprint: strings.Repeat("a", 64), SizeBytes: 1 << 30}}}}}
+	var queued map[string]any
+	read(t, a.call(http.MethodPost, "/api/v1/storage/zfs/provision", body, nil, http.StatusAccepted), &queued)
+	if queued["repository_id"] != nil || queued["name"] != body.Name {
+		t.Fatalf("Controller exposed or allocated a repository ID: %#v", queued)
+	}
+	commands := a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 2, Capabilities: caps})
+	if len(commands.Commands) != 1 || commands.Commands[0].Kind != "storage-zfs-provision" || commands.Commands[0].ZFSProvision == nil || commands.Commands[0].ZFSProvision.PoolID != pool || commands.Commands[0].ZFSProvision.Hosts[0].HostID != master.HostID {
+		t.Fatalf("ZFS provision was not sent as a master command: %#v", commands.Commands)
+	}
+	firstOperationID := commands.Commands[0].OperationID
+	a.call(http.MethodPost, "/api/v1/storage/zfs/provision", body, nil, http.StatusOK)
+	configure := body
+	configure.RequestID, configure.RepositoryID = "zfs-configure-host", "core-repository-1"
+	var configureQueued map[string]any
+	read(t, a.call(http.MethodPost, "/api/v1/storage/zfs/provision", configure, nil, http.StatusAccepted), &configureQueued)
+	if configureQueued["repository_id"] != configure.RepositoryID {
+		t.Fatalf("Core-owned repository ID was not retained for host configuration: %#v", configureQueued)
+	}
+	commands = a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 3, Capabilities: caps, Results: []protocol.Result{{OperationID: firstOperationID, Status: "succeeded"}}})
+	if len(commands.Commands) != 1 || commands.Commands[0].ZFSProvision == nil || commands.Commands[0].ZFSProvision.RepositoryID != configure.RepositoryID {
+		t.Fatalf("host configuration lost Core repository ID: %#v", commands.Commands)
+	}
+	bad := body
+	bad.RequestID = "zfs-bad"
+	bad.Hosts[0].Devices[0].SizeBytes = 0
+	a.call(http.MethodPost, "/api/v1/storage/zfs/provision", bad, nil, http.StatusBadRequest)
+}
+
+func TestZFSProvisionRecoveryCompletesOriginalAttentionOperation(t *testing.T) {
+	a := newClient(t)
+	master := a.enroll(a.token(a.site(), ""), csr(t))
+	pool := a.poolOf(master.HostID)
+	cert := certificate(t, master.CertificatePEM)
+	caps := []string{protocol.ManagedVMCapability, protocol.StorageRepositoryCapability, protocol.ZFSProvisionCapability}
+	a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: caps})
+	body := zfsProvisionAPIRequest{RequestID: "zfs-recover-original", Name: "Recovered disks", PoolID: pool, Scope: "host", Hosts: []protocol.ZFSProvisionHost{{HostID: master.HostID, Layout: "single", Devices: []protocol.ZFSProvisionDevice{{ByID: "/dev/disk/by-id/scsi-recover", Serial: "recover-serial", Fingerprint: strings.Repeat("c", 64), SizeBytes: 1 << 30}}}}}
+	a.call(http.MethodPost, "/api/v1/storage/zfs/provision", body, nil, http.StatusAccepted)
+	first := a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 2, Capabilities: caps})
+	if len(first.Commands) != 1 {
+		t.Fatalf("ZFS command was not dispatched: %#v", first.Commands)
+	}
+	opID := first.Commands[0].OperationID
+	attention := a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 3, Capabilities: caps, Results: []protocol.Result{{OperationID: opID, Status: "needs_attention", Error: "interrupted before registration"}}})
+	if len(attention.AcknowledgedResults) != 1 || attention.AcknowledgedResults[0] != opID {
+		t.Fatalf("attention result was not acknowledged: %#v", attention)
+	}
+	// The later report represents Core's durable recovery after the Controller was
+	// disconnected. It supplies the original operation result; no storage inventory
+	// is used to infer success.
+	recovered := a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 4, Capabilities: caps, Results: []protocol.Result{{OperationID: opID, Status: "succeeded"}}})
+	if len(recovered.AcknowledgedResults) != 1 || recovered.AcknowledgedResults[0] != opID {
+		t.Fatalf("recovered result was not acknowledged: %#v", recovered)
+	}
+	var operations []protocol.Operation
+	read(t, a.call(http.MethodGet, "/api/v1/operations", nil, nil, http.StatusOK), &operations)
+	for _, operation := range operations {
+		if operation.ID == opID {
+			if operation.Status != "succeeded" || operation.Error != "" {
+				t.Fatalf("Core recovery did not settle original operation: %#v", operation)
+			}
+			return
+		}
+	}
+	t.Fatalf("original ZFS operation %q was not retained", opID)
+}
+
+func TestZFSProvisionRequiresCurrentCoreCapability(t *testing.T) {
+	a := newClient(t)
+	host := a.enroll(a.token(a.site(), ""), csr(t))
+	pool := a.poolOf(host.HostID)
+	cert := certificate(t, host.CertificatePEM)
+	a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability, protocol.StorageRepositoryCapability, protocol.StorageDiscoveryCapability}})
+	body := zfsProvisionAPIRequest{RequestID: "zfs-old-core", Name: "Fast disks", PoolID: pool, Scope: "host", Hosts: []protocol.ZFSProvisionHost{{HostID: host.HostID, Layout: "single", Devices: []protocol.ZFSProvisionDevice{{ByID: "/dev/disk/by-id/scsi-test", Serial: "test-serial", Fingerprint: strings.Repeat("a", 64), SizeBytes: 1 << 30}}}}}
+	a.call(http.MethodPost, "/api/v1/storage/zfs/provision", body, nil, http.StatusConflict)
+	a.call(http.MethodPost, "/api/v1/storage/discover", protocol.StorageDiscoveryRequest{RequestID: "zfs-discover-old", PoolID: pool, HostID: host.HostID, Kind: "zfs-device"}, nil, http.StatusConflict)
+}
+
+func TestZFSProvisionInventoryRemainsCoreOwnedPerHostReadModel(t *testing.T) {
+	a := newClient(t)
+	master := a.enroll(a.token(a.site(), ""), csr(t))
+	pool := a.poolOf(master.HostID)
+	cert := certificate(t, master.CertificatePEM)
+	results := []protocol.ZFSProvisionHostResult{
+		{RepositoryID: "core-repository-1", PoolID: pool, Name: "Fast disks", Scope: "pool", HostID: master.HostID, Layout: "mirror", Devices: []protocol.ZFSProvisionDevice{{ByID: "/dev/disk/by-id/master-a", Serial: "master-a", Fingerprint: strings.Repeat("a", 64), SizeBytes: 1 << 30}}, Status: "succeeded", PoolGUID: "pool-guid-a", DatasetGUID: "dataset-guid-a"},
+		{RepositoryID: "core-repository-1", PoolID: pool, Name: "Fast disks", Scope: "pool", HostID: "member-core-1", Layout: "single", Devices: []protocol.ZFSProvisionDevice{{ByID: "/dev/disk/by-id/member-a", Serial: "member-a", Fingerprint: strings.Repeat("b", 64), SizeBytes: 1 << 30}}, Status: "needs_attention", Error: "member unreachable"},
+	}
+	a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability, protocol.ZFSProvisionCapability}, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{ZFSProvisions: results}}})
+	for _, host := range a.hosts() {
+		if host.ID != master.HostID {
+			continue
+		}
+		if host.Inventory.Managed == nil || len(host.Inventory.Managed.ZFSProvisions) != len(results) || host.Inventory.Managed.ZFSProvisions[0].HostID != master.HostID || host.Inventory.Managed.ZFSProvisions[1].HostID != "member-core-1" {
+			t.Fatalf("Controller did not preserve Core's per-host ZFS read model: %+v", host.Inventory.Managed)
+		}
+		return
+	}
+	t.Fatal("master host missing")
+}
+
+func TestMemberPoolLocalZFSReportCannotOverwriteMasterRepository(t *testing.T) {
+	a := newClient(t)
+	master := a.enroll(a.token(a.site(), ""), csr(t))
+	pool := a.poolOf(master.HostID)
+	const member = "zfs-member-1"
+	if _, err := a.c.db.Exec("INSERT INTO hosts(id,pool_id,hostname) VALUES(?,?,?)", member, pool, "member"); err != nil {
+		t.Fatal(err)
+	}
+	membership := protocol.PoolMembership{PoolID: pool, MasterHostID: master.HostID, Generation: 1, Members: []protocol.PoolMember{{HostID: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}, {HostID: member, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"}}}
+	observed := time.Now().UTC()
+	masterStorage := protocol.StorageRegistration{ID: "core-zfs-pool", PoolID: pool, HostID: master.HostID, Name: "Pool local ZFS", Path: "/var/lib/nex-storage/core-zfs-pool", Kind: protocol.StorageKindZFS, Source: protocol.StorageSource{ZFS: &protocol.ZFSStorageSource{Pool: "nex-core-zfs-pool", Dataset: "vms", MountPath: "/var/lib/nex-storage/core-zfs-pool"}}, ZFSProvisioned: true, ZFSScope: "pool", Capabilities: protocol.StorageCapabilities{VMDisk: true, Shared: false}, Access: protocol.StorageAccess{Status: "healthy", Readable: true, Writable: true}, ZFSHostAccess: []protocol.ZFSHostAccess{{HostID: master.HostID, Path: "/var/lib/nex-storage/core-zfs-pool", Readable: true, Writable: true, TotalBytes: 1 << 30, ObservedAt: observed}, {HostID: member, Path: "/var/lib/nex-storage/member-local", Readable: true, Writable: true, TotalBytes: 2 << 30, ObservedAt: observed}}}
+	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{Membership: &membership, Storage: []protocol.StorageRegistration{masterStorage}}}})
+	memberStorage := masterStorage
+	memberStorage.HostID, memberStorage.Path = member, "/var/lib/nex-storage/member-local"
+	memberStorage.Access.TotalBytes = 9 << 30
+	tx, err := a.c.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = a.c.adoptManaged(tx, member, &protocol.Inventory{Managed: &protocol.ManagedState{Membership: &membership, Storage: []protocol.StorageRegistration{memberStorage}}}); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var repositories []protocol.StorageRegistration
+	read(t, a.call(http.MethodGet, "/api/v1/storage", nil, nil, http.StatusOK), &repositories)
+	if len(repositories) != 1 || repositories[0].HostID != master.HostID || repositories[0].Path != masterStorage.Path || len(repositories[0].ZFSHostAccess) != 2 || repositories[0].Capabilities.Shared {
+		t.Fatalf("member ZFS report overwrote the master projection: %+v", repositories)
+	}
+	tx, err = a.c.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err = a.c.readyStorageForHost(tx, masterStorage.ID, pool, member); err != nil {
+		t.Fatalf("fresh master-reported local ZFS access was unusable on member: %v", err)
+	}
+}
+
+func TestHostScopeZFSUsesMasterProjectionAndTargetAccess(t *testing.T) {
+	a := newClient(t)
+	master := a.enroll(a.token(a.site(), ""), csr(t))
+	pool := a.poolOf(master.HostID)
+	const member = "zfs-member-host-scope"
+	if _, err := a.c.db.Exec("INSERT INTO hosts(id,pool_id,hostname) VALUES(?,?,?)", member, pool, "member"); err != nil {
+		t.Fatal(err)
+	}
+	membership := protocol.PoolMembership{PoolID: pool, MasterHostID: master.HostID, Generation: 1, Members: []protocol.PoolMember{{HostID: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}, {HostID: member, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"}}}
+	storage := protocol.StorageRegistration{ID: "core-zfs-host", PoolID: pool, HostID: master.HostID, Name: "Member ZFS", Path: "/var/lib/nex-storage/core-zfs-host", Kind: protocol.StorageKindZFS, Source: protocol.StorageSource{ZFS: &protocol.ZFSStorageSource{Pool: "nex-core-zfs-host", Dataset: "vms", MountPath: "/var/lib/nex-storage/core-zfs-host"}}, ZFSProvisioned: true, ZFSScope: "host", Capabilities: protocol.StorageCapabilities{VMDisk: true}, ZFSHostAccess: []protocol.ZFSHostAccess{{HostID: master.HostID, Error: "local ZFS repository is not observed", ObservedAt: time.Now().UTC()}, {HostID: member, Path: "/var/lib/nex-storage/member-zfs", Readable: true, Writable: true, ObservedAt: time.Now().UTC()}}}
+	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{Membership: &membership, Storage: []protocol.StorageRegistration{storage}}}})
+	memberStorage := storage
+	memberStorage.HostID, memberStorage.Path = member, "/var/lib/nex-storage/member-zfs"
+	tx, err := a.c.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = a.c.adoptManaged(tx, member, &protocol.Inventory{Managed: &protocol.ManagedState{Membership: &membership, Storage: []protocol.StorageRegistration{memberStorage}}}); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var repositories []protocol.StorageRegistration
+	read(t, a.call(http.MethodGet, "/api/v1/storage", nil, nil, http.StatusOK), &repositories)
+	if len(repositories) != 1 || repositories[0].HostID != master.HostID || repositories[0].Path != storage.Path {
+		t.Fatalf("member host-scope report overwrote master projection: %+v", repositories)
+	}
+	tx, err = a.c.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err = a.c.readyStorageForHost(tx, storage.ID, pool, master.HostID); err == nil {
+		t.Fatal("master without a native ZFS access observation was accepted")
+	}
+	if _, err = a.c.readyStorageForHost(tx, storage.ID, pool, member); err != nil {
+		t.Fatalf("member with a fresh native ZFS access observation was rejected: %v", err)
+	}
+}
+
+func TestCoreStorageReportRepairsOrphanAdoptionProjection(t *testing.T) {
+	a := newClient(t)
+	master := a.enroll(a.token(a.site(), ""), csr(t))
+	pool := a.poolOf(master.HostID)
+	membership := protocol.PoolMembership{PoolID: pool, MasterHostID: master.HostID, Generation: 1, Members: []protocol.PoolMember{{HostID: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
+	storage := protocol.StorageRegistration{ID: "zfs-orphan-repair", PoolID: pool, HostID: master.HostID, Name: "Repair ZFS", Path: "/var/lib/nex-storage/zfs-orphan-repair", Kind: protocol.StorageKindZFS, Source: protocol.StorageSource{ZFS: &protocol.ZFSStorageSource{Pool: "nex-orphan-repair", Dataset: "vms", MountPath: "/var/lib/nex-storage/zfs-orphan-repair"}}, ZFSProvisioned: true, ZFSScope: "pool", Capabilities: protocol.StorageCapabilities{VMDisk: true}, ZFSHostAccess: []protocol.ZFSHostAccess{{HostID: master.HostID, Path: "/var/lib/nex-storage/zfs-orphan-repair", Readable: true, Writable: true, ObservedAt: time.Now().UTC()}}}
+	report := func(sequence uint64) {
+		a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: sequence, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{Membership: &membership, Storage: []protocol.StorageRegistration{storage}}, Checks: []protocol.Check{{Name: "managed-journal", Status: "healthy", ObservedAt: time.Now().UTC()}}}})
+	}
+	report(1)
+	var originalOperation string
+	if err := a.c.db.QueryRow("SELECT operation_id FROM managed_resources WHERE id=?", storage.ID).Scan(&originalOperation); err != nil || originalOperation == "" {
+		t.Fatalf("initial Core adoption missing: %q %v", originalOperation, err)
+	}
+	if _, err := a.c.db.Exec("DELETE FROM managed_resources WHERE id=?", storage.ID); err != nil {
+		t.Fatal(err)
+	}
+	report(2)
+	var restoredOperation string
+	if err := a.c.db.QueryRow("SELECT operation_id FROM managed_resources WHERE id=?", storage.ID).Scan(&restoredOperation); err != nil || restoredOperation != originalOperation {
+		t.Fatalf("orphan adoption was not reconnected to its original operation: got=%q want=%q err=%v", restoredOperation, originalOperation, err)
+	}
+}
+
+func TestMasterReportMarksStaleZFSProjectionUnusableUntilCoreReregisters(t *testing.T) {
+	a := newClient(t)
+	master := a.enroll(a.token(a.site(), ""), csr(t))
+	pool := a.poolOf(master.HostID)
+	membership := protocol.PoolMembership{PoolID: pool, MasterHostID: master.HostID, Generation: 1, Members: []protocol.PoolMember{{HostID: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
+	storage := protocol.StorageRegistration{ID: "zfs-failed-create", PoolID: pool, HostID: master.HostID, Name: "Failed ZFS", Path: "/var/lib/nex-storage/zfs-failed-create", Kind: protocol.StorageKindZFS, Source: protocol.StorageSource{ZFS: &protocol.ZFSStorageSource{Pool: "nex-failed", Dataset: "vms", MountPath: "/var/lib/nex-storage/zfs-failed-create"}}, ZFSProvisioned: true, ZFSScope: "pool", Capabilities: protocol.StorageCapabilities{VMDisk: true}}
+	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{Membership: &membership, Storage: []protocol.StorageRegistration{storage}}}})
+	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: 2, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{
+		Managed: &protocol.ManagedState{Membership: &membership, ZFSProvisions: []protocol.ZFSProvisionHostResult{{RepositoryID: storage.ID, PoolID: pool, Name: storage.Name, Scope: "pool", HostID: master.HostID, Status: "needs_attention", Error: "managed journal is unavailable"}}},
+		Checks:  []protocol.Check{{Name: "managed-journal", Status: "failed", ObservedAt: time.Now().UTC(), Error: "managed journal is unreadable"}},
+	}})
+	var repositories []protocol.StorageRegistration
+	read(t, a.call(http.MethodGet, "/api/v1/storage", nil, nil, http.StatusOK), &repositories)
+	if len(repositories) != 1 {
+		t.Fatalf("unreadable Core journal erased a prior ZFS projection: %+v", repositories)
+	}
+	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: 3, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{
+		Managed: &protocol.ManagedState{Membership: &membership, ZFSProvisions: []protocol.ZFSProvisionHostResult{{RepositoryID: storage.ID, PoolID: pool, Name: storage.Name, Scope: "pool", HostID: master.HostID, Status: "needs_attention", Error: "registration unavailable"}}},
+		Checks:  []protocol.Check{{Name: "managed-journal", Status: "healthy", ObservedAt: time.Now().UTC()}},
+	}})
+	read(t, a.call(http.MethodGet, "/api/v1/storage", nil, nil, http.StatusOK), &repositories)
+	if len(repositories) != 1 || repositories[0].Status != "needs_attention" || repositories[0].Capabilities.VMDisk || repositories[0].Access.Writable || len(repositories[0].ZFSHostAccess) != 0 {
+		t.Fatalf("stale ZFS mirror remained eligible after Core stopped reporting storage: %+v", repositories)
+	}
+	priorOperation := repositories[0].OperationID
+	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: 4, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{
+		Managed: &protocol.ManagedState{Membership: &membership, Storage: []protocol.StorageRegistration{storage}},
+		Checks:  []protocol.Check{{Name: "managed-journal", Status: "healthy", ObservedAt: time.Now().UTC()}},
+	}})
+	read(t, a.call(http.MethodGet, "/api/v1/storage", nil, nil, http.StatusOK), &repositories)
+	if len(repositories) != 1 || repositories[0].Status != "succeeded" || !repositories[0].Capabilities.VMDisk || repositories[0].OperationID != priorOperation {
+		t.Fatalf("Core re-registration did not restore the retained ZFS projection: %+v", repositories)
+	}
+}
+
 func TestStorageClusterResultMustMatchOriginalMasterAndPool(t *testing.T) {
 	c := &Controller{}
 	b := c.clusterBroker()
@@ -241,4 +490,42 @@ func TestFreshControllerAdoptsCoreResolvedRemoteStorage(t *testing.T) {
 			t.Fatalf("invalid adopted repository %+v", storage)
 		}
 	}
+}
+
+// ZFS provisioning is an administrator mutation over selected disks: it needs a session and
+// CSRF token, and every selected host must be one Core can actually do the work on.
+func TestZFSProvisionRefusesUnauthorizedAndUnusableSelectedHosts(t *testing.T) {
+	a := newClient(t)
+	site := a.site()
+	master := a.enroll(a.token(site, ""), csr(t))
+	pool := a.poolOf(master.HostID)
+	caps := []string{protocol.ManagedVMCapability, protocol.StorageRepositoryCapability, protocol.ZFSProvisionCapability}
+	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: caps})
+	host := func(id string) protocol.ZFSProvisionHost {
+		return protocol.ZFSProvisionHost{HostID: id, Layout: "single", Devices: []protocol.ZFSProvisionDevice{{ByID: "/dev/disk/by-id/scsi-auth", Serial: "auth-serial", Fingerprint: strings.Repeat("d", 64), SizeBytes: 1 << 30}}}
+	}
+	body := zfsProvisionAPIRequest{RequestID: "zfs-auth", Name: "Fast disks", PoolID: pool, Scope: "host", Hosts: []protocol.ZFSProvisionHost{host(master.HostID)}}
+	cookie, csrf := a.cookie, a.csrf
+	a.cookie = nil
+	a.call(http.MethodPost, "/api/v1/storage/zfs/provision", body, nil, http.StatusUnauthorized)
+	a.cookie, a.csrf = cookie, ""
+	a.call(http.MethodPost, "/api/v1/storage/zfs/provision", body, nil, http.StatusForbidden)
+	a.csrf = csrf
+	// A member of this pool that Core has not reported is neither fresh nor known to
+	// support provisioning: refuse the request instead of queueing work for it.
+	const member = "zfs-unreported-member"
+	if _, err := a.c.db.Exec("INSERT INTO hosts(id,pool_id,hostname) VALUES(?,?,?)", member, pool, "member"); err != nil {
+		t.Fatal(err)
+	}
+	stale := body
+	stale.RequestID, stale.Scope, stale.Hosts = "zfs-stale-member", "pool", []protocol.ZFSProvisionHost{host(master.HostID), host(member)}
+	a.call(http.MethodPost, "/api/v1/storage/zfs/provision", stale, nil, http.StatusConflict)
+	// A host of another pool is never a selectable target of this pool's request.
+	foreign := a.enroll(a.token(site, ""), csr(t))
+	a.report(certificate(t, foreign.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: caps})
+	crossPool := body
+	crossPool.RequestID, crossPool.Scope, crossPool.Hosts = "zfs-cross-pool", "pool", []protocol.ZFSProvisionHost{host(master.HostID), host(foreign.HostID)}
+	a.call(http.MethodPost, "/api/v1/storage/zfs/provision", crossPool, nil, http.StatusConflict)
+	// The request that names only usable hosts still reaches Core.
+	a.call(http.MethodPost, "/api/v1/storage/zfs/provision", body, nil, http.StatusAccepted)
 }

@@ -62,11 +62,12 @@ and Phase 3 installation evidence**, followed by native placement acceptance.
    membership changes and Controller replacement. Prove one durable
    owner and no second writer. Use the [placement plan](2026-09-18-master-vm-placement.md#acceptance)
    as the checklist; code implementation is complete, this evidence is not.
-4. **Complete the remaining Phase 4 Core foundation.** Close member join and
-   storage/network convergence, interrupted reconciliation and staged management
-   network recovery before treating a Controller join screen as completion. Then
-   deliver signed authority replicas and fenced transfer/eject/promotion with their
-   recovery checks; automatic succession retains its own quorum/fencing gate.
+4. **Complete the remaining Phase 4 Core foundation.** Member join plus storage/VLAN/shared-ISO
+   convergence are implemented in Core (unit/peer evidence; native two-host acceptance still
+   open). Close interrupted-reconciliation native proof and staged **management** network
+   recovery before treating a Controller join screen as completion. Then deliver signed
+   authority replicas and fenced transfer/eject/promotion with their recovery checks;
+   automatic succession retains its own quorum/fencing gate.
 5. **Only then expand into the dependent roadmap.** Snapshots precede independent
    backup and verified restoration, followed by migration and later HA. Managed
    container applications stay after the VM foundation. Shared storage alone does

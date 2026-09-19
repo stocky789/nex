@@ -77,8 +77,10 @@ and the guest-tools dependency for memory reclaim.
 **Storage repository implementation priority, 2026-09-11:** project owner authorized Terra
 5.6 medium workers to implement and locally test OpenZFS/ZFS, iSCSI, NFS and SMB VM repositories.
 See the [storage implementation plan](2026-09-11-vm-storage-repositories.md) and
-[current checks](../qa/storage-repositories/checks.md). Core consumes existing storage and keeps
-registrations, identities and credentials; Controller submits operations and displays inventory.
+[current checks](../qa/storage-repositories/checks.md). The original repository slice consumes
+existing storage; the later [ZFS provisioning slice](2026-09-19-zfs-repository-provisioning.md)
+adds Core-owned creation from explicitly selected devices. Core keeps registrations, identities
+and credentials; Controller submits operations and displays inventory.
 Single-host code is in testing, not completed backend acceptance. Multi-host placement retains
 Phase 4 ownership and exclusion gates; existing-target iSCSI consumption does not add SAN
 provisioning. Disk formatting, storage-server administration, migration and HA remain outside scope.
@@ -164,7 +166,7 @@ Each milestone must work end to end before the next one expands the scope. The f
 | 1. Local foundation | Stock Debian runs a persistent guest through libvirt | 0 |
 | 2. First managed VM | One controller, site, pool, host, local disk, VM, and browser console | 1–2 |
 | 3. Installable host and Controller bootstrap | Nex Core installs; its local UI deploys a Controller VM or connects to an existing Controller | 3 |
-| 4. Shared pool | Two hosts use pool-level NFS storage with explicit VM placement; master authority replicates and transfers, including automatic succession | 4 |
+| 4. Shared pool | Two hosts use pool-level NFS storage with explicit VM placement; master authority replicates and transfers with manual, fence-verified recovery first; automatic succession is separately gated | 4 |
 | 5. Recovery | Snapshot rollback, independent backups, scheduling, and proven restores | 5–6 |
 | 6. Mobility | Shared-storage live migration and host evacuation | 7 |
 | 7. Supported release | Upgrade/recovery checks, access controls, and operator documentation | 8 |
@@ -687,6 +689,14 @@ record bounded checks already passed; they do not close the remaining gates abov
 
 ### 4. Multi-host pools and shared storage
 
+**Implementation status (2026-09-19):** Core-local member join, member pull of pool-shared
+NFS/SMB (and eligible clustered iSCSI), guest VLAN networks and ISO library metadata on those
+shared repositories are implemented. Members materialize locally and report per-host access;
+Controller mirrors observations only. Still open for this phase: Controller join UI, master
+change/eject, authority replicas, maintenance mode, staged remote **management** network edits,
+native two-host join/VLAN/media walkthrough acceptance, and the full Phase 4 gate below.
+See [join guide](../guide/join-a-pool.md) and [QA note](../qa/2026-09-19-pool-member-config-converge.md).
+
 1. Enroll a second host; join it to an existing pool as a member host under that pool's master (“Add host to pool”), provide master change and member eject through [pool authority transfer](#pool-authority-transfer-and-master-succession), and provide pool-wide inventory and explicit placement approved by the master. A join is a Core-to-Core convergence operation: the master retains the durable pool membership and every pool-wide configuration record, sends each applicable generation to the member, and retains that member's result. At minimum reconcile logical networks (including VLAN/uplink mappings), pool storage registrations and the member's real access state; materialize only configuration applicable to that member, never another host's local storage or runtime state. The Controller asks the master and displays durable per-member pending, succeeded, failed or needs-attention results; it neither stores a second desired-state copy nor runs the reconciliation. On member reconnect, reboot or interrupted join, the master resumes reconciliation from its durable record before reporting the member ready for placement on an affected resource. Require authenticated Core-to-Core calls, capability and identity checks, generation/idempotency rules, narrow member credential delivery, and safe retry/outage behavior. Until this phase every enrolled host remains the master of its own pool.
 2. Add existing NFS storage through the pool UI. Validate access, write permissions, identity, capacity, and mount health per host before marking it usable.
 3. Distinguish local/shared storage visibly. Track disk attachment and exclusive VM execution; never launch a second writer because a host stopped reporting.
@@ -704,6 +714,33 @@ master change, member eject, manual promotion after permanent master loss
 ([Phase 7](#manual-recovery-after-permanent-host-loss)) and automatic succession. Phase 7 and
 [Phase 9](#9-optional-per-pool-ha) reference it; they do not redesign it.
 
+**Recovery decisions: project owner, 2026-09-19; planned, not implemented.**
+
+- **Preserve the pool.** Promotion changes the master, not the pool ID. Preserve VM,
+  repository and network identities, names and configuration. Do not recreate the pool or
+  show a returning stale master as a new independent pool. Healthy member workloads are not
+  restarted merely because authority changes.
+- **Manual promotion first.** An operator selects the surviving member and explicitly requests
+  promotion. An uncooperative or unreachable old master requires verified fencing before
+  activation; operator assurance, a missed heartbeat or a successful fence request alone is
+  insufficient. Automatic master succession remains a separately gated future capability.
+- **Automatic safe rejoin.** The original host may automatically rejoin as a member without
+  another approval once Core validates its identity, accepts the current authority and
+  reconciles VM ownership and storage. Until then block stale control operations, local and
+  libvirt autostarts, other workload starts and conflicting storage writes. Enforce this on
+  Core before exposing start paths, including during Controller outages. Conflicts or an
+  inability to establish current authority leave the host restricted with recovery access;
+  do not guess or start a second copy of a VM recovered elsewhere.
+- **VM visibility is not disk availability.** Recover VM definitions from durable member
+  replicas even if the failed host's disks are unavailable. Restart elsewhere requires
+  accessible validated disks or a validated replica/restore plus exclusive ownership and
+  compatible placement. Independent local ZFS repositories do not replicate VM data.
+- **Rejoin and HA policy are separate.** Rejoin alone neither restarts nor moves VMs. Manual
+  recovery uses the Phase 7 gate; automatic restart and optional return follow the configured
+  pool/VM HA policies and Phase 9 safety gates. The existing default is to leave recovered
+  VMs on their healthy host, with explicit manual return or opt-in automatic return. This
+  discussion does not authorize general automatic load balancing or implement HA.
+
 - **Member replica.** The master pushes a signed, monotonically generation-numbered replica of
   its durable pool authority to every ready member: the pool CA key encrypted for members,
   membership, VM ownership, epochs and pending updates (`pool-vms.json`), and the pool storage,
@@ -711,18 +748,23 @@ master change, member eject, manual promotion after permanent master loss
   promoted; until then it is not an independent authority. Each Core reports its replica
   generation and freshness as observed state; Controller stores none of it. This is the
   recoverable copy required by Phase 7 item 2.
-- **Transfer steps**, identical for every trigger:
-  1. Freeze authority writes on the master (new placements, membership, storage/network and VM
-     ownership changes); running guests continue.
-  2. Replicate to the target and confirm it holds the current generation.
+- **Transfer steps**, with the same authority and exclusion checks for every trigger:
+  1. For a cooperating master, freeze authority writes (new placements, membership,
+     storage/network and VM ownership changes); running guests continue.
+  2. Replicate to the target and confirm the current generation. If the master is unavailable,
+     validate the surviving durable replica's freshness and accepted ownership state instead;
+     define and test that proof before implementation. Missing or ambiguous authority records
+     block promotion; fencing alone cannot make an incomplete replica authoritative.
   3. When the old master is not cooperating, obtain verified power-off through the existing
      fencing proof mechanism. A timeout or heartbeat loss is never proof.
   4. The target activates as master at generation + 1 and signs the new authority.
   5. Members re-point to the new master and accept only the higher generation.
   6. The old master is demoted, or refused by generation/epoch check when it returns, and
-     rejoins only as a member. Eject is the same flow with the target staying master and the
-     ejected host's membership removed at the new generation.
-- **Automatic succession** elects a new master only with a strict quorum majority of current
+     automatically rejoins only as a member after the reconciliation gates above. Eject is the
+     same flow with the target staying master and the ejected host's membership removed at the
+     new generation.
+- **Future automatic succession**, deferred beyond the initial manual-promotion slice,
+  elects a new master only with a strict quorum majority of current
   members (counted by the established pool quorum layer, not a Nex consensus), a verified fence
   proof of the old master, and the most recent replica generation among the majority. Pools that
   cannot form a majority, including two hosts, never auto-elect and use manual, fence-verified
@@ -737,18 +779,28 @@ master change, member eject, manual promotion after permanent master loss
 
 **Planned API impact: new contracts** — Core peer replica push/ack; promotion, planned-transfer
 and eject operations; succession election messages; Controller-facing
-observed replica generation and transfer status. Master placement admission is now
+observed replica generation, transfer status and automatic-rejoin readiness/conflicts.
+Controller submits the operator request to Core; Core validates fencing and replica freshness,
+persists authority/ownership, reconciles returning members and reports results through
+peer and inventory contracts. No Controller-owned recovery journal is introduced.
+Master placement admission is now
 implemented in the [placement slice](2026-09-18-master-vm-placement.md); its native
 acceptance remains open. For the remaining contracts define authentication, generation/epoch checks,
 safe retries, reconnect and version compatibility on both sides when implementing.
 **State owner: core** — the durable record is the member replica on each Core; a fresh Controller
 reads the active master's inventory.
 
-**Gate — all outstanding (disposable lab):** planned handover on a healthy pool; master power-off
-on three hosts with automatic succession; two-host manual, fence-verified promotion; returning old
-master refused and rejoined as a member; interrupted transfer at each step. Throughout, prove no
-duplicate writer or dual master, VM ownership and epochs preserved, no health reported from the
-replica alone, and a fresh Controller re-adopting the new master with every pool setting.
+**Initial manual-recovery gate — outstanding (disposable lab):** planned handover on a
+healthy pool; operator-selected, fence-verified promotion in supported two- and multi-host
+pools; returning old master automatically rejoined only after reconciliation; interrupted
+transfer at each step; stale-host boot/autostart and conflicting VM ownership refused.
+Throughout, prove no duplicate writer or dual master, unchanged pool/resource identities,
+VM ownership and epochs preserved, unavailable disks reported without losing VM visibility,
+no health reported from the replica alone, and fresh Controller adoption of every pool setting.
+
+**Future automatic-succession gate — outstanding:** master power-off on three hosts, quorum
+loss and fence failure, plus the same identity, rejoin and ownership checks above. This is
+separate from both initial manual promotion and automatic VM restart acceptance.
 
 ### 5. Snapshots and rollback
 
@@ -1158,7 +1210,9 @@ count. The following are blocking requirements for HA, migration and disaster-re
   lost replies, power restoration and stale-host local/autostart attempts. Publish supported
   fencing hardware/target combinations and limits; mocks or nested power-off tests alone do
   not certify physical fencing. No “force” checkbox may bypass unproven writable ownership.
-- **Returning a host does not automatically move VMs.** Default to leaving successfully
+- **Returning a host does not automatically move VMs.** Automatic safe member rejoin follows
+  the authority-transfer decision above; VM restart and movement follow configured HA policy,
+  not an independent rejoin action. Default to leaving successfully
   recovered VMs on their current healthy host. Offer an explicit return action and a separate
   opt-in automatic return policy tied to an operator-selected preferred host. Keep that policy,
   host identity, stabilization interval and retry/hold state in the master's durable pool/VM

@@ -3,11 +3,13 @@ package vmhost
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"nex.local/nex/internal/protocol"
@@ -16,8 +18,8 @@ import (
 // Guest VLAN networks are additive: one Linux bridge per (uplink, VLAN) on top of an 802.1Q
 // sub-interface, exactly like a management bridge on a tagged port. The management bridge,
 // its untagged path, addresses and routes are never touched, so applying one cannot cut
-// the host off. Removal is not implemented; the bridge persists until an operator deletes
-// its /etc/network/interfaces.d file.
+// the host off. removeGuestBridge is the inverse, and touches only a bridge Nex provably
+// created: /etc/network/interfaces itself, its source line and the uplink stay untouched.
 const sysNet = "/sys/class/net/"
 
 func guestPort(n protocol.NetworkRegistration) string {
@@ -36,11 +38,37 @@ func master(dev string) string {
 	return filepath.Base(target)
 }
 
+// interfacesOwnership is the part of the stanza header that names which network Nex wrote the
+// file for. It survives a rename, which changes only the quoted name before it.
+func interfacesOwnership(n protocol.NetworkRegistration) string {
+	return fmt.Sprintf(" (%s): VLAN %d on %s. Managed by Nex Core", n.ID, n.VLAN, n.Uplink)
+}
+
+const interfacesHeader, interfacesTrailer = "# Nex guest network ", "; do not edit."
+
+// ownsInterfacesHeader is the ownership proof for the one destructive network operation Core
+// has, so it matches the header exactly rather than looking for a substring: the operator's
+// name is rendered before the ownership text and a name that embeds another network's
+// ownership string would otherwise pass that network's proof. The name is the header's only
+// free text and is quoted, so stripping the quoted run leaves a tail that must equal this
+// network's ID, VLAN and uplink byte for byte.
+func ownsInterfacesHeader(header string, n protocol.NetworkRegistration) bool {
+	rest, ok := strings.CutPrefix(header, interfacesHeader)
+	if !ok {
+		return false
+	}
+	quoted, err := strconv.QuotedPrefix(rest)
+	if err != nil {
+		return false
+	}
+	return rest[len(quoted):] == interfacesOwnership(n)+interfacesTrailer
+}
+
 // interfacesFile renders the ifupdown stanza that recreates the bridge at boot. The VLAN
 // device is created explicitly so no bridge-utils VLAN convention is relied upon.
 func interfacesFile(n protocol.NetworkRegistration) string {
 	port := guestPort(n)
-	s := fmt.Sprintf("# Nex guest network %q (%s): VLAN %d on %s. Managed by Nex Core; do not edit.\nauto %s\niface %s inet manual\n", n.Name, n.ID, n.VLAN, n.Uplink, n.Source, n.Source)
+	s := fmt.Sprintf("%s%q%s%s\nauto %s\niface %s inet manual\n", interfacesHeader, n.Name, interfacesOwnership(n), interfacesTrailer, n.Source, n.Source)
 	if n.VLAN != 0 {
 		s += fmt.Sprintf("    pre-up ip link show %s >/dev/null 2>&1 || ip link add link %s name %s type vlan id %d\n", port, n.Uplink, port, n.VLAN)
 	}
@@ -135,20 +163,150 @@ func ensureGuestBridge(ctx context.Context, n protocol.NetworkRegistration, netw
 			return fmt.Errorf("bring up %s: %v", dev, err)
 		}
 	}
-	dir := filepath.Join(networkDir, "interfaces.d")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-	if err := atomicWrite(filepath.Join(dir, "nex-"+bridge), []byte(interfacesFile(n))); err != nil {
-		return fmt.Errorf("persist bridge configuration: %v", err)
-	}
-	if err := os.Chmod(filepath.Join(dir, "nex-"+bridge), 0644); err != nil {
+	if err := writeGuestBridgeFile(n, networkDir); err != nil {
 		return err
 	}
 	if err := ensureSourceLine(filepath.Join(networkDir, "interfaces")); err != nil {
 		return fmt.Errorf("enable interfaces.d: %v", err)
 	}
 	return verifyGuestBridge(n)
+}
+
+// writeGuestBridgeFile persists the boot-time stanza. A rename calls it alone: the stanza's
+// only variable part is the name in its header comment, so no link is disturbed.
+func writeGuestBridgeFile(n protocol.NetworkRegistration, networkDir string) error {
+	if err := protocol.ValidateVLAN(n); err != nil {
+		return err
+	}
+	path := filepath.Join(networkDir, "interfaces.d", "nex-"+n.Source)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	if err := atomicWrite(path, []byte(interfacesFile(n))); err != nil {
+		return fmt.Errorf("persist bridge configuration: %v", err)
+	}
+	return os.Chmod(path, 0644)
+}
+
+// checkGuestBridgeRemovable evaluates every refusal removeGuestBridge would raise without
+// touching anything, so pool convergence can skip a teardown it knows will be refused instead
+// of journalling the same failure on every probe tick. removeGuestBridge calls it first, so
+// the two cannot drift apart.
+func checkGuestBridgeRemovable(n protocol.NetworkRegistration, networkDir string) error {
+	if err := protocol.ValidateVLAN(n); err != nil {
+		return err
+	}
+	port, bridge := guestPort(n), n.Source
+	file := filepath.Join(networkDir, "interfaces.d", "nex-"+bridge)
+	notOurs := fmt.Errorf("bridge %s was not created by Nex; remove it by hand", bridge)
+	switch b, err := os.ReadFile(file); {
+	case err == nil:
+		header, _, _ := strings.Cut(string(b), "\n")
+		if !ownsInterfacesHeader(header, n) {
+			return notOurs
+		}
+	case errors.Is(err, os.ErrNotExist):
+		// No proof: only a bridge that is already gone may be treated as removed.
+		if exists(sysNet + bridge) {
+			return notOurs
+		}
+	default:
+		return err
+	}
+	if !exists(sysNet + bridge) {
+		return nil
+	}
+	if !exists(sysNet + bridge + "/bridge") {
+		return fmt.Errorf("%s exists but is not a bridge", bridge)
+	}
+	ports, err := os.ReadDir(sysNet + bridge + "/brif")
+	if err != nil {
+		return err
+	}
+	for _, p := range ports {
+		if p.Name() != port {
+			return errors.New("network still has attached interfaces")
+		}
+	}
+	return nil
+}
+
+// removeGuestBridge tears down a guest VLAN bridge. It is the only destructive network
+// operation Core performs, so it acts only on a bridge Nex provably created: the
+// interfaces.d file it wrote must be present and name this network. It is idempotent —
+// an absent bridge and an absent file are a completed removal — so an interrupted
+// removal settles by re-running. The uplink, the management bridge, addresses, routes and
+// /etc/network/interfaces (including its source line) are never named, let alone changed.
+func removeGuestBridge(ctx context.Context, n protocol.NetworkRegistration, networkDir string) error {
+	if err := checkGuestBridgeRemovable(n, networkDir); err != nil {
+		return err
+	}
+	port, bridge := guestPort(n), n.Source
+	dir := filepath.Join(networkDir, "interfaces.d")
+	file := filepath.Join(dir, "nex-"+bridge)
+	if exists(sysNet + bridge) {
+		ports, err := os.ReadDir(sysNet + bridge + "/brif")
+		if err != nil {
+			return err
+		}
+		for _, p := range ports {
+			// A live VM tap or a port an operator attached; tearing the bridge down
+			// would cut it off. checkGuestBridgeRemovable read the same directory a
+			// moment ago under the same engine lock; this re-read is the one that counts.
+			if p.Name() != port {
+				return errors.New("network still has attached interfaces")
+			}
+		}
+		if _, err = run(ctx, "ip", "link", "set", bridge, "down"); err != nil {
+			return fmt.Errorf("bring down bridge %s: %v", bridge, err)
+		}
+		if _, err = run(ctx, "ip", "link", "del", bridge); err != nil {
+			return fmt.Errorf("delete bridge %s: %v", bridge, err)
+		}
+	}
+	// The 802.1Q sub-interface is Nex's only when Nex created it: it must be a VLAN device,
+	// belong to no other bridge now that ours is gone, and be named by no other Nex stanza.
+	if n.VLAN != 0 && exists(sysNet+port) && exists("/proc/net/vlan/"+port) && master(port) == "" {
+		used, err := vlanPortInUse(dir, "nex-"+bridge, port)
+		if err != nil {
+			return err
+		}
+		if !used {
+			if _, err = run(ctx, "ip", "link", "del", port); err != nil {
+				return fmt.Errorf("delete VLAN device %s: %v", port, err)
+			}
+		}
+	}
+	if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove bridge configuration: %v", err)
+	}
+	return nil
+}
+
+// vlanPortInUse reports whether a Nex stanza other than except attaches port to a bridge.
+func vlanPortInUse(dir, except, port string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Name() == except || !strings.HasPrefix(entry.Name(), "nex-") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return false, err
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			if strings.TrimSpace(line) == "bridge_ports "+port {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // verifyGuestBridge proves the bridge exists with its port attached; it says nothing about

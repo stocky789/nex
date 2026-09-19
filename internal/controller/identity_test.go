@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRevocationBetweenMiddlewareAndTransaction(t *testing.T) {
@@ -137,6 +138,34 @@ func TestHostOwnedIdentity(t *testing.T) {
 	}
 }
 
+func TestReplacementControllerAcknowledgesFormerResultsAndAdoptsZFS(t *testing.T) {
+	const hostID = "51b68e3d-c902-4d14-bf31-b66d54bae65b"
+	const poolID = "9bb3babd-f22e-4932-b991-f4a8eed9178f"
+	a := newClient(t)
+	site := a.site()
+	host := a.enrollWith(protocol.EnrollRequest{Token: a.token(site, ""), CSRPEM: csr(t), HostID: hostID, PoolID: poolID, PoolName: "Recovered pool"}, 200)
+	cert := certificate(t, host.CertificatePEM)
+	membership := protocol.PoolMembership{PoolID: poolID, MasterHostID: hostID, Generation: 1, Members: []protocol.PoolMember{{HostID: hostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
+	storage := protocol.StorageRegistration{ID: "zfs-recovered", PoolID: poolID, HostID: hostID, Name: "Recovered ZFS", Path: "/var/lib/nex-storage/zfs-recovered", Kind: protocol.StorageKindZFS, Source: protocol.StorageSource{ZFS: &protocol.ZFSStorageSource{Pool: "nex-recovered", Dataset: "vms", MountPath: "/var/lib/nex-storage/zfs-recovered"}}, ZFSProvisioned: true, ZFSScope: "pool", Capabilities: protocol.StorageCapabilities{VMDisk: true}, ZFSHostAccess: []protocol.ZFSHostAccess{{HostID: hostID, Path: "/var/lib/nex-storage/zfs-recovered", Readable: true, Writable: true, ObservedAt: time.Now().UTC()}}}
+	response := a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability, protocol.ZFSProvisionCapability}, Results: []protocol.Result{{OperationID: "former-zfs-operation", Status: "succeeded"}}, Inventory: &protocol.Inventory{
+		Managed: &protocol.ManagedState{Membership: &membership, Storage: []protocol.StorageRegistration{storage}, ZFSProvisions: []protocol.ZFSProvisionHostResult{{RepositoryID: storage.ID, PoolID: poolID, Name: storage.Name, Scope: "pool", HostID: hostID, Status: "succeeded"}}},
+		Checks:  []protocol.Check{{Name: "managed-journal", Status: "healthy", ObservedAt: time.Now().UTC()}},
+	}})
+	if len(response.AcknowledgedResults) != 1 || response.AcknowledgedResults[0] != "former-zfs-operation" {
+		t.Fatalf("former Controller result was not safely acknowledged: %#v", response)
+	}
+	var repositories []protocol.StorageRegistration
+	read(t, a.call(http.MethodGet, "/api/v1/storage", nil, nil, http.StatusOK), &repositories)
+	if len(repositories) != 1 || repositories[0].ID != storage.ID || !repositories[0].ZFSProvisioned {
+		t.Fatalf("fresh Controller did not adopt Core ZFS projection: %#v", repositories)
+	}
+	other := a.enroll(a.token(site, ""), csr(t))
+	if _, err := a.c.db.Exec("INSERT INTO operations VALUES(?,?,?,?,?,?,?,?,?)", "other-host-operation", other.HostID, "storage-register", "other-request", "succeeded", "", stamp(), stamp(), "system"); err != nil {
+		t.Fatal(err)
+	}
+	a.call(http.MethodPost, "/api/v1/agent/report", protocol.ReportRequest{Version: protocol.Version, Sequence: 2, Results: []protocol.Result{{OperationID: "other-host-operation", Status: "succeeded"}}}, cert, http.StatusBadRequest)
+}
+
 func TestFreshControllerAdoptsOnlyCoreReportedPoolMembers(t *testing.T) {
 	const masterID = "6f1c2a3e-9b7d-4c5e-8a1b-0d2e3f4a5b6c"
 	const poolID = "0a9b8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d"
@@ -210,5 +239,53 @@ func TestCoreReportedJoinMovesExistingPeerIntoMasterPool(t *testing.T) {
 	read(t, a.call("GET", "/api/v1/storage", nil, nil, http.StatusOK), &got)
 	if len(got) != 1 || got[0].PoolID != pool || got[0].HostID != member.HostID {
 		t.Fatalf("actual Core resource was not adopted: %+v", got)
+	}
+}
+
+// Only a durable ZFS provision recovers from needs_attention through a result; every other
+// kind settles through Core's reported managed outcome. Unknown result IDs are echoed back
+// only when they are well formed.
+func TestOnlyZFSProvisionResultsRecoverFromAttention(t *testing.T) {
+	a := newClient(t)
+	host := a.enroll(a.token(a.site(), ""), csr(t))
+	pool := a.poolOf(host.HostID)
+	cert := certificate(t, host.CertificatePEM)
+	caps := []string{protocol.ManagedVMCapability}
+	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 1, Capabilities: caps})
+	var network protocol.NetworkRegistration
+	read(t, a.call(http.MethodPost, "/api/v1/networks", registrationRequest{RequestID: "net-attention", PoolID: pool, HostID: host.HostID, Name: "Servers", Kind: "bridge", Source: "br0"}, nil, 201), &network)
+	if len(a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 2, Capabilities: caps}).Commands) != 1 {
+		t.Fatal("network registration was not dispatched")
+	}
+	status := func() string {
+		var ops []protocol.Operation
+		read(t, a.call(http.MethodGet, "/api/v1/operations", nil, nil, 200), &ops)
+		for _, op := range ops {
+			if op.ID == network.OperationID {
+				return op.Status
+			}
+		}
+		return ""
+	}
+	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 3, Capabilities: caps, Results: []protocol.Result{{OperationID: network.OperationID, Status: "needs_attention", Error: "interrupted"}}})
+	if got := status(); got != "needs_attention" {
+		t.Fatalf("host result was not recorded: %q", got)
+	}
+	oversized := strings.Repeat("x", 129)
+	acknowledged := a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 4, Capabilities: caps, Results: []protocol.Result{
+		{OperationID: network.OperationID, Status: "succeeded"}, {OperationID: oversized, Status: "succeeded"}, {OperationID: "former-controller:op 1", Status: "succeeded"}}})
+	if got := status(); got != "needs_attention" {
+		t.Fatalf("a non-ZFS result reopened a settled attention operation: %q", got)
+	}
+	// Core journals any command ID up to 128 bytes, so such a result from a former
+	// Controller is acknowledged (or Core re-sends it forever); a longer one is not.
+	if !slices.Contains(acknowledged.AcknowledgedResults, network.OperationID) || !slices.Contains(acknowledged.AcknowledgedResults, "former-controller:op 1") || slices.Contains(acknowledged.AcknowledgedResults, oversized) {
+		t.Fatalf("unexpected acknowledged result IDs: %#v", acknowledged.AcknowledgedResults)
+	}
+	// Core's own managed outcome is what settles the entry it owns.
+	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 5, Capabilities: caps, Inventory: &protocol.Inventory{Hostname: "core", Managed: &protocol.ManagedState{
+		Outcomes: []protocol.ManagedOutcome{{OperationID: network.OperationID, Kind: "network-register", ID: network.ID, Name: network.Name, Status: "succeeded"}}}}})
+	if got := status(); got != "succeeded" {
+		t.Fatalf("Core outcome did not settle the operation: %q", got)
 	}
 }

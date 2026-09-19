@@ -87,6 +87,15 @@ trap 'echo NEX_SMOKE_FAILED; systemctl poweroff' EXIT
 for p in qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients virtinst ovmf-generic python3-virt-firmware openssh-server nftables chrony; do
     test "$(dpkg-query -W -f='${Status}' "$p")" = 'install ok installed'
 done
+if dpkg-query -W -f='${Status}' zfs-dkms 2>/dev/null | grep -qx 'install ok installed'; then
+    dkms status | grep -q '^zfs/'
+    modprobe zfs
+    zpool version
+    zfs version
+    systemctl is-enabled zfs-import-cache.service
+    systemctl is-active zfs-mount.service
+    echo NEX_SMOKE_ZFS_PASS
+fi
 test "$(dpkg-query -W -f='${Version}' ovmf-generic)" = 2026.05-2
 test -f /usr/share/qemu/firmware/40-edk2-x86_64-secure-enrolled.json
 grep -Fq /usr/share/OVMF/OVMF_CODE_4M.ms.fd /usr/share/qemu/firmware/40-edk2-x86_64-secure-enrolled.json

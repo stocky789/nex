@@ -1,10 +1,11 @@
 # Usage history and Stats tabs
 
-Status: implemented in the working tree with host evidence, 2026-09-17 — uncommitted. Unit,
-contract and mocked-browser checks pass, two independent reviews' findings are fixed, and the final
-disposable-host run ([QA record](../qa/2026-09-16-usage-history.md), simulated nested-KVM host, 1 s
-heartbeat) passed every exercised check for stored history, realtime, Controller replacement and
-the Stats and Realtime UI. Open: see [Remaining work](#remaining-work).
+Status: published in 0.3.0. The following 2026-09-17 working-tree status was superseded by
+commit `16478a9` and tag `v0.3.0`. Unit, contract and mocked-browser checks pass, two
+independent reviews' findings are fixed, and the final disposable-host run
+([QA record](../qa/2026-09-16-usage-history.md), simulated nested-KVM host, 1 s heartbeat)
+passed every exercised check for stored history, realtime, Controller replacement and the Stats
+and Realtime UI. Open: see [Remaining work](#remaining-work).
 
 ## Goal
 

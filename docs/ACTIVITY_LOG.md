@@ -2,7 +2,7 @@
 
 ## 2026-09-08 — Root-only ISO installation and handoff
 
-### Current state
+### Historical state (as of 2026-09-08)
 
 project owner requested that installation ask only for a root password and confirmation,
 without creating an ordinary user. That implementation is complete. At project owner's
@@ -11,9 +11,10 @@ were committed and pushed to `origin/main` as
 `009a3dd4e7aca93e81418b5a9287184697d34861`.
 The working tree was clean after that push. This log is a subsequent handoff update.
 
-The current product remains the standalone Nex Core alpha. Controller and agent
-implementation are deferred; do not expand the milestone based on this handoff.
-Read [the platform plan](plans/2026-09-08-nex-platform.md) and `AGENTS.md` first.
+At the time of this handoff, the product was the standalone Nex Core alpha and
+Controller and agent implementation were deferred. This is a dated handoff, not a
+statement of the current product scope; use [the platform plan](plans/2026-09-08-nex-platform.md)
+and `AGENTS.md` for current direction.
 
 ### What changed
 

@@ -10,6 +10,10 @@ hash-verified (still untagged; [release QA](../qa/2026-09-16-nex-core-0.2.9-rele
 gate fixes are in the uncommitted working tree awaiting the project owner's review and commit
 ([gate report](../qa/2026-09-17-phase2-gate/checks.md)).
 
+Supersession: that uncommitted 2026-09-17 snapshot was subsequently included in 0.3.0
+(`16478a9`, tag `v0.3.0`). The 0.2.9 package failure remains historical release evidence;
+this handover does not establish later release or hosted-CI acceptance.
+
 ## What landed
 
 Two independent batches converged on one tree.

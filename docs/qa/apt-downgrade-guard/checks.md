@@ -49,5 +49,5 @@ Same container, same state, same hook:
 - The Controller package installs the same script (`--controller`), so it had the same defect and
   takes the same fix; that path was not separately exercised against real apt.
 - The published 0.2.3 package still contains the broken guard. Hosts already carrying it must use
-  the recovery in [software updates](../guide/software-updates.md), because the guard that decides
+  the recovery in [software updates](../../guide/software-updates.md), because the guard that decides
   an upgrade is the installed one.

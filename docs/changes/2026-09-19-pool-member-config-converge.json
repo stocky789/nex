@@ -1,0 +1,62 @@
+{
+  "summary": "Pool members pull master-owned VLANs and shared-storage ISO metadata after join, matching existing NFS/SMB storage reconcile. API impact: new Core peer contracts for /api/v1/pool/networks* and /api/v1/pool/media*; Controller placement uses member_access for those resources.",
+  "paths": [
+    "internal/protocol/managed.go",
+    "internal/protocol/pool.go",
+    "internal/agent/pool_network.go",
+    "internal/agent/pool_network_test.go",
+    "internal/agent/pool_media.go",
+    "internal/agent/pool_media_test.go",
+    "internal/agent/peer.go",
+    "internal/agent/run.go",
+    "internal/vmhost/managed.go",
+    "internal/controller/managed.go",
+    "internal/controller/vmmedia.go",
+    "internal/controller/media.go",
+    "web/src/managed.tsx",
+    "web/src/vm-create.tsx",
+    "web/src/vm-edit.tsx",
+    "docs/API.md",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/guide/join-a-pool.md",
+    "docs/qa/2026-09-19-pool-member-config-converge.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Join workflow now covers VLAN and shared ISO pull as well as storage.",
+    "pages": [
+      "docs/guide/join-a-pool.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "Core peer APIs for pool networks and pool media list/get/access; NetworkRegistration and Media gain member_access; VLAN registration is forced to the pool master.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/peer-openapi.json",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "Website multi-host milestone records guest VLAN/shared-ISO member pull as built, with native acceptance and management-network staged apply still open.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Pool VLAN desired state and shared ISO library metadata remain durable on the pool master Core journal; members journal local apply and report process-local access. Controller mirrors are disposable.",
+    "record": "Master managed-vms journal for VLAN network-register and iso-import on pool-shared storage; member journals after pull; member_access observations in master Core memory rebuilt from authenticated peer POSTs."
+  },
+  "verification": {
+    "method": "Ran go test for agent pool network/media reconcile, focused controller VLAN/media/pool checks, protocol and vmhost packages; ran documentation gate and repository privacy check.",
+    "evidence": [
+      "docs/qa/2026-09-19-pool-member-config-converge.md",
+      "internal/agent/pool_network_test.go",
+      "internal/agent/pool_media_test.go"
+    ]
+  }
+}

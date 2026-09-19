@@ -119,7 +119,8 @@ across the upgrade must be restarted from the host. Older UI
 builds that call `POST /api/v1/pools` or send `{pool_id}` to `POST /api/v1/enrollment-tokens`
 receive 404 and 400 respectively.
 
-Core-local authenticated member join and NFS/SMB reconciliation are implemented;
+Core-local authenticated member join and member pull of pool-shared NFS/SMB storage,
+guest VLANs and ISO library metadata on those shared repositories are implemented;
 see [Core pool peer join](#core-pool-peer-join-and-repository-observations).
 Changing the pool master and ejecting a member remain planned, **not available**
 Phase 4 work. This slice does not establish the full multi-host phase gate.
@@ -586,6 +587,62 @@ generation, access observation and credential receipt. Controller holds only a d
 projection recovered from `Inventory.managed.storage`; a new Controller does not need paths or
 secrets re-entered.
 
+### ZFS provisioning
+
+API impact: **new contract** — `storage-zfs-provision-v1` adds read-only
+`kind: "zfs-device"` discovery and administrator/Origin/CSRF-protected
+`POST /api/v1/storage/zfs/provision`. The request targets a pool master and carries
+`request_id`, `pool_id`, `name`, `scope` (`host` or `pool`) and explicit per-host
+`hosts` selections. Controller submits one durable Core operation; it does not perform
+or schedule member disk work. An older Core is refused, and a timed-out reply is not
+permission to submit a different operation over the same disks. Every selected host must
+also be fresh, active, in the selected pool and advertise `storage-zfs-provision-v1`;
+otherwise Controller refuses the request with 409 before Core is asked. Core still makes
+every provisioning decision; this is only an early refusal instead of a delayed
+`needs_attention`. A later Core result may move a `storage-zfs-provision` operation from
+`needs_attention` to `succeeded` when its durable native receipt verifies an interrupted
+create; no other operation kind recovers that way, and Controller never infers success
+from an adopted storage projection.
+
+Core owns repository identity, selected device intent, native pool/dataset identities,
+and per-host results. The master retains `zfs-pool.json`, lifecycle generations and
+separate operation receipts in `zfs-lifecycle.json`, and its accepted command journal; target hosts retain native
+`zfs-provision` receipts and managed registration records. Completed detach receipts
+retain canonical tombstone metadata so a master without a local dataset can remove
+Controller mirrors after interruption; a newer registration generation takes precedence.
+Pool scope describes independent host-local zpools under one
+repository identity, not shared disks; `shared` remains false. Provisioned ZFS
+advertises VM-disk capability, with `iso: false`: the existing media-import contract
+does not select a target member within a local-ZFS aggregate. Hosts with no selected
+disks stay unconfigured. Device discovery is transient and does not grant permission:
+Core rechecks device identity and use before destructive work. Selections include the discovery fingerprint alongside by-id path, serial and size;
+old-data selections also include an exact by-id erase confirmation. Omit the per-host
+layout for Core's default. An optional `repository_id` refers to an existing Core-owned
+repository when configuring another host; it never allocates an identity in Controller.
+The exact request and result schemas are in the [machine-readable contract](api/openapi.json).
+
+The master publishes one `StorageRegistration` with `zfs_provisioned`, `zfs_scope`
+and `zfs_host_access`; each access entry belongs to one host and carries that host's
+native pool/dataset GUIDs, path, capacity, access and observation time. Members retain
+local registrations under the canonical ID for local VM operations. Controller adopts
+the master's aggregate and does not replace it with a member registration. Durable
+`Managed.zfs_provisions` outcomes do not establish current writable access.
+
+Strict older Controllers receive no new inventory fields until the upgraded Controller
+acknowledges `storage-zfs-provision-v1` through the existing `storage_repositories`
+support shape. This is an additive capability acknowledgement with wire protocol 2;
+upgrade Controller first. Debian packages retain the `storage-format-v2` compatibility
+marker and add `storage-format-v3` for ZFS records. The APT guard requires v3 only for
+retained ZFS state or a Controller with ZFS-capable enrolled hosts; v2-only state keeps
+its prior compatibility. This is a package guard, not a protocol version increment or
+permission to bypass it through manual binary replacement.
+
+The existing-dataset registration contract below remains an advanced path. It does not
+create or import a pool. Provisioning is a separate operation that creates a Core-owned
+pool and `vms` dataset with safe native defaults; detach never destroys a pool or dataset.
+Acceptance evidence and remaining native/delivery gates are tracked in
+[ZFS rollout verification](qa/2026-09-19-zfs-provisioning.md).
+
 ### Transient Core storage discovery
 
 API impact: **new client operation and changed Core report contract** —
@@ -606,8 +663,10 @@ missing capability or duplicate active request is `409`. Core rejects local syml
 unmounted NFS exports with `showmount`, uses an ephemeral mode-0600 SMB credential file for
 `smbclient` source/share/directory browsing, sends iSCSI discovery only with nonpersistent
 `iscsiadm` discoverydb settings, and lists already mounted ZFS sources. Results contain only kind,
-source, directory path, browsable state and an optional existing-repository flag—never passwords, device paths, mount options or command
-output. Discovery cannot create a directory, mount/login a backend, retain an iSCSI node/session,
+source, directory path, browsable state and an optional existing-repository flag. The
+`zfs-device` kind additionally returns operator-safe physical-device metadata and stable
+by-id paths; it requires `storage-zfs-provision-v1`. Results never contain passwords,
+mount options or raw command output. Discovery cannot create a directory, mount/login a backend, retain an iSCSI node/session,
 change repository configuration or weaken later registration validation. A cancelled or stale
 request must use a new request ID.
 
@@ -747,6 +806,15 @@ retains desired records durably; current member access observations live in mast
 and are rebuilt from authenticated reports after restart. A replacement Controller adopts their
 inventory projection.
 
+The same peer listener exposes pool-wide VLAN networks at `/api/v1/pool/networks` and
+`/api/v1/pool/networks/{network_id}` (list/get) with `POST …/access` for per-member apply
+status (uplink present, bridge name, generation, error). Only `kind=vlan` registrations are
+listed; host-local bridges and libvirt networks are not. Members materialize the bridge locally
+with the master's network ID, then report access. ISO library metadata for media whose
+`storage_id` is pool-shared is listed at `/api/v1/pool/media` with the same access-report shape;
+bytes ride the shared repository mount, and members journal an adopted `iso-import` after digest
+verification. Controller placement uses `member_access` the same way it does for shared storage.
+
 The synchronous peer lock check uses `POST` and `DELETE` at
 `/api/v1/pool/storage/{repository_id}/lock`, with the current `generation` and a
 32-hex-character random `challenge`. It is bound to the authenticated member,
@@ -806,6 +874,18 @@ repository-list retrieval, repository reconciliation, local observation, orphan 
 and safe outcome, never raw peer/command text. Deadline and cancellation outcomes are failures.
 A fresh successful pass replaces the failed observation; healthy mount/access reports alone do
 not prove reconciliation succeeded.
+
+Members report `pool-network-reconciliation` and `pool-media-reconciliation` in the same
+`Inventory.checks` list with the same `unknown`/`failed`/`healthy` meaning for pulling the
+master's guest VLANs and shared ISO entries; the master reports neither. API impact: existing
+contract — no route or field is added, and the process-local observation is not durable state.
+A member re-creates a journalled VLAN guest bridge it observes missing **while the master still
+lists that network**, and skips re-hashing an already adopted ISO whose published file still has
+the recorded size; every media attach still verifies the digest. Once the master has durably
+removed the network, the member's journal holds a tombstone instead, so the bridge is torn down
+and never rebuilt. A member's own refusal to remove (a local VM still uses the resource) appears
+in these same two checks, appended to the outcome word from this member's own resource and VM
+IDs; no remote text is ever rendered into a reported check.
 
 ### Core-owned clustered GFS2 iSCSI
 
@@ -1022,7 +1102,7 @@ source as its real QEMU identity, and reports canonical identity, capacity, acce
 and generation. NFS uses a Core-owned hard NFSv4 mount; ZFS only recognizes an imported mounted
 dataset and its GUID/health, then exposes its original `source.zfs.mount_path` through a
 Core-owned bind alias at `/var/lib/nex-storage/<repository-id>` recorded as `StorageRegistration.path`.
-VM disk references use that alias. Core never changes ZFS properties and detach removes only the
+VM disk references use that alias. Existing-dataset registration never changes ZFS properties and detach removes only the
 alias; SMB uses an encrypted SMB3 mount with strict cache/locking; iSCSI
 uses the stable WWID and an existing ext4/XFS filesystem. Registration never formats a LUN,
 creates or imports a zpool, changes ZFS properties, creates a target/export, or configures
@@ -1115,8 +1195,15 @@ it does not prove fencing against an unmanaged initiator.
 `kind: "vlan"` with `uplink` (host NIC or bond name, at most 10 characters) and `vlan`
 (0–4094; 0 = untagged). `source` must be omitted; Controller derives the bridge name
 `<uplink>v<vlan>` (for example `nex1v100`) before replay comparison, so identical retries
-replay identically. Controller rejects mixed shapes (400) and uplinks the host has not reported
-as a physical NIC or bond (409). A duplicate uplink/VLAN or plain registration of the same
+replay identically. A pool VLAN is master-owned desired state: the submitted `host_id` only
+selects the pool, and the stored registration, the response and later reads carry the pool
+master as `host_id` while members pull and materialize the bridge. Resending the identical
+body — including the member `host_id` a client first sent — replays the same registration and
+operation; it is never treated as a changed payload. The registration also carries
+`generation` (the master-owned desired generation members reconcile against) and
+`member_access` (the master's per-member observations of the applied bridge); both are absent
+or zero on host-local registrations. Controller rejects mixed shapes (400) and uplinks the
+host has not reported as a physical NIC or bond (409). A duplicate uplink/VLAN or plain registration of the same
 derived bridge on that host is queued and refused by the host as a failed task (see
 *Host-owned defaults and validation* below). The `network-register` command then creates the 802.1Q
 sub-interface `<uplink>.<vlan>` and the bridge idempotently, persists an ifupdown stanza under
@@ -1128,13 +1215,165 @@ request targets a NIC carrying host addresses. `NetworkRegistration` carries `up
 `vlan`; `Inventory.nics[].kind` (`physical`, `bond`, `bridge`, `vlan`, `loopback`,
 `virtual`) lets clients offer uplinks. The agent service needs write access to
 `/etc/network`. Success proves the host bridge exists, not that the switch carries the VLAN.
-Registrations still cannot be deleted. See [the plan](plans/2026-09-09-pool-vlan-networks.md).
+Removing and renaming a pool VLAN are described next. See
+[the plan](plans/2026-09-09-pool-vlan-networks.md).
+
+**Pool network and ISO removal, and network rename (new contract, 2026-09-19).** API impact:
+**new contract** — three Core command kinds (`network-remove`, `network-update`, `media-remove`)
+carrying one new payload, two new client routes, a changed branch on an existing client route,
+two new reported fields and a new capability. Peer routes keep their shapes but gained one
+response: `GET /api/v1/pool/networks`, `GET /api/v1/pool/networks/{network_id}`,
+`POST /api/v1/pool/networks/{network_id}/access`, `GET /api/v1/pool/media`,
+`GET /api/v1/pool/media/{media_id}` and `POST /api/v1/pool/media/{media_id}/access` answer `503`
+with the fixed body `pool resource list unavailable: managed journal is incomplete` when the
+serving host cannot read its managed journal whole (an unreadable entry, or the 10 000-entry
+retention cap). A member treats any non-200 as "remove nothing", so the converge pass fails and
+nothing is torn down. The body names no file and carries nothing from the journal; the same
+condition is visible on the serving host as its `failed` `managed-journal` check, which names the
+unreadable entry, and that host refuses every managed operation while it lasts. A tombstone still
+never travels on the peer wire — a member infers a removal from a resource's absence from an
+authoritative master list, exactly as shared storage already does.
+
+*Capability.* Core advertises `pool-resource-removal-v1` when it accepts the three kinds.
+
+*Client routes* (administrator session, same HTTPS Origin, `X-CSRF-Token`; JSON rejects unknown
+fields and bodies over 1 MiB):
+
+| Route | Body | Target |
+| --- | --- | --- |
+| `DELETE /api/v1/networks/{id}` | `{request_id, pool_id, expected_generation}` | pool master |
+| `PATCH /api/v1/networks/{id}` | the same plus `name` | pool master |
+| `DELETE /api/v1/media/{id}` (succeeded import) | `{request_id}` | the reported owning host |
+
+`host_id` is **not accepted** on any of them. For a pool VLAN the target is always the pool
+master, resolved from the pool record (`master_host_id`), so a client-supplied host would be a
+second opinion about who owns pool state; because unknown fields are rejected, sending one is
+`400 invalid JSON request`. For an ISO the pool, owner and current generation all come from the
+host-reported record, which is why that body carries nothing but `request_id`. The unchanged
+failed/`needs_attention` discard branch of `DELETE /api/v1/media/{id}` still takes **no body**.
+
+Acceptance is `202` with `{resource, resource_id, action, operation}`; a replay of the same
+`request_id` with an identical body is `200` with the original operation and queues nothing, and
+the same `request_id` with a different body is `409`. A lost reply is recovered by resending the
+identical request, not by minting a new one.
+
+*Network status codes and error texts:* `400 network, pool_id and stable request_id required`
+(bad `{id}`, `request_id` or `pool_id`); `400 resource removal must not carry a name`;
+`400 a network name must be nonblank, at most 200 UTF-8 bytes, without slashes or control
+characters`; `401 administrator login required` / `session expired or invalid`;
+`403 CSRF token required`; `404 network is not registered on this pool's master` (unknown,
+another pool's, not yet succeeded, or an unreadable mirrored command); `409 pool master is
+unavailable`; `409 host must be fresh, active, in the selected pool, and support managed-vm-v1`;
+`409 the pool master does not support removing pool networks yet; upgrade Nex Core`;
+`409 only pool VLAN networks can be removed` (also the rename refusal for a non-VLAN network —
+one gate, one string); `409 network generation is no longer current; refresh and retry`;
+`409 request_id already used with another payload` / `request_id already used for another
+operation`; `500 storage unavailable` / `network operation failed`. A `PATCH` whose
+`expected_generation` is absent or `0` never matches a live network's generation, so it is
+refused by the generation check (409) rather than by shape validation.
+
+*ISO status codes:* the discard branch is unchanged; for a succeeded import,
+`409 the host that stores this ISO does not support removing imported ISOs yet; upgrade Nex Core` is answered
+**before the body is read**, so an older client's bodyless call gets a useful answer;
+`400 stable request_id required to remove an imported ISO`; `409 another media transfer is
+active; retry shortly`; `409 this import is still running; wait for its task to finish`;
+`409 host must be fresh, active, in the selected pool, and support managed-vm-v1`; `404 media not
+found`; `500 ISO removal request storage failed`.
+
+*Command payload.* `Command.resource_lifecycle` carries `ResourceLifecycleRequest`
+(`resource` `network`|`media`, `action` `remove`|`update`, `resource_id`, `pool_id`, `host_id`,
+`expected_generation` ≥ 1, `name` for a rename only), and `kind` is always
+`resource + "-" + action`, so `media-update` cannot exist. Registration keeps the existing
+`Command.network`/`Command.media` shape, whose resource ID Core reserves permanently; a lifecycle
+change takes its own operation slot (`network-lifecycle:<id>:<operation>`,
+`media-lifecycle:<id>:<operation>`), so a removal never collides with the registration that
+created the resource. Replay is the existing `Execute` rule: the same operation ID with the same
+command returns the stored result, and with different input is refused.
+
+*Reported fields.* `NetworkRegistration` and `Media` gain `tombstone`, and `Media` gains
+`generation` (zero reads as 1, as `NetworkRegistration.generation` already did). A tombstone row
+in `Inventory.managed` carries only `id`, `pool_id`, `host_id` and the generation after the
+removal. Controller deletes its mirror row for that reporting host only, so a member's tombstone
+cannot delete the master's pool VLAN row, and nothing re-adopts the resource from an older
+report. A fresh Controller connected to the master after a removal and a rename reproduces the
+whole picture from the master's report: live rows come back with their Core IDs, names and
+generations, and a tombstone row simply deletes nothing it never had.
+
+*Where a refusal appears.* Core owns every refusal and its text; the Controller only relays.
+A refusal reaches the operator as the operation's `failed` result — either as the host's
+transport `Result` or, for a replacement Controller, through the inventory `ManagedOutcome`
+(both admit the three kinds) — and is shown verbatim in Task history. The Core-owned texts are
+`only pool VLAN networks can be removed`, `network generation is no longer current; refresh and
+retry`, `ISO generation is no longer current; refresh and retry`, `network cannot be removed
+while used by VM <uuid>`, `ISO cannot be removed while attached to VM <uuid>`, the pool-wide
+`… on host <host>` variants, `pool VM inventory is incomplete; wait for every member to report
+before removing this network|ISO`, `only the pool master may remove or rename a pool
+network|ISO`, `bridge <b> was not created by Nex; remove it by hand`, `network still has attached
+interfaces`, `pool network <id> changed uplink or VLAN; remove and re-add it`, `network is not
+registered on this host`, `ISO is not imported on this host` and the unresolved-lifecycle guard
+`network|media lifecycle operation is unresolved; inspect or reconcile it before retrying`.
+A member's converge check carries three more Core-owned texts: `pool network <id> was removed on
+this host and is listed again by the master; remove it on the master and add it again` and its
+`pool ISO <id> …` variant (a removal on a host is permanent, so the ID can never be held again
+there), and `pool network|ISO <id> cannot be removed on this host: <reason>`, where `<reason>` is
+any refusal above plus `<bridge> exists but is not a bridge` and `managed journal is incomplete`.
+An ambiguous timeout stays `dispatched` and is never turned into a success; teardown is
+idempotent, so a re-run settles it rather than needing attention.
+
+*Media file ownership.* `media-remove` unlinks the published file only when this host's live
+`iso-import` record is its own import. An adopted record — a member's copy of a pool-shared ISO,
+whose operation ID is the deterministic adoption ID — writes the tombstone and leaves the file to
+the importing host, so a member never deletes the pool's single copy on shared storage.
+
+*Master-side dependency check.* Before accepting a pool-wide removal the master reads each other
+member's last published VM inventory (`state.Inventory[host].VMs`, replaced whole on every
+publication) and refuses while any of those VMs names the network or ISO. A member that is **not
+ready** still holds the resource: its last published snapshot keeps counting, because Core refuses
+to record a snapshot from a host that is not ready. Only a *ready* member must additionally be at
+the current membership generation, and a ready member that is behind gives
+`pool VM inventory is incomplete; wait for every member to report before removing this
+network|ISO`. This host's own VMs are covered by Core's local dependency check inside `Execute`,
+so a single-host pool needs no published inventory at all.
+
+*Member convergence.* Members converge on their ordinary member pull pass (the same probe tick as
+shared storage, ten seconds on a packaged host). The pass tears nothing down unless the master's
+list was **authoritative**: HTTP 200, a decodable body, an unexpired list context and every entry
+belonging to this pool. Any failure, partial answer or foreign entry returns before the orphan
+loop, so an unreachable or confused master never removes anything; a master that cannot read its
+own managed journal whole answers `503` rather than a short list, and a member that cannot read
+its own journal whole removes nothing either. Before any `Execute`, a member runs
+`CheckNetworkRemoval` / `CheckMediaRemoval`, which share one implementation with the teardown, so
+every predictable refusal (a VM dependency, a non-pool network, unproven bridge ownership, a
+bridge that is not a bridge, an extra attached port, an incomplete journal) is reported in the
+converge check and writes no journal entry. A teardown or apply that fails for an unexpected
+native reason uses an operation ID that is deterministic within the UTC hour, so it records one
+journal entry per hour and replays that stored result within the hour instead of writing one per
+probe tick; the next hour's ID retries for real. A failed pool-VLAN `network-register` does not
+reserve the network ID — the same registration may be retried under a later operation ID once the
+member's uplink or trunk is fixed — while a `needs_attention` outcome stays reserved, as it does
+for storage. A rename is
+applied one generation at a time, so a member several renames behind never reports a generation it
+did not apply.
+
+*Version skew.* An older **master** does not advertise the capability, so the Controller refuses
+with the upgrade text and queues nothing. An older **Controller** ignores the unknown `tombstone`
+field and keeps a mirror row for a resource Core no longer has — the same exposure storage detach
+already has, documented rather than engineered around. An older **member** keeps applying what the
+master lists and never removes, so it silently retains a removed bridge or ISO file until it is
+upgraded; the master cannot detect that. A newer member with an older master sees no removals at
+all, so no orphan appears.
 
 **Host-held pool state and Controller replacement (2026-09-09):** `POST /api/v1/agent/enroll`
 from an already enrolled host targeting a *different* Controller URL or trust is a replacement:
 the agent (`nex-core-agent enroll` or the local `POST /api/local/v1/enrollment`) takes a fresh
-key and host identity there, keeps its state directory and managed journal, and drops pending
-results for the previous Controller; `--replace-host` is refused in that case. Only the same
+key and Controller credentials while preserving its Core-owned host and pool identities,
+state directory and managed journal. Existing managed results are marked acknowledged;
+ongoing Core recovery can publish a later result under its original operation ID. A
+replacement Controller acknowledges unknown operation IDs without creating operations,
+and adopts resources from fresh inventory. Acknowledging an unknown result does not
+adopt its payload; resource identities and per-host outcomes come from Core inventory.
+A known operation belonging to another host
+is rejected. `--replace-host` is refused in this replacement flow. Only the same
 Controller answers "already enrolled". Report bodies may be up to 16 MiB to carry the journal. API impact: changed
 contract. `Inventory.nics[]` carries `master` (bridge/bond membership) and `parent` (VLAN raw
 device). `Inventory.guest_networks[]` and the `GuestNetwork` schema are replaced by
@@ -1183,8 +1422,9 @@ remains `needs_attention`. It never recreates disks or a definition, replays the
 the guest, deletes it, or changes a permit. A failed or unavailable revalidation remains
 `needs_attention`; the Controller neither retries nor drives this recovery. The exact Core engine
 outcome overrides stale transport-journal results; Controller updates its matching operation
-from that raw outcome, while a replacement Controller records an unknown operation as passive
-`adopt-outcome:<host>:<operation_id>` history) and `missing_vms` (IDs of `vms` entries whose persistent domain
+from that inventory-reported `ManagedOutcome`, while a replacement Controller records an
+unknown inventory outcome as passive `adopt-outcome:<host>:<operation_id>` history. This
+is distinct from an unknown raw transport result, which is acknowledged without adoption) and `missing_vms` (IDs of `vms` entries whose persistent domain
 `virsh list --all --uuid` no longer reports). Two host checks qualify the report:
 `managed-journal` is `failed` when a journal file cannot be read — that file is skipped and
 named in the error while every other entry is still reported, instead of the whole state
@@ -1852,11 +2092,15 @@ clear it (BUG-0203). Administrator session, same Origin and `X-CSRF-Token`, audi
 `media.discard`. Only Controller-owned staging bytes of the failed upload are deleted; no Core
 command is issued and no host state is touched.
 
-It answers **409** while the import is still queued or dispatched, **409** when another media
-transfer holds the staging lock, and **409 when the import SUCCEEDED**: the ISO then lives on its
-host, Core has no media-removal command, and Controller will not drop a record for bytes it
-cannot delete. Removing a stored ISO therefore remains unavailable until Core gains that call —
-this is a deliberate refusal, not an oversight. **404** for an unknown id.
+It answers **409** while the import is still queued or dispatched and **409** when another media
+transfer holds the staging lock. **404** for an unknown id.
+
+**Changed contract, 0.3.5 — removing an imported ISO.** The former 409 for a **succeeded** import
+is replaced by a relay: the same route now takes `{request_id}` and queues a `media-remove`
+command to the host that stores the file, which unlinks it, journals a tombstone and propagates
+it to members. An owning host without `pool-resource-removal-v1` is still refused, with
+`the host that stores this ISO does not support removing imported ISOs yet; upgrade Nex Core`. See
+*Pool network and ISO removal, and network rename* above for the full contract.
 
 Retrying a failed download is `POST /api/v1/media/download` again under a **new** `request_id`;
 no second endpoint was added for what an existing one already covers.

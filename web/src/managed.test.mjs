@@ -336,3 +336,132 @@ console.log("managed.test.mjs: ok");
   assert.equal(stateText("running"), "running");
   assert.equal(stateText(undefined), "unknown");
 }
+
+// Pool resource removal / rename (pool VLAN networks and stored ISOs). Core does the work: the
+// UI only submits the request, shows the accepted state and waits for the master to report the
+// resource gone. Nothing here deletes a row by itself.
+{
+  const {
+    networkRemovable, mediaRemovable, confirmMatches, validResourceName, renameChanged,
+    lifecycleBlocker, networkRemoveBody, networkRenameBody, stableRequestID, resourceGeneration,
+    networkMemberState, removalCapability,
+  } = await import(`file://${outfile}`);
+
+  // Only a pool VLAN network is Nex's to rename or remove.
+  assert.equal(networkRemovable({ kind: "vlan" }), true);
+  for (const kind of ["bridge", "network", "", undefined]) assert.equal(networkRemovable({ kind }), false, `${kind}`);
+  // A succeeded import is host-held media; a failed one keeps the existing discard action.
+  assert.equal(mediaRemovable({ status: "succeeded" }), true);
+  for (const status of ["failed", "needs_attention", "queued", "dispatched"]) assert.equal(mediaRemovable({ status }), false, status);
+  assert.equal(mediaDiscardable({ status: "failed" }), true, "the discard path for failed imports is unchanged");
+  assert.equal(mediaDiscardable({ status: "succeeded" }), false);
+
+  // Exact match only: no trimming and no case folding, or a name that differs by an invisible
+  // space would arm a destructive button.
+  assert.equal(confirmMatches("guest-vlan", "guest-vlan"), true);
+  assert.equal(confirmMatches(" guest-vlan", "guest-vlan"), false);
+  assert.equal(confirmMatches("guest-vlan ", "guest-vlan"), false);
+  assert.equal(confirmMatches("Guest-VLAN", "guest-vlan"), false);
+  assert.equal(confirmMatches("", ""), false);
+
+  // The register-network form's rule (required, at most 100 characters) plus what Core refuses.
+  assert.equal(validResourceName("lab vlan 100"), true);
+  assert.equal(validResourceName("   "), false);
+  assert.equal(validResourceName("a".repeat(100)), true);
+  assert.equal(validResourceName("a".repeat(101)), false);
+  assert.equal(validResourceName("lab/vlan"), false);
+  assert.equal(validResourceName("lab\nvlan"), false);
+  // Submitting the name the network already has is a no-op, not an empty rename request.
+  assert.equal(renameChanged("guests", "guests"), false);
+  assert.equal(renameChanged("guests", " guests "), false);
+  assert.equal(renameChanged("guests", "guests-2"), true);
+  assert.equal(renameChanged("guests", ""), false);
+
+  const ok = { unavailable: false, inFlight: false, ready: true, hostFresh: true, capable: true };
+  assert.equal(lifecycleBlocker(ok), "");
+  assert.match(lifecycleBlocker({ ...ok, unavailable: true }), /out of date/);
+  assert.match(lifecycleBlocker({ ...ok, ready: false }), /Wait for Nex Core to confirm/);
+  assert.match(lifecycleBlocker({ ...ok, hostFresh: false }), /pool master is not freshly connected/);
+  assert.match(lifecycleBlocker({ ...ok, capable: false }), /upgrade Nex Core/);
+  assert.match(lifecycleBlocker({ ...ok, inFlight: true }), /already in flight/);
+
+  // 0 is the pre-generation wire value for 1, so a network registered before generations existed
+  // is still removable at the generation Core compares against.
+  assert.equal(resourceGeneration(0), 1);
+  assert.equal(resourceGeneration(undefined), 1);
+  assert.equal(resourceGeneration(4), 4);
+  assert.deepEqual(networkRemoveBody({ generation: 0 }, "pool-1"), { pool_id: "pool-1", expected_generation: 1 });
+  assert.deepEqual(networkRemoveBody({ generation: 3 }, "pool-1"), { pool_id: "pool-1", expected_generation: 3 });
+  assert.deepEqual(networkRenameBody({ generation: 3 }, "pool-1", "  guests-2 "), { pool_id: "pool-1", expected_generation: 3, name: "guests-2" });
+
+  // One request identity per unchanged request: a retry after a lost reply replays it, and only
+  // a real change (another new name) mints a new one.
+  let minted = 0;
+  const mint = () => `request-${++minted}`;
+  const store = {};
+  const remove = networkRemoveBody({ generation: 2 }, "pool-1");
+  assert.equal(stableRequestID(store, "network:n1:remove", remove, mint), "request-1");
+  assert.equal(stableRequestID(store, "network:n1:remove", networkRemoveBody({ generation: 2 }, "pool-1"), mint), "request-1", "the same unchanged request keeps its identity");
+  assert.equal(stableRequestID(store, "network:n1:rename", networkRenameBody({ generation: 2 }, "pool-1", "guests-2"), mint), "request-2", "another row/action is its own request");
+  assert.equal(stableRequestID(store, "network:n1:rename", networkRenameBody({ generation: 2 }, "pool-1", "guests-3"), mint), "request-3", "a changed request mints a new identity");
+  assert.equal(stableRequestID(store, "network:n1:remove", networkRemoveBody({ generation: 3 }, "pool-1"), mint), "request-4", "a moved generation is a different request");
+
+  // Per-host convergence keeps reading sensibly through a rename: a member still on the old
+  // generation has not applied the new name, so it is not reported as ready.
+  const converged = { network_id: "n1", host_id: "member", generation: 2, uplink_present: true };
+  assert.equal(networkMemberState({ generation: 2 }, converged), "ready");
+  assert.equal(networkMemberState({ generation: 3 }, converged), "converging");
+  assert.equal(networkMemberState({ generation: 2 }, { ...converged, uplink_present: false }), "pending");
+  assert.equal(networkMemberState({ generation: 2 }, { ...converged, error: "uplink eno1 is missing" }), "uplink eno1 is missing");
+  assert.equal(networkMemberState({ generation: 1 }, { ...converged, generation: 0 }), "ready", "0 is generation 1 on both sides");
+
+  // The calls themselves: DELETE/PATCH on the resource, request_id plus the body, and never an
+  // optimistic row deletion — the list is reloaded and the master reports the removal.
+  assert.match(managedSource, /rename \? "PATCH" : "DELETE", \{ request_id, \.\.\.body \}/);
+  assert.match(managedSource, /`\$\{lifecycle\.resource === "network" \? "networks" : "media"\}\/\$\{encodeURIComponent\(lifecycle\.id\)\}`/);
+  assert.match(managedSource, /const body = rename \? \{ \.\.\.lifecycle\.base, name: renameText\.trim\(\) \} : lifecycle\.base;/);
+  assert.match(managedSource, /base: \{\}, note:/, "an ISO removal sends request_id only");
+  assert.doesNotMatch(managedSource, /setNetworks|networks\.filter\(.*!==.*lifecycle/);
+  // Never a pool object in browser storage: the request identities live in a ref.
+  assert.match(managedSource, /const lifecycleRequests = useRef<Record<string, \{ key: string; id: string \}>>\(\{\}\);/);
+  // Enter in the confirmation field must not reach the destructive button.
+  assert.match(managedSource, /onKeyDown=\{e => \{ if \(e\.key === "Enter"\) e\.preventDefault\(\); \}\}/);
+  assert.match(managedSource, /<button type="button" className="danger" disabled=\{lifecycleBusy \|\| !confirmMatches\(confirmText, lifecycle\.name\)\}/);
+  // Focus returns to the button that opened the dialog.
+  assert.match(managedSource, /lifecycleOpener\.current\?\.focus\(\)/);
+
+  // Rendered rows: a pool VLAN network offers both actions, a host network offers neither, and a
+  // stale Controller inventory disables them with the reason in the title.
+  const master = { id: "host-1", pool_id: "pool-1", hostname: "core-a", connection: "fresh", revoked: false, capabilities: ["managed-vm-v1", removalCapability], inventory: null };
+  const vlan = { id: "net-1", pool_id: "pool-1", host_id: "host-1", name: "guests", operation_id: "op-n1", status: "succeeded", kind: "vlan", source: "nex-guests", uplink: "eno1", vlan: 100, generation: 2, member_access: [{ network_id: "net-1", host_id: "host-1", generation: 1, uplink_present: true }] };
+  const hostNetwork = { ...vlan, id: "net-2", name: "br0", kind: "bridge", source: "br0", vlan: undefined, member_access: undefined };
+  const netProps = { ...props, tab: "Networking", masterHostID: "host-1", hosts: [master] };
+  const vlanRow = renderToStaticMarkup(createElement(ManagedVMs, { ...netProps, networks: [vlan] }));
+  assert.match(vlanRow, />Rename</);
+  assert.match(vlanRow, />Remove</);
+  assert.doesNotMatch(vlanRow, /<button type="button" title="[^"]*" disabled=""[^>]*>Rename</, "a confirmed network on a fresh capable master is actionable");
+  // The member line still renders, and says converging while the member is behind the rename.
+  assert.match(vlanRow, /core-a: converging/);
+  const hostRow = renderToStaticMarkup(createElement(ManagedVMs, { ...netProps, networks: [hostNetwork] }));
+  assert.doesNotMatch(hostRow, />Rename</);
+  assert.doesNotMatch(hostRow, />Remove</);
+  assert.match(hostRow, /Host network · created and managed on core-a/);
+  const staleRow = renderToStaticMarkup(createElement(ManagedVMs, { ...netProps, networks: [vlan], unavailable: true }));
+  assert.match(staleRow, /Controller inventory may be out of date\. Refresh the view before changing this pool resource\.[^>]*disabled=""/);
+  const oldCore = renderToStaticMarkup(createElement(ManagedVMs, { ...netProps, networks: [vlan], hosts: [{ ...master, capabilities: ["managed-vm-v1"] }] }));
+  assert.match(oldCore, /cannot remove pool networks or ISOs yet; upgrade Nex Core\.[^>]*disabled=""/);
+  const queued = renderToStaticMarkup(createElement(ManagedVMs, { ...netProps, networks: [{ ...vlan, id: "", status: "queued" }] }));
+  assert.match(queued, /Wait for Nex Core to confirm this resource[^>]*disabled=""/);
+
+  // The ISO library offers Remove ISO only for a stored import, and keeps Discard for a failed one.
+  const isoProps = { ...props, tab: "ISO library", masterHostID: "host-1", hosts: [master] };
+  const stored = { id: "iso-1", pool_id: "pool-1", host_id: "host-1", storage_id: "storage-1", name: "debian.iso", operation_id: "op-i1", status: "succeeded", size_bytes: 40000, sha256: "a" };
+  const storedRow = renderToStaticMarkup(createElement(ManagedVMs, { ...isoProps, media: [stored] }));
+  assert.match(storedRow, />Remove ISO</);
+  assert.doesNotMatch(storedRow, />Discard failed import</);
+  const failedRow = renderToStaticMarkup(createElement(ManagedVMs, { ...isoProps, media: [{ ...stored, id: "iso-2", status: "failed" }] }));
+  assert.match(failedRow, />Discard failed import</);
+  assert.doesNotMatch(failedRow, />Remove ISO</);
+}
+
+console.log("managed.test.mjs: pool resource removal ok");

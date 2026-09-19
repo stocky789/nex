@@ -3193,3 +3193,465 @@ Append resolved defects with their evidence and the approach to avoid.
 - Avoid: rebuilding published artifacts to test URL routing, ignoring auth failures,
   downloading gigabytes for a reachability check, or using an early-exit consumer
   in a pipe whose producer must complete successfully.
+
+## BUG-0295 — Pool master refused VM creation on its own SMB/NFS repository
+
+- Date: 2026-09-19. Status: corrected locally; not yet deployed to the affected lab host.
+- Symptom: `vm-create` on a single-host pool with a Controller-registered SMB repository
+  failed with `selected VM host returned an unregistered shared storage observation`,
+  even when the VM's disks were on local storage.
+- Root cause: Controller stamps its request state (`status: "queued"`, `operation_id`)
+  into typed `storage-register` commands. Core copied the request into the durable
+  applied record, and `storageProjection` echoed it. The master's own applied-storage
+  list clears those fields, but the placement observation did not, so the master's
+  shared-storage comparison saw status `queued` and refused. Members never hit it
+  because replicated pool storage already strips the fields.
+- Fix: `storageProjection` drops `OperationID`, `Status` and `Error`. Only succeeded
+  journal entries are projected, so those fields are never an observation. The read-side
+  fix also heals journals already written with `queued`.
+- Regression: `go test ./internal/vmhost/ -run TestStorageProjectionDropsControllerRequestState`
+  failed before (projection carried `Status:queued`) and passes after. `go test
+  ./internal/vmhost/ ./internal/agent/ ./internal/controller/ ./internal/protocol/`
+  passed. Both push/PR workflows run `go test -race ./...`.
+- Live evidence: observed read-only through the lab Controller API (operation failed,
+  one host, one SMB repository, no tombstones). The fix was not deployed or re-tested
+  on that host.
+- API impact: none; no request, response or journal format changes.
+- Avoid: relaxing the master's shared-storage status check, or clearing the field only
+  in new registrations, which leaves existing journals broken.
+
+
+## BUG-0296 — Initial ZFS provisioning passed its ownership marker as a pool property
+
+- Date: 2026-09-19; found during the unshipped provisioning implementation.
+- Symptom: the disposable host API operation reached `needs_attention` with
+  `property 'nex:repository' is not a valid pool or vdev property`; no pool was created.
+- Root cause: the create command used `zpool create -o` for a ZFS user property and
+  attempted to recover it through pool-property lookup. User properties belong to
+  filesystem datasets.
+- Fix: set `nex:repository` on the pool's root filesystem atomically through
+  `zpool create -O`; recovery reads it with `zfs get` before adopting any native state.
+- Regression: `go test ./internal/vmhost -run TestZFSProvisionCreatesCoreOwnedPoolOnce -count=1`
+  passed. The test requires the exact `-O nex:repository=repo-1` argument and rejects
+  the original `-o` form. Both GitHub and Gitea push/PR foundation workflows already
+  run the vmhost tests through `go test -race -timeout 20m ./...`.
+- Evidence: [native failure and rollout verification](qa/2026-09-19-zfs-provisioning.md).
+  The initial native failure is reproduced; successful post-fix native provisioning
+  and later recovery gates are recorded separately when executed.
+- Avoid: treating a mocked subprocess success as proof that a native tool accepts
+  an option, or moving the ownership marker to a separate post-create command that
+  leaves an unmarked pool after interruption.
+
+## BUG-0297 — ZFS recovery stopped after native pool creation
+
+- Date: 2026-09-19; found during the unshipped provisioning implementation.
+- Symptom: the disposable host created an ONLINE tagged pool, but a missing lab
+  prerequisite failed registration and an identical Controller request only returned
+  the stored attention result.
+- Root cause: the normal worker dispatched pending commands, while the aggregate
+  attention result had no Core-owned continuation for a completed native provision.
+  The failed managed registration also retained its original failure.
+- Fix: the Core worker resumes durable incomplete aggregates and retries registration
+  only after the exact completed native receipt and live pool/dataset identities prove
+  ownership. Failed-create intent alone never proves a healthy repository.
+- Regression: `go test ./internal/agent ./internal/vmhost ./internal/controller -run 'TestResumePoolZFSOperations|TestZFSProvisionResumesPartitionedNVMePoolWithoutWipe|TestZFSProvisionRecoveryCompletesOriginalAttentionOperation|TestManagedWorkerBackgroundCompletion' -count=1`
+  passes, covering recovery without Controller replay, refusal of an unproven failed
+  create, and the partitioned-vdev, attention-completion and background-completion
+  tests named below, which live in `internal/vmhost`, `internal/controller` and
+  `internal/agent` respectively. Both GitHub and Gitea push/PR foundation workflows run
+  these tests through `go test -race -timeout 20m ./...`.
+- Native evidence: the retry retained the existing pool GUID and did not create a
+  pool or managed registration for the earlier failed-create intent. Registration
+  then correctly refused an unmounted dataset. After the lab mounted it and completed
+  registration, a real reboot proved native import/mount with stable GUIDs; see the [rollout report](qa/2026-09-19-zfs-provisioning.md).
+- Further fault injection interrupted an actual tagged pool before dataset creation.
+  Recovery originally rejected OpenZFS partition vdevs for selected whole disks. It
+  now resolves by-id paths and explicitly marked sysfs partitions to their parent
+  disks, preserving whole NVMe namespaces, before completing only the missing dataset.
+  `TestZFSProvisionResumesPartitionedNVMePoolWithoutWipe` exercises the full path and
+  asserts neither erasure nor a second pool create occurs.
+- Completed aggregate recovery now reconciles the original Core journal after a crash
+  and republishes an acknowledged attention result under the same operation ID.
+  Controller accepts that authoritative attention-to-success transition.
+  `TestZFSProvisionRecoveryCompletesOriginalAttentionOperation` covers this report flow;
+  native task readback remains part of the rollout verification.
+- Background completion uses the heartbeat-owned journal rather than a shared worker
+  map. `TestManagedWorkerBackgroundCompletionSendCancels` reaches the production send
+  helper with a full channel; `TestManagedWorkerBackgroundCompletionPreservesForeground`
+  verifies durable attribution, acknowledgement reset, duplicate suppression and the
+  independent foreground completion. Both passed under `go test -race`.
+- Avoid: resetting operation identity, selecting fresh disks to hide recovery failure,
+  or equating a stored successful intent with current native access.
+
+## BUG-0298 — Provisioned ZFS aggregates bypassed target-host storage checks
+
+- Date: 2026-09-19; found during native and independent review of the unshipped slice.
+- Symptom: a failed-create repository remained a successful Controller mirror after
+  Core stopped reporting it; a host-scoped repository on a member could be mistaken
+  for storage local to its canonical master.
+- Root cause: adoption and readiness applied the new per-host access semantics only
+  to pool scope, retained absent master rows, and allowed the ordinary same-host
+  readiness shortcut. Media capability also advertised a member-targeting flow that
+  the existing import API does not implement.
+- Fix: all provisioned ZFS scopes use the master's record and fresh access for the
+  exact target. A healthy master journal confirming absence marks a stale mirror unusable
+  while retaining its adoption operation; a later Core registration restores the
+  same mirror. Failed inventory grants no new access. New provisioned
+  repositories advertise VM disks only; advanced existing datasets are unchanged.
+- Regression: `go test ./internal/controller` passed, including
+  `TestHostScopeZFSUsesMasterProjectionAndTargetAccess` and
+  `TestMasterReportMarksStaleZFSProjectionUnusableUntilCoreReregisters`. Both GitHub and
+  Gitea push/PR foundation workflows execute the package through the full Go race
+  suite. Native post-fix observation is tracked separately in the
+  [rollout report](qa/2026-09-19-zfs-provisioning.md).
+- Avoid: deriving disk availability from the master row's host ID, treating the
+  selected scope as state ownership, or erasing mirrors after a failed Core probe.
+
+## BUG-0299 — ZFS lifecycle replay and later-host configuration could drift
+
+- Date: 2026-09-19; found during review of the unshipped provisioning slice.
+- Symptom: an interrupted rename could fail when replayed after its generation was
+  persisted; a configure-host request could replace canonical name/scope or an
+  existing host's selected devices.
+- Root cause: rename incremented the generation before transport completion without
+  recognizing the already-applied exact name; configure-host admission checked only
+  repository existence before adding another operation record.
+- Fix: permit an already-applied rename only at the immediately following generation
+  with the exact persisted name; preserve canonical name/scope and refuse replacement
+  device intent when configuring additional hosts.
+- Regression: `go test ./internal/agent -run 'TestPoolZFSLifecycle|TestPoolZFSJournal' -count=1`
+  passed. The checks cover rename replay, changed-source/stale-update rejection and
+  configure-host input identity. Both GitHub and Gitea push/PR foundation workflows
+  execute these tests in the full Go race suite. These are simulated journal/peer
+  checks; native lifecycle evidence remains separate.
+- Avoid: treating a new configure-host operation as a rename, or incrementing state
+  without defining safe replay after a lost completion.
+
+## BUG-0300 — ZFS wizard could retain another provisioning context
+
+- Date: 2026-09-19; found in the expanded browser walkthrough.
+- Symptom: opening a new ZFS workflow after configuring an existing repository could
+  retain the prior repository context or race its unfinished close/reload. Scope
+  radios also rendered above their labels and lacked native keyboard grouping.
+- Root cause: toolbar actions did not clear configuration context or prevent
+  overlapping wizard lifetimes; generic grid labels were used for radio choices.
+- Fix: clear configuration context for fresh actions, key the wizard by repository,
+  disable competing open actions until it closes, and use aligned labelled radios
+  with a shared native name. Draft/retry identity remains preserved after uncertainty.
+- Regression: `.cache/phase1-qa-venv/bin/python tests/integration/zfs_provisioning_browser.py --evidence .cache/zfs-provisioning-browser-complete`
+  passed, where `--evidence` names the output directory the run writes its captures and
+  results to; it selects no additional checks. The runner checks configure-to-new identity, toolbar locking, Space/arrow
+  selection, typed erasure and lost-reply replay; it runs in both GitHub and Gitea
+  push/PR foundation workflows. Captures were inspected. Replies are simulated.
+- Avoid: reusing a mounted wizard across different repository intents or allowing a
+  late response from one submission to close the next workflow.
+
+
+## BUG-0301 — Controller replacement could reject retained Core reports
+
+- Date: 2026-09-19; found in the disposable two-host replacement walkthrough.
+- Symptom: replacement enrollment preserved host identity, but reports failed and
+  repositories were absent from the fresh Controller.
+- Root cause: Core recovery could republish former Controller operation IDs, which
+  report validation rejected. Removing stale resource mirrors also left their unique
+  adoption operations behind, so a later authoritative registration could not insert
+  another adoption operation.
+- Fix: acknowledge valid unknown results without creating state, retain cross-host
+  rejection for known operations, and restore an orphan mirror only through its exact
+  host/repository adoption operation using the current Core registration. Missing
+  registrations keep an unusable mirror rather than deleting its adoption relation.
+- Regression: `go test ./internal/controller -run 'TestReplacementControllerAcknowledgesFormerResultsAndAdoptsZFS|TestCoreStorageReportRepairsOrphanAdoptionProjection|TestMasterReportMarksStaleZFSProjectionUnusableUntilCoreReregisters' -count=1`
+  passed. Both GitHub and Gitea push/PR foundation workflows run these through the
+  full Go race suite. Native retesting uses the preserved failing database; its final
+  result is recorded separately in the [rollout report](qa/2026-09-19-zfs-provisioning.md).
+- Avoid: resetting the Controller database to hide an adoption failure, accepting
+  another host's known operation, or deriving resource state from an unknown result.
+
+
+## BUG-0302 — ZFS detach after rename mixed aggregate and local recovery state
+
+- Date: 2026-09-19; reproduced through the disposable member-only repository API.
+- Symptom: rename and recheck succeeded, but detach failed its member generation
+  check. The failed lifecycle result then hid the successful repository registration.
+  Review also found that a lost detach reply could leave an aggregate unrecoverable.
+- Root cause: the master generation was forwarded as the member's local generation,
+  lifecycle results overwrote provisioning outcomes, and replay required a live local
+  registration even after successful detach had left its durable tombstone.
+- Fix: retain the master generation fence and translate to the observed local
+  generation; keep lifecycle receipts separately; replay only exact local detach
+  receipts and retain a ready receipt across aggregate removal. Earlier development
+  outcomes are repaired only against authenticated current matching native GUIDs.
+- Regression: `go test -race ./internal/agent -run 'ZFSLifecycle|TestPoolZFSProjectionPublishesCompletedDetachTombstoneWithoutMasterDataset' -count=1`
+  passed, covering aggregate generation two/local generation one, stale master
+  rejection, failed-lifecycle isolation, matching/mismatched GUID repair, and crashes
+  before and after aggregate removal. Canonical tombstone projection also removes
+  detached master-only mirrors while preserving newer registration generations.
+  Both GitHub and Gitea push/PR foundation
+  workflows run these tests in the full Go race suite. Native terminal detach and
+  unchanged-pool evidence are recorded in the [rollout report](qa/2026-09-19-zfs-provisioning.md).
+- Avoid: weakening Controller adoption gates, rewriting immutable failed command
+  receipts, treating missing registration as proof of successful detach, or reporting
+  HTTP 202 as completed work.
+
+
+## BUG-0303 — ZFS source labels repeated the pool name
+
+- Date: 2026-09-19; found by inspecting the real disposable Controller storage page.
+- Symptom: a Core-reported `tank/vms` dataset rendered as `tank/tank/vms`.
+- Root cause: the shared source formatter always prepended the pool, assuming every
+  dataset was relative even though Core can report a qualified dataset name.
+- Fix: preserve an already qualified dataset or pool root; prepend the pool only to
+  relative names. API impact: existing contract, presentation only; no state changes.
+- Regression: `npm --prefix web test` failed before the fix and passed after it,
+  covering relative, qualified and root datasets. Typecheck and build also passed.
+  Both GitHub and Gitea push/PR foundation workflows execute the web test suite.
+  The real-Controller recapture is recorded in the [rollout report](qa/2026-09-19-zfs-provisioning.md).
+- Avoid: changing Core-reported identity to compensate for a display assumption.
+
+
+## BUG-0304 — Adopting a shared ISO made a member's managed journal unreadable
+
+- Date: 2026-09-19; found by independent review of the uncommitted 0.3.5 batch, before release.
+- Symptom: after a member adopted one shared ISO, every later managed operation on that host
+  (VM, storage, network) failed until the journal file was deleted by hand.
+- Root cause: `AdoptSharedMedia` used `"pool-media-" + media.ID` as the operation ID. Media IDs
+  are 64 hex characters, so the ID was 75 characters, beyond the 64-character identifier limit.
+  `save` does not validate, `readJournal` does, and `journals` fails closed on the first bad file.
+  The only test of the path stubbed the function out.
+- Fix: derive a bounded deterministic operation ID from a digest of the media ID and run
+  `validateManaged` on the constructed command before saving. API impact: none.
+- Regression: `go test ./internal/vmhost -run TestAdoptSharedMediaKeepsTheJournalReadableForALongMediaID -count=1`
+  failed before the fix and passed after it. Both GitHub and Gitea push/PR foundation workflows
+  run it in the full Go race suite.
+- Avoid: short fixture IDs, asserting only that adoption returned nil (the damage shows on the
+  next journal read), or deleting an invalid entry at read time instead of never writing it.
+
+
+## BUG-0305 — Members re-hashed every shared ISO on every probe pass
+
+- Date: 2026-09-19; found by independent review before release.
+- Symptom: each member read the whole shared ISO library from NFS/SMB every ten seconds; long
+  passes skipped later passes, so storage access observations aged out and placement refused.
+- Root cause: media convergence had no already-adopted short-circuit, and the already-published
+  path still ran a full SHA-256, unlike network convergence.
+- Fix: skip media whose journalled storage, digest and size match and whose published file is
+  still a regular file of that size; hash only on first adoption. A same-size in-place
+  replacement is therefore not re-detected by convergence.
+- Regression: `go test ./internal/vmhost -run TestAdoptSharedMediaDoesNotRehashAnAdoptedISO -count=1`
+  failed before the fix and passed after it; both workflows run it in the Go race suite.
+- Avoid: a Controller- or process-side "last verified" cache for something the host journal
+  already records.
+
+
+## BUG-0306 — A hung shared mount stopped member convergence permanently
+
+- Date: 2026-09-19; found by independent review before release.
+- Symptom: on a member whose shared storage hung, network, media and storage convergence stopped
+  and never resumed until restart.
+- Root cause: `adoptPoolMediaNative` discarded its context and `verifyISO` hashed without
+  cancellation, so the goroutine never returned and `poolReconcileRunning` stayed true. The
+  convergence goroutine was also not registered with `runWork`.
+- Fix: thread the context through `AdoptSharedMedia` into a context-checking reader, and register
+  the goroutine with `runWork`. The initial open/stat on a hung mount remains uninterruptible.
+- Regression: `go test ./internal/vmhost -run TestAdoptSharedMediaHonoursACancelledContext -count=1`
+  failed before the fix and passed after it; both workflows run it. The `runWork` registration has
+  no dedicated test.
+- Avoid: clearing `poolReconcileRunning` on a timeout while the goroutine still runs; that lets a
+  second pass mutate the same journal concurrently.
+
+
+## BUG-0307 — An unreachable host poisoned the ZFS lifecycle journal
+
+- Date: 2026-09-19; found by independent review before release.
+- Symptom: after a ZFS recheck or detach against an unreachable host, lifecycle operations on any
+  other provisioned repository failed with "ZFS lifecycle operation ID belongs to another
+  repository", across restarts. The real cause was also replaced by a generic failure message.
+- Root cause: the dispatch result was persisted before its error was tested, a failed dispatch
+  returns an empty result, and the receipt was keyed on the result's empty operation ID.
+- Fix: key receipts on the lifecycle command's operation ID, refuse an empty one, drop an existing
+  empty-key entry on load, and wrap a failed dispatch as needs-attention with its real error.
+- Regression: `go test ./internal/agent -run TestZFSLifecycleDispatchFailureKeepsCauseAndDoesNotPoisonJournal -count=1`
+  failed before the fix and passed after it; both workflows run it in the Go race suite.
+- Avoid: testing through detach with a stubbed dispatcher; detach fails in preflight, before the
+  persist. Drive the real dispatcher against a host that is not a reachable member.
+
+
+## BUG-0308 — A reopened ZFS wizard kept the disk-erase confirmation armed
+
+- Date: 2026-09-19; found by independent review before release.
+- Symptom: closing and reopening the wizard landed on the confirm step with the typed by-id
+  confirmations restored, so **Provision and erase selected disks** was one click away. The
+  browser check asserted this as correct.
+- Root cause: the wizard serialised its whole selection state, including each confirmation and
+  the current step, to `sessionStorage`, while the discovered devices were never restored.
+- Fix: persist selections with blank confirmations, stop persisting the step so a reopened wizard
+  starts at scope and asks Core again, and keep the request identity so an unchanged retry
+  replays. API impact: none.
+- Regression: `npm --prefix web test` and `tests/integration/zfs_provisioning_browser.py` failed
+  before the fix and passed after it; both workflows run both.
+- Avoid: clearing storage on close or dropping the stored request identity, which breaks safe
+  retry of a submission whose reply was lost.
+
+
+## BUG-0309 — "Configure this host" discarded the chosen host
+
+- Date: 2026-09-19; found by independent review before release.
+- Symptom: the per-host action opened the wizard with an empty host picker listing every eligible
+  host, including hosts Core already reported as configured for that repository.
+- Root cause: the wizard's `initialHostID` property existed but was never passed.
+- Fix: carry the selected row's host into the wizard and exclude hosts that already have a
+  Core-reported outcome for the repository.
+- Regression: `npm --prefix web test` and `tests/integration/zfs_provisioning_browser.py` failed
+  before the fix and passed after it; both workflows run both.
+- Avoid: a Controller-side record of which host holds which repository; derive the exclusion from
+  host-reported outcomes.
+
+
+## BUG-0310 — A pool VLAN retry burned its request ID
+
+- Date: 2026-09-19; found by independent review before release.
+- Symptom: registering a VLAN with a member's `host_id` returned 201, and the identical retry
+  returned 409 "request_id already used with another payload" although the network existed.
+- Root cause: `registerResource` replaced the host with the pool master after the replay check and
+  before storing the idempotency payload, so the stored payload was never what a client resends.
+- Fix: store the request as received; the row and command still carry the master. API impact:
+  existing contract, now documented.
+- Regression: `go test ./internal/controller -run TestPoolVLANRequestedOnMemberReplays -count=1`
+  failed before the fix and passed after it; both workflows run it.
+- Avoid: relaxing the payload comparison or requiring clients to send the master's ID.
+
+
+## BUG-0311 — Network adoption left attention open and one bad VLAN failed the host report
+
+- Date: 2026-09-19; found by independent review before release.
+- Symptom: a repaired network kept its needs-attention operation forever; separately, one
+  master-reported VLAN failing validation made every report from that host return 500.
+- Root cause: the network loop moved from the shared save helper to `mirrorNetworkProjection`,
+  which never resolves attention and returns a hard error that the held branch propagated.
+- Fix: resolve network attention after a successful mirror, and record attention and continue in
+  the held branch instead of failing the report.
+- Regression: `go test ./internal/controller -run 'TestRepairedNetworkClosesAdoptionAttention|TestInvalidMasterVLANDoesNotFailHostReport' -count=1`
+  failed before the fix and passed after it; both workflows run it.
+- Avoid: making the mirror swallow validation failures, or clearing attention on a timer.
+
+
+## BUG-0312 — Updating an older host failed on unsatisfiable OpenZFS dependencies
+
+- Date: 2026-09-19; found by independent review before any ZFS-enabled package was published.
+- Symptom (by analysis, not observed): a host installed from 0.3.4 or earlier could not apply the
+  update, because `zfs-dkms` and `zfsutils-linux` had no installation candidate.
+- Root cause: the Core package declared them as hard dependencies, but they live in Debian
+  `contrib`, which only a fresh ISO install enabled. The first upgrade is driven by the old
+  installed updater, and apt resolves dependencies before any new package script runs.
+- Fix: recommend the OpenZFS packages instead, have `postinst` idempotently add `contrib` to the
+  Debian deb822 sources, and have the updater install still-missing recommendations after a
+  successful Core upgrade. ZFS therefore arrives one update later on such hosts.
+- Regression: `python3 -m unittest tests.test_storage_packaging` and
+  `go test ./internal/nexupdate/... -count=1` failed before the fix and passed after it; both
+  workflows run them. Outstanding: no real 0.3.4 to 0.3.5 upgrade was run; apt's handling of an
+  unsatisfiable recommendation needs a disposable-lab install before field use.
+- Avoid: fixing this only in new updater code, or rewriting an operator's sources file.
+
+
+## BUG-0313 — The pre-wipe signature gate used a non-portable wipefs form
+
+- Date: 2026-09-19; found by independent review before release.
+- Symptom (by analysis): the gate immediately before a disk wipe called `wipefs` with a column
+  list, the form device discovery had already abandoned for breaking blank-disk scans on a
+  supported util-linux release. No test executed the wipe path at all.
+- Root cause: a second, differently shaped `wipefs` invocation beside the existing JSON helper.
+- Fix: reuse `zfsDeviceSignatures`; inspection errors still fail closed and old data is still
+  refused without an exact confirmation. `wipe-started` is journalled only immediately before the
+  first real wipe, the adopt branch verifies vdevs, and a provision intent requires a fingerprint.
+- Regression: `go test ./internal/vmhost -run 'TestZFSProvisionRefusesDataFoundAfterDiscoveryWithoutEraseConfirmation|TestZFSProvisionWipesOnlySelectedDevicesAndNeverForcesPoolCreate' -count=1`
+  failed before the fix and passed after it; both workflows run it.
+- Avoid: a third call shape for the destructive path, or changing output columns to compensate.
+
+
+## BUG-0314 — A blocked release printed a traceback
+
+- Date: 2026-09-19; found by independent review.
+- Symptom: `scripts/gitea-release.py` refusing a ZFS-enabled manifest, or reading an invalid one,
+  printed a Python traceback instead of its one-line reason. The exit status was already non-zero.
+- Root cause: the gate raised a bare `RuntimeError` and JSON parsing was unguarded, outside the
+  exception types `main` reports.
+- Fix: raise `GiteaError` for the gate and for an invalid or non-object manifest; still fail closed
+  before any release API call.
+- Regression: `python3 -m unittest tests.test_gitea_release` failed before the fix and passed
+  after it; both workflows run it.
+- Avoid: broadening `main` to catch every exception, or letting an unreadable manifest pass.
+
+
+## BUG-0315 — ZFS device discovery offered the disks of an imported pool as erasable
+
+- Date: 2026-09-19; found natively in the disposable two-host ZFS lab, before release.
+- Symptom: after a pool was provisioned on a disk, discovery on both hosts still reported that
+  disk as `erase_required`, selectable for a new repository, while `zpool status -P` listed its
+  first partition as an online member. A system disk with a stable by-id name and mounted
+  partitions would have been offered the same way.
+- Root cause: `lsblk --json` was called without `--tree`. Without a NAME column current
+  util-linux prints a flat device list, so every disk had no children and the imported-pool,
+  mounted, swap, RAID and LVM checks, which walk a disk's partitions, saw nothing. The
+  pre-wipe revalidation reuses the same discovery, so it shared the blind spot. Unit fixtures
+  hand-wrote nested children, so the tests passed.
+- Fix: pass `--tree`, and refuse to offer any device when a partition appears at the top level
+  of the reply, so a future change in `lsblk` output fails closed.
+- Regression: `go test ./internal/vmhost -run 'TestDiscoverZFSDevices' -count=1` — the discovery
+  test now requires `--tree` in the arguments and `TestDiscoverZFSDevicesRefusesAFlatDeviceList`
+  feeds the flat shape seen in the lab; both failed before the fix and pass after it. Both GitHub
+  and Gitea push/PR foundation workflows run them in the Go race suite. Native recheck, run by
+  the lab session on 2026-09-19 in the same disposable two-host QEMU lab (Debian 13, util-linux
+  2.41.5, OpenZFS 2.3.9, Core built from the uncommitted working tree): on both hosts the disk
+  backing the imported online pool now reports `member of an imported zpool`, the spare disks
+  stay `blank`, and the system disk stays ineligible. Limits: virtio disks, one pool per host;
+  a real-hardware system disk with a stable by-id name was not exercised.
+- Avoid: fixtures shaped by hand instead of captured from the tool, and trusting any in-use check
+  whose input structure was never observed on a real host.
+
+
+## BUG-0316 — A member's half of a pool-wide ZFS repository went stale after provisioning
+
+- Date: 2026-09-19; found natively in the disposable two-host ZFS lab, before release.
+- Symptom: about thirty seconds after provisioning a pool-scoped ZFS repository, the member's
+  access entry stopped refreshing while both Cores and the peer path were healthy, so the
+  storage page showed the member as stale and no VM could be placed on the member's repository.
+- Root cause: the master pulls each member's access from the member's peer `/access` reply. That
+  handler answered from the journalled registration, whose access and observation time are
+  fixed at registration, while the host's own report overlays the live storage monitor.
+- Fix: the agent shares its running storage monitor with the peer handler, which overlays the
+  live observation before answering; an unobserved repository answers unknown, not writable.
+- Regression: `go test -race ./internal/agent -run TestPoolZFSAccessProbeFencesMembersAndReleasesConnections -count=1`
+  failed before the fix and passed after it; both GitHub and Gitea push/PR foundation workflows
+  run it in the Go race suite. Native recheck, same lab and build as BUG-0315: both hosts'
+  access observation times advanced between two samples forty seconds apart, writable and
+  without error, where the member's had been frozen at provisioning time before the fix.
+- Avoid: refreshing the observation time in the handler without observing, or having the
+  Controller treat a member's row as fresh because the master's is.
+
+## BUG-0317 — A member's failed pool VLAN registration reserved the network ID for ever
+
+- Date: 2026-09-19; found by independent review of the working tree, before release.
+- Symptom: a member whose first apply of a pool VLAN failed for a host reason — most often an
+  uplink NIC name the member does not have, or a switch trunk that does not carry the tag —
+  never converged afterwards. Every later attempt answered `resource ID already reserved by
+  another operation` instead of retrying, so fixing the uplink changed nothing and the member's
+  `pool-network-reconciliation` check reported a reservation message that named the wrong cause.
+  The guide told operators to fix the uplink and wait, which could not work.
+- Root cause: `Execute`'s reservation loop reserves `network:<id>` permanently for any journal
+  entry, whatever its status. Its exception list covered only `vm-update` and a same-generation
+  `storage-register`, so a `failed` `network-register` kept the ID even though it applied nothing
+  durable.
+- Fix: one more exception arm in the same loop — a `failed` `network-register` for the same pool
+  VLAN network ID does not reserve it, so the registration may be retried under a later operation
+  ID. Building the bridge is idempotent and a failed registration has no applied projection.
+  `needs_attention` stays reserved, because native rollback is ambiguous there.
+- Regression: `go test ./internal/vmhost -run TestFailedPoolVLANRegistrationCanBeRetried -count=1`
+  passes on the fixed tree (`ok`, re-run by the documentation lane). The failure it reproduces was
+  observed before the fix by the independent reviewer, against the real engine: hour one
+  `status=failed err=uplink <nic> does not exist on this host`, hour two `status=failed
+  err=resource ID already reserved by another operation`. Both the GitHub and Gitea foundation workflows run the test, because
+  each runs `go test -race -timeout 20m ./...` on pushes and pull requests. No native two-host
+  lab run: the member-side convergence this unblocks has in-process evidence only.
+- Avoid: retrying under fresh operation IDs without releasing the failed reservation (the retry
+  is refused by the reservation, not by the host condition), and releasing a `needs_attention`
+  entry whose native state is ambiguous.

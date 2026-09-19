@@ -145,6 +145,68 @@ func TestManagedWorkerRejectsDifferentHostWithoutEffects(t *testing.T) {
 	}
 }
 
+func TestManagedWorkerBackgroundCompletionSendCancels(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	completed := make(chan managedCompletion, 1)
+	completed <- managedCompletion{result: protocol.Result{OperationID: "occupied"}}
+	done := make(chan bool, 1)
+	go func() {
+		done <- sendManagedCompletion(ctx, completed, managedCompletion{result: protocol.Result{OperationID: "recovered"}, background: true})
+	}()
+	select {
+	case <-done:
+		t.Fatal("background completion bypassed the full channel")
+	case <-time.After(20 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case sent := <-done:
+		if sent {
+			t.Fatal("canceled background completion was sent")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked background completion did not exit on cancellation")
+	}
+	if got := <-completed; got.result.OperationID != "occupied" {
+		t.Fatal("cancellation replaced the queued completion")
+	}
+}
+
+func TestManagedWorkerBackgroundCompletionPreservesForeground(t *testing.T) {
+	s := &Store{dir: t.TempDir(), State: State{Journal: map[string]JournalEntry{
+		"foreground": {Command: &protocol.Command{OperationID: "foreground", Kind: "vm-start"}, Status: "pending"},
+		"recovered":  {Command: &protocol.Command{OperationID: "recovered", Kind: "storage-zfs-provision"}, Status: "needs_attention", Error: "member was offline", Acknowledged: true},
+	}}}
+	before := s.State.Journal["foreground"]
+	completion := managedCompletion{result: protocol.Result{OperationID: "recovered", Status: "succeeded", ObservedAt: time.Now().UTC()}, background: true}
+	active, err := completeManagedCommand(s, "foreground", completion, nil)
+	if err != nil || active != "foreground" || s.State.Journal["foreground"] != before {
+		t.Fatalf("background recovery changed foreground: active=%q error=%v entry=%+v", active, err, s.State.Journal["foreground"])
+	}
+	var persisted State
+	data, err := os.ReadFile(filepath.Join(s.dir, "state.json"))
+	if err != nil || json.Unmarshal(data, &persisted) != nil {
+		t.Fatalf("completion was not persisted: %v", err)
+	}
+	entry := persisted.Journal["recovered"]
+	if entry.Status != "succeeded" || entry.Error != "" || entry.Acknowledged || persisted.Journal["foreground"].Status != "pending" {
+		t.Fatalf("incorrect durable completion: %+v", persisted.Journal)
+	}
+	entry.Acknowledged = true
+	s.State.Journal["recovered"] = entry
+	s.beforePublish = func() error { return errors.New("duplicate completion must not rewrite state") }
+	active, err = completeManagedCommand(s, active, completion, nil)
+	if err != nil || active != "foreground" || !s.State.Journal["recovered"].Acknowledged {
+		t.Fatalf("settled recovery was republished: active=%q err=%v", active, err)
+	}
+	s.beforePublish = nil
+	active, err = completeManagedCommand(s, active, managedCompletion{result: protocol.Result{OperationID: "foreground", Status: "succeeded", ObservedAt: time.Now().UTC()}}, nil)
+	if err != nil || active != "" || s.State.Journal["foreground"].Status != "succeeded" {
+		t.Fatalf("foreground completion was lost: active=%q err=%v", active, err)
+	}
+}
+
 func TestMemberSuccessfulEjectAndDiskRemovalReleaseUnusedReservations(t *testing.T) {
 	membership := protocol.PoolMembership{MasterHostID: "master-1"}
 	for _, command := range []protocol.Command{

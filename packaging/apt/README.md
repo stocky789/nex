@@ -2,7 +2,9 @@
 
 # Nex APT repository
 
-Public client URL: `https://nexvirtualization.com/apt`
+Configured client URL: `https://nexvirtualization.com/apt`. Confirm that a specific
+published package/version is present before treating the archive as available; an
+unreleased working-tree version is not an APT candidate.
 
 The tree is served from the website host (`/srv/nex-apt`) through nginx `/apt/`
 and the Pangolin route for nexvirtualization.com.

@@ -11,9 +11,9 @@ export type StorageSource = { nfs?: { server: string; export: string; directory?
 // `member_access` is a Core observation from the pool master. It is deliberately
 // separate from repository configuration: Controller uses it only to render and
 // preflight placement; Core rechecks access and writer safety for the operation.
-export type Storage = Registration & { path: string; kind?: string; source?: StorageSource; identity?: Record<string, unknown>; generation?: number; tombstone?: boolean; credential_present?: boolean; capabilities?: { vm_disk?: boolean; iso?: boolean; thin?: boolean; thick?: boolean; shared?: boolean; eligible_host_ids?: string[] }; access?: { status?: string; readable?: boolean; writable?: boolean; available_bytes?: number; total_bytes?: number; observed_at?: string; error?: string }; member_access?: { repository_id: string; host_id: string; generation: number; identity: string; readable: boolean; writable: boolean; qemu_writable: boolean; locking: boolean; observed_at?: string; error?: string }[] };
-export type Network = Registration & { kind: string; source: string; uplink?: string; vlan?: number };
-export type Media = Registration & { storage_id: string; size_bytes: number; sha256: string };
+export type Storage = Registration & { path: string; kind?: string; source?: StorageSource; identity?: Record<string, unknown>; generation?: number; tombstone?: boolean; credential_present?: boolean; zfs_provisioned?: boolean; zfs_scope?: "host" | "pool"; capabilities?: { vm_disk?: boolean; iso?: boolean; thin?: boolean; thick?: boolean; shared?: boolean; eligible_host_ids?: string[] }; access?: { status?: string; readable?: boolean; writable?: boolean; available_bytes?: number; total_bytes?: number; observed_at?: string; error?: string }; member_access?: { repository_id: string; host_id: string; generation: number; identity: string; readable: boolean; writable: boolean; qemu_writable: boolean; locking: boolean; observed_at?: string; error?: string }[]; zfs_host_access?: { host_id: string; pool_guid?: string; dataset_guid?: string; path?: string; readable: boolean; writable: boolean; total_bytes?: number; available_bytes?: number; observed_at?: string; error?: string }[] };
+export type Network = Registration & { kind: string; source: string; uplink?: string; vlan?: number; generation?: number; member_access?: { network_id: string; host_id: string; generation: number; bridge?: string; uplink_present: boolean; observed_at?: string; error?: string }[] };
+export type Media = Registration & { storage_id: string; size_bytes: number; sha256: string; member_access?: { media_id: string; host_id: string; storage_id: string; sha256?: string; observed_at?: string; error?: string }[] };
 // Arrays are nullable because Go marshals an empty slice as null; render accordingly.
 // boot.secure_boot and boot.tpm are absent from a definition written before those fields
 // existed: an unset secure_boot on a UEFI VM is Secure Boot on, and an unset tpm is no TPM.
@@ -80,6 +80,74 @@ export function isoTransferNotice(name: string, status?: string, source: "upload
 // Only imports that never became host-held media can be discarded. Core owns a succeeded ISO,
 // while queued and dispatched imports still belong to their host task (BUG-0203).
 export const mediaDiscardable = (media: Media) => media.status === "failed" || media.status === "needs_attention";
+
+// --- Pool resource removal and rename -------------------------------------------------------
+// Removing a pool VLAN network or an imported ISO is work the pool master does: Core tears the
+// resource down, records the removal durably and every member converges on its next pass. The
+// Controller only submits the request and shows what the hosts report, so nothing here deletes a
+// row by itself — the row goes when the master reports it gone.
+export const removalCapability = "pool-resource-removal-v1";
+
+// Core's generations are 1-based on the wire, with 0 meaning "written before generations existed".
+export const resourceGeneration = (value?: number) => (value || 0) > 0 ? value as number : 1;
+
+// Only a pool VLAN network is Nex's to rename or remove. A host-automatic bridge or an existing
+// libvirt network was not created by Nex and Core refuses to touch it.
+export const networkRemovable = (n: Network) => n.kind === "vlan";
+// A succeeded import is host-held media; a failed one is still only a Controller request row,
+// which keeps its existing Discard action instead.
+export const mediaRemovable = (m: Media) => m.status === "succeeded";
+
+// The typed confirmation must match the name exactly: no trimming, no case folding. A name that
+// differs only by a space the operator cannot see must not arm a destructive button.
+export const confirmMatches = (typed: string, name: string) => name !== "" && typed === name;
+
+// The register-network form's name rule (required, at most 100 characters) written out for the
+// rename dialog, plus the two characters Core itself refuses in a resource name.
+export const validResourceName = (name: string) => {
+  const value = name.trim();
+  return value.length > 0 && value.length <= 100 && !value.includes("/") && !/[ -]/.test(value);
+};
+// Submitting the name a network already has is a no-op, not an empty rename request.
+export const renameChanged = (current: string, next: string) => validResourceName(next) && next.trim() !== current;
+
+// Why a removal or rename cannot be submitted right now; "" means it can. Order matters: state
+// the most fundamental reason, so an operator is not told to reconnect a host when the view they
+// are looking at is the stale part.
+export function lifecycleBlocker(o: { unavailable: boolean; inFlight: boolean; ready: boolean; hostFresh: boolean; capable: boolean }): string {
+  if (o.unavailable) return "Controller inventory may be out of date. Refresh the view before changing this pool resource.";
+  if (!o.ready) return "Wait for Nex Core to confirm this resource before changing it.";
+  if (!o.hostFresh) return "The pool master is not freshly connected. Reconnect it before changing this pool resource.";
+  if (!o.capable) return "This Nex Core cannot remove pool networks or ISOs yet; upgrade Nex Core.";
+  if (o.inFlight) return "A request for this resource is already in flight. Wait for Nex Core to report its result.";
+  return "";
+}
+
+// Request bodies. The Controller resolves the target host itself (the pool master), so the body
+// names only the pool and the generation the operator acted on: a view that has moved on is
+// refused instead of removing something that changed underneath it.
+export const networkRemoveBody = (n: Network, poolID: string) => ({ pool_id: poolID, expected_generation: resourceGeneration(n.generation) });
+export const networkRenameBody = (n: Network, poolID: string, name: string) => ({ ...networkRemoveBody(n, poolID), name: name.trim() });
+
+// One request identity per unchanged request: a retry after a lost reply replays the same
+// request_id so Core returns the original outcome, while a changed request (another new name)
+// mints a new one. Kept in memory for this view only — no pool object enters browser storage.
+export function stableRequestID(store: Record<string, { key: string; id: string }>, scope: string, body: unknown, mint: () => string = () => crypto.randomUUID()) {
+  const key = JSON.stringify(body);
+  if (store[scope]?.key !== key) store[scope] = { key, id: mint() };
+  return store[scope].id;
+}
+
+// Per-host convergence for a pool network, as the master reports it. A member still carrying an
+// older generation has not applied the current name or settings yet; saying "ready" there would
+// claim a convergence that has not happened.
+export function networkMemberState(n: Network, a: NonNullable<Network["member_access"]>[number]): string {
+  if (a.error) return a.error;
+  if (resourceGeneration(a.generation) !== resourceGeneration(n.generation)) return "converging";
+  return a.uplink_present ? "ready" : "pending";
+}
+
+type Lifecycle = { scope: string; resource: "network" | "media"; action: "remove" | "rename"; id: string; name: string; base: Record<string, unknown>; note?: string };
 
 type Pending = Record<string, { payload: string; id: string }>;
 function pendingRequests(key: string): Pending {
@@ -209,6 +277,64 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
       await reload(); if (mounted.current) { setForm(""); location.hash = `/vms/${result.vm_id}/${result.operation.id}`; }
     });
   }
+  // Removal and rename of a pool VLAN network or a stored ISO. The dialog owns its own error so
+  // the refusal appears where the operator is looking, and the request identity lives in a ref:
+  // a retry of the same unchanged request replays it, a changed request gets a new one.
+  const [lifecycle, setLifecycle] = useState<Lifecycle | null>(null);
+  const [confirmText, setConfirmText] = useState("");
+  const [renameText, setRenameText] = useState("");
+  const [lifecycleError, setLifecycleError] = useState("");
+  const [lifecycleBusy, setLifecycleBusy] = useState(false);
+  const [inFlightScope, setInFlightScope] = useState("");
+  const lifecycleRequests = useRef<Record<string, { key: string; id: string }>>({});
+  const lifecycleDialog = useRef<HTMLDialogElement>(null);
+  const lifecycleOpener = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    const element = lifecycleDialog.current;
+    if (!element) return;
+    if (lifecycle && !element.open) element.showModal();
+    else if (!lifecycle && element.open) element.close();
+  }, [lifecycle]);
+  // Reasons a lifecycle action on this row cannot be submitted, from the host that owns it.
+  function lifecycleState(hostID: string, resourceID: string, resourceStatus: string, scope: string) {
+    const host = hosts.find(h => h.id === hostID);
+    return lifecycleBlocker({
+      unavailable, inFlight: inFlightScope === scope,
+      ready: Boolean(resourceID) && resourceStatus === "succeeded",
+      hostFresh: Boolean(host && readyHost(host)),
+      capable: Boolean(host?.capabilities?.includes(removalCapability)),
+    });
+  }
+  function beginLifecycle(event: { currentTarget: HTMLButtonElement }, target: Lifecycle) {
+    lifecycleOpener.current = event.currentTarget;
+    setLifecycleError(""); setConfirmText(""); setRenameText(target.action === "rename" ? target.name : "");
+    setLifecycle(target);
+  }
+  async function submitLifecycle() {
+    if (!lifecycle || lifecycleBusy) return;
+    const rename = lifecycle.action === "rename";
+    // Nothing to ask a host for: the name is unchanged, or the confirmation does not match.
+    if (rename && !renameChanged(lifecycle.name, renameText)) { setLifecycle(null); return; }
+    if (!rename && !confirmMatches(confirmText, lifecycle.name)) return;
+    const body = rename ? { ...lifecycle.base, name: renameText.trim() } : lifecycle.base;
+    const request_id = stableRequestID(lifecycleRequests.current, lifecycle.scope, body);
+    setLifecycleBusy(true); setLifecycleError(""); setInFlightScope(lifecycle.scope); setError(""); setNotice("");
+    try {
+      await api(`${lifecycle.resource === "network" ? "networks" : "media"}/${encodeURIComponent(lifecycle.id)}`, rename ? "PATCH" : "DELETE", { request_id, ...body });
+      delete lifecycleRequests.current[lifecycle.scope];
+      setLifecycle(null);
+      await reload();
+      setNotice(rename
+        ? `Rename accepted for ${lifecycle.name}. The new name appears once the pool master reports it.`
+        : lifecycle.resource === "network"
+          ? `Removal accepted for ${lifecycle.name}. The pool master removes the VLAN bridge from every host in the pool; the network disappears from this list once the master reports the removal.`
+          : `Removal accepted for ${lifecycle.name}. The ISO disappears from this list once the pool master reports the file deleted.`);
+    } catch (e) {
+      // The identity is kept: retrying this unchanged request replays it rather than starting
+      // a second removal whose outcome could differ from the first.
+      setLifecycleError((e as Error).message);
+    } finally { setLifecycleBusy(false); setInFlightScope(""); }
+  }
   function discardMedia(media: Media) {
     if (!confirm(`Discard ${media.name}? This removes the failed import record and any Controller staging bytes. The task and audit history are kept.`)) return;
     void run("media-discard", async () => {
@@ -314,8 +440,52 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
     {form === "vm" && <div hidden={!showForm}><VMWizard poolID={poolID} poolName={poolName} hosts={hosts} storage={storage} networks={networks} media={media} restored={() => restored("vm")} create={create} busy={busy} unavailable={unavailable} setTab={setTab} onClose={() => setForm("")} /></div>}
     {vmTab && <section className="panel"><div className="section-heading"><h2>Virtual machines</h2><span className="muted">{vms.length} in pool</span></div>{vms.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Assigned host</th><th>Observed state</th><th>Freshness</th><th>Creation task</th></tr></thead><tbody>{vms.map(v => <tr key={v.id}><td><a href={`#/vms/${v.id}`}>{v.name}</a>{v.protected && <small>Protected Controller appliance</small>}</td><td>{hostName(v.host_id)}</td><td>{stateText(v.state)}</td><td>{status(v.freshness)}</td><td>{v.operation_id ? task(v) : "—"}</td></tr>)}</tbody></table></div> : <p className="empty">No virtual machines in this pool. Register storage and a network, upload an ISO, then create your first VM.</p>}<p className="panel-note">A stale or unreachable host does not mean its VMs have stopped. Creation results and current observations are separate.</p></section>}
     {tab === "Storage" && <StorageRepositories poolID={poolID} masterHostID={masterHostID} hosts={hosts} storage={storage} api={api} reload={reload} unavailable={unavailable} onNotice={setNotice} />}
-    {tab === "Networking" && <section className="panel"><div className="section-heading"><h2>Pool guest networks</h2></div>{networks.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Host</th><th>Connection</th><th>VMs</th><th>Host check</th></tr></thead><tbody>{[...networks].sort((a, b) => (a.vlan || 0) - (b.vlan || 0) || a.name.localeCompare(b.name)).map(n => <tr key={n.id || `op:${n.operation_id}`}><td>{n.name}</td><td>{hostName(n.host_id)}</td><td>{describeNetwork(n)}<small className="mono">{n.source}</small></td><td>{vms.filter(v => v.spec?.nics?.some(i => i.network_id === n.id)).length}</td><td>{task(n)}</td></tr>)}</tbody></table></div> : <p className="empty">No networks reported yet.</p>}</section>}
-    {tab === "ISO library" && <section className="panel"><div className="section-heading"><h2>Guest ISO library</h2></div>{media.length ? <div className="table-scroll"><table><thead><tr><th>ISO</th><th>Host / storage</th><th>Size</th><th>Transfer task</th><th>Actions</th></tr></thead><tbody>{media.map(m => <tr key={m.id || `op:${m.operation_id}`}><td>{m.name}<small className="mono">SHA-256: {m.sha256 || "Pending verification"}</small></td><td>{hostName(m.host_id)}<small>{storage.find(s => s.id === m.storage_id)?.name || m.storage_id}</small></td><td>{m.size_bytes > 0 ? `${(m.size_bytes / GiB).toFixed(2)} GiB` : "Unknown until downloaded"}</td><td>{task(m)}</td><td>{mediaDiscardable(m) && <button type="button" disabled={busy || unavailable} onClick={() => discardMedia(m)}>Discard failed import</button>}</td></tr>)}</tbody></table></div> : <p className="empty">No ISO images uploaded. Select validated storage and upload installation media.</p>}</section>}
+    {tab === "Networking" && <section className="panel"><div className="section-heading"><h2>Pool guest networks</h2></div>{networks.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Scope</th><th>Connection</th><th>VMs</th><th>Host check</th><th>Actions</th></tr></thead><tbody>{[...networks].sort((a, b) => (a.vlan || 0) - (b.vlan || 0) || a.name.localeCompare(b.name)).map(n => {
+      const scope = `network:${n.id || n.operation_id}`;
+      const blocker = lifecycleState(masterHostID, n.id, n.status, scope);
+      const users = vms.filter(v => v.spec?.nics?.some(i => i.network_id === n.id)).length;
+      return <tr key={n.id || `op:${n.operation_id}`}><td>{n.name}</td><td>{n.kind === "vlan" ? <>Pool VLAN{n.member_access?.length ? <small>{n.member_access.map(a => `${hostName(a.host_id)}: ${networkMemberState(n, a)}`).join(" · ")}</small> : null}</> : hostName(n.host_id)}</td><td>{describeNetwork(n)}<small className="mono">{n.source}</small></td><td>{users}</td><td>{task(n)}</td><td>{networkRemovable(n) ? <div className="actions">
+        <button type="button" title={blocker || "Change this pool network's name on the pool master."} disabled={busy || Boolean(blocker)} onClick={e => beginLifecycle(e, { scope: `${scope}:rename`, resource: "network", action: "rename", id: n.id, name: n.name, base: networkRemoveBody(n, poolID) })}>Rename</button>
+        <button type="button" className="danger" title={blocker || "Remove this pool VLAN network from every host in the pool."} disabled={busy || Boolean(blocker)} onClick={e => beginLifecycle(e, { scope: `${scope}:remove`, resource: "network", action: "remove", id: n.id, name: n.name, base: networkRemoveBody(n, poolID), note: users ? `${users} VM definition${users === 1 ? "" : "s"} in this pool still use this network, so Nex Core will refuse the removal. Detach the network in each VM first.` : "" })}>Remove</button>
+      </div> : <small>Host network · created and managed on {hostName(n.host_id)}</small>}</td></tr>;
+    })}</tbody></table></div> : <p className="empty">No networks reported yet.</p>}<p className="panel-note">Only pool VLAN networks are renamed or removed here; the pool master applies the change on every host and each member reports its own convergence. Changing a VLAN tag or uplink NIC means removing the network and adding it again.</p></section>}
+    {tab === "ISO library" && <section className="panel"><div className="section-heading"><h2>Guest ISO library</h2></div>{media.length ? <div className="table-scroll"><table><thead><tr><th>ISO</th><th>Host / storage</th><th>Size</th><th>Transfer task</th><th>Actions</th></tr></thead><tbody>{media.map(m => {
+      const scope = `media:${m.id || m.operation_id}:remove`;
+      const blocker = lifecycleState(m.host_id, m.id, m.status, scope);
+      const users = vms.filter(v => v.spec?.media_id === m.id || v.spec?.drivers_media_id === m.id).length;
+      return <tr key={m.id || `op:${m.operation_id}`}><td>{m.name}<small className="mono">SHA-256: {m.sha256 || "Pending verification"}</small></td><td>{hostName(m.host_id)}<small>{storage.find(s => s.id === m.storage_id)?.name || m.storage_id}</small></td><td>{m.size_bytes > 0 ? `${(m.size_bytes / GiB).toFixed(2)} GiB` : "Unknown until downloaded"}</td><td>{task(m)}</td><td>{mediaDiscardable(m) && <button type="button" disabled={busy || unavailable} onClick={() => discardMedia(m)}>Discard failed import</button>}{mediaRemovable(m) && <button type="button" className="danger" title={blocker || "Delete this ISO file from its storage on the host."} disabled={busy || Boolean(blocker)} onClick={e => beginLifecycle(e, { scope, resource: "media", action: "remove", id: m.id, name: m.name, base: {}, note: users ? `${users} VM definition${users === 1 ? "" : "s"} in this pool still have this ISO in a CD drive, so Nex Core will refuse the removal. Eject it in each VM first.` : "" })}>Remove ISO</button>}</td></tr>;
+    })}</tbody></table></div> : <p className="empty">No ISO images uploaded. Select validated storage and upload installation media.</p>}<p className="panel-note">Removing an ISO deletes the file from its storage on the host. Nex Core refuses while the ISO is in any VM's CD drive; a failed import is only a request record and is discarded instead.</p></section>}
+    <dialog ref={lifecycleDialog} className="confirm-dialog" aria-labelledby="pool-lifecycle-title" onClose={() => { setLifecycle(null); setConfirmText(""); setRenameText(""); setLifecycleError(""); lifecycleOpener.current?.focus(); }}>
+      {lifecycle && (lifecycle.action === "rename"
+        ? <form onSubmit={e => { e.preventDefault(); void submitLifecycle(); }}>
+          <h2 id="pool-lifecycle-title">Rename {lifecycle.name}</h2>
+          <p>The pool master records the new name and every host in the pool picks it up on its next pass. The VLAN tag, the uplink NIC and the VMs on this network are unchanged.</p>
+          <p className="help">To change the VLAN tag or the uplink NIC, remove this network and add it again. Nex Core never re-plumbs an existing network.</p>
+          {lifecycleError && <p className="alert" role="alert">{lifecycleError}</p>}
+          <label>Network name<input required autoFocus maxLength={100} value={renameText} disabled={lifecycleBusy} onChange={e => setRenameText(e.target.value)} /></label>
+          <div className="actions">
+            <button type="button" disabled={lifecycleBusy} onClick={() => setLifecycle(null)}>Cancel</button>
+            <button className="primary" disabled={lifecycleBusy || !renameChanged(lifecycle.name, renameText)}>{lifecycleBusy ? "Submitting…" : "Rename network"}</button>
+          </div>
+        </form>
+        // Not a form: the destructive button must never be reachable by pressing Enter in the
+        // confirmation field, only by clicking the button itself.
+        : <div>
+          <h2 id="pool-lifecycle-title">Remove {lifecycle.resource === "network" ? "network" : "ISO"} {lifecycle.name}?</h2>
+          {lifecycle.resource === "network"
+            ? <><p>The pool master removes this VLAN bridge from every host in the pool and records the removal durably. Nex Core refuses while any VM still uses this network, running or stopped. The management network is never touched.</p>
+              <p className="help">Type the network name to confirm. The network disappears from the list once the pool master reports the removal, not before.</p></>
+            : <><p>The pool master deletes this ISO file from its storage. Nex Core refuses while the ISO is in any VM's CD drive, running or stopped. No VM disk is touched.</p>
+              <p className="help">Type the ISO name to confirm. The ISO disappears from the list once the pool master reports the file deleted, not before.</p></>}
+          {lifecycle.note && <p className="warning">{lifecycle.note}</p>}
+          {lifecycleError && <p className="alert" role="alert">{lifecycleError}</p>}
+          <label>{lifecycle.resource === "network" ? "Network name" : "ISO name"}<input autoFocus value={confirmText} disabled={lifecycleBusy} onChange={e => setConfirmText(e.target.value)} onKeyDown={e => { if (e.key === "Enter") e.preventDefault(); }} /></label>
+          <div className="actions">
+            <button type="button" disabled={lifecycleBusy} onClick={() => setLifecycle(null)}>Cancel</button>
+            <button type="button" className="danger" disabled={lifecycleBusy || !confirmMatches(confirmText, lifecycle.name)} onClick={() => void submitLifecycle()}>{lifecycleBusy ? "Submitting…" : lifecycle.resource === "network" ? "Remove network" : "Remove ISO"}</button>
+          </div>
+        </div>)}
+    </dialog>
   </div>;
 }
 

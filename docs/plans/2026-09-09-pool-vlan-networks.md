@@ -90,10 +90,36 @@ Reference: [docs/API.md](../API.md#managed-vm-creation), `docs/api/openapi.json`
 
 ## Follow-on
 
-- Phase 4 member join: check that a joining host observes every uplink name used by the
-  pool's VLAN networks and materialize the pool's networks on it; report per-host status.
-- Network removal with in-use protection; per-VM multiple NICs; bonds as uplinks in the UI.
+- **Member join VLAN materialize (2026-09-19):** implemented as Core peer pull
+  (`/api/v1/pool/networks*`). Joining members observe each pool VLAN's uplink, create the
+  guest bridge with the master's network ID, and report per-host access. Native two-host
+  walkthrough acceptance remains open; see [QA](../qa/2026-09-19-pool-member-config-converge.md).
+- **Network removal and rename with in-use protection (2026-09-19):** implemented. Decision:
+  project owner, 2026-09-19 — pool-wide changes received by the master propagate to members. The
+  master accepts `network-remove` and `network-update` (rename only) under capability
+  `pool-resource-removal-v1`, relayed by `DELETE`/`PATCH /api/v1/networks/{id}`; it refuses while
+  any VM on any host in the pool uses the network, running or stopped, and while any ready
+  member's VM inventory is stale. Teardown proves ownership from the `interfaces.d/nex-<bridge>`
+  stanza Nex wrote, refuses a bridge carrying a foreign port, and never names the uplink, the
+  management bridge, host addresses or routes. Members converge from the resource's absence from
+  an authoritative master list (an implementation choice matching shared-storage detach, not a
+  product decision), refusing locally while one of their own VMs uses it. Changing a VLAN tag or
+  uplink remains remove-and-re-add with a new identity, because the derived bridge name is in every
+  VM's domain XML. Two independent review rounds hardened this before release: the peer pool
+  network and media lists now answer `503 pool resource list unavailable: managed journal is
+  incomplete` instead of a possibly short list, the ownership proof is an exact match, a re-listed
+  removed ID is refused before `Execute`, converge retries use one deterministic operation ID per
+  UTC hour, and a *failed* pool VLAN `network-register` no longer reserves the network ID, so a
+  member converges once its uplink or trunk is fixed (BUG-0317). Open: no native two-host
+  walkthrough of removal or rename; an older member keeps a removed bridge until upgraded; no
+  per-host "removal in progress" view; journal pruning, the storage peer list's asymmetry and
+  master-change effects are recorded in the pool master model plan. See the
+  [pool master model plan](2026-09-09-pool-master-model.md#not-in-this-change-planned-phase-4) and
+  the [QA note](../qa/2026-09-19-pool-removal-convergence.md).
+- Bonds as uplinks in the UI.
 - Show guest-reported IPs per network once guest agent reporting lands (below).
+- Staged apply / timed recovery for remote **management** interface edits remains Phase 4
+  (separate from guest VLAN copy-on-join).
 
 ## Guest tools assessment (requested 2026-09-09)
 

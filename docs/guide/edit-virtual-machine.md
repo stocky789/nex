@@ -38,8 +38,10 @@ disk to other storage and moving a VM to another host are not available in this 
      The CPU selector keeps every host-usable named model and the host modes, independently
      of guest OS. **Pool CPU baseline** applies the currently verified common model and fixed
      features. An existing explicit definition appears as **Saved fixed CPU baseline** and
-     is preserved even if current discovery is unavailable; the feature summary shows what
-     the VM will receive. Selecting another model clears the saved explicit feature list.
+     is preserved even if current discovery is unavailable. The current pool baseline is
+     marked **(Recommended)**; a saved definition receives the same label only when it
+     matches that baseline. Individual feature flags are not displayed. Selecting another
+     model clears the saved explicit feature list.
      Core checks explicit features before applying the stopped edit. Future hosts may not
      support the saved definition, and this does not certify live migration.
    - **Description**, **Guest operating system** and **Start automatically when the host boots**
@@ -77,9 +79,9 @@ disk to other storage and moving a VM to another host are not available in this 
      to eject the current one. The ISO library does not have to be the repository that holds
      the VM's disks. Both work while the VM runs; the CD drive keeps its place in the boot order.
    - **Driver disc**: the second CD drive, for the virtio-win ISO a Windows installer needs
-     beside its install media. The public 0.2.9 ISO does not include it, so import matching media
-     into this host's ISO library before choosing it here. Choose another ISO on this host or
-     **No driver disc**; the list excludes whatever
+     beside its install media. Current Core media seeds Fedora virtio-win into this host's ISO
+     library after enrollment; select it here. On an older host without that seed, import matching
+     media first. Choose another ISO on this host or **No driver disc**; the list excludes whatever
      **Install ISO** holds. It changes while the VM runs and is never in the boot order. The
      field is disabled, with *This host's Nex Core does not provide a second CD drive yet*, on
      a host running an older Nex Core. A VM defined before the second drive existed gains it

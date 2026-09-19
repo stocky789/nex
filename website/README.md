@@ -2,7 +2,7 @@
 
 SvelteKit and custom CSS, prerendered as a static site. Pages, navigation, FAQs and
 screenshot links work without JavaScript. Keep the preview private until the
-maintainer authorizes publication.
+project owner authorizes publication.
 
 ## Local development
 

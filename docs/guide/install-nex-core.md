@@ -20,6 +20,8 @@ required, and the installed driver ISO is unchanged.
 
 - A locally built ISO and its matching SHA256 sidecar; see [build instructions](../../installer/README.md).
   External redistribution remains subject to the [release licensing gates](../LICENSING.md).
+  The current working `0.3.5` tree is not a released artifact; its ZFS-enabled images
+  are restricted to internal disposable labs.
 - An isolated disposable amd64 VM with at least 2 virtual CPUs, 4 GB RAM, and one blank 24 GB
   virtual disk. Do not attach real host disks or existing VM data disks.
 - Hardware virtualization exposed to the VM if you intend to run nested KVM guests.
@@ -150,7 +152,8 @@ you have validated access controls.
 
 Root SSH login is disabled, so a fresh root-only installation has no SSH login account.
 Use the local console. Installation can work offline; later package updates require access
-to configured Debian repositories. No Nex package repository is configured yet.
+to configured Debian repositories. The installed Nex package configures its default Nex APT
+source; it may have no candidate until a compatible release is actually published.
 
 ## Troubleshooting
 

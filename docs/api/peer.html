@@ -8,6 +8,12 @@
 <li><a href="#peerJoin">POST /api/v1/pool/join</a></li>
 <li><a href="#peerAdvertiseOrigin">POST /api/v1/pool/advertise</a></li>
 <li><a href="#peerCheckVMPlacement">POST /api/v1/pool/placement</a></li>
+<li><a href="#peerListPoolNetworks">GET /api/v1/pool/networks</a></li>
+<li><a href="#peerGetPoolNetwork">GET /api/v1/pool/networks/{network_id}</a></li>
+<li><a href="#peerPostPoolNetworkAccess">POST /api/v1/pool/networks/{network_id}/access</a></li>
+<li><a href="#peerListPoolMedia">GET /api/v1/pool/media</a></li>
+<li><a href="#peerGetPoolMedia">GET /api/v1/pool/media/{media_id}</a></li>
+<li><a href="#peerPostPoolMediaAccess">POST /api/v1/pool/media/{media_id}/access</a></li>
 <li><a href="#peerListPoolStorage">GET /api/v1/pool/storage</a></li>
 <li><a href="#peerGetPoolStorage">GET /api/v1/pool/storage/{repository_id}</a></li>
 <li><a href="#peerReservePoolStorage">POST /api/v1/pool/storage/{repository_id}/reserve</a></li>
@@ -24,6 +30,9 @@
 <li><a href="#peerCPUCapabilities">GET /api/v1/pool/cpu/capabilities</a></li>
 <li><a href="#peerCPUCompare">POST /api/v1/pool/cpu/compare</a></li>
 <li><a href="#peerCPUBaseline">GET /api/v1/pool/cpu/baseline</a></li>
+<li><a href="#peerProvisionZFS">POST /api/v1/pool/zfs-provision</a></li>
+<li><a href="#peerObserveZFSAccess">GET /api/v1/pool/zfs-provision/{repository_id}/access</a></li>
+<li><a href="#peerZFSRepositoryLifecycle">POST /api/v1/pool/zfs-provision/lifecycle</a></li>
 </ul></nav>
 <section id="peerJoin"><h2>POST <code>/api/v1/pool/join</code></h2>
 <p>Redeem a pool join offer</p><p>Served by the pool master; the only peer route without a client certificate. Authority is the single-use offer created by the master Core local API: it binds pool, master host, member host ID and CSR SHA-256, and expires after 15 minutes. The master signs the CSR with the pool CA, appends the member as ready, increments the membership generation and persists before replying. A retry of the same offer, host ID and CSR after a lost response returns the same certificate and current membership; a different key or an already-admitted host is refused. The member pins the pool CA and master host ID from the offer, verifies the returned certificate against its pending key, then persists and completes a Core-owned rehome. Body at most 1 MiB.</p>
@@ -238,6 +247,274 @@
           &quot;$ref&quot;: &quot;#/components/schemas/PoolPlacementRequest&quot;
         }
       }
+    }
+  }
+}</pre></details></section>
+<section id="peerListPoolNetworks"><h2>GET <code>/api/v1/pool/networks</code></h2>
+<p>List pool-shared VLAN networks</p><p>Served by the pool master. Returns non-local VLAN registrations for the authenticated member. Host-local bridges and libvirt networks are omitted. Members pull periodically after join.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerListPoolNetworks&quot;,
+  &quot;summary&quot;: &quot;List pool-shared VLAN networks&quot;,
+  &quot;description&quot;: &quot;Served by the pool master. Returns non-local VLAN registrations for the authenticated member. Host-local bridges and libvirt networks are omitted. Members pull periodically after join.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolPeerMTLS&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.3.4&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: member \u2192 pool master&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Desired VLAN networks.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;items&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/NetworkRegistration&quot;
+            }
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Peer rejected.&quot;
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;The serving host cannot read its managed journal whole (an unreadable entry, or the 10000-entry retention cap), so it refuses to serve a possibly short list. Fixed body: pool resource list unavailable: managed journal is incomplete. A member treats any non-200 as \&quot;remove nothing\&quot; and tears nothing down.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="peerGetPoolNetwork"><h2>GET <code>/api/v1/pool/networks/{network_id}</code></h2>
+<p>Get one pool VLAN network</p><p>Served by the pool master. Returns one VLAN registration eligible for the authenticated member.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerGetPoolNetwork&quot;,
+  &quot;summary&quot;: &quot;Get one pool VLAN network&quot;,
+  &quot;description&quot;: &quot;Served by the pool master. Returns one VLAN registration eligible for the authenticated member.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolPeerMTLS&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.3.4&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: member \u2192 pool master&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;network_id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Desired VLAN network.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/NetworkRegistration&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Peer rejected.&quot;
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown or non-shareable network.&quot;
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;The serving host cannot read its managed journal whole (an unreadable entry, or the 10000-entry retention cap), so it refuses to serve a possibly short list. Fixed body: pool resource list unavailable: managed journal is incomplete. A member treats any non-200 as \&quot;remove nothing\&quot; and tears nothing down.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="peerPostPoolNetworkAccess"><h2>POST <code>/api/v1/pool/networks/{network_id}/access</code></h2>
+<p>Report member VLAN apply status</p><p>Authenticated member posts uplink/bridge apply observation for one master-owned VLAN generation. Observations are process-local on the master.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerPostPoolNetworkAccess&quot;,
+  &quot;summary&quot;: &quot;Report member VLAN apply status&quot;,
+  &quot;description&quot;: &quot;Authenticated member posts uplink/bridge apply observation for one master-owned VLAN generation. Observations are process-local on the master.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolPeerMTLS&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.3.4&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: member \u2192 pool master&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;network_id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolNetworkAccess&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;204&quot;: {
+      &quot;description&quot;: &quot;Access recorded.&quot;
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid access report.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Peer rejected.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Network generation unavailable.&quot;
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;The serving host cannot read its managed journal whole (an unreadable entry, or the 10000-entry retention cap), so it refuses to serve a possibly short list. Fixed body: pool resource list unavailable: managed journal is incomplete. A member treats any non-200 as \&quot;remove nothing\&quot; and tears nothing down.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="peerListPoolMedia"><h2>GET <code>/api/v1/pool/media</code></h2>
+<p>List ISO metadata on pool-shared storage</p><p>Served by the pool master. Returns succeeded ISO imports whose storage_id is a pool-shareable repository. Local-only libraries are omitted.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerListPoolMedia&quot;,
+  &quot;summary&quot;: &quot;List ISO metadata on pool-shared storage&quot;,
+  &quot;description&quot;: &quot;Served by the pool master. Returns succeeded ISO imports whose storage_id is a pool-shareable repository. Local-only libraries are omitted.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolPeerMTLS&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.3.4&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: member \u2192 pool master&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Shared ISO library entries.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;items&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/Media&quot;
+            }
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Peer rejected.&quot;
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;The serving host cannot read its managed journal whole (an unreadable entry, or the 10000-entry retention cap), so it refuses to serve a possibly short list. Fixed body: pool resource list unavailable: managed journal is incomplete. A member treats any non-200 as \&quot;remove nothing\&quot; and tears nothing down.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="peerGetPoolMedia"><h2>GET <code>/api/v1/pool/media/{media_id}</code></h2>
+<p>Get one shared ISO library entry</p><p>Served by the pool master. Returns one ISO library entry on pool-shared storage for the authenticated member.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerGetPoolMedia&quot;,
+  &quot;summary&quot;: &quot;Get one shared ISO library entry&quot;,
+  &quot;description&quot;: &quot;Served by the pool master. Returns one ISO library entry on pool-shared storage for the authenticated member.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolPeerMTLS&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.3.4&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: member \u2192 pool master&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;media_id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Shared ISO entry.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Media&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Peer rejected.&quot;
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown or non-shared media.&quot;
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;The serving host cannot read its managed journal whole (an unreadable entry, or the 10000-entry retention cap), so it refuses to serve a possibly short list. Fixed body: pool resource list unavailable: managed journal is incomplete. A member treats any non-200 as \&quot;remove nothing\&quot; and tears nothing down.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="peerPostPoolMediaAccess"><h2>POST <code>/api/v1/pool/media/{media_id}/access</code></h2>
+<p>Report member ISO verification</p><p>Authenticated member posts digest verification for one shared ISO after adopting metadata onto its mount. Observations are process-local on the master.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerPostPoolMediaAccess&quot;,
+  &quot;summary&quot;: &quot;Report member ISO verification&quot;,
+  &quot;description&quot;: &quot;Authenticated member posts digest verification for one shared ISO after adopting metadata onto its mount. Observations are process-local on the master.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolPeerMTLS&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.3.4&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: member \u2192 pool master&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;media_id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolMediaAccess&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;204&quot;: {
+      &quot;description&quot;: &quot;Access recorded.&quot;
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid access report.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Peer rejected.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Media unavailable.&quot;
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;The serving host cannot read its managed journal whole (an unreadable entry, or the 10000-entry retention cap), so it refuses to serve a possibly short list. Fixed body: pool resource list unavailable: managed journal is incomplete. A member treats any non-200 as \&quot;remove nothing\&quot; and tears nothing down.&quot;
     }
   }
 }</pre></details></section>
@@ -1487,6 +1764,156 @@
     }
   ]
 }</pre></details></section>
+<section id="peerProvisionZFS"><h2>POST <code>/api/v1/pool/zfs-provision</code></h2>
+<p>Provision one selected host for a Core-owned ZFS repository</p><p>Served only by a selected member and authenticated with the current pool master certificate. The master submits its durable operation ID, Core-owned repository ID, complete intended selection, and this member&#x27;s exact host selection. The member validates the stable device fingerprints before any destructive operation. A retry of the same request is safe; a changed request using the same operation is refused.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerProvisionZFS&quot;,
+  &quot;summary&quot;: &quot;Provision one selected host for a Core-owned ZFS repository&quot;,
+  &quot;description&quot;: &quot;Served only by a selected member and authenticated with the current pool master certificate. The master submits its durable operation ID, Core-owned repository ID, complete intended selection, and this member&#x27;s exact host selection. The member validates the stable device fingerprints before any destructive operation. A retry of the same request is safe; a changed request using the same operation is refused.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool master to selected member&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Per-host Core outcome.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionHostResult&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request or selected host.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Caller is not the current pool master.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Local repository access is unavailable.&quot;
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Method other than POST.&quot;
+    }
+  },
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionPeerRequest&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="peerObserveZFSAccess"><h2>GET <code>/api/v1/pool/zfs-provision/{repository_id}/access</code></h2>
+<p>Observe a member&#x27;s local ZFS repository access</p><p>Served only to the current pool master. Returns the member&#x27;s local access observation for the canonical Core-owned repository ID; it does not make the repository shared.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerObserveZFSAccess&quot;,
+  &quot;summary&quot;: &quot;Observe a member&#x27;s local ZFS repository access&quot;,
+  &quot;description&quot;: &quot;Served only to the current pool master. Returns the member&#x27;s local access observation for the canonical Core-owned repository ID; it does not make the repository shared.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool master to selected member&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;repository_id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Local access observation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ZFSHostAccess&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid repository ID.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Caller is not the current pool master.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Repository is unavailable.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="peerZFSRepositoryLifecycle"><h2>POST <code>/api/v1/pool/zfs-provision/lifecycle</code></h2>
+<p>Apply a ZFS repository lifecycle phase on a selected member</p><p>Served only to the current pool master. The master dispatches a validated Core storage lifecycle command to each configured local ZFS host; Core keeps the durable master operation and dependency checks.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerZFSRepositoryLifecycle&quot;,
+  &quot;summary&quot;: &quot;Apply a ZFS repository lifecycle phase on a selected member&quot;,
+  &quot;description&quot;: &quot;Served only to the current pool master. The master dispatches a validated Core storage lifecycle command to each configured local ZFS host; Core keeps the durable master operation and dependency checks.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool master to configured member&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;properties&quot;: {
+            &quot;phase&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;enum&quot;: [
+                &quot;preflight&quot;,
+                &quot;execute&quot;
+              ]
+            },
+            &quot;command&quot;: {
+              &quot;type&quot;: &quot;object&quot;
+            }
+          },
+          &quot;required&quot;: [
+            &quot;phase&quot;,
+            &quot;command&quot;
+          ]
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Core lifecycle result.&quot;
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid phase or lifecycle command.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Caller is not the current pool master.&quot;
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Method other than POST.&quot;
+    }
+  }
+}</pre></details></section>
 <section id="schemas"><h2>Schemas and authentication</h2>
 <h3>securitySchemes</h3>
 <details id="PoolMemberCertificate"><summary>PoolMemberCertificate</summary><pre>{
@@ -2424,7 +2851,8 @@
       &quot;type&quot;: &quot;boolean&quot;
     },
     &quot;shared&quot;: {
-      &quot;type&quot;: &quot;boolean&quot;
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Core-observed shared-storage capability, never by itself permission to place or start a VM. Provisioned ZFS is always false because each selected host has an independent local zpool.&quot;
     },
     &quot;eligible_host_ids&quot;: {
       &quot;type&quot;: [
@@ -2856,6 +3284,225 @@
   &quot;required&quot;: [],
   &quot;x-go-type&quot;: &quot;protocol.StorageIdentity&quot;
 }</pre></details>
+<details id="ZFSProvisionDevice"><summary>ZFSProvisionDevice</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;by_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;serial&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;fingerprint&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;size_bytes&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;erase_confirmation&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;by_id&quot;,
+    &quot;serial&quot;,
+    &quot;fingerprint&quot;,
+    &quot;size_bytes&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSProvisionDevice&quot;
+}</pre></details>
+<details id="ZFSProvisionHost"><summary>ZFSProvisionHost</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;layout&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;devices&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionDevice&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;layout&quot;,
+    &quot;devices&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSProvisionHost&quot;
+}</pre></details>
+<details id="ZFSProvisionRequest"><summary>ZFSProvisionRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;scope&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;hosts&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionHost&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;name&quot;,
+    &quot;pool_id&quot;,
+    &quot;scope&quot;,
+    &quot;hosts&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSProvisionRequest&quot;
+}</pre></details>
+<details id="ZFSProvisionHostResult"><summary>ZFSProvisionHostResult</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;scope&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;layout&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;devices&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionDevice&quot;
+      }
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_guid&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;dataset_guid&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;repository_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;name&quot;,
+    &quot;scope&quot;,
+    &quot;host_id&quot;,
+    &quot;layout&quot;,
+    &quot;devices&quot;,
+    &quot;status&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSProvisionHostResult&quot;,
+  &quot;description&quot;: &quot;Durable outcome for one selected host. pool_guid and dataset_guid identify that host&#x27;s independent native zpool and dataset after a successful provision; this outcome alone is not a current access observation.&quot;
+}</pre></details>
+<details id="ZFSHostAccess"><summary>ZFSHostAccess</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_guid&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;dataset_guid&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;path&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;readable&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;writable&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;total_bytes&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;available_bytes&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;type&quot;: &quot;integer&quot;,
+          &quot;minimum&quot;: 0
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;readable&quot;,
+    &quot;writable&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSHostAccess&quot;,
+  &quot;description&quot;: &quot;Current per-host observation for a Core-provisioned local ZFS repository. The GUIDs, path, capacity and read/write flags apply only to host_id; a missing or errored observation grants no placement permission.&quot;
+}</pre></details>
+<details id="ZFSProvisionPeerRequest"><summary>ZFSProvisionPeerRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;request&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionRequest&quot;
+    },
+    &quot;host&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionHost&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;operation_id&quot;,
+    &quot;repository_id&quot;,
+    &quot;request&quot;,
+    &quot;host&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;agent.zfsPoolPeerRequest&quot;
+}</pre></details>
 <details id="StorageRegistration"><summary>StorageRegistration</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;properties&quot;: {
@@ -2937,6 +3584,24 @@
       &quot;items&quot;: {
         &quot;$ref&quot;: &quot;#/components/schemas/PoolStorageAccess&quot;
       }
+    },
+    &quot;zfs_host_access&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ZFSHostAccess&quot;
+      },
+      &quot;description&quot;: &quot;Current local access observations for each configured host of a Core-provisioned ZFS repository.&quot;
+    },
+    &quot;zfs_provisioned&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;True only for a repository created through Core ZFS provisioning.&quot;
+    },
+    &quot;zfs_scope&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Requested ZFS scope (host or pool). Pool scope shares the Core repository identity across independent host-local zpools; it does not make storage shared.&quot;
     }
   },
   &quot;required&quot;: [
@@ -2949,7 +3614,7 @@
     &quot;status&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.StorageRegistration&quot;,
-  &quot;description&quot;: &quot;Core-owned repository configuration and observation. A repository has one selected host in this release; shared is a capability observation, never placement permission. Source identity, access, capacity and health are Core observations; a missing or replaced mount blocks writes and never falls back to a mountpoint. For ZFS, source.zfs.mount_path remains the existing dataset mount and path is the Core-owned /var/lib/nex-storage/&lt;repository-id&gt; bind alias used by VM disks; detach removes only that alias, never ZFS properties. Credentials remain Core-local and inventory reports only presence. A fresh Controller adopts these records from Inventory.managed.storage.&quot;
+  &quot;description&quot;: &quot;Core-owned repository configuration and observation. A repository has one selected host in this release; shared is a capability observation, never placement permission. Source identity, access, capacity and health are Core observations; a missing or replaced mount blocks writes and never falls back to a mountpoint. For existing-dataset ZFS registration, source.zfs.mount_path remains the existing dataset mount and path is the Core-owned /var/lib/nex-storage/&lt;repository-id&gt; bind alias used by VM disks; detach removes only that alias and never ZFS properties. Core ZFS provisioning creates its own tagged pool and vms dataset, then uses the same alias. Credentials remain Core-local and inventory reports only presence. A fresh Controller adopts these records from Inventory.managed.storage.&quot;
 }</pre></details>
 <details id="StorageSource"><summary>StorageSource</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -3516,5 +4181,237 @@
     &quot;features&quot;
   ],
   &quot;x-go-type&quot;: &quot;agent.poolCPUComparison&quot;
+}</pre></details>
+<details id="PoolNetworkAccess"><summary>PoolNetworkAccess</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;network_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;bridge&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;uplink_present&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;network_id&quot;,
+    &quot;host_id&quot;,
+    &quot;generation&quot;,
+    &quot;uplink_present&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolNetworkAccess&quot;
+}</pre></details>
+<details id="PoolMediaAccess"><summary>PoolMediaAccess</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;media_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;storage_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;media_id&quot;,
+    &quot;host_id&quot;,
+    &quot;storage_id&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolMediaAccess&quot;
+}</pre></details>
+<details id="NetworkRegistration"><summary>NetworkRegistration</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;bridge&quot;,
+        &quot;network&quot;,
+        &quot;vlan&quot;
+      ]
+    },
+    &quot;source&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Bridge name used by guest interfaces (derived &lt;uplink&gt;v&lt;vlan&gt; for kind vlan) or libvirt network name.&quot;
+    },
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;queued&quot;,
+        &quot;dispatched&quot;,
+        &quot;succeeded&quot;,
+        &quot;failed&quot;,
+        &quot;needs_attention&quot;
+      ]
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;uplink&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Uplink NIC name: required for kind vlan; set on kind bridge when the registration was created automatically for the untagged network of a bridge on a physical port.&quot;
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;kind vlan: master-owned desired generation members reconcile against; 0 on host-local registrations.&quot;
+    },
+    &quot;vlan&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;maximum&quot;: 4094,
+      &quot;description&quot;: &quot;kind vlan only: 802.1Q tag, 0 untagged.&quot;
+    },
+    &quot;member_access&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;description&quot;: &quot;kind vlan: the master&#x27;s observations of each member&#x27;s applied bridge; absent on host-local registrations.&quot;,
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolNetworkAccess&quot;
+      }
+    },
+    &quot;tombstone&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;The host durably removed this network. The row carries only id, pool_id, host_id and the generation after the removal; name, kind, source and the rest are absent. A Controller deletes its mirror row for that host and never re-adopts the registration from an older report, and a peer list never carries one.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;name&quot;,
+    &quot;kind&quot;,
+    &quot;source&quot;,
+    &quot;operation_id&quot;,
+    &quot;status&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.NetworkRegistration&quot;,
+  &quot;description&quot;: &quot;Pool guest network on one host: an existing bridge, an active libvirt network, or a Core-created VLAN bridge (kind vlan) on an uplink NIC. VLAN bridges are additive; the management bridge, addresses and routes are never changed. The host self-registers the untagged default network of every host bridge on a physical NIC or bond (&lt;port&gt; untagged, kind bridge, uplink recorded) in its own journal with host-generated IDs, at agent start and when a new uplink appears; Controller creates registrations itself only by adoption (actor system): any network the host reports in Inventory.managed.networks that Controller does not hold (request_id adopt-network:&lt;host&gt;:&lt;id&gt;, ID and name preserved). A bridge or libvirt network already held by another registration on that host is a failed host result, not an HTTP 409.&quot;
+}</pre></details>
+<details id="Media"><summary>Media</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;storage_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;size_bytes&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;Zero until a URL download completes; applied media is at least 32774 bytes.&quot;
+    },
+    &quot;sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^([0-9a-f]{64})?$&quot;
+    },
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;queued&quot;,
+        &quot;dispatched&quot;,
+        &quot;succeeded&quot;,
+        &quot;failed&quot;,
+        &quot;needs_attention&quot;
+      ]
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;url&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Command-only public HTTP(S) source URL. Omitted from client responses and applied host inventory. Requires iso-download-v1.&quot;
+    },
+    &quot;member_access&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolMediaAccess&quot;
+      }
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;Fences removal, as it does for storage and networks. Imports leave it zero and every reader treats zero as 1.&quot;
+    },
+    &quot;tombstone&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;The host durably removed this ISO and unlinked its published file. The row carries only id, pool_id, host_id and the generation after the removal; a Controller deletes its mirror row for that host and never re-adopts the import from an older report.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;storage_id&quot;,
+    &quot;name&quot;,
+    &quot;size_bytes&quot;,
+    &quot;sha256&quot;,
+    &quot;operation_id&quot;,
+    &quot;status&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.Media&quot;
 }</pre></details>
 </section></main></html>
