@@ -1,0 +1,39 @@
+{
+  "summary": "Private forge Release publishes ZFS-enabled ISOs for internal labs again; the public website publisher still rejects them and the Release workflow skips website/APT with a warning instead of failing the run. API impact: none.",
+  "paths": [
+    "scripts/gitea-release.py",
+    "tests/test_gitea_release.py",
+    ".gitea/workflows/release.yml",
+    ".github/workflows/release.yml",
+    "docs/guide/publish-a-release.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-19-zfs-private-forge-release.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "pages": [
+      "docs/guide/publish-a-release.md"
+    ],
+    "reason": "Release publication now distinguishes private forge delivery from public website redistribution for ZFS-enabled builds."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Release and website publishing scripts only; no Controller/Core API contract change."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Publishing policy alignment with existing OpenZFS external-distribution gates; no milestone status change."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable pool or Controller state; CI and publication behaviour only."
+  },
+  "verification": {
+    "method": "python3 -m unittest discover -s tests -p 'test_gitea_release.py' passed 7 tests including private-forge ZFS publish; test_release_publish.py passed 14 including public ZFS rejection; python3 scripts/check_docs.py --worktree passed; repository privacy check passed. Hosted Release of 0.3.6 is the live forge evidence after push.",
+    "evidence": [
+      "tests/test_gitea_release.py",
+      "tests/test_release_publish.py",
+      "docs/guide/publish-a-release.md"
+    ]
+  }
+}

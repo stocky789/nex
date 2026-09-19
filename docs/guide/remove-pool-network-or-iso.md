@@ -2,7 +2,7 @@
 
 ## Status
 
-Development workflow for Nex Core 0.3.5 and a matching Nex Controller. A pool VLAN guest network
+Development workflow for Nex Core 0.3.6 and a matching Nex Controller. A pool VLAN guest network
 can be renamed or removed, and an imported ISO can be removed, from the pool's **Networking** and
 **ISO library** views. The pool master's Nex Core does the work, records it durably and every
 member host converges to it on its next pass.

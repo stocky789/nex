@@ -6,12 +6,19 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.3.5` →
-> Debian `0.3.5`).
+> development software. Builds use the newest numbered changelog heading (`0.3.6` →
+> Debian `0.3.6`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.3.6] — 2026-09-19
+
+### Bug Fixes
+
+- Fixed Release builds failing after a successful ISO build when ZFS packages are present;
+  private forge releases publish again, and the public website stays blocked.
 
 ## [0.3.5] — 2026-09-19
 

@@ -13,8 +13,8 @@ Disposable lab verified Check/Apply for both packages against the public repo.
 Host backend remains `/srv/nex-apt` on the website VM.
 
 This dated record does not assert the current archive contents or that working version
-`0.3.5` is published. ZFS-enabled ISO publication is currently refused until the
-external-distribution gates are closed.
+`0.3.6` is published. ZFS-enabled ISO publication to the public website is currently refused
+until the external-distribution gates are closed.
 
 ## Decision
 

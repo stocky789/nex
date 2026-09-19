@@ -20,7 +20,7 @@ required, and the installed driver ISO is unchanged.
 
 - A locally built ISO and its matching SHA256 sidecar; see [build instructions](../../installer/README.md).
   External redistribution remains subject to the [release licensing gates](../LICENSING.md).
-  The current working `0.3.5` tree is not a released artifact; its ZFS-enabled images
+  The current working `0.3.6` tree is not a released artifact; its ZFS-enabled images
   are restricted to internal disposable labs.
 - An isolated disposable amd64 VM with at least 2 virtual CPUs, 4 GB RAM, and one blank 24 GB
   virtual disk. Do not attach real host disks or existing VM data disks.

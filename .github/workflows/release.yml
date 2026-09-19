@@ -188,6 +188,7 @@ jobs:
       - name: Check for deploy credentials
         id: deploy
         env:
+          NEX_VERSION: ${{ steps.version.outputs.version }}
           NEX_DEPLOY_HOST: ${{ secrets.NEX_DEPLOY_HOST }}
           NEX_DEPLOY_KEY: ${{ secrets.NEX_DEPLOY_KEY }}
           NEX_DEPLOY_USER: ${{ secrets.NEX_DEPLOY_USER }}
@@ -210,7 +211,24 @@ jobs:
             fi
           done
           missing=${missing# }
-          if [ -z "$missing" ]; then
+          # ZFS-enabled ISOs may land on the private forge (internal labs) but must not
+          # hit the public download tree until docs/LICENSING.md external gates close.
+          zfs_blocked=false
+          if python3 -c "
+import json, sys
+manifest = json.load(open(sys.argv[1], encoding='utf-8'))
+components = manifest.get('components') if isinstance(manifest, dict) else None
+blocked = isinstance(components, list) and any(
+    isinstance(c, dict) and c.get('package') in {'zfs-dkms', 'zfsutils-linux'}
+    for c in components)
+sys.exit(0 if blocked else 1)
+" "dist/nex-core-${NEX_VERSION}-compliance-manifest.json"; then
+            zfs_blocked=true
+          fi
+          if [ -z "$missing" ] && [ "$zfs_blocked" = true ]; then
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+            echo '::warning::ZFS-enabled ISO: forge release published; public website downloads and APT stay blocked until OpenZFS redistribution evidence is closed.'
+          elif [ -z "$missing" ]; then
             echo 'enabled=true' >> "$GITHUB_OUTPUT"
           elif [ "$missing" = "NEX_DEPLOY_HOST NEX_DEPLOY_USER NEX_DEPLOY_KEY NEX_DEPLOY_KNOWN_HOSTS" ]; then
             echo 'enabled=false' >> "$GITHUB_OUTPUT"
