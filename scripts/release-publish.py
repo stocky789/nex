@@ -79,15 +79,31 @@ def compliance_manifest(path, version):
     return path, manifest
 
 
-def reject_unverified_zfs(manifest):
+def zfs_blocks_public_publish(manifest):
+    """True when the ISO carries OpenZFS packages that must not hit the public site."""
     components = manifest.get("components")
     if not isinstance(components, list):
-        return
-    if any(isinstance(component, dict) and component.get("package") in
-           {"zfs-dkms", "zfsutils-linux"} for component in components):
+        return False
+    return any(isinstance(component, dict) and component.get("package") in
+               {"zfs-dkms", "zfsutils-linux"} for component in components)
+
+
+def reject_unverified_zfs(manifest):
+    if zfs_blocks_public_publish(manifest):
         raise ReleasePublishError(
             "ZFS-enabled ISO publishing is blocked pending verified OpenZFS licence, "
             "DKMS/kernel, offline-install, Secure Boot and boot-recovery evidence")
+
+
+def check_zfs_blocked(path):
+    path = Path(path)
+    try:
+        manifest = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise ReleasePublishError(f"invalid compliance manifest: {path}") from error
+    if not isinstance(manifest, dict):
+        raise ReleasePublishError(f"invalid compliance manifest: {path}")
+    return zfs_blocks_public_publish(manifest)
 
 
 def sha256(path, chunk=1 << 20):
@@ -189,15 +205,32 @@ def publish(root, iso, source, manifest, keep):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check-zfs-blocked", metavar="MANIFEST",
+        help="print 'blocked' or 'clear' for a compliance manifest and exit; "
+             "used by the Release workflow before public website publishing")
     parser.add_argument("--root", default="/srv/nex-downloads")
-    parser.add_argument("--iso", required=True)
-    parser.add_argument("--source", required=True,
+    parser.add_argument("--iso",
+                        help="built ISO path (required unless --check-zfs-blocked)")
+    parser.add_argument("--source",
                         help="matching whole-release source bundle")
-    parser.add_argument("--compliance-manifest", required=True,
+    parser.add_argument("--compliance-manifest",
                         help="matching release compliance manifest")
     parser.add_argument("--keep", type=int, default=3,
                         help="number of releases to retain (default 3)")
     args = parser.parse_args(argv)
+    if args.check_zfs_blocked:
+        try:
+            print("blocked" if check_zfs_blocked(args.check_zfs_blocked) else "clear")
+        except (ReleasePublishError, OSError) as error:
+            print(f"release-publish: {error}", file=sys.stderr)
+            return 1
+        return 0
+    missing = [name for name, value in (
+        ("--iso", args.iso), ("--source", args.source),
+        ("--compliance-manifest", args.compliance_manifest)) if not value]
+    if missing:
+        parser.error(f"{', '.join(missing)} required unless --check-zfs-blocked is set")
     try:
         version, digest, newest, removed = publish(
             args.root, args.iso, args.source, args.compliance_manifest, args.keep)

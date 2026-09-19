@@ -2,11 +2,14 @@
 """ISO publishing into the website download tree, without touching a real host."""
 import importlib.machinery
 import importlib.util
+import io
 import json
-import subprocess
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -185,6 +188,34 @@ class PublishTests(unittest.TestCase):
             manifest.write_text(json.dumps(data) + "\n")
             with self.assertRaisesRegex(publish.ReleasePublishError, "ZFS-enabled ISO publishing is blocked"):
                 publish.publish(Path(tmp) / "downloads", iso, source, manifest, keep=3)
+
+    def test_check_zfs_blocked_reports_blocked_or_clear(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            clear = make_manifest(tmp, "0.1.6")
+            blocked = Path(tmp) / "nex-core-0.1.7-compliance-manifest.json"
+            blocked.write_text(json.dumps({
+                "version": "0.1.7",
+                "components": [{"package": "zfsutils-linux"}],
+            }) + "\n")
+
+            def gate(path):
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    status = publish.main(["--check-zfs-blocked", str(path)])
+                return status, out.getvalue().strip()
+
+            self.assertEqual(gate(clear), (0, "clear"))
+            self.assertEqual(gate(blocked), (0, "blocked"))
+            bad = Path(tmp) / "bad.json"
+            bad.write_text("{not json")
+            status, _ = gate(bad)
+            self.assertEqual(status, 1)
+            # Workflow invokes the script as a process; keep that path covered.
+            self.assertEqual(
+                subprocess.check_output(
+                    [sys.executable, str(ROOT / "scripts/release-publish.py"),
+                     "--check-zfs-blocked", str(blocked)], text=True).strip(),
+                "blocked")
 
 
 if __name__ == "__main__":

@@ -213,18 +213,13 @@ jobs:
           missing=${missing# }
           # ZFS-enabled ISOs may land on the private forge (internal labs) but must not
           # hit the public download tree until docs/LICENSING.md external gates close.
-          zfs_blocked=false
-          if python3 -c "
-import json, sys
-manifest = json.load(open(sys.argv[1], encoding='utf-8'))
-components = manifest.get('components') if isinstance(manifest, dict) else None
-blocked = isinstance(components, list) and any(
-    isinstance(c, dict) and c.get('package') in {'zfs-dkms', 'zfsutils-linux'}
-    for c in components)
-sys.exit(0 if blocked else 1)
-" "dist/nex-core-${NEX_VERSION}-compliance-manifest.json"; then
-            zfs_blocked=true
-          fi
+          zfs_gate=$(python3 scripts/release-publish.py --check-zfs-blocked \
+            "dist/nex-core-${NEX_VERSION}-compliance-manifest.json")
+          case "$zfs_gate" in
+            blocked) zfs_blocked=true ;;
+            clear) zfs_blocked=false ;;
+            *) echo "release-publish: unexpected zfs gate result: $zfs_gate" >&2; exit 1 ;;
+          esac
           if [ -z "$missing" ] && [ "$zfs_blocked" = true ]; then
             echo 'enabled=false' >> "$GITHUB_OUTPUT"
             echo '::warning::ZFS-enabled ISO: forge release published; public website downloads and APT stay blocked until OpenZFS redistribution evidence is closed.'

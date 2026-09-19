@@ -2,7 +2,9 @@
   "summary": "Private forge Release publishes ZFS-enabled ISOs for internal labs again; the public website publisher still rejects them and the Release workflow skips website/APT with a warning instead of failing the run. API impact: none.",
   "paths": [
     "scripts/gitea-release.py",
+    "scripts/release-publish.py",
     "tests/test_gitea_release.py",
+    "tests/test_release_publish.py",
     ".gitea/workflows/release.yml",
     ".github/workflows/release.yml",
     "docs/guide/publish-a-release.md",
@@ -29,7 +31,7 @@
     "reason": "No durable pool or Controller state; CI and publication behaviour only."
   },
   "verification": {
-    "method": "python3 -m unittest discover -s tests -p 'test_gitea_release.py' passed 7 tests including private-forge ZFS publish; test_release_publish.py passed 14 including public ZFS rejection; python3 scripts/check_docs.py --worktree passed; repository privacy check passed. Hosted Release of 0.3.6 is the live forge evidence after push.",
+    "method": "python3 -m unittest discover -s tests -p 'test_gitea_release.py' passed 7 tests including private-forge ZFS publish; test_release_publish.py passed including public ZFS rejection and --check-zfs-blocked; both release.yml files parse with PyYAML; python3 scripts/check_docs.py --worktree passed; repository privacy check passed. Hosted Release of 0.3.6 is the live forge evidence after push.",
     "evidence": [
       "tests/test_gitea_release.py",
       "tests/test_release_publish.py",
