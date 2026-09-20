@@ -222,7 +222,9 @@ The exact final component/source licence review, matching corresponding source a
 notice retention, supported-kernel DKMS build, offline installation, Secure Boot
 signing/key handling where applicable, kernel-upgrade and known-good boot recovery
 must have inspected evidence. Until those gates close, ZFS-enabled images are for
-internal disposable labs only. Configuration changes and unit tests do not establish
+internal disposable labs only. Private forge releases of those images count as that
+internal lab delivery (project owner, 2026-09-19 follow-up); the public website download
+tree and APT archive remain blocked. Configuration changes and unit tests do not establish
 that an image builds, boots or can be redistributed. See the
 [rollout verification](qa/2026-09-19-zfs-provisioning.md) for actual checks and limits.
 That report records internal QA4 offline installation, first boot, reboot, and a

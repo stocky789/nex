@@ -5480,3 +5480,34 @@ Append resolved defects with their evidence and the approach to avoid.
   still converge in seconds. And do not try to distinguish "member is dead" from "member is
   partitioned" to decide the status — that judgement is made over the same channel that just
   failed, so it cannot be trusted either way.
+
+## BUG-0394 — Shared Gitea runner marked every Controller foundation lane failed at once
+- Date: 2026-09-20
+- Symptom: Gitea run 4168 failed every phase1 lane at one timestamp with truncated logs; Installer
+  tests passed then the job was marked failed after `context deadline exceeded` removing the job
+  container. UI lane steps had all succeeded.
+- Root cause: Five parallel job containers plus Installer/Documentation on one act_runner Docker
+  host overloaded cleanup; synchronized kill left no usable failure output. Separate from real
+  test failures such as run 4162's browser assertion.
+- Fix: Stagger phase1 to two concurrent containers (wave 1: go + controller-browser; wave 2:
+  contracts + web; wave 3: website), add job timeouts and noninteractive apt, keep Installer and
+  Documentation concurrency groups. Forge still executes `.github/workflows/` (BUG-0043).
+- Regression: `tests.test_ci_security.BrowserArtifactTests.test_phase1_keeps_separate_lanes_with_runner_safe_stagger`
+  asserts the stagger markers and wave-1 browser placement in both workflow copies. Hosted rerun
+  after push is the remaining evidence.
+- Avoid: Starting five apt/Playwright/Go-race containers on this runner at once, or treating a
+  Docker cleanup timeout as a product test failure.
+
+## BUG-0395 — Release deploy credential script crashed on unset NEX_VERSION
+- Date: 2026-09-20
+- Symptom: Contracts lane on main (run 4155) failed twelve `ReleaseDeployCredentialTests` with
+  `sh: NEX_VERSION: parameter not set` under `set -u`.
+- Root cause: The ZFS public-publish gate ran before secret completeness was decided, so fork and
+  half-configured paths still expanded `${NEX_VERSION}`.
+- Fix: Resolve deploy secrets first and return; only then run
+  `release-publish.py --check-zfs-blocked` against the built compliance manifest. Private forge
+  ZFS publishes remain allowed; public website stays blocked with an explicit warning.
+- Regression: `tests.test_ci_security.ReleaseDeployCredentialTests` (fork, partial, clear, ZFS)
+  plus `tests.test_release_publish.PublishTests.test_check_zfs_blocked_reports_blocked_or_clear`.
+- Avoid: Reading release version or the compliance manifest before the secret-set decision under
+  `set -u`.

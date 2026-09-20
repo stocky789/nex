@@ -1,11 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Republishing a version must replace its release and move its tag, streaming assets."""
-import contextlib
 import importlib.machinery
 import importlib.util
-import io
 import json
-import os
 import tempfile
 import threading
 import unittest
@@ -149,47 +146,24 @@ class PublishTests(unittest.TestCase):
             gitea.publish(self.repo, "v1.0.0-rc1", "same", "Nex Core", "", [deb])
         self.assertNotIn("DELETE", [c[0] for c in FakeGitea.calls])
 
-    def test_rejects_zfs_enabled_release_before_creating_a_draft(self):
+    def test_private_forge_publishes_zfs_enabled_manifest(self):
+        # The private forge is internal lab delivery. Public website publishing
+        # still rejects ZFS; that gate lives in scripts/release-publish.py.
+        FakeGitea.state = {"release": None, "tag_sha": None}
         with tempfile.TemporaryDirectory() as temporary:
             manifest = Path(temporary) / "nex-core-1.0.0-compliance-manifest.json"
             manifest.write_text(json.dumps({"components": [{"package": "zfsutils-linux"}]}))
-            with self.assertRaisesRegex(RuntimeError, "ZFS-enabled ISO publishing is blocked"):
-                gitea.publish(self.repo, "v1.0.0", "new", "Nex Core", "", [manifest])
-        self.assertEqual(FakeGitea.calls, [])
+            release = gitea.publish(self.repo, "v1.0.0-rc1", "new", "Nex Core", "", [manifest])
+        self.assertFalse(release["draft"])
+        self.assertIn("POST", [c[0] for c in FakeGitea.calls])
 
-    def test_blocked_release_reports_one_line_instead_of_a_traceback(self):
-        # A blocked or unreadable manifest must fail closed through main's own
-        # error path; a traceback tells an operator nothing about the gate.
-        os.environ["GITHUB_TOKEN"] = "t"
-        self.addCleanup(os.environ.pop, "GITHUB_TOKEN", None)
+    def test_unreadable_manifest_fails_closed_before_creating_a_draft(self):
+        # BUG-0314: corrupt JSON must not ship; ZFS packages alone are allowed on the forge.
         with tempfile.TemporaryDirectory() as temporary:
-            notes = Path(temporary) / "notes.md"
-            notes.write_text("notes\n")
             manifest = Path(temporary) / "nex-core-1.0.0-compliance-manifest.json"
-
-            def run():
-                errors = io.StringIO()
-                with contextlib.redirect_stderr(errors):
-                    status = gitea.main([
-                        "--tag", "v1.0.0", "--target", "new", "--name", "Nex Core",
-                        "--notes", str(notes), "--repository", "o/r",
-                        "--api-url", f"http://127.0.0.1:{self.server.server_port}/api/v1",
-                        str(manifest)])
-                return status, errors.getvalue().splitlines()
-
-            manifest.write_text(json.dumps({"components": [{"package": "zfs-dkms"}]}))
-            status, reported = run()
-            self.assertEqual(status, 1)
-            self.assertEqual(len(reported), 1, reported)
-            self.assertTrue(reported[0].startswith(
-                "gitea-release: ZFS-enabled ISO publishing is blocked"), reported)
-
             manifest.write_text("{not json")
-            status, reported = run()
-            self.assertEqual(status, 1)
-            self.assertEqual(len(reported), 1, reported)
-            self.assertTrue(reported[0].startswith(
-                "gitea-release: invalid compliance manifest"), reported)
+            with self.assertRaisesRegex(RuntimeError, "invalid compliance manifest"):
+                gitea.publish(self.repo, "v1.0.0", "new", "Nex Core", "", [manifest])
         self.assertEqual(FakeGitea.calls, [])
 
     def test_dropped_upload_is_resent_whole_after_discarding_the_stale_asset(self):

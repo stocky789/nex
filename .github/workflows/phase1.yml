@@ -10,12 +10,18 @@ concurrency:
 permissions:
   contents: read
 jobs:
-  # Parallel lanes. Wall clock ≈ longest lane (~go race or Playwright+browser),
-  # not the sum. A single serial job was ~16 minutes before the late storage UI
-  # failures; smoke now lives in controller-browser and starts without waiting
-  # for go race or website work.
+  # Separate lanes so storage UI failures stay visible, capped at two concurrent
+  # job containers inside this workflow on the shared Gitea act_runner.
+  # Five fully parallel containers (plus Installer/Documentation on the same
+  # Docker host) wedged cleanup in run 4168: truncated logs, synchronized
+  # failure timestamps, and Installer marked failed after a clean test pass.
+  #
+  # Wave 1: go + controller-browser (UI fails fast; Go race runs alongside)
+  # Wave 2: contracts + web
+  # Wave 3: website
   go:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -28,6 +34,8 @@ jobs:
       - name: Test Go services and recovery
         run: go test -race -timeout 20m ./...
       - name: Verify Controller package startup gate rejects the SQLite stub
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends dpkg-dev openssl gcc libc6-dev
@@ -37,43 +45,9 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
           govulncheck ./...
 
-  contracts:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - name: Install dpkg tools and nginx for packaging and hosting checks
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends nginx-core dpkg-dev gnupg
-      - name: Check contracts and contributor tools
-        run: |
-          python3 scripts/generate_api.py --check
-          python3 -m unittest discover -s tests -p 'test_*.py' -v
-
-  web:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: Build and check UI
-        run: |
-          npm --prefix web ci
-          npm --prefix web run typecheck
-          npm --prefix web run test
-          npm --prefix web run build
-      - name: Check UI dependency advisories
-        run: npm --prefix web audit --audit-level=low
-
   controller-browser:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -121,8 +95,51 @@ jobs:
       - name: Verify form select pickers render in the page and stay open
         run: .cache/phase1-qa-venv/bin/python tests/integration/form_select_picker.py --evidence .cache/form-select-picker
 
-  website:
+  contracts:
+    needs: [go, controller-browser]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install dpkg tools and nginx for packaging and hosting checks
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends nginx-core dpkg-dev gnupg
+      - name: Check contracts and contributor tools
+        run: |
+          python3 scripts/generate_api.py --check
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+  web:
+    needs: [controller-browser]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build and check UI
+        run: |
+          npm --prefix web ci
+          npm --prefix web run typecheck
+          npm --prefix web run test
+          npm --prefix web run build
+      - name: Check UI dependency advisories
+        run: npm --prefix web audit --audit-level=low
+
+  website:
+    needs: [web]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -133,6 +150,8 @@ jobs:
           cache: npm
           cache-dependency-path: website/package-lock.json
       - name: Install nginx for hardened website checks
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends nginx-core
