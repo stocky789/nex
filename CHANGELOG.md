@@ -85,6 +85,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Controller foundation CI no longer starts five heavy jobs at once on the shared Gitea
   runner, which had been killing runs mid-check and falsely failing Installer after a clean
   pass when Docker cleanup timed out.
+- Controller foundation CI runs the browser lane alone before Go race, so stalled-probe
+  heartbeats are not starved on the shared runner.
 - Release credential checks no longer crash on an unset version when only deploy secrets are
   under test; ZFS-enabled builds still publish to the private forge and stay off the public
   download page.

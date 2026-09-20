@@ -13,38 +13,12 @@ jobs:
   # Separate lanes so storage UI failures stay visible, capped at two concurrent
   # job containers inside this workflow on the shared Gitea act_runner.
   # Five fully parallel containers (plus Installer/Documentation on the same
-  # Docker host) wedged cleanup in run 4168: truncated logs, synchronized
-  # failure timestamps, and Installer marked failed after a clean test pass.
+  # Docker host) wedged cleanup in run 4168. Wave 1 previously ran Go race beside
+  # Playwright and starved the stalled-probe heartbeat check (run 4171).
   #
-  # Wave 1: go + controller-browser (UI fails fast; Go race runs alongside)
-  # Wave 2: contracts + web
-  # Wave 3: website
-  go:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - uses: https://github.com/actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: '1.27.1'
-      # Keep production-strength password hashing and race checks; the shared
-      # runner can exceed Go's default ten-minute package deadline.
-      - name: Test Go services and recovery
-        run: go test -race -timeout 20m ./...
-      - name: Verify Controller package startup gate rejects the SQLite stub
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends dpkg-dev openssl gcc libc6-dev
-          python3 tests/integration/controller_package_smoke.py
-      - name: Check Go dependency advisories
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
-          govulncheck ./...
-
+  # Wave 1: controller-browser alone (UI fails fast; no Go-race CPU contention)
+  # Wave 2: go + web
+  # Wave 3: contracts + website
   controller-browser:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -95,24 +69,32 @@ jobs:
       - name: Verify form select pickers render in the page and stay open
         run: .cache/phase1-qa-venv/bin/python tests/integration/form_select_picker.py --evidence .cache/form-select-picker
 
-  contracts:
-    needs: [go, controller-browser]
+  go:
+    needs: [controller-browser]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: Install dpkg tools and nginx for packaging and hosting checks
+      - uses: https://github.com/actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+      # Keep production-strength password hashing and race checks; the shared
+      # runner can exceed Go's default ten-minute package deadline.
+      - name: Test Go services and recovery
+        run: go test -race -timeout 20m ./...
+      - name: Verify Controller package startup gate rejects the SQLite stub
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends nginx-core dpkg-dev gnupg
-      - name: Check contracts and contributor tools
+          sudo apt-get install --yes --no-install-recommends dpkg-dev openssl gcc libc6-dev
+          python3 tests/integration/controller_package_smoke.py
+      - name: Check Go dependency advisories
         run: |
-          python3 scripts/generate_api.py --check
-          python3 -m unittest discover -s tests -p 'test_*.py' -v
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          govulncheck ./...
 
   web:
     needs: [controller-browser]
@@ -135,6 +117,25 @@ jobs:
           npm --prefix web run build
       - name: Check UI dependency advisories
         run: npm --prefix web audit --audit-level=low
+
+  contracts:
+    needs: [go]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install dpkg tools and nginx for packaging and hosting checks
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends nginx-core dpkg-dev gnupg
+      - name: Check contracts and contributor tools
+        run: |
+          python3 scripts/generate_api.py --check
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
 
   website:
     needs: [web]

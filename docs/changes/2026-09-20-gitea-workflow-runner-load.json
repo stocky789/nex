@@ -1,5 +1,5 @@
 {
-  "summary": "Stagger Gitea Controller foundation CI to two concurrent jobs with wave-1 browser fail-fast, harden apt and timeouts, fix the release deploy ZFS gate ordering, keep private-forge ZFS publishes with fail-closed manifest parse, and record BUG-0394/0395.",
+  "summary": "Stagger Gitea Controller foundation CI so the browser lane runs alone before Go race, harden stalled-probe eventually budgets, fix release deploy ZFS gate ordering, keep private-forge ZFS publishes with fail-closed manifest parse, and record BUG-0394/0395/0396.",
   "paths": [
     ".github/workflows/phase1.yml",
     ".github/workflows/installer.yml",
@@ -11,6 +11,7 @@
     ".gitea/workflows/release.yml",
     "scripts/release-publish.py",
     "scripts/gitea-release.py",
+    "tests/integration/phase1.py",
     "tests/test_ci_security.py",
     "tests/test_gitea_release.py",
     "tests/test_release_publish.py",
@@ -38,7 +39,7 @@
     "reason": "No Nex durable pool or Controller state added or moved."
   },
   "verification": {
-    "method": "Inspected Gitea run 4168 job logs. Local unittest for CI security, gitea-release and release-publish including --check-zfs-blocked and unreadable-manifest fail-closed. docs gate --worktree. Hosted rerun outstanding until push.",
+    "method": "Inspected Gitea runs 4168, 4171 and 4174. Local unittest for CI security, gitea-release and release-publish. docs gate --worktree. Hosted rerun outstanding until push.",
     "evidence": [
       "tests/test_ci_security.py",
       "tests/test_gitea_release.py",

@@ -203,8 +203,11 @@ def acceptance(lab, args):
     (shim / 'virsh').chmod(0o700)
     env = {**os.environ, 'PATH': str(shim) + os.pathsep + os.environ['PATH'], 'NEX_QA_MODE': str(mode)}
     # Retain the production probe deadline; only reporting/polling cadence is accelerated.
+    # Keep the production probe deadline (3s). Heartbeat/probe cadence is accelerated
+    # for CI; a loaded runner can still need longer than the default 15s eventually
+    # budget for inventory to advance while a stalled probe is timing out.
     agent_args = [agent, 'run', '--state-dir', state_dir, '--heartbeat', '250ms',
-                  '--probe-interval', '250ms']
+                  '--probe-interval', '250ms', '--probe-timeout', '3s']
     ap = lab.start('agent', *agent_args, env=env)
 
     def check_status(name, status):
@@ -220,10 +223,10 @@ def acceptance(lab, args):
     eventually(lambda: check_status('libvirt', 'failed'), 'libvirt failure distinguished from connectivity')
     lab.passed('simulated libvirt failure remains fresh with failed service check')
     mode.write_text('stalled')
-    eventually(lambda: check_status('libvirt', 'unknown'), 'stalled libvirt probe is unknown')
+    eventually(lambda: check_status('libvirt', 'unknown'), 'stalled libvirt probe is unknown', timeout=30)
     before = host()['last_seen']
     eventually(lambda: host()['last_seen'] != before and check_status('inventory', 'healthy'),
-               'other observations responsive during stalled probe')
+               'other observations responsive during stalled probe', timeout=45)
     lab.passed('simulated stalled probe times out independently; native inventory and heartbeat continue')
     mode.write_text('healthy')
     eventually(lambda: check_status('libvirt', 'healthy'), 'probe recovery')

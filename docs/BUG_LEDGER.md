@@ -5498,16 +5498,34 @@ Append resolved defects with their evidence and the approach to avoid.
 - Avoid: Starting five apt/Playwright/Go-race containers on this runner at once, or treating a
   Docker cleanup timeout as a product test failure.
 
-## BUG-0395 — Release deploy credential script crashed on unset NEX_VERSION
+## BUG-0396 — Stalled-probe heartbeat check failed under Go-race CPU load
 - Date: 2026-09-20
-- Symptom: Contracts lane on main (run 4155) failed twelve `ReleaseDeployCredentialTests` with
-  `sh: NEX_VERSION: parameter not set` under `set -u`.
-- Root cause: The ZFS public-publish gate ran before secret completeness was decided, so fork and
-  half-configured paths still expanded `${NEX_VERSION}`.
-- Fix: Resolve deploy secrets first and return; only then run
-  `release-publish.py --check-zfs-blocked` against the built compliance manifest. Private forge
-  ZFS publishes remain allowed; public website stays blocked with an explicit warning.
-- Regression: `tests.test_ci_security.ReleaseDeployCredentialTests` (fork, partial, clear, ZFS)
-  plus `tests.test_release_publish.PublishTests.test_check_zfs_blocked_reports_blocked_or_clear`.
-- Avoid: Reading release version or the compliance manifest before the secret-set decision under
-  `set -u`.
+- Symptom: Gitea run 4171 controller-browser failed
+  `other observations responsive during stalled probe` after libvirt unknown had already
+  been observed; remaining browser steps were skipped by the job graph.
+- Root cause: Wave 1 ran `go test -race` beside Playwright. Under that load, inventory and
+  `last_seen` did not advance within the 15-second eventually budget while a stalled probe
+  was timing out.
+- Fix: Run controller-browser alone first; start go and web only after it finishes. Pass an
+  explicit `--probe-timeout 3s` and raise the stalled-probe eventually budgets to 30s/45s.
+- Regression: `tests.test_ci_security.BrowserArtifactTests.test_phase1_keeps_separate_lanes_with_runner_safe_stagger`
+  asserts the browser job has no `needs` and precedes `go`. Hosted rerun after push is remaining
+  evidence for the timing.
+- Avoid: Running Go race and the phase1 agent lab on the same shared runner at once, or keeping
+  a 15-second eventually budget for post-timeout inventory under CI load.
+
+## BUG-0396 — Stalled-probe heartbeat check failed under Go-race CPU load
+- Date: 2026-09-20
+- Symptom: Gitea run 4171 controller-browser failed
+  `other observations responsive during stalled probe` after libvirt unknown had already
+  been observed; remaining browser steps were skipped by the job graph.
+- Root cause: Wave 1 ran `go test -race` beside Playwright. Under that load, inventory and
+  `last_seen` did not advance within the 15-second eventually budget while a stalled probe
+  was timing out.
+- Fix: Run controller-browser alone first; start go and web only after it finishes. Pass an
+  explicit `--probe-timeout 3s` and raise the stalled-probe eventually budgets to 30s/45s.
+- Regression: `tests.test_ci_security.BrowserArtifactTests.test_phase1_keeps_separate_lanes_with_runner_safe_stagger`
+  asserts the browser job has no `needs` and precedes `go`. Hosted rerun after push is remaining
+  evidence for the timing.
+- Avoid: Running Go race and the phase1 agent lab on the same shared runner at once, or keeping
+  a 15-second eventually budget for post-timeout inventory under CI load.

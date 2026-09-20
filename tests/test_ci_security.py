@@ -43,8 +43,9 @@ class BrowserArtifactTests(unittest.TestCase):
 
         A single serial job hid late UI failures behind ~15 minutes of unrelated work.
         Five fully parallel containers on the shared Gitea act_runner then wedged Docker
-        cleanup (run 4168). Keep named lanes, stagger to two concurrent containers, and
-        start the browser lane in wave 1 so storage UI fails fast beside Go.
+        cleanup (run 4168). Keep named lanes, stagger to two concurrent containers, run
+        the browser lane alone first so Go race cannot starve stalled-probe heartbeats
+        (run 4171).
         """
         required = (
             'go:',
@@ -55,8 +56,8 @@ class BrowserArtifactTests(unittest.TestCase):
             'phase1:',
             'iso_url_browser.py',
             'storage_repositories_browser.py',
-            'needs: [go, controller-browser]',
             'needs: [controller-browser]',
+            'needs: [go]',
             'needs: [web]',
         )
         for provider in PROVIDERS:
@@ -68,10 +69,12 @@ class BrowserArtifactTests(unittest.TestCase):
                 gallery = workflow.index('website_controller_captures.py')
                 self.assertLess(smoke, gallery, 'storage UI smoke must run before gallery in the browser lane')
                 self.assertIn('cancel-in-progress: true', workflow)
-                # Browser lane must not wait on Go or contracts.
-                browser_job = workflow.index('controller-browser:')
-                contracts_job = workflow.index('contracts:')
-                self.assertLess(browser_job, contracts_job)
+                # Browser lane must be first and must not wait on Go.
+                browser_job = workflow.index('\n  controller-browser:')
+                go_job = workflow.index('\n  go:')
+                self.assertLess(browser_job, go_job)
+                browser_block = workflow[browser_job:go_job]
+                self.assertNotIn('needs:', browser_block)
                 self.assertNotIn('  host:', workflow)
                 self.assertNotIn('schedule:', workflow)
 
