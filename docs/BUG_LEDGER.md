@@ -5527,3 +5527,19 @@ Append resolved defects with their evidence and the approach to avoid.
   before asserting the secret is gone. Hosted PR/push rerun is remaining evidence.
 - Avoid: Asserting DOM privacy against a still-mounted password field, or leaving credentials in
   React draft state across an awaited reload.
+
+## BUG-0398 — Host ISO browser check failed when the host was briefly not fresh
+- Date: 2026-09-20
+- Symptom: Gitea PR run 4201 failed host_iso_browser expecting
+  `Transfer succeeded · not rescanned`; the row showed
+  `Availability unknown · host is not freshly connected`. Push run 4198 on the same
+  commit passed.
+- Root cause: The hosts route only applied explicit overrides, so a transient
+  non-fresh connection from earlier controller-browser work on the shared runner
+  changed the succeeded-ISO availability string.
+- Fix: Default the fixture host to fresh, not revoked, and managed-vm-v1 before
+  applying the stale/revoked/old-agent overrides the test already covers.
+- Regression: `tests/integration/host_iso_browser.py` hosts route baseline. Hosted
+  PR/push rerun is remaining evidence.
+- Avoid: Asserting ISO availability wording against a live host connection that
+  earlier lab steps may have left reconnecting.

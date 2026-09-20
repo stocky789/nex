@@ -1,0 +1,34 @@
+{
+  "summary": "Keep the host ISO browser fixture host fresh so succeeded transfers are not mislabeled during reconnect windows.",
+  "paths": [
+    "tests/integration/host_iso_browser.py",
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Browser fixture only; operator UI wording unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Test fixture route only.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "CI flake fix only.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable product state changed."
+  },
+  "verification": {
+    "method": "Gitea run 4201 showed available.iso as host not freshly connected. Fixture now baselines connection=fresh before overrides. Hosted rerun after push.",
+    "evidence": [
+      "tests/integration/host_iso_browser.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}
