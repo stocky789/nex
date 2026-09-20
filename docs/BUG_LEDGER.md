@@ -5513,19 +5513,3 @@ Append resolved defects with their evidence and the approach to avoid.
   evidence for the timing.
 - Avoid: Running Go race and the phase1 agent lab on the same shared runner at once, or keeping
   a 15-second eventually budget for post-timeout inventory under CI load.
-
-## BUG-0396 — Stalled-probe heartbeat check failed under Go-race CPU load
-- Date: 2026-09-20
-- Symptom: Gitea run 4171 controller-browser failed
-  `other observations responsive during stalled probe` after libvirt unknown had already
-  been observed; remaining browser steps were skipped by the job graph.
-- Root cause: Wave 1 ran `go test -race` beside Playwright. Under that load, inventory and
-  `last_seen` did not advance within the 15-second eventually budget while a stalled probe
-  was timing out.
-- Fix: Run controller-browser alone first; start go and web only after it finishes. Pass an
-  explicit `--probe-timeout 3s` and raise the stalled-probe eventually budgets to 30s/45s.
-- Regression: `tests.test_ci_security.BrowserArtifactTests.test_phase1_keeps_separate_lanes_with_runner_safe_stagger`
-  asserts the browser job has no `needs` and precedes `go`. Hosted rerun after push is remaining
-  evidence for the timing.
-- Avoid: Running Go race and the phase1 agent lab on the same shared runner at once, or keeping
-  a 15-second eventually budget for post-timeout inventory under CI load.
