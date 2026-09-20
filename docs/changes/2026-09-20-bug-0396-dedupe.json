@@ -1,0 +1,31 @@
+{
+  "summary": "Remove a duplicated BUG-0396 ledger entry introduced by a double append.",
+  "paths": [
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor bug ledger only; no operator workflow change.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No API surface changed.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Ledger cleanup only.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable product state changed."
+  },
+  "verification": {
+    "method": "Confirmed a single BUG-0396 section remains; python3 scripts/check_docs.py --worktree.",
+    "evidence": [
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}
