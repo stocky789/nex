@@ -359,6 +359,8 @@ export function StorageRepositories({ poolID, masterHostID, hosts, storage, api,
       const registration = { name: draft.name.trim(), kind: draft.kind, ...(draft.kind === "local" ? { path: draft.path } : { source: source(draft) }) };
       const credentials = needsCredential(draft.kind, draft) ? (draft.kind === "smb" ? smbCredentials(draft) : { username: draft.username, secret: draft.password }) : undefined;
       // Passwords deliberately never enter session storage, notices, task payloads, or a GET response.
+      // Drop the draft value as soon as the handoff payload is built so reload cannot leave it in the form.
+      if (credentials) patch({ password: "" });
       if (edit) {
         let credential_receipt = "";
         if (credentials) credential_receipt = (await api<{ receipt: string }>("storage/credentials", "POST", { request_id, pool_id: poolID, host_id: draft.host_id, repository_id: edit.id, credentials })).receipt;

@@ -87,6 +87,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pass when Docker cleanup timed out.
 - Controller foundation CI runs the browser lane alone before Go race, so stalled-probe
   heartbeats are not starved on the shared runner.
+- Storage registration clears the password field as soon as credentials are handed off, so a
+  slow reload cannot leave the secret in the open form (BUG-0397).
 - Release credential checks no longer crash on an unset version when only deploy secrets are
   under test; ZFS-enabled builds still publish to the private forge and stay off the public
   download page.

@@ -352,6 +352,8 @@ def main():
             assert register["source"] == {"smb": {"server": "files.example.test", "share": "team-share", "directory": "vms"}}, register
             assert register["credential_receipt"] == "core-only-receipt" and secret not in json.dumps(register), register
             assert credential["registration_request_id"] == register["request_id"] == register["credential_request_id"], (credential, register)
+            # Wait for close() after reload; asserting while the form is still mounted races the password input.
+            expect(page.get_by_role("region", name="Register storage")).to_have_count(0)
             assert secret not in page.content() and secret not in page.evaluate("Object.values(sessionStorage).join(' ')")
             expect(page.get_by_text("VM share", exact=True)).to_be_visible()
             expect(page.get_by_text("queued", exact=True)).to_be_visible()

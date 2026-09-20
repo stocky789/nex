@@ -5513,3 +5513,17 @@ Append resolved defects with their evidence and the approach to avoid.
   evidence for the timing.
 - Avoid: Running Go race and the phase1 agent lab on the same shared runner at once, or keeping
   a 15-second eventually budget for post-timeout inventory under CI load.
+
+## BUG-0397 — Storage SMB secret still in page HTML during registration reload
+- Date: 2026-09-20
+- Symptom: Gitea PR run 4195 failed storage_repositories_browser asserting
+  `not-for-display-qa-secret` was absent from page content after "Storage registration queued".
+  The same commit passed on the push run.
+- Root cause: Notice is shown before `reload()` finishes and `close()` clears the form, so the
+  password input can still hold the draft value when the check runs under slower CI load.
+- Fix: Clear the draft password as soon as the credential handoff payload is built; wait for the
+  Register storage region to unmount before the privacy assertion.
+- Regression: `tests/integration/storage_repositories_browser.py` waits for the form to close
+  before asserting the secret is gone. Hosted PR/push rerun is remaining evidence.
+- Avoid: Asserting DOM privacy against a still-mounted password field, or leaving credentials in
+  React draft state across an awaited reload.
