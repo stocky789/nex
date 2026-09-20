@@ -73,6 +73,20 @@ def acceptance(url, evidence):
             elif path == 'updates/apply' and route.request.method == 'POST':
                 update_status.update(phase='failed', error='fixture apt failure')
                 route.fulfill(status=202, json={})
+            elif route.request.method == 'GET' and path.startswith('pools/') and path.endswith('/members'):
+                # Host pages load the pool membership report for the restricted-host banner.
+                pool_id = path.split('/', 2)[1]
+                pool = next((row for row in data.get('pools', []) if row['id'] == pool_id), None)
+                host_id = (pool or {}).get('master_host_id') or f'host-{pool_id.removeprefix("pool-")}'
+                route.fulfill(json={
+                    'pool_id': pool_id,
+                    'pool_name': (pool or {}).get('name') or pool_id,
+                    'master_host_id': host_id,
+                    'master_connection': 'fresh',
+                    'generation': 1,
+                    'authoritative': True,
+                    'members': [{'host_id': host_id, 'status': 'active', 'maintenance': False}],
+                })
             elif route.request.method == 'GET' and path in data:
                 route.fulfill(json=data[path])
             else:

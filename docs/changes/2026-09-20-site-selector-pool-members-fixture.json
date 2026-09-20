@@ -1,0 +1,32 @@
+{
+  "summary": "Stub GET pools/*/members in the site-selector browser fixture so host deep links can load the restricted-host banner. API impact: none.",
+  "paths": [
+    "tests/integration/site_selector_browser.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Test-only fixture; operator workflows unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No contract change; the fixture returns a minimal existing membership report shape.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "CI browser coverage only.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state is added or changed."
+  },
+  "verification": {
+    "method": "Inspected controller-browser job 5078: Verify searchable site selection failed on Unexpected API fixture request GET pools/pool-333/members during hosts/host-333 deep link. Confirmed HostRestrictedBanner fetches that route. Added a GET members stub derived from the fixture inventory.",
+    "evidence": [
+      "tests/integration/site_selector_browser.py",
+      "web/src/pool-promotion.tsx"
+    ]
+  }
+}
