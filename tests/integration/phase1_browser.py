@@ -572,7 +572,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         tabs.get_by_role('button', name='General', exact=True).click()
         assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), '360px page overflow'
 
-        # U7/U10: Core's management-network report is projected by the Controller UI. Keep this
+        # U7/U10: Core owns CIDR validation; the UI only projects the refusal. Keep this
         # browser-only fixture at the API boundary: no host configuration is submitted or changed.
         network_route = '**/api/v1/hosts/*/network'
         network_spec = {'interfaces': [
@@ -583,12 +583,19 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
             {'name': 'ens3', 'mac': '52:54:00:12:34:56', 'kind': 'physical', 'addresses': ['192.0.2.10/24'], 'state': 'up'},
             {'name': 'ens4', 'mac': '52:54:00:12:34:57', 'kind': 'physical', 'addresses': [], 'state': 'up'},
         ]
+        network_cidr_error = 'interface ens3 needs a usable IPv4 address in CIDR form, for example 192.0.2.10/24'
 
         def network_view(state, record):
             return {'host_id': host_id, 'hostname': 'browser-host', 'connection': 'fresh', 'supported': True,
                     'state': state, 'management_network': record, 'nics': network_nics, 'check': None}
 
-        page.route(network_route, lambda route: route.fulfill(json=network_view('none', None)))
+        def network_fixture(route):
+            if route.request.method == 'POST':
+                route.fulfill(status=400, json={'error': network_cidr_error})
+                return
+            route.fulfill(json=network_view('none', None))
+
+        page.route(network_route, network_fixture)
         tabs.get_by_role('button', name='Networking', exact=True).click()
         page.locator('#mode-ens3').select_option('static')
         page.locator('#address-ens3').fill('192.0.2.999/24')
