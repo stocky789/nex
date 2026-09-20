@@ -167,6 +167,12 @@ class SourceBundleTests(unittest.TestCase):
         self.assertIn('virtio-win corresponding source RPM missing', build)
         self.assertIn('virtio-win.iso.gz', build)
         self.assertNotIn('refusing to publish virtio-win.iso without complete corresponding-source and legal accounting', build)
+        # Binary closure and source-bundle pins must stay on the same snapshots.
+        # Live trixie advanced past 20260916 and left unbound 1.26.1-0+deb13u1
+        # without a matching source (release run 4223).
+        self.assertIn('binary-sources.list', build)
+        self.assertIn('20260920T000000Z', build)
+        self.assertLess(build.index('binary-sources.list'), build.index('apt-get "${apt_snapshot[@]}" update'))
         for package in ('dahdi-firmware-nonfree', 'atmel-firmware', 'bluez-firmware',
                         'firmware-sof-signed', 'firmware-b43-installer',
                         'firmware-b43legacy-installer'):

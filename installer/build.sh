@@ -295,8 +295,12 @@ assert_iso_artifacts_current() {
 
 if [[ ${1:-} != --inside ]]; then
     mkdir -p .cache/nex-iso dist
-    source_snapshot=${NEX_DEBIAN_SOURCE_SNAPSHOT:-https://snapshot.debian.org/archive/debian/20260916T235959Z/}
-    security_snapshot=${NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT:-https://snapshot.debian.org/archive/debian-security/20260916T235959Z/}
+    # Keep binary downloads and source-bundle fetches on the same immutable
+    # snapshots. Live deb.debian.org advanced past 20260916 with unbound
+    # 1.26.1-0+deb13u1 (first on snapshot 2026-09-19) and release run 4223
+    # failed apt-get source for a version the pinned sources did not have.
+    source_snapshot=${NEX_DEBIAN_SOURCE_SNAPSHOT:-https://snapshot.debian.org/archive/debian/20260920T000000Z/}
+    security_snapshot=${NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT:-https://snapshot.debian.org/archive/debian-security/20260920T000000Z/}
     [[ $source_snapshot == https://snapshot.debian.org/archive/* && $security_snapshot == https://snapshot.debian.org/archive/* ]] || {
         echo 'NEX_DEBIAN_SOURCE_SNAPSHOT and NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT must be immutable snapshot.debian.org archive URLs.' >&2
         exit 1
@@ -410,7 +414,20 @@ cp installer/preseed.cfg "$stage/preseed.cfg"
 cp installer/late-install.sh installer/root-account.sh installer/packages.txt "$stage/nex/"
 # Empty dpkg status is intentional: resolve the whole closure, including packages
 # already installed in this build container. Real installer base may differ.
-apt-get update
+# Resolve the offline closure from the same immutable snapshots used for the
+# corresponding-source archive. Live trixie/security moves ahead of those pins
+# and leaves apt-get source unable to find the versions on the media.
+cat > "$cache/binary-sources.list" <<SOURCES
+deb $source_snapshot trixie main contrib non-free non-free-firmware
+deb $source_snapshot trixie-updates main contrib non-free non-free-firmware
+deb $security_snapshot trixie-security main contrib non-free non-free-firmware
+SOURCES
+apt_snapshot=(
+    -o "Dir::Etc::sourcelist=$cache/binary-sources.list"
+    -o 'Dir::Etc::sourceparts=-'
+    -o 'Acquire::Check-Valid-Until=false'
+)
+apt-get "${apt_snapshot[@]}" update
 : > "$cache/empty-status"
 deb_cache=$(mktemp -d "$cache/debs.XXXXXX")
 mkdir -p "$deb_cache/partial"
@@ -420,6 +437,7 @@ for package in "${packages[@]}"; do
     [[ $package == ovmf-generic ]] || apt_packages+=("$package")
 done
 apt-get -y --download-only --no-install-recommends \
+    "${apt_snapshot[@]}" \
     -o Dir::State::status="$cache/empty-status" \
     -o Dir::Cache::archives="$deb_cache" install "${apt_packages[@]}"
 mapfile -t downloaded_debs < <(find "$deb_cache" -maxdepth 1 -type f -name '*.deb' -printf '%f\n' | sort)
@@ -459,7 +477,8 @@ Nex Core $version / internal development image
 Base: $base/$iso
 Base SHA256: $expected
 Debian signing fingerprint: $fingerprint
-APT sources: Debian trixie, trixie-updates, trixie-security; isolated Debian sid for ovmf-generic 2026.05-2 only
+APT sources: immutable snapshot.debian.org pins ($source_snapshot, $security_snapshot);
+isolated Debian sid for ovmf-generic 2026.05-2 only
 Bundled media: Fedora virtio-win 0.1.302 with matching Fedora corresponding-source RPM
 Build UTC: $(date -u +%FT%TZ)
 Nex package version: ${NEX_ISO_VERSION:-unknown}
@@ -469,7 +488,7 @@ snapshot for this ISO build (see nex-source.product.sha256).
 Public redistribution requires the matching source bundle and compliance manifest.
 Build recipe: installer/build.sh; installed packages: nex/package-manifest.tsv
 Packages authenticated by Debian APT signed repository metadata during build.
-Package versions reflect build-time trixie repositories; not bit-reproducible yet.
+Package versions follow the pinned snapshots above (not live trixie).
 BUILD
 ./installer/build-gui.sh
 mkdir -p "$stage/nex/docs"

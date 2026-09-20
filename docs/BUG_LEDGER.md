@@ -5552,9 +5552,44 @@ Append resolved defects with their evidence and the approach to avoid.
 - Root cause: phase1 concurrency was keyed by `github.ref`, so `refs/heads/dev` and
   `refs/pull/5/head` started two full controller-browser labs on one act_runner. Shared
   CPU delayed post-rotation inventory past the default eventually budget.
-- Fix: One concurrency group `nex-controller-foundation` across refs (cancel in progress).
-  Raise the rotated-identity eventually timeout to 45s.
+- Fix: One concurrency group across Controller foundation refs (later widened to
+  `nex-shared-runner` with Release — see BUG-0400). Raise the rotated-identity
+  eventually timeout to 45s.
 - Regression: `tests.test_ci_security.BrowserArtifactTests` asserts the shared group in
   both workflow copies. Hosted rerun after push is remaining evidence.
 - Avoid: Letting push and PR phase1 share a single Docker runner under different
   concurrency keys, or keeping a 15s budget for post-rotation mTLS reporting under load.
+
+## BUG-0400 — Phase 1 browser lab starved by a concurrent Release ISO build
+
+- Date: 2026-09-20
+- Symptom: Gitea phase1 run 4222 failed `phase1.py --browser` at
+  `Page.reload: Timeout 30000ms exceeded` on the pool health summary route after
+  the toolbar power checks passed. Release run 4223 was downloading the ISO
+  package closure on the same act_runner the whole time.
+- Root cause: `phase1.yml` and `release.yml` used separate concurrency groups, so
+  main-push started both. One Docker host ran Playwright plus a heavy ISO build;
+  the SPA reload never reached load under that load.
+- Fix: Shared concurrency group `nex-shared-runner` for Controller foundation and
+  Release (both forge copies).
+- Regression: `tests.test_ci_security.BrowserArtifactTests` asserts the shared
+  group in phase1 and release workflows. Hosted rerun after push is remaining
+  evidence.
+- Avoid: Letting Release and Controller foundation overlap on a single act_runner,
+  or treating a Playwright load timeout during an ISO build as an app defect.
+
+## BUG-0401 — Release source bundle could not find live-security unbound
+
+- Date: 2026-09-20
+- Symptom: Gitea release run 4223 failed `scripts/build-source-bundle.py` with
+  `Can not find version '1.26.1-0+deb13u1' of package 'unbound'`.
+- Root cause: ISO binary packages came from live `deb.debian.org` (security update
+  first seen 2026-09-19) while corresponding-source apt used pinned snapshots at
+  `20260916T235959Z`, which lacked that unbound version.
+- Fix: Default snapshots to `20260920T000000Z`, and download the offline binary
+  closure through the same snapshot sources.list as the source bundle.
+- Regression: `tests.test_source_bundle.SourceBundleTests.test_iso_build_exports_complete_release_evidence`
+  asserts `binary-sources.list` and the bumped snapshot. Hosted release rerun is
+  remaining evidence.
+- Avoid: Resolving the offline package closure from live trixie while pinning
+  corresponding source to an older snapshot.debian.org archive.

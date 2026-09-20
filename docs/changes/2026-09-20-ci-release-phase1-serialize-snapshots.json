@@ -1,0 +1,42 @@
+{
+  "summary": "Serialize Controller foundation and Release on one Gitea runner concurrency group, and pin ISO binary apt downloads to the same Debian snapshots as the corresponding-source archive (BUG-0400, BUG-0401).",
+  "paths": [
+    ".github/workflows/phase1.yml",
+    ".github/workflows/release.yml",
+    ".gitea/workflows/phase1.yml",
+    ".gitea/workflows/release.yml",
+    "installer/build.sh",
+    "tests/test_ci_security.py",
+    "tests/test_source_bundle.py",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-20-ci-release-phase1-serialize-snapshots.json",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "CI scheduling and ISO build snapshot pinning only; operator install and GUI steps are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core client, agent command, inventory or observed-result contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "CI reliability and reproducible ISO package pinning; no phase acceptance change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No Nex durable pool or Controller state added or moved."
+  },
+  "verification": {
+    "method": "Inspected Gitea runs 4222 and 4223. Local unittest for CI security and source-bundle evidence. docs gate --worktree. Hosted rerun outstanding until push.",
+    "evidence": [
+      "tests/test_ci_security.py",
+      "tests/test_source_bundle.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

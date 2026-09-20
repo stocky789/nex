@@ -5,9 +5,10 @@ on:
       - '**'
   pull_request:
 concurrency:
-  # One shared runner: push and PR on the same commit must not run two full
-  # controller-browser labs at once (runs 4204+4207). Serialize across refs.
-  group: nex-controller-foundation
+  # One shared Gitea act_runner also runs Release ISO builds. Serialize every
+  # heavy Controller foundation and Release run (runs 4222+4223): browser
+  # Page.reload timed out while the ISO job starved the host.
+  group: nex-shared-runner
   cancel-in-progress: true
 permissions:
   code: read
