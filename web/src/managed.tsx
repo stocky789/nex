@@ -2,9 +2,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { Guest } from "./console";
 import { Icon } from "./icons";
-import { VMWizard, adapterNames, busNames, cpuNames, describeNetwork, guestNames, readyHost, secureBootText, tpmText, type DiskRow, type NICRow } from "./vm-create";
+import { VMWizard, adapterNames, busNames, cpuNames, describeNetwork, guestNames, readyHost, secureBootText, tpmText, type DiskRow, type NICRow, type PlacementState } from "./vm-create";
 import { VMEditor, editBlocker } from "./vm-edit";
-import { StorageRepositories, storageOwnerFresh } from "./storage";
+import { StorageRepositories, discardConfirmText, registrationDiscardable, storageOwnerFresh } from "./storage";
 
 export type Registration = { id: string; pool_id: string; host_id: string; name: string; operation_id: string; status: string; error?: string };
 export type StorageSource = { nfs?: { server: string; export: string; directory?: string }; zfs?: { pool: string; dataset: string; mount_path: string }; smb?: { server: string; share: string; directory?: string }; iscsi?: { portal: string; target_iqn: string; lun: number; wwid: string; filesystem_uuid: string; exclusive_target: boolean; mode?: "exclusive" | "clustered_gfs2"; cluster_id?: string; lock_table?: string; eligible_host_ids?: string[] } };
@@ -28,7 +28,7 @@ type NIC = { name: string; mac: string; kind?: string; master?: string; parent?:
 // carry the last state the host reported for each VM.
 export type Host = { id: string; pool_id: string; hostname: string; connection: string; revoked: boolean; capabilities?: string[]; inventory: { observed_at?: string; cpu_count: number; cpu_models?: string[] | null; cpu_baseline?: { model: string; features: CPUFeature[] | null; machine: string; generation: number; member_count: number; observed_at: string; error?: string } | null; memory_bytes: number; nics?: NIC[] | null; vms?: { id: string; state: string }[] | null } | null };
 type API = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
-type Props = { account: string; poolID: string; poolName: string; masterHostID: string; tab: string; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[]; vms: VM[]; api: API; reload: () => Promise<void>; setTab: (tab: string) => void; unavailable: boolean; uploading: boolean; startIsoUpload: <T>(path: string, file: File) => Promise<T>; createVM: boolean; onCreateVMShown: () => void };
+type Props = { account: string; poolID: string; poolName: string; masterHostID: string; tab: string; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[]; vms: VM[]; api: API; reload: () => Promise<void>; setTab: (tab: string) => void; unavailable: boolean; uploading: boolean; startIsoUpload: <T>(path: string, file: File) => Promise<T>; createVM: boolean; onCreateVMShown: () => void; onNotice?: (text: string, operationID?: string) => void };
 const GiB = 1024 ** 3;
 const status = (value: string) => <span className={`badge ${value}`}>{value || "unknown"}</span>;
 // sentence ends a message with a full stop when it has no terminal punctuation of its own.
@@ -81,6 +81,10 @@ export function isoTransferNotice(name: string, status?: string, source: "upload
 // while queued and dispatched imports still belong to their host task (BUG-0203).
 export const mediaDiscardable = (media: Media) => media.status === "failed" || media.status === "needs_attention";
 
+// A create the Controller accepted may carry placement warnings from its mirror of the master's
+// last report. They never refuse and never change the request: the pool master decides.
+export const placementWarningNotice = (warnings: string[]) => warnings.map(sentence).join(" ");
+
 // --- Pool resource removal and rename -------------------------------------------------------
 // Removing a pool VLAN network or an imported ISO is work the pool master does: Core tears the
 // resource down, records the removal durably and every member converges on its next pass. The
@@ -106,7 +110,7 @@ export const confirmMatches = (typed: string, name: string) => name !== "" && ty
 // rename dialog, plus the two characters Core itself refuses in a resource name.
 export const validResourceName = (name: string) => {
   const value = name.trim();
-  return value.length > 0 && value.length <= 100 && !value.includes("/") && !/[ -]/.test(value);
+  return value.length > 0 && value.length <= 100 && !value.includes("/") && !/[\u0000-]/.test(value);
 };
 // Submitting the name a network already has is a no-op, not an empty rename request.
 export const renameChanged = (current: string, next: string) => validResourceName(next) && next.trim() !== current;
@@ -138,6 +142,12 @@ export function stableRequestID(store: Record<string, { key: string; id: string 
   return store[scope].id;
 }
 
+// One request identity per unchanged signature: a retry after a lost reply replays the same id.
+export function heldRequestID(held: { id: string; signature: string }, signature: string, mint: () => string = () => crypto.randomUUID()) {
+  if (held.signature !== signature || !held.id) { held.id = mint(); held.signature = signature; }
+  return held.id;
+}
+
 // Per-host convergence for a pool network, as the master reports it. A member still carrying an
 // older generation has not applied the current name or settings yet; saying "ready" there would
 // claim a convergence that has not happened.
@@ -158,8 +168,9 @@ function pendingRequests(key: string): Pending {
   return {};
 }
 
-export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts: allHosts, storage: allStorage, networks: allNetworks, media: allMedia, vms: allVMs, api, reload, setTab, unavailable, uploading, startIsoUpload, createVM, onCreateVMShown }: Props) {
+export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts: allHosts, storage: allStorage, networks: allNetworks, media: allMedia, vms: allVMs, api, reload, setTab, unavailable, uploading, startIsoUpload, createVM, onCreateVMShown, onNotice }: Props) {
   const hosts = allHosts.filter(h => h.pool_id === poolID);
+  const hostIDs = hosts.map(host => host.id).join(",");
   const storage = allStorage.filter(s => s.pool_id === poolID);
   const networks = allNetworks.filter(n => n.pool_id === poolID);
   const media = allMedia.filter(m => m.pool_id === poolID);
@@ -169,6 +180,7 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
   const restored = (scope: string) => { try { return JSON.parse(requests.current[scope]?.payload || "{}"); } catch { return {}; } };
   const [form, setForm] = useState(requests.current.vm ? "vm" : requests.current.iso ? "iso" : requests.current.storage ? "storage" : requests.current.network ? "network" : "");
   const [busy, setBusy] = useState(false);
+  const [placement, setPlacement] = useState<Record<string, PlacementState> | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -187,6 +199,25 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
   const lock = useRef(false);
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
+  useEffect(() => {
+    if (form !== "vm") return;
+    let live = true;
+    setPlacement(null);
+    api<{ authoritative?: boolean; master_connection?: string; members?: { host_id: string; maintenance?: boolean | null }[] }>(`pools/${encodeURIComponent(poolID)}/members`)
+      .then(report => {
+        if (!live) return;
+        const unknown = report.authoritative
+          ? "The pool master did not report this host's maintenance state."
+          : `The pool master's membership report is ${report.master_connection || "not current"}; maintenance state is unknown.`;
+        setPlacement(Object.fromEntries(hosts.map(host => {
+          const member = (report.members || []).find(item => item.host_id === host.id);
+          return [host.id, member && typeof member.maintenance === "boolean"
+            ? { maintenance: member.maintenance }
+            : { reason: unknown }];
+        })));
+      }, () => { if (live) setPlacement(Object.fromEntries(hosts.map(host => [host.id, { reason: "The pool master did not report maintenance state; wait for a fresh report before placing a VM." }]))) });
+    return () => { live = false; };
+  }, [api, form, poolID, hostIDs]);
   const input = useRef<HTMLInputElement>(null);
   const hostName = (id: string) => hosts.find(h => h.id === id)?.hostname || id;
   function persist() {
@@ -270,11 +301,15 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
   }
   async function create(payload: Record<string, unknown>) {
     await run("vm", async () => {
-      const result = await api<{ vm_id: string; operation: { id: string } }>("vms", "POST", { ...payload, request_id: requestID("vm", payload) });
+      const result = await api<{ vm_id: string; operation: { id: string }; warnings?: string[] }>("vms", "POST", { ...payload, request_id: requestID("vm", payload) });
       clearRequest("vm");
       // The creation operation rides along in the route, so a create that fails after this 202
       // still names its task once the VM listing no longer includes it.
       await reload(); if (mounted.current) { setForm(""); location.hash = `/vms/${result.vm_id}/${result.operation.id}`; }
+      // Placement warnings come back with the accepted 202. This panel is about to unmount with
+      // the route change, so they go to the shell's notice, which clears itself when the
+      // operation leaves queued/dispatched.
+      if (result.warnings?.length) onNotice?.(placementWarningNotice(result.warnings), result.operation.id);
     });
   }
   // Removal and rename of a pool VLAN network or a stored ISO. The dialog owns its own error so
@@ -334,6 +369,17 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
       // a second removal whose outcome could differ from the first.
       setLifecycleError((e as Error).message);
     } finally { setLifecycleBusy(false); setInFlightScope(""); }
+  }
+  // A registration the pool master refused is only a Controller request record: this deletes that
+  // row and relays nothing. A 409 (a host reports the network as applied) is shown exactly as the
+  // Controller worded it, and the row survives.
+  function discardNetwork(n: Network) {
+    if (!confirm(discardConfirmText("network", n.name))) return;
+    void run(`network:${n.id}:discard`, async () => {
+      await api(`networks/${encodeURIComponent(n.id)}`, "DELETE");
+      await reload();
+      setNotice(`Discarded the failed registration for ${n.name}. Register the network again to retry.`);
+    });
   }
   function discardMedia(media: Media) {
     if (!confirm(`Discard ${media.name}? This removes the failed import record and any Controller staging bytes. The task and audit history are kept.`)) return;
@@ -437,18 +483,20 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
         <button className="primary" disabled={busy || uploading || unavailable || !isoReadyStorage.some(s => s.id === uploadStorage) || (isoSource === "url" ? !canDownload || !isoURL.trim() || !isoName.trim() : !file)}>{busy ? "Submitting…" : uploading ? "Uploading…" : isoSource === "url" ? "Download ISO" : "Upload and transfer ISO"}</button>
       </form>
     </section>}
-    {form === "vm" && <div hidden={!showForm}><VMWizard poolID={poolID} poolName={poolName} hosts={hosts} storage={storage} networks={networks} media={media} restored={() => restored("vm")} create={create} busy={busy} unavailable={unavailable} setTab={setTab} onClose={() => setForm("")} /></div>}
+    {form === "vm" && <div hidden={!showForm}><VMWizard poolID={poolID} poolName={poolName} hosts={hosts} placement={placement} storage={storage} networks={networks} media={media} restored={() => restored("vm")} create={create} busy={busy} unavailable={unavailable} setTab={setTab} onClose={() => setForm("")} /></div>}
     {vmTab && <section className="panel"><div className="section-heading"><h2>Virtual machines</h2><span className="muted">{vms.length} in pool</span></div>{vms.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Assigned host</th><th>Observed state</th><th>Freshness</th><th>Creation task</th></tr></thead><tbody>{vms.map(v => <tr key={v.id}><td><a href={`#/vms/${v.id}`}>{v.name}</a>{v.protected && <small>Protected Controller appliance</small>}</td><td>{hostName(v.host_id)}</td><td>{stateText(v.state)}</td><td>{status(v.freshness)}</td><td>{v.operation_id ? task(v) : "—"}</td></tr>)}</tbody></table></div> : <p className="empty">No virtual machines in this pool. Register storage and a network, upload an ISO, then create your first VM.</p>}<p className="panel-note">A stale or unreachable host does not mean its VMs have stopped. Creation results and current observations are separate.</p></section>}
     {tab === "Storage" && <StorageRepositories poolID={poolID} masterHostID={masterHostID} hosts={hosts} storage={storage} api={api} reload={reload} unavailable={unavailable} onNotice={setNotice} />}
     {tab === "Networking" && <section className="panel"><div className="section-heading"><h2>Pool guest networks</h2></div>{networks.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Scope</th><th>Connection</th><th>VMs</th><th>Host check</th><th>Actions</th></tr></thead><tbody>{[...networks].sort((a, b) => (a.vlan || 0) - (b.vlan || 0) || a.name.localeCompare(b.name)).map(n => {
       const scope = `network:${n.id || n.operation_id}`;
       const blocker = lifecycleState(masterHostID, n.id, n.status, scope);
       const users = vms.filter(v => v.spec?.nics?.some(i => i.network_id === n.id)).length;
-      return <tr key={n.id || `op:${n.operation_id}`}><td>{n.name}</td><td>{n.kind === "vlan" ? <>Pool VLAN{n.member_access?.length ? <small>{n.member_access.map(a => `${hostName(a.host_id)}: ${networkMemberState(n, a)}`).join(" · ")}</small> : null}</> : hostName(n.host_id)}</td><td>{describeNetwork(n)}<small className="mono">{n.source}</small></td><td>{users}</td><td>{task(n)}</td><td>{networkRemovable(n) ? <div className="actions">
+      return <tr key={n.id || `op:${n.operation_id}`}><td>{n.name}</td><td>{n.kind === "vlan" ? <>Pool VLAN{n.member_access?.length ? <small>{n.member_access.map(a => `${hostName(a.host_id)}: ${networkMemberState(n, a)}`).join(" · ")}</small> : null}</> : hostName(n.host_id)}</td><td>{describeNetwork(n)}<small className="mono">{n.source}</small></td><td>{users}</td><td>{task(n)}</td><td>{registrationDiscardable(n) ? <div className="actions">
+        <button type="button" title="Remove this Controller record of a registration the pool master refused." disabled={busy || unavailable} onClick={() => discardNetwork(n)}>Discard failed registration</button>
+      </div> : networkRemovable(n) ? <div className="actions">
         <button type="button" title={blocker || "Change this pool network's name on the pool master."} disabled={busy || Boolean(blocker)} onClick={e => beginLifecycle(e, { scope: `${scope}:rename`, resource: "network", action: "rename", id: n.id, name: n.name, base: networkRemoveBody(n, poolID) })}>Rename</button>
         <button type="button" className="danger" title={blocker || "Remove this pool VLAN network from every host in the pool."} disabled={busy || Boolean(blocker)} onClick={e => beginLifecycle(e, { scope: `${scope}:remove`, resource: "network", action: "remove", id: n.id, name: n.name, base: networkRemoveBody(n, poolID), note: users ? `${users} VM definition${users === 1 ? "" : "s"} in this pool still use this network, so Nex Core will refuse the removal. Detach the network in each VM first.` : "" })}>Remove</button>
       </div> : <small>Host network · created and managed on {hostName(n.host_id)}</small>}</td></tr>;
-    })}</tbody></table></div> : <p className="empty">No networks reported yet.</p>}<p className="panel-note">Only pool VLAN networks are renamed or removed here; the pool master applies the change on every host and each member reports its own convergence. Changing a VLAN tag or uplink NIC means removing the network and adding it again.</p></section>}
+    })}</tbody></table></div> : <p className="empty">No networks reported yet.</p>}<p className="panel-note">Only pool VLAN networks are renamed or removed here; the pool master applies the change on every host and each member reports its own convergence. Changing a VLAN tag or uplink NIC means removing the network and adding it again. A registration the master refused is only a request record and is discarded instead.</p></section>}
     {tab === "ISO library" && <section className="panel"><div className="section-heading"><h2>Guest ISO library</h2></div>{media.length ? <div className="table-scroll"><table><thead><tr><th>ISO</th><th>Host / storage</th><th>Size</th><th>Transfer task</th><th>Actions</th></tr></thead><tbody>{media.map(m => {
       const scope = `media:${m.id || m.operation_id}:remove`;
       const blocker = lifecycleState(m.host_id, m.id, m.status, scope);

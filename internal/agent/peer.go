@@ -182,9 +182,20 @@ func PoolPeerHandler(s *Store) http.Handler {
 			}
 			poolPeerMu.Lock()
 			state, e := loadPoolPeer(s)
+			// A member's advertised endpoint is part of the membership, which is a
+			// replicated section, so recording it is an authority write and takes the same
+			// guard inside the same lock section. A refusal is deferred, not dropped: the
+			// member re-advertises from its own retry, and the pool reaches the same place
+			// once the transfer is over.
+			if e == nil {
+				e = poolAuthorityWritable(state)
+			}
 			if e == nil {
 				for i := range state.Membership.Members {
 					if state.Membership.Members[i].HostID == member.HostID {
+						if state.Membership.Members[i].PeerOrigin == origin.String() {
+							break
+						}
 						state.Membership.Members[i].PeerOrigin = origin.String()
 						e = savePoolPeer(s, state)
 						break
@@ -201,6 +212,18 @@ func PoolPeerHandler(s *Store) http.Handler {
 		}
 		if strings.HasPrefix(r.URL.Path, poolCPUPath) {
 			PoolCPUHandler(s).ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == poolReplicaPath {
+			PoolReplicaHandler(s).ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == poolTransferPath {
+			PoolTransferHandler(s).ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == poolAuthorityPath {
+			PoolAuthorityHandler(s).ServeHTTP(w, r)
 			return
 		}
 		if r.URL.Path == poolPlacementPath {
@@ -263,6 +286,12 @@ func acceptPeerJoin(s *Store, request peerJoinRequest) (peerJoinResponse, error)
 	if request.HostID == "" || len(request.HostID) > 128 || len(request.Offer) > 4096 {
 		return peerJoinResponse{}, errors.New("invalid join identity")
 	}
+	// Check-then-bind is one critical section under this lock, which is why two concurrent
+	// redemptions cannot both admit a member. That is only sound because one process owns
+	// an agent state directory, and that is enforced rather than assumed: OpenStore takes
+	// an exclusive flock on <state dir>/lock and refuses to start otherwise (state.go), so
+	// the local service and the standalone agent unit cannot serve this handler at once
+	// even if their systemd Conflicts= were ever dropped.
 	poolPeerMu.Lock()
 	defer poolPeerMu.Unlock()
 	state, err := loadPoolPeer(s)
@@ -272,10 +301,29 @@ func acceptPeerJoin(s *Store, request peerJoinRequest) (peerJoinResponse, error)
 	if state.CAKeyPEM == "" || state.Membership.Valid() != nil {
 		return peerJoinResponse{}, errors.New("not a pool master")
 	}
+	// The membership write itself, checked against the bytes it is about to rewrite: an
+	// invitation issued before a master change must not admit a member during one.
+	if err = poolAuthorityWritable(state); err != nil {
+		return peerJoinResponse{}, err
+	}
 	csrHash := fmt.Sprintf("%x", sha256.Sum256([]byte(request.CSRPEM)))
 	digest := offerDigest(request.Offer, state.Membership.PoolID, state.Membership.MasterHostID, request.HostID, csrHash)
 	offer, ok := state.Offers[digest]
-	if !ok || offer.Digest != digest || offer.PoolID != state.Membership.PoolID || offer.Master != state.Membership.MasterHostID || offer.HostID != request.HostID || offer.CSRHash != csrHash || time.Now().After(offer.Expires) {
+	if !ok {
+		// A Controller-relayed invitation is issued with no CSR hash: this master binds
+		// the presented CSR at first redemption and keeps it under the unbound digest, so
+		// the same invitation still returns the same certificate and never a second one.
+		digest = offerDigest(request.Offer, state.Membership.PoolID, state.Membership.MasterHostID, request.HostID, "")
+		offer, ok = state.Offers[digest]
+	}
+	// An offer that has already issued a certificate is past its expiry only for *new*
+	// admissions: replaying it returns that same certificate to that same host and public
+	// key and admits nothing. Refusing the replay is what makes a lost reply unrecoverable
+	// — the master holds a ready membership row the joining host cannot learn about, and
+	// both minting and redeeming then refuse it as an existing member. So the TTL bounds
+	// the first redemption, not the replay of one that already happened.
+	issued := offer.CertificatePEM != ""
+	if !ok || offer.Digest != digest || offer.PoolID != state.Membership.PoolID || offer.Master != state.Membership.MasterHostID || offer.HostID != request.HostID || (offer.CSRHash != "" && offer.CSRHash != csrHash) || (!issued && time.Now().After(offer.Expires)) {
 		return peerJoinResponse{}, errors.New("invalid or expired offer")
 	}
 	csr, err := parsePeerCSR(request.CSRPEM, request.HostID)
@@ -302,19 +350,29 @@ func acceptPeerJoin(s *Store, request peerJoinRequest) (peerJoinResponse, error)
 	if err != nil {
 		return peerJoinResponse{}, err
 	}
-	for _, member := range state.Membership.Members {
-		if member.HostID == request.HostID {
+	replace := -1
+	for i, member := range state.Membership.Members {
+		if member.HostID == request.HostID && member.Status != "ejected" {
 			return peerJoinResponse{}, errors.New("host is already a pool member")
+		}
+		if member.HostID == request.HostID {
+			replace = i
 		}
 	}
 	state.Membership.Generation++
 	for i := range state.Membership.Members {
 		state.Membership.Members[i].Generation = state.Membership.Generation
 	}
-	state.Membership.Members = append(state.Membership.Members, protocol.PoolMember{HostID: request.HostID, CertificateSHA256: hash, Generation: state.Membership.Generation, Status: "ready", ObservedAt: time.Now().UTC()})
-	// Retain this exact certificate for a retry after a lost response. It cannot
-	// admit a different member or public key, and the private record still expires.
-	offer.CertificatePEM = cert
+	member := protocol.PoolMember{HostID: request.HostID, CertificateSHA256: hash, Generation: state.Membership.Generation, Status: "ready", ObservedAt: time.Now().UTC()}
+	if replace >= 0 {
+		state.Membership.Members[replace] = member
+	} else {
+		state.Membership.Members = append(state.Membership.Members, member)
+	}
+	// Retain this exact certificate, and the CSR an invitation bound here, for a retry
+	// after a lost response. It cannot admit a different member or public key, and the
+	// private record still expires.
+	offer.CertificatePEM, offer.CSRHash = cert, csrHash
 	state.Offers[digest] = offer
 	if err = savePoolPeer(s, state); err != nil {
 		return peerJoinResponse{}, err
@@ -361,6 +419,24 @@ func PoolMemberPeerClient(s *Store, memberURL, memberHostID string) (*http.Clien
 	return poolPeerClient(s, memberURL, memberHostID)
 }
 
+func poolMTLSClient(state poolPeerState, expectedHost, expectedHash string) (*http.Client, error) {
+	if state.CAPEM == "" || state.CertificatePEM == "" || state.KeyPEM == "" {
+		return nil, errors.New("pool peer identity is unavailable")
+	}
+	cert, err := tls.X509KeyPair([]byte(state.CertificatePEM), []byte(state.KeyPEM))
+	if err != nil {
+		return nil, errors.New("pool peer identity is invalid")
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM([]byte(state.CAPEM)) {
+		return nil, errors.New("invalid pool CA")
+	}
+	config := &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert}, InsecureSkipVerify: true, VerifyConnection: func(c tls.ConnectionState) error {
+		return verifyPoolPeer(c, roots, expectedHost, expectedHash)
+	}}
+	return &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: config}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("peer redirects refused") }}, nil
+}
+
 func poolPeerClient(s *Store, endpoint, memberHostID string) (*http.Client, error) {
 	u, err := peerOrigin(endpoint)
 	if err != nil {
@@ -372,16 +448,8 @@ func poolPeerClient(s *Store, endpoint, memberHostID string) (*http.Client, erro
 	if err != nil {
 		return nil, err
 	}
-	if err = state.Membership.Valid(); err != nil || state.CAPEM == "" || state.CertificatePEM == "" || state.KeyPEM == "" {
+	if err = state.Membership.Valid(); err != nil {
 		return nil, errors.New("pool peer identity is unavailable")
-	}
-	cert, err := tls.X509KeyPair([]byte(state.CertificatePEM), []byte(state.KeyPEM))
-	if err != nil {
-		return nil, errors.New("pool peer identity is invalid")
-	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM([]byte(state.CAPEM)) {
-		return nil, errors.New("invalid pool CA")
 	}
 	expectedHost, expectedHash := state.Membership.MasterHostID, ""
 	if memberHostID != "" {
@@ -405,10 +473,7 @@ func poolPeerClient(s *Store, endpoint, memberHostID string) (*http.Client, erro
 			return nil, errors.New("member peer is not a current ready membership origin")
 		}
 	}
-	config := &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert}, InsecureSkipVerify: true, VerifyConnection: func(c tls.ConnectionState) error {
-		return verifyPoolPeer(c, roots, expectedHost, expectedHash)
-	}}
-	return &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: config}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("peer redirects refused") }}, nil
+	return poolMTLSClient(state, expectedHost, expectedHash)
 }
 
 // AdvertisePoolPeerOrigin records a member's validated peer listener on its master.
@@ -623,15 +688,30 @@ func ResumePoolRehome(ctx context.Context, s *Store) error {
 		}
 		s.State.PoolID, s.State.PoolName = pending.PoolID, pending.PoolName
 		if err = s.Save(); err == nil {
-			poolPeerMu.Lock()
-			state, err = loadPoolPeer(s)
-			if err == nil && state.PendingRehome != nil && state.PendingRehome.PoolID == pending.PoolID && state.PendingRehome.PoolName == pending.PoolName {
-				state.PendingRehome = nil
-				err = savePoolPeer(s, state)
+			// A joining host's former single-host owner projection belongs to the pool it
+			// just left. PoolJoinPrecheck has already refused live managed VMs, so retaining
+			// it could only later leak stale authority into a replica after promotion.
+			poolVMMu.Lock()
+			vms, vmErr := loadPoolVMs(s)
+			if vmErr == nil && (len(vms.VMs) != 0 || len(vms.Inventory) != 0) {
+				vms.VMs, vms.Inventory = map[string]poolVMRecord{}, map[string]poolVMInventory{}
+				vmErr = savePoolVMs(s, vms)
 			}
-			poolPeerMu.Unlock()
+			poolVMMu.Unlock()
+			if vmErr != nil {
+				err = errors.New("the previous pool's VM ownership records could not be cleared")
+			}
 			if err == nil {
-				return nil
+				poolPeerMu.Lock()
+				state, err = loadPoolPeer(s)
+				if err == nil && state.PendingRehome != nil && state.PendingRehome.PoolID == pending.PoolID && state.PendingRehome.PoolName == pending.PoolName {
+					state.PendingRehome = nil
+					err = savePoolPeer(s, state)
+				}
+				poolPeerMu.Unlock()
+				if err == nil {
+					return nil
+				}
 			}
 		}
 		select {

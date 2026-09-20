@@ -13,7 +13,11 @@ UMask=0077
 ExecStartPre=/bin/mkdir -p /var/lib/libvirt/images
 ExecStartPre=/bin/chmod 0711 /var/lib/libvirt/images
 ExecStart=/usr/local/lib/nex/nex-core-agent run --state-dir /var/lib/nex-core-agent --heartbeat 10s --probe-interval 10s --probe-timeout 3s
-Restart=on-failure
+# Restart=always, not on-failure: a management-network change arms a rollback that only
+# runs when this service is running again, so a clean exit (an exit 0, a killed process
+# reaped as success) must not leave the host on an unconfirmed network with nothing armed.
+# `systemctl stop` and a package upgrade still stop the unit; only an exit does not.
+Restart=always
 RestartSec=5
 NoNewPrivileges=yes
 # The QEMU access probe intentionally drops to libvirt-qemu with runuser.

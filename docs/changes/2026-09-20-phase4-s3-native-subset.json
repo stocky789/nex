@@ -1,0 +1,37 @@
+{
+  "summary": "Record final-candidate native S3 management-network subset evidence. API impact: existing contract.",
+  "paths": [
+    "docs/qa/2026-09-19-phase4-native-acceptance.md",
+    "docs/guide/change-management-network.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The workflow is unchanged, but its verification limits now distinguish the retained native subset from unexecuted cases.",
+    "pages": [
+      "docs/guide/change-management-network.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The native checks exercised existing staged management-network operations and changed no route or wire field.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The subset is attributed to the final Core candidate but does not complete all-phase CAC replay or Phase 4 acceptance.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Core owns the host management-network record and rollback lifecycle.",
+    "record": "The existing host-local management-network record remains authoritative and is reported to a replacement Controller through inventory."
+  },
+  "verification": {
+    "method": "Reviewed final-candidate 2f50 native artifacts show C4 and C7 through C12 passed. C7 used a disposable-host-only temporary systemd prestart clock fault before Core started; retained capture shows a 3,600-second offset, inactive Core before power cut, rollback in 0.1 seconds, byte-identical management files, and restored temporary configuration, guest definition and services. Earlier RTC-clock attempts did not produce required skew and are historical failed attempts, not C7 evidence. The first C4 failure was a br0-vs-spare-interface DHCP harness error; the br0-specific rerun passed. C10 used the lab service's Restart=on-failure setting and does not validate packaged restart behavior. A first C12 interruption left only a harness firewall rule; it was removed and the guarded final rerun passed. The G3 disposable-host browser walkthrough staged, applied and confirmed the documented baseline at revision 25, then performed Roll back now from applied state; browser-fetched authoritative state reported rolled-back and requested_rollback true, with the bridge restored. It does not cover deadline expiry or reboot recovery.",
+    "evidence": [
+      "docs/qa/2026-09-19-phase4-native-acceptance.md"
+    ]
+  }
+}

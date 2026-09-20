@@ -106,6 +106,13 @@ func (c *Controller) issue(csrPEM, hostID string) (string, string, error) {
 	}
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), serial.String(), nil
 }
+
+// poolIdentityHeldRefusal is the enrollment refusal a pool member gets while its pool master
+// has not yet told this Controller that the member is ready. It is a normal, documented wait
+// during a Controller replacement, so the add-host route recognises it by name and answers a
+// retryable conflict instead of a transport failure.
+const poolIdentityHeldRefusal = "pool identity is held; the pool master has not reported this ready member"
+
 func (c *Controller) enroll(w http.ResponseWriter, r *http.Request) {
 	var v protocol.EnrollRequest
 	if !decode(w, r, &v) {
@@ -198,7 +205,7 @@ func (c *Controller) enroll(w http.ResponseWriter, r *http.Request) {
 		}
 		if n != 0 {
 			if !c.coreReportedPoolMember(tx, site, pool, host) {
-				fail(w, 409, "pool identity is held; the pool master has not reported this ready member")
+				fail(w, 409, poolIdentityHeldRefusal)
 				return
 			}
 			if tx.QueryRow("SELECT name FROM pools WHERE id=?", pool).Scan(&poolName) != nil || (v.PoolName != "" && v.PoolName != poolName) {
@@ -267,7 +274,12 @@ func (c *Controller) coreReportedPoolMember(tx *sql.Tx, site, pool, host string)
 		return false
 	}
 	membership := inventory.Managed.Membership
-	if membership.Valid() != nil || membership.PoolID != pool || membership.MasterHostID != master {
+	// The recorded master's own report is the evidence, and it settles two cases: it names
+	// itself master, or it names the host now presenting this pool identity. The second is a
+	// replacement Controller where a member reconnected first and so holds the pool row it
+	// created: its report is the pool's own record that the host enrolling now is the master,
+	// and adoptReportedMaster moves the row once that master reports for itself.
+	if membership.Valid() != nil || membership.PoolID != pool || (membership.MasterHostID != master && membership.MasterHostID != host) {
 		return false
 	}
 	for _, member := range membership.Members {
@@ -476,6 +488,10 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		fail(w, 400, "too many clustered storage results")
 		return
 	}
+	if len(v.PoolResults) > 32 {
+		fail(w, 400, "too many pool results")
+		return
+	}
 	for _, result := range v.StorageClusters {
 		if !clusterResultValid(result) || (!slices.Contains(v.Capabilities, protocol.StorageClusterSessionMonitorCapability) && clusterResultHasSessionMonitor(result)) {
 			fail(w, 400, "invalid clustered storage result")
@@ -505,6 +521,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	out := protocol.ReportResponse{Commands: []protocol.Command{}, AcknowledgedResults: []string{}}
 	c.completeStorageDiscoveries(host, v.StorageDiscoveries)
 	c.completeStorageClusters(host, v.StorageClusters)
+	c.completePoolResults(host, v.PoolResults)
 	// A v2 Core asks for this acknowledgement before it advertises the repository
 	// capability. v1 peers receive their original response shape unchanged.
 	if v.Version == protocol.Version {
@@ -529,6 +546,13 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	}
 	if v.Version == protocol.Version && slices.Contains(v.Capabilities, protocol.StorageClusterCapability) {
 		out.StorageClusterRequests = c.takeStorageClusters(host)
+	}
+	// The one brokered round trip serves two actions now: an invitation, which needs the
+	// join capability, and a promotion preflight, which needs the transfer one. A host that
+	// advertises either can be asked, and the broker only ever holds a request addressed to
+	// it; a host that advertises neither is never asked anything.
+	if v.Version == protocol.Version && (slices.Contains(v.Capabilities, protocol.PoolJoinCapability) || slices.Contains(v.Capabilities, protocol.PoolAuthorityTransferCapability)) {
+		out.PoolRequests = c.takePoolRequests(host)
 	}
 	for _, res := range v.Results {
 		var status, kind string
@@ -604,6 +628,13 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 				fail(w, 500, "pool membership adoption failed")
 				return
 			}
+			// The hosts own the pool master. A host reporting itself master with newer
+			// evidence than this Controller mirrors is followed here, before its journal is
+			// projected, so the projection is keyed to the master the pool now names.
+			if err = c.adoptReportedMaster(tx, host, v.Inventory); err != nil {
+				fail(w, 500, "pool master adoption failed")
+				return
+			}
 			if v.Inventory.Managed != nil {
 				c.credentials.observeReceipts(host, v.Inventory.Managed.CredentialReceipts)
 			}
@@ -635,11 +666,24 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 			// Membership is retained only as the master's latest Core report so a
 			// replacement Controller can enroll a proven peer. Other managed state is
 			// projected into managed_resources and must not be duplicated in inventory.
-			if merged.Managed != nil && (merged.Managed.Membership != nil || len(merged.Managed.ZFSProvisions) != 0) {
+			if merged.Managed != nil && (merged.Managed.Membership != nil || merged.Managed.Join != nil || merged.Managed.Replica != nil || merged.Managed.Transfer != nil || merged.Managed.Authority != nil || merged.Managed.Promotion != nil || merged.Managed.Restricted != nil || len(merged.Managed.ZFSProvisions) != 0) {
 				// These are Core's master-journal outcomes, retained only as the latest
 				// host observation so the Controller can render per-host status. A fresh
 				// Controller re-adopts them from the next Core inventory report.
-				stored.Managed = &protocol.ManagedState{Membership: merged.Managed.Membership, ZFSProvisions: merged.Managed.ZFSProvisions}
+				// Join is the joining host's own staged-join report, retained for the same
+				// reason: it is per-host status a replacement Controller must be able to show.
+				// Replica is this host's own report of the replica it holds; it is retained
+				// the same minimal way, mirrored for display only and never acted on.
+				// Transfer is this host's own part of a master change or an eject, and
+				// Authority is the master's own generation of the authority the members
+				// replicate. Both are retained the same minimal way: mirrored for display,
+				// never acted on, and re-reported by the hosts after any Controller loss.
+				// Promotion is a candidate's own fence-verified promotion and Restricted is
+				// this host's own refusal to act on pool authority. Both are retained the
+				// same minimal way, and for a sharper reason: they are what an operator
+				// reads when the pool master is gone, so a Controller that restarts must be
+				// able to show them from the last report until the next one arrives.
+				stored.Managed = &protocol.ManagedState{Membership: merged.Managed.Membership, Join: merged.Managed.Join, Replica: merged.Managed.Replica, Transfer: merged.Managed.Transfer, Authority: merged.Managed.Authority, Promotion: merged.Managed.Promotion, Restricted: merged.Managed.Restricted, ZFSProvisions: merged.Managed.ZFSProvisions}
 			} else {
 				stored.Managed = nil
 			}
@@ -690,6 +734,12 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 				fail(w, 500, "command payload unavailable")
 				return
 			}
+		}
+		// A pool-join whose invitation has been scrubbed is not a command any more: the host
+		// already collected the one that carried the credential, and resending it emptied
+		// would only be refused. Its own result settles the operation.
+		if cmd.Kind == "pool-join" && cmd.Pool != nil && cmd.Pool.Invitation == "" {
+			continue
 		}
 		if cmd.Power != nil && cmd.Power.AfterOperationID != "" && !slices.Contains(v.Capabilities, protocol.PowerQueueCapability) {
 			continue

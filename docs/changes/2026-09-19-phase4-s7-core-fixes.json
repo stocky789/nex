@@ -1,0 +1,68 @@
+{
+  "summary": "Record Phase 4 S7 Core defect fixes for join tombstones, safe ejection leave, stale remote mounts, retained resource rehome, ejected VM inventory, and management-network recovery. API impact: existing contract.",
+  "paths": [
+    "internal/protocol/storage.go",
+    "internal/agent/managed.go",
+    "internal/agent/peer_test.go",
+    "internal/agent/peer.go",
+    "internal/agent/pool_join.go",
+    "internal/agent/pool_storage.go",
+    "internal/agent/pool_storage_test.go",
+    "internal/agent/pool_transfer.go",
+    "internal/agent/pool_transfer_test.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_inventory.go",
+    "internal/controller/pooljoin.go",
+    "internal/controller/managed.go",
+    "internal/controller/managed_s7_test.go",
+    "internal/controller/pooljoin_s7_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/pool.go",
+    "internal/vmhost/storage_mounts.go",
+    "internal/agent/pool_join_test.go",
+    "internal/agent/pool_leave_test.go",
+    "internal/agent/pool_vm_inventory_test.go",
+    "internal/vmhost/management_network_test.go",
+    "internal/vmhost/management_network.go",
+    "internal/vmhost/pool_test.go",
+    "internal/vmhost/storage_lifecycle_test.go",
+    "internal/vmhost/storage_mounts_test.go",
+    "web/src/pool-authority.tsx",
+    "web/src/pool-authority.test.mjs",
+    "web/src/pool-members.tsx",
+    "web/src/pool-members.test.mjs",
+    "docs/BUG_LEDGER.md",
+    "docs/API.md",
+    "docs/guide/host-maintenance-mode.md",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/storage-repositories.md",
+    "docs/qa/2026-09-19-phase4-native-acceptance.md",
+    "docs/plans/2026-09-19-phase4-closure.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Join eligibility, ejection safety and recovery, repository recheck and detach behaviour, and maintenance staleness changed or had inaccurate wording.",
+    "pages": ["docs/guide/join-a-pool.md", "docs/guide/pool-authority-and-recovery.md", "docs/guide/storage-repositories.md", "docs/guide/host-maintenance-mode.md"]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No endpoint, wire field, status or protocol contract changed. Management-network Core now matches the existing optional expected_revision contract; other fixes are internal.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "S7 has partial historical lab results but neither Phase 4 acceptance gate is complete.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The fixes use existing Core-owned journals, pool peer state and pool VM inventory; Controller re-adopts host reports.",
+    "record": "Existing host managed journal, pool-peer.json and pool-vms.json records remain authoritative and are reported for Controller adoption."
+  },
+  "verification": {
+    "method": "Historical S7 reports record focused failing-first regressions and in-process checks. Native reruns for these fixes remain outstanding; this record does not claim them.",
+    "evidence": ["docs/BUG_LEDGER.md", "docs/plans/2026-09-19-phase4-closure.md"]
+  }
+}

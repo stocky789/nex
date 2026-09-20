@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -362,6 +363,40 @@ func trustedPoolVMAutostartStateDir(path string) error {
 	}
 }
 
+// prunePoolVMOwners removes owner records for VMs their owner has provably deleted. The
+// rule is positive evidence only, never absence: a record is removed when the host that
+// just published its inventory is the record's owner, that inventory carries a succeeded
+// vm-delete tombstone for the same pool and host, the record has no pending update to
+// reconcile, and no other host's stored inventory still defines that VM. A deleted VM ID
+// can never be defined again on the same host, so the tombstone cannot prune a later VM.
+// Everything else is kept: an unreported, unreachable or mid-placement VM keeps its owner
+// record, because a lost record is a lost fence. It returns the pruned IDs.
+func prunePoolVMOwners(state *poolVMState, observedHost string) []string {
+	inventory, ok := state.Inventory[observedHost]
+	if !ok || len(inventory.Deleted) == 0 {
+		return nil
+	}
+	defined := map[string]bool{}
+	for host, inv := range state.Inventory {
+		if host == observedHost {
+			continue
+		}
+		for _, vm := range inv.VMs {
+			defined[vm.ID] = true
+		}
+	}
+	var pruned []string
+	for _, id := range inventory.Deleted {
+		record, exists := state.VMs[id]
+		if !exists || record.HostID != observedHost || record.PendingUpdate != nil || defined[id] {
+			continue
+		}
+		delete(state.VMs, id)
+		pruned = append(pruned, id)
+	}
+	return pruned
+}
+
 func poolVMFile(s *Store) string { return filepath.Join(s.dir, "pool-vms.json") }
 func loadPoolVMs(s *Store) (poolVMState, error) {
 	out := poolVMState{VMs: map[string]poolVMRecord{}, Inventory: map[string]poolVMInventory{}}
@@ -588,6 +623,17 @@ func isPoolVMStopOnly(cmd protocol.Command) bool {
 	return cmd.Kind == "vm-power" && cmd.Power != nil && (cmd.Power.Action == "shutdown" || cmd.Power.Action == "force-stop")
 }
 
+// poolVMStartsExecution identifies the requests that begin a new execution on this host: a
+// power start, the S3 wake AdmitPoolVMExecution turns a start into, and a create that asks
+// for the guest to be started. A reboot or force-reboot needs a guest that is already
+// running here, so it is not a new placement and maintenance never refuses it.
+func poolVMStartsExecution(cmd protocol.Command) bool {
+	if cmd.Kind == "vm-create" {
+		return cmd.VM != nil && cmd.VM.StartAfterCreate
+	}
+	return cmd.Kind == "vm-power" && cmd.Power != nil && (cmd.Power.Action == "start" || cmd.Power.Action == "wake")
+}
+
 // poolVMStopOnly proves a stop request is for the exact locally journaled
 // owner before allowing it to bypass live clustered-storage readiness.  It
 // does not contact or alter the master record; a fresh authenticated inventory
@@ -646,7 +692,7 @@ func PoolVMHandler(s *Store) http.Handler {
 				return
 			}
 			if err = recordPoolVMInventory(s, membership, inv); err != nil {
-				if errors.Is(err, errPoolVMInventoryIncomplete) {
+				if errors.Is(err, errPoolVMInventoryIncomplete) || errors.Is(err, errPoolVMOwnersDeferred) {
 					// The snapshot is durable but cannot activate legacy owner
 					// adoption until every current ready member has reported.
 					w.WriteHeader(http.StatusAccepted)
@@ -706,6 +752,13 @@ func PoolVMHandler(s *Store) http.Handler {
 		}
 		poolVMMu.Lock()
 		defer poolVMMu.Unlock()
+		// A frozen or handed-over pool authority refuses new ownership and new start
+		// permits here, inside the same lock section that would record them, which is what
+		// makes the freeze an ordering guarantee rather than a hint.
+		if err := requirePoolVMAuthorityWritable(s, req.Action, req.Create); err != nil {
+			http.Error(w, placementError(err), http.StatusConflict)
+			return
+		}
 		// All placement admission paths take the established VM → peer lock order.
 		// Keep the peer lock through savePoolVMs so membership cannot change between
 		// the authenticated preflight and durable owner/reservation record.
@@ -799,6 +852,12 @@ func PoolVMHandler(s *Store) http.Handler {
 				}
 			}
 		case "start":
+			// A drained host starts nothing new. Stop and the transitions that follow a
+			// start already under way are deliberately not refused here.
+			if err := poolHostInMaintenance(s, member.HostID); err != nil {
+				http.Error(w, placementError(err), http.StatusConflict)
+				return
+			}
 			if !ok || record.PendingUpdate != nil || record.PoolID != s.State.PoolID || record.HostID != member.HostID || (record.State != "defined" && record.State != "stopped") {
 				http.Error(w, "VM execution is not eligible to start", http.StatusConflict)
 				return
@@ -835,6 +894,15 @@ func PoolVMHandler(s *Store) http.Handler {
 		case "reboot", "force-reboot", "wake", "media":
 			// wake resumes a guest that put itself to sleep (ACPI S3): the domain is
 			// still this owner's running execution, so the record keeps state and epoch.
+			// It is nevertheless an operator pressing Start, so a drained host refuses it;
+			// a reboot of a guest already executing there is not a new placement and is
+			// deliberately allowed.
+			if req.Action == "wake" {
+				if err := poolHostInMaintenance(s, member.HostID); err != nil {
+					http.Error(w, placementError(err), http.StatusConflict)
+					return
+				}
+			}
 			if !ok || record.PendingUpdate != nil || record.HostID != member.HostID || (req.Action != "media" && record.State != "running") {
 				http.Error(w, "VM execution is not eligible for this action", http.StatusConflict)
 				return
@@ -897,6 +965,29 @@ func PoolVMMediaCommand(ctx context.Context, s *Store, cmd protocol.Command) pro
 // AdmitPoolVMExecution must wrap every managed create/start/stop.  Its returned callback
 // records only a confirmed local observation; it never frees ownership after an error/timeout.
 func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (func(protocol.Result, error) error, error) {
+	// A host that cannot prove it holds its pool's current authority starts no workload at
+	// all and does not even ask its master for a permit. It is decided first, before any
+	// storage or runtime observation, so a restricted host refuses in its own words rather
+	// than failing for an unrelated reason, and it covers local-storage guests too: the
+	// recovery decision is that a stale host blocks local and libvirt autostarts and other
+	// workload starts until it has reconciled. Stop, shutdown and force-stop are never
+	// blocked — a restricted host must always be able to put a guest down — and local
+	// console and recovery access are untouched.
+	if !isPoolVMStopOnly(cmd) {
+		if err := requirePoolStartPath(s); err != nil {
+			return nil, err
+		}
+	}
+	// A drained host starts nothing new, for exactly the same reason and in exactly the
+	// same place: the early return below is where every local-storage-only guest leaves
+	// this function, before any master contact, so a maintenance guard downstream of that
+	// round trip never sees the most common guest shape. Reboots and every reducing power
+	// request are deliberately not refused here.
+	if poolVMStartsExecution(cmd) {
+		if err := poolHostInMaintenance(s, s.State.HostID); err != nil {
+			return nil, err
+		}
+	}
 	v, shared, err := poolSharedVM(ctx, s, cmd)
 	if err != nil {
 		return nil, err
@@ -1129,6 +1220,12 @@ func poolVMRequestPeer(ctx context.Context, s *Store, id, action string, permit 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		// The master's own sentence, not a bare refusal: an operator whose start was
+		// refused has to be told which check refused it and on which host.
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		if reason := placementError(errors.New(string(detail))); reason != "" {
+			return errors.New("pool master refused VM execution: " + reason)
+		}
 		return errors.New("pool master refused VM execution")
 	}
 	var result poolVMRequest
@@ -1240,6 +1337,9 @@ func poolVMLocalUpdate(s *Store, id, action, operationID string, previous, next 
 func poolVMLocalUpdatePlacement(s *Store, id, action, operationID string, previous, next *protocol.VMCreateSpec, evidence *vmhost.VMUpdateEvidence, placement *poolPlacementReply) error {
 	poolVMMu.Lock()
 	defer poolVMMu.Unlock()
+	if err := requirePoolVMAuthorityWritable(s, action, false); err != nil {
+		return err
+	}
 	var membership protocol.PoolMembership
 	if placement != nil {
 		poolPeerMu.Lock()
@@ -1295,8 +1395,21 @@ func poolVMLocal(s *Store, id, action string, permit *string, create bool, vm *p
 }
 
 func poolVMLocalPlacement(s *Store, id, action string, permit *string, create bool, vm *protocol.VMCreateSpec, epoch *uint64, placement *poolPlacementReply) error {
+	// The master's own guests take this path instead of the peer handler. Read the drain
+	// flag before any lock: a placement already carries its own refusal from
+	// poolVMPlacement, and reading membership here would otherwise take the peer lock in
+	// the wrong order behind the VM lock a placement already holds. A wake is a start an
+	// operator asked for; a reboot of a guest already running here is not.
+	if action == "start" || action == "wake" {
+		if err := poolHostInMaintenance(s, s.State.HostID); err != nil {
+			return err
+		}
+	}
 	poolVMMu.Lock()
 	defer poolVMMu.Unlock()
+	if err := requirePoolVMAuthorityWritable(s, action, create); err != nil {
+		return err
+	}
 	if placement != nil {
 		poolPeerMu.Lock()
 		defer poolPeerMu.Unlock()
@@ -1373,25 +1486,51 @@ func poolVMLocalPlacement(s *Store, id, action string, permit *string, create bo
 }
 
 // ReconcilePoolVMAutostart is called from the serialized managed worker.  It starts only the
-// already-recorded owner and only after a fresh master permit; it is not HA or failover.
-func ReconcilePoolVMAutostart(ctx context.Context, s *Store) {
-	managed, checks := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(ctx)
+// already-recorded owner and only after a fresh master permit; it is not HA or failover. It
+// returns the reason the pass did nothing, or "" when it ran.
+func ReconcilePoolVMAutostart(ctx context.Context, s *Store) string {
+	// A drained host does not autostart pool guests on boot. Say so once for the pass: the
+	// master would refuse each start anyway, and a silent skip reads like a failed start.
+	// The operator-visible reason is the maintenance flag this host reports in inventory.
+	drained := poolHostInMaintenance(s, s.State.HostID)
+	// A restricted host autostarts no pool guest: this pass runs at boot, which is exactly
+	// when a host that was fenced and promoted away would otherwise start a second copy of
+	// a guest that is already running on the host that took over.
+	restricted := requirePoolStartPath(s)
+	engine := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms"))
+	managed, checks := engine.Applied(ctx)
+	// Neither refusal above can stop libvirt: it starts its autostart domains at boot,
+	// before this agent runs, and this pass is not on that path at all. So the drain has to
+	// reach libvirt's own flag. While this host is drained or restricted every managed
+	// domain's autostart is disabled, and it is restored from Nex's durable definition —
+	// the managed journal, which is where the operator's choice lives and stays — as soon
+	// as the host is neither. Nothing about the desired value is recorded here.
+	//
+	// The flag alone is not enough to bring a local-storage guest back, because libvirt's
+	// one attempt happens before this host has confirmed its pool authority and the startup
+	// hook refuses it then. The loop below is what actually starts those guests, once the
+	// two gates above have passed.
+	for _, vm := range managed.VMs {
+		if err := engine.SetManagedVMAutostart(ctx, vm, drained != nil || restricted != nil); err != nil {
+			log.Print("libvirt autostart could not be reconciled for a managed VM; inspect this host")
+		}
+	}
+	if drained != nil {
+		log.Print("pool VM autostart skipped: this host is in maintenance mode")
+		return "pool VM autostart skipped: this host is in maintenance mode"
+	}
+	if restricted != nil {
+		log.Print("pool VM autostart skipped: this host is restricted until its pool authority is reconciled")
+		return "pool VM autostart skipped: this host is restricted until its pool authority is reconciled"
+	}
 	if !managedVMChecksReady(checks) {
-		return
+		return "pool VM autostart skipped: managed VM checks are not ready"
 	}
 	for _, vm := range managed.VMs {
 		if !vm.Autostart {
 			continue
 		}
-		shared := false
-		for _, d := range vm.Disks {
-			for _, storage := range managed.Storage {
-				shared = shared || (d.StorageID == storage.ID && isPoolSharedStorage(storage))
-			}
-		}
-		if !shared {
-			continue
-		}
+		shared := poolVMOnSharedStorage(managed, vm)
 		// Autostart is an on-boot intent, not a keepalive policy. Claim this boot
 		// before native observation or master admission, so an agent restart after
 		// a manual stop cannot start the VM again.
@@ -1401,6 +1540,10 @@ func ReconcilePoolVMAutostart(ctx context.Context, s *Store) {
 		}
 		state, err := vmhost.ManagedVMState(ctx, vm.ID)
 		if err != nil || state != "shut off" {
+			continue
+		}
+		if !shared {
+			startLocalAutostartVM(ctx, s, engine, vm)
 			continue
 		}
 		_ = vmhost.RemovePoolVMStartPermit(s.dir, vm.ID)
@@ -1433,5 +1576,49 @@ func ReconcilePoolVMAutostart(ctx context.Context, s *Store) {
 		if observed, err := vmhost.ManagedVMState(ctx, vm.ID); err == nil && observed == "running" {
 			_ = poolVMRequestPeer(ctx, s, vm.ID, "running", nil, false, nil, nil)
 		}
+	}
+	return ""
+}
+
+// poolVMOnSharedStorage answers whether any of this VM's disks sit on a repository the pool
+// shares. It decides which half of the autostart pass a guest belongs to: a shared-storage
+// guest needs the master's admission and a one-use execution permit, a local one cannot be
+// opened from another host and needs neither.
+func poolVMOnSharedStorage(managed *protocol.ManagedState, vm protocol.VMCreateSpec) bool {
+	for _, disk := range vm.Disks {
+		for _, storage := range managed.Storage {
+			if disk.StorageID == storage.ID && isPoolSharedStorage(storage) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// startLocalAutostartVM brings back a local-storage guest whose autostart flag libvirt owns.
+//
+// libvirt tries that flag exactly once, at boot, and on a pool master with other ready
+// members it tries it before this agent has confirmed this boot's pool authority — so the
+// startup hook refuses it, and nothing retries it for the rest of that boot. Without this the
+// guest simply never returns from a reboot, and an operator has to start it by hand.
+//
+// It is safe to start here for the same reason the hook could not be left to it: the gates
+// this pass already passed are the whole decision. The host is neither drained nor
+// restricted, and a local disk cannot be opened from another host, so no retry here can ever
+// produce a second writer. No master permit or ownership transition is involved either — an
+// API start of a local-storage guest takes exactly the same path (AdmitPoolVMExecution
+// returns before any master round trip for one).
+func startLocalAutostartVM(ctx context.Context, s *Store, engine *vmhost.ManagedEngine, vm protocol.VMCreateSpec) {
+	executionCtx, err := poolVMExecutionContext(ctx, s, vm)
+	if err != nil {
+		return
+	}
+	op, err := randomPermit()
+	if err != nil {
+		return
+	}
+	result, err := engine.Execute(executionCtx, protocol.Command{OperationID: op, Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: vm.ID, PoolID: vm.PoolID, HostID: vm.HostID, Action: "start"}}, nil)
+	if err != nil || result.Status != "succeeded" {
+		log.Print("pool VM autostart could not start a local-storage guest; inspect the VM on this host")
 	}
 }

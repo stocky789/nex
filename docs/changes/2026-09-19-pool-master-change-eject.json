@@ -1,0 +1,94 @@
+{
+  "summary": "Planned master change and member eject: one durable, resumable Nex Core state machine, driven by a single Controller command to the pool master, hands the pool authority to a ready member or removes a member from the pool, with a pool-CA-signed hand-off and re-point, a durable freeze that makes two masters impossible, an operator cancel until the hand-off, and a Hosts-tab panel assembled only from what each participating host reports",
+  "paths": [
+    "internal/protocol/pool.go",
+    "internal/protocol/protocol.go",
+    "internal/protocol/pool_test.go",
+    "internal/protocol/pool_transfer_test.go",
+    "internal/agent/pool_transfer.go",
+    "internal/agent/pool_transfer_test.go",
+    "internal/agent/pool_authority.go",
+    "internal/agent/pool_join.go",
+    "internal/agent/pool_maintenance.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/poolca.go",
+    "internal/agent/peer.go",
+    "internal/agent/managed.go",
+    "internal/agent/run.go",
+    "internal/vmhost/managed_media_adoption.go",
+    "internal/vmhost/managed_media_adoption_test.go",
+    "internal/controller/pooltransfer.go",
+    "internal/controller/pooltransfer_test.go",
+    "internal/controller/controller.go",
+    "internal/controller/managed.go",
+    "internal/controller/identity.go",
+    "internal/controller/pooljoin.go",
+    "internal/controller/poolreplica_test.go",
+    "web/src/pool-authority.tsx",
+    "web/src/pool-authority.test.mjs",
+    "web/src/pool-members.tsx",
+    "web/src/pool-members.test.mjs",
+    "web/src/style.css",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer.html",
+    "tests/test_api_contract.py",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/README.md",
+    "CHANGELOG.md",
+    "docs/plans/2026-09-19-phase4-closure.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-09-pool-master-model.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Two new operator workflows with real consequences. The pool authority page gains prerequisites for a transfer, step-by-step instructions for changing the pool master and for ejecting a host, how to read the Pool master change panel and each participant's own reported stage, when a cancel is still possible and what happens when it is not, what an ejected host becomes, ejecting an unreachable host, every refusal with what to do about it, and the master-conflict banner. Automatic succession is stated as explicitly unavailable in the Status section, the Troubleshooting section and the panel's own wording; promotion while the master is gone is named once as a later section, not described. The join page's 'joining is one way' limit and its 'member eject was not verified' line are corrected now that an eject exists, and the guide index entry names the two new workflows. The Verification section states plainly that no native multi-host master change or eject was run, no host was power-cycled during one, and no browser review of the panel, the banner or either dialog was carried out.",
+    "pages": [
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/guide/join-a-pool.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "Three Controller routes (POST /api/v1/pools/{id}/master, POST /api/v1/pools/{id}/master/cancel, DELETE /api/v1/pools/{id}/members/{host_id}), each an administrator session with same-origin and CSRF, a typed confirmation on the two destructive ones, request_id replay and a documented 409 refusal matrix; the pool-transfer command kind carried by PoolCommand with actions master-change, eject and transfer-cancel, always addressed to the pool's current master; two peer routes (POST /api/v1/pool/transfer with actions activate, abort, repoint and leave, bounded to 256 KiB, and the read-only GET /api/v1/pool/authority probe admitted to any holder of a certificate this pool's CA issued, including an ejected one); the pool-CA-signed PoolAuthorityNotice and the PoolTransferRequest, PoolTransferReply, PoolTransferStatus, PoolAuthorityStatus and PoolAuthorityRecord shapes; the inventory fields managed.transfer (every participant) and managed.authority (the master alone); the pool-authority-transfer health check; the pool-authority-transfer-v1 capability; and additions to the existing GET /api/v1/pools/{id}/members projection (transfer_supported, authority, transfer, last_transfer, master_conflict, and a per-member transfer), including the amended replica state ladder now that an absolute authority generation is reported. Both sides, authentication and admission per action, validation, bounded refusal texts, idempotency by operation ID, asynchronous Core refusals surfaced as last_transfer rather than invented HTTP statuses, capability gating and Controller/Core version compatibility are implemented in this slice. Amended 2026-09-19 by the closure sweep: PoolTransferStatus gains cancellable, Core's own always-present answer to whether a transfer may still be cancelled, computed from the same predicate the cancel is gated on; the cancel itself is now refused once an eject's membership write is durable, which is a behaviour change on POST /api/v1/pools/{id}/master/cancel where a wrong success used to be returned (BUG-0331); and the documented master_conflict rule is corrected to the complement of the adoption rule rather than \"at least as high\". The fix's own paths are owned by docs/changes/2026-09-19-phase4-defect-fixes.json. Amended 2026-09-19: PoolTransferStatus gains an always-present handed_off; cancellable is now always present; POST /api/v1/pools/{id}/master/cancel accepts optional fence_confirmed and fence_host_ids, both or neither, used by Nex Core only to resume a hand-off whose target has died; and last_transfer gains reason, so a cancellation Core performed is reported as the success it is.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/api/index.html",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase 4 stays in progress and no milestone item moves to built. The master change and the eject have in-process multi-host, Controller and contract evidence only; their native multi-host acceptance is outstanding, and the recovery capability the phase still needs \u2014 promotion with an unreachable master, and the automatic succession gate beyond it \u2014 is not delivered here. The board keeps built separate from in testing, so it still describes the project accurately.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Every durable record belongs to the hosts. Nex Controller writes only Controller-scoped rows: one operations row, one managed_resources replay row of kind pool-transfer and the audit rows, which is the ordinary durable-command pattern, plus its own mirror of who the master is, which it moves only because the hosts reported it. It holds no stage, no timer, no generation, no digest and no membership of its own, derives none, and a Controller restarted, replaced or disconnected mid-transfer keeps nothing to recover.",
+    "record": "The pool master's pool-peer.json gains a Transfer record (operation ID, action, role, target host, stage, status, last error, authority and membership generations, frozen, handed_off, the signed notice, the hosts already re-pointed, attempts and updated_at) written atomically beside the membership it already holds; the freeze and the handed-off flag live in that same record and are persisted before the steps they guard. Each participant \u2014 the target and the ejected host included \u2014 keeps its own Transfer record in its own pool-peer.json, which is what makes every stage resumable on both sides with no Controller in the loop. The host that becomes master writes the replicated VM ownership map into its own pool-vms.json byte-identically and then, in one atomic pool-peer.json write, takes the unwrapped pool CA key, the new membership at generation+1 and authority generation N+1; the authority it activates is the S4 replica it already held in <state-dir>/pool-replica.json, at exactly the generation the outgoing master froze and signed away. An ejected host re-initializes into a new single-host pool in its own pool-peer.json, keeping its host ID, its local storage and its local VMs; its old row is marked ejected rather than deleted, so the pool can tell a returning host why it is refused. A fresh or rebuilt Controller recovers all of it from reported inventory with nothing for an operator to re-enter: it follows the hosts' reported membership, and adopts a master change only on the evidence Core itself uses \u2014 a report from the host that its own membership names as master, at a membership generation strictly higher than the one the Controller last mirrored for that pool. Two hosts claiming mastery at the same generation change nothing; the Controller keeps the recorded master and reports the conflict in master_conflict. On adoption it moves pools.master_host_id and re-keys the pool's storage, network and media mirror rows to the new master host ID, and it records an ejected host's new pool under the same site the way enrollment records one.",
+    "record_note": "The unwrapped pool CA key exists on the new master only after it activates, in the same 0600 pool-peer.json inside the already-0700 state dir that the previous master used; the outgoing master drops its own copy when it adopts the new master's signed re-point. Neither the key nor any signed notice is ever logged, reported to the Controller or placed in any Controller store.",
+    "notes": "Amended 2026-09-19 by the review-fix batch (docs/changes/2026-09-19-phase4-review-fixes.json): BUG-0335 (a master change handed to a host that then died killed the pool permanently, now recoverable through a fence-backed resume on the source), BUG-0336 (adoption of a reported master failed open, and a member-first Controller replacement deadlocked at enrolment), BUG-0339 (a host could leave its pool with no report from the master) and BUG-0353 (the hand-off was not reported, so the interface had to key on a refusal sentence). The durable record is unchanged in kind: Transfer.HandedOff was already written before the signed hand-off and is now simply reported."
+  },
+  "verification": {
+    "method": "IMPLEMENTED. Go unit tests with the race detector (go test -race -count=1 on internal/agent, internal/protocol, internal/localcore, internal/vmhost; go test -race -count=1 on internal/controller) covering, over the real mutual-TLS pool peer transport with real certificates and real pool-CA signatures but with every host in one process: a three-host master change with VM identities proven byte-identical afterwards and placement, start permits, maintenance, replica push and member pull all working again; refusal of every pool authority write while the freeze is held, with stop still permitted; table-driven interruption at freeze, replicate, activate and repoint on each side, each converging on exactly one host that would accept an authority write; a host that handed the authority over refusing authority after a restart and converging only on signed evidence; an unreachable member catching up via the old master and then the new one; refusal of stale and unsigned re-point notices; the full cancellation rule including the target's durable never-activate record; an eject with re-initialization as a new pool (new pool ID, same host ID, replica removed, certificate no longer admitted); both eject refusals (owned pool VM records, held pool-shared storage reservation); ejecting an unreachable member and its learning on return; twenty-four concurrent authority writes during a freeze, all refused; and the adopted-ISO removal refusal. Controller tests cover the command shape and addressing, exact retry versus changed-payload conflict, the audit rows, ejecting an unreachable member, the cancel route, the full refusal matrix, the capability gate on master, target and every fresh ready member, the fresh and stale projections, a frozen-authority refusal surfacing as conflict plus retryable, the amended replica behind rule, adoption of a higher-generation master with the mirror re-key, an equal-generation rival producing master_conflict and no flap, adoption of an ejected host's new pool, and a Controller reopened from the same database mid-transfer knowing nothing until the hosts report. UI component suite (npm run typecheck, npm test; pool-authority.test.mjs and pool-members.test.mjs ok) covers the action availability matrix, the strip states, cancel availability, the frozen marker, the conflict banner, the behind-by-N line and both dialogs. Offline contract checks: python3 -m unittest discover -s tests -p 'test_api_contract.py' \u2014 the new PoolTransferContractTests pass, asserting the eight protocol types against their Go structs in both contracts, the three routes against their registrations with their security and CSRF headers, the request and accepted shapes against the handler structs and resourceResponse, every literal route refusal including the templated ones expanded with the handler's own words, every asynchronous Core conflict against the command semantics, the capability and command kind, both peer routes' served statuses and every bounded step refusal, the 256 KiB bound, the action enums against the validators, and the projection additions with the amended ladder; python3 scripts/generate_api.py --check reports the generated reference current. Documentation gate: python3 scripts/check_docs.py --worktree. NOT executed and recorded as outstanding: any native multi-host master change or eject, a host power-cycled during one, and a browser/360 px review of the Pool master change panel, the master-conflict banner and both confirmation dialogs, all deferred to the Phase 4 native acceptance slice. Amended 2026-09-19: a cancel accepted after an eject was already durable was found in review of this slice and fixed (BUG-0331), with TestPoolEjectCannotBeCancelledOnceTheMembershipIsWritten and TestPoolTransferCancellableMatchesTheCancelAtEveryStage observed failing first. The outstanding native and browser evidence above is unchanged.",
+    "evidence": [
+      "internal/agent/pool_transfer_test.go",
+      "internal/protocol/pool_transfer_test.go",
+      "internal/vmhost/managed_media_adoption_test.go",
+      "internal/controller/pooltransfer_test.go",
+      "internal/controller/poolreplica_test.go",
+      "web/src/pool-authority.test.mjs",
+      "web/src/pool-members.test.mjs",
+      "tests/test_api_contract.py",
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/plans/2026-09-19-phase4-closure.md"
+    ]
+  }
+}

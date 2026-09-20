@@ -1,0 +1,14 @@
+{
+  "summary": "Correct Core VLAN reapply operation identity after same-pool rejoin. API impact: existing contract anticipated.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-20-phase4-vlan-reapply-operation-identity.json"
+  ],
+  "guide": {"impact": "none", "reason": "The existing rejoin workflow is unchanged.", "pages": []},
+  "api": {"impact": "existing contract", "reason": "The expected correction is Core-private operation replay identity; no route, schema or field change is proposed.", "pages": ["docs/API.md"]},
+  "roadmap": {"impact": "none", "reason": "The pending correction does not complete G1, S7 or Phase 4.", "pages": []},
+  "state": {"owner": "core", "reason": "Core owns managed-journal operation identity and cleanup-consumption state.", "record": "Existing Core managed-journal reapply and cleanup-consumption records remain authoritative and are reported through inventory to a replacement Controller."},
+  "verification": {"method": "A retained native capture found the expected VLAN device absent despite fresh healthy API state after rejoin. Diagnosis identified an hour-pinned operation ID replaying an earlier successful operation. The source correction binds the private reapply ID to the selected durable cleanup operation and caller identity. A retained failing-before Engine network replay test exits 1; the focused corrected test passes, as do affected-package normal and race suites. Two same-input signed cleanup cycles cover a new materialization attempt, new receipt and stable retry. Independent review cleared the frozen source: a later cleanup receives a distinct receipt, the same selected cleanup stays idempotent, and the shared storage helper has the same receipt-ID behavior. The test NIC is intentionally missing, so native validation fails and this is not a successful VLAN lifecycle; storage coverage is source-only. The final whole-tree race and 374-test Python gate passed. Independent review cleared bounded native preserved reconciliation: the expected bridge, VLAN child and owned network stanza materialized with repository recovery and matching current API state. This does not establish the active G1 two-cycle workflow.", "evidence": ["internal/vmhost/managed_test.go", "docs/BUG_LEDGER.md"]}
+}

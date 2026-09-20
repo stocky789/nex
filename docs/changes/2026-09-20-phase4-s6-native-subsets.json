@@ -1,0 +1,35 @@
+{
+  "summary": "Record reviewed native S6 proof-retry, lab-hook-overlay, and bounded restriction/refusal subsets without closing the manual-recovery gate. API impact: existing contract.",
+  "paths": [
+    "docs/plans/2026-09-19-phase4-closure.md",
+    "docs/qa/2026-09-19-phase4-native-acceptance.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This records acceptance evidence and limits; the promotion and recovery workflows did not change.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The native subsets exercised existing promotion, restriction, inventory and eject operations without changing a contract.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Partial S6 evidence does not complete Phase 4 or the manual-recovery gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Core owns promotion transfer, fence proof, restriction, membership and VM inventory records.",
+    "record": "Existing Core pool-peer transfer and membership records, operation-bound fence proofs, and pool VM inventory remain authoritative and are reported to a replacement Controller through inventory."
+  },
+  "verification": {
+    "method": "Reviewed S6-13 expiry evidence held an aged bound proof at activation while the old master was externally off, then replaced it for the same operation, host, target and configuration before promotion completed. Separate retained fresh-branch evidence records a new candidate boot identity after proof persistence, the same operation-bound proof byte-identical while the old master stayed off, successful promotion, and cleanup returning the old master unrestricted. Reviewed S6-17 lab-hook-overlay evidence records unrestricted boot with a member off, terminal same-VM start/run/stop, an initial current-inventory eject refusal, and a later raw terminal eject retry with solo state and inventory cleanup. The earlier S6-18 bounded rerun recorded restricted state after master reboot with a ready member off, terminal API/direct-hook VM-start and eject refusals, return, normal start and force-stop cleanup. Its earlier autostart/no-escape limit is superseded by the later reviewed timed-autostart suppression/restoration and UI/source no-escape audit, which pass the exact CHECKPLAN scope. It does not establish duplicate-writer safety, package installation, permanently-dead-member recovery, or Phase 4 acceptance.",
+    "evidence": [
+      "docs/qa/2026-09-19-phase4-native-acceptance.md"
+    ]
+  }
+}

@@ -1,0 +1,89 @@
+{
+  "summary": "Phase 4 staged-review cleanup: freeze authority when a master-change/eject transfer is first recorded; align join preview with Core failed-operation filtering and require same-site joins; project promotion conflicts only for generation/fence mismatches; share request-id/confirm helpers and drop Controller-as-proxy panel notes and client-side management-network IP validation; disable maintenance/transfer submit until membership generation is known and refresh restricted banners; delete unused vmhost helpers and shrink duplicated agent/controller/protocol helpers",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-20-phase4-review-cleanup.json",
+    "internal/agent/managed.go",
+    "internal/agent/managed_test.go",
+    "internal/agent/peer.go",
+    "internal/agent/pool_authority.go",
+    "internal/agent/pool_join.go",
+    "internal/agent/pool_network.go",
+    "internal/agent/pool_promote.go",
+    "internal/agent/pool_transfer.go",
+    "internal/agent/pool_transfer_test.go",
+    "internal/controller/credentials.go",
+    "internal/controller/controller.go",
+    "internal/controller/host_row.go",
+    "internal/controller/hostnetwork.go",
+    "internal/controller/managed.go",
+    "internal/controller/placement_warning_test.go",
+    "internal/controller/pool_master.go",
+    "internal/controller/pool_operation.go",
+    "internal/controller/pool_reported_fields_test.go",
+    "internal/controller/pooljoin.go",
+    "internal/controller/pooljoin_test.go",
+    "internal/controller/poolmaintenance.go",
+    "internal/controller/poolpromotion.go",
+    "internal/controller/poolpromotion_test.go",
+    "internal/controller/poolreplica_test.go",
+    "internal/controller/pooltransfer.go",
+    "internal/controller/storage_cluster.go",
+    "internal/protocol/hostnetwork.go",
+    "internal/protocol/pool.go",
+    "internal/protocol/pool_promotion_test.go",
+    "internal/protocol/validate.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/management_network.go",
+    "internal/vmhost/management_network_test.go",
+    "internal/vmhost/pool_fence.go",
+    "internal/vmhost/storage_guard.go",
+    "internal/vmhost/vlan.go",
+    "web/src/host-network.test.mjs",
+    "web/src/host-network.tsx",
+    "web/src/main.tsx",
+    "web/src/managed.test.mjs",
+    "web/src/managed.tsx",
+    "web/src/pool-authority.test.mjs",
+    "web/src/pool-authority.tsx",
+    "web/src/pool-members.test.mjs",
+    "web/src/pool-members.tsx",
+    "web/src/pool-promotion.test.mjs",
+    "web/src/pool-promotion.tsx",
+    "web/src/style.css"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator workflows and labels are unchanged; dialogs and panels carry less tutorial prose and client-side IP prechecks, while Core still validates and refuses. Same-site join and freeze-on-record are already the documented behaviour.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Join route validation now requires same site_id (already described for join workflows); freeze timing, join preview filtering, promotion conflict projection and fence-freshness boundary tighten existing contracts with no new routes or Controller-owned records.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone status change; cleanup of unreleased Phase 4 review findings.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Transfer freeze and cancel wording live on the pool master's durable transfer record; Controller changes are projections and route validation only.",
+    "record": "pool-peer.json transfer record (Frozen at create); Controller mirrors operations/hosts/pools for join preview and conflict projection only"
+  },
+  "verification": {
+    "method": "go test ./internal/agent/ ./internal/vmhost/ ./internal/protocol/ ./internal/localcore/ ./internal/controller/ -count=1; web npm test and typecheck for touched UI suites; focused agent Cancel/Transfer/Frozen runs after cancel-message fix.",
+    "evidence": [
+      "internal/agent/pool_transfer_test.go",
+      "internal/controller/pooljoin_test.go",
+      "internal/controller/poolpromotion_test.go",
+      "internal/protocol/pool_promotion_test.go",
+      "web/src/pool-members.test.mjs",
+      "web/src/pool-promotion.test.mjs",
+      "web/src/host-network.test.mjs"
+    ]
+  }
+}

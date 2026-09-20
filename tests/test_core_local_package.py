@@ -337,6 +337,33 @@ class CoreLocalPackageTests(unittest.TestCase):
         # The prerm removes the generated source so removal leaves no source with a missing key.
         self.assertIn('/etc/apt/sources.list.d/nex.sources', (ROOT / 'packaging/core-local/prerm').read_text())
 
+    def test_depends_cover_what_core_networking_runs(self):
+        """A host that installs this package on its own must get the tools Core execs.
+
+        The ISO installs ifupdown and bridge-utils from installer/packages.txt, so the
+        gap is invisible there; a standalone install had neither, and the first pool VLAN
+        registration or management network edit failed on the host.
+        """
+        import re
+        build = (ROOT / 'packaging/core-local/build-inside.sh').read_text()
+        line = re.search(r'^Depends: (.*)$', build, re.M)
+        self.assertIsNotNone(line, 'the package must declare Depends')
+        depends = {field.strip().split()[0] for field in line.group(1).split(',')}
+        vlan = (ROOT / 'internal/vmhost/vlan.go').read_text()
+        management = (ROOT / 'internal/vmhost/management_network.go').read_text()
+        # Each entry is (package, the thing in Core that needs it, where that thing is).
+        required = [
+            ('iproute2', '"ip", "link"', vlan),
+            ('ifupdown', '"ifup"', management),
+            ('bridge-utils', 'bridge_ports', vlan),
+            ('bridge-utils', 'bridge_ports', management),
+            ('vlan', 'vlan-raw-device', management),
+        ]
+        for package, needed, source in required:
+            with self.subTest(package=package, needs=needed):
+                self.assertIn(needed, source, 'this check is stale: Core no longer uses ' + needed)
+                self.assertIn(package, depends, needed + ' needs the ' + package + ' package at runtime')
+
     def test_removal_never_erases_guest_or_state(self):
         import re
         script = (ROOT / 'packaging/core-local/prerm').read_text()
@@ -363,6 +390,18 @@ class CoreLocalPackageTests(unittest.TestCase):
         service = (ROOT / 'packaging/core-local/nex-core-local.service').read_text()
         self.assertIn('StateDirectory=nex/core-local nex-core-agent', service)
         self.assertIn('StateDirectoryMode=0700', service)
+
+    def test_local_service_restarts_after_a_clean_exit_for_the_network_rollback(self):
+        """The embedded agent rolls a management-network change back only while it runs.
+
+        Restart=on-failure would leave an exit 0 (or a signal reaped as success) with nothing
+        armed during the rollback window; `systemctl stop`, which prerm and upgrades use,
+        still stops a Restart=always unit.
+        """
+        service = (ROOT / 'packaging/core-local/nex-core-local.service').read_text()
+        settings = dict(line.split('=', 1) for line in service.splitlines()
+                        if '=' in line and not line.startswith('#'))
+        self.assertEqual(settings.get('Restart'), 'always')
 
 
 if __name__ == '__main__':

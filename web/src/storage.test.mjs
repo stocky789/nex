@@ -6,7 +6,8 @@ import { join } from "node:path";
 import assert from "node:assert/strict";
 
 const src = readFileSync(new URL("./storage.tsx", import.meta.url), "utf8");
-// UI-1: queued and failed registrations all have id "", so the key falls back to the operation.
+// UI-1: a queued registration still has id "", so the key falls back to the operation. A failed
+// one now answers its Controller request-row key (pending-storage-<operation id>).
 assert.match(src, /<tr key=\{s\.id \|\| `op:\$\{s\.operation_id\}`\} data-storage-id=\{s\.id\}>/);
 assert.match(src, />Domain</);
 assert.match(src, /storage-existing-badge/);
@@ -18,7 +19,25 @@ const stubbed = code
   .replace('from "react"', 'from "data:text/javascript,export const useEffect=()=>{};export const useRef=()=>({});export const useState=()=>[undefined,()=>{}];"')
   .replace('from "./zfs"', 'from "data:text/javascript,export const ZFSProvisionWizard=()=>null;"');
 writeFileSync(file, stubbed);
-const { storageUsable, storageSource, storageChecked, storageLifecycleReady, storageOwnerFresh, storageObservationFresh, clusterStatusView, clusterSetupAvailable } = await import(`file://${file}`);
+const { storageUsable, storageSource, storageChecked, storageLifecycleReady, storageOwnerFresh, storageObservationFresh, clusterStatusView, clusterSetupAvailable, registrationDiscardable, discardConfirmText } = await import(`file://${file}`);
+
+// D1: only a registration the pool master refused is a discardable Controller request record.
+// A queued one has no id to address and is still the host's business; a succeeded one is a
+// repository the host holds and is removed with detach instead.
+assert.equal(registrationDiscardable({ id: "pending-storage-op-1", status: "failed" }), true);
+assert.equal(registrationDiscardable({ id: "", status: "failed" }), false);
+assert.equal(registrationDiscardable({ id: "", status: "queued" }), false);
+assert.equal(registrationDiscardable({ id: "repo-1", status: "queued" }), false);
+assert.equal(registrationDiscardable({ id: "repo-1", status: "dispatched" }), false);
+assert.equal(registrationDiscardable({ id: "repo-1", status: "succeeded" }), false);
+// The confirmation says what it does and does not do: no host is asked for anything.
+assert.match(discardConfirmText("storage", "lab-nfs-fault"), /^Discard the failed storage registration lab-nfs-fault\?/);
+assert.match(discardConfirmText("network", "guests"), /removes only Nex Controller's record of the failed request and asks no host to do anything/);
+// The discard takes no body and addresses the row by the id the list answered.
+assert.match(src, /await api\(`storage\/\$\{encodeURIComponent\(s\.id\)\}`, "DELETE"\);/);
+assert.match(src, /catch \(e\) \{ setError\(\(e as Error\)\.message\); \}/);
+// A failed row offers the discard instead of the repository actions, never beside them.
+assert.match(src, /registrationDiscardable\(s\) \? <button type="button"[\s\S]*?>Discard failed registration<\/button> : <>[\s\S]*?>Recheck<\/button>[\s\S]*?>Detach<\/button><\/>\}/);
 
 // One freshness rule for every Core observation: undated, unparseable, older than 30 s or dated
 // in the future is not current access.

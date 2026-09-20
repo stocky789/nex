@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +41,44 @@ func writeAppliedPoolMediaAt(t *testing.T, s *Store, media protocol.Media, path 
 	}
 	if err = os.WriteFile(filepath.Join(dir, op+".json"), journal, 0600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The shared-ISO adoption path has neither half of the pool VLAN apply defect, and this holds
+// it there. AdoptSharedMedia verifies the published file on every pass and journals only on
+// success, so a member that cannot adopt yet mints no journal entry at all, re-evaluates the
+// cause on the next probe tick and reports a freshly observed error to the master. Only the
+// media *removal* loop uses an hour-pinned operation ID, and it is gated by CheckMediaRemoval
+// exactly as the network removal loop is.
+func TestPoolMediaAdoptionFailureIsReEvaluatedEveryTickAndJournalsNothing(t *testing.T) {
+	member := peerStore(t, "member-1", "pool-1")
+	storage := protocol.StorageRegistration{
+		ID: "repo-1", PoolID: "pool-1", HostID: member.State.HostID, Name: "shared", Path: t.TempDir(),
+		Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/exports"}}, Generation: 1,
+	}
+	media := protocol.Media{
+		ID: "iso-1", PoolID: "pool-1", HostID: member.State.HostID, StorageID: storage.ID,
+		Name: "debian.iso", SizeBytes: 40000, SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	// The repository has not been registered on this member yet: the adoption is refused, and
+	// nothing is written, so the cause is re-read rather than replayed on the next pass.
+	for pass := 0; pass < 3; pass++ {
+		if err := adoptPoolMediaNative(context.Background(), member, media); err == nil {
+			t.Fatalf("pass %d adopted an ISO on an unregistered repository", pass)
+		}
+		if n := poolJournalEntries(t, member); n != 0 {
+			t.Fatalf("pass %d: a refused adoption journalled %d entries", pass, n)
+		}
+	}
+	// The operator registers the repository. The next pass gets past the repository and fails
+	// on the ISO itself, so the reported error tracks the current cause without waiting an hour.
+	writeAppliedPoolStorage(t, member, storage)
+	err := adoptPoolMediaNative(context.Background(), member, media)
+	if err == nil || !strings.Contains(err.Error(), "ISO") {
+		t.Fatalf("adoption error after the repository was registered = %v", err)
+	}
+	if n := poolJournalEntries(t, member); n != 1 {
+		t.Fatalf("a failing adoption journalled a media entry: %d entries", n)
 	}
 }
 

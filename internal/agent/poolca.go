@@ -33,8 +33,65 @@ type poolPeerState struct {
 	MasterURL                               string
 	PendingPeerOrigin                       string
 	PendingRehome                           *poolRehome
+	PendingJoin                             *poolPendingJoin
 	Membership                              protocol.PoolMembership
 	Offers                                  map[string]poolJoinOffer
+	// AuthorityGeneration is the pool master's own monotonic counter for the signed
+	// authority replica it pushes to its members, and AuthorityDigest the content it last
+	// numbered. It is persisted before any replica is pushed, so it never goes backwards
+	// after a crash; generations may skip. A member leaves both empty.
+	AuthorityGeneration uint64
+	AuthorityDigest     string
+	// Transfer is this host's durable part of a planned master change or a member eject.
+	// It carries the authority freeze: while Frozen is set every authority write on this
+	// host is refused, and while HandedOff is set they are refused for good, because this
+	// host has signed the generation away. Both outlive a restart, a reboot and the loss of
+	// the Controller, which is the only reason two hosts can never both write.
+	Transfer *poolTransferRecord
+	// Restricted is this host's own durable refusal to act on pool authority while it
+	// cannot prove it holds the current one: after a restart it has not confirmed with its
+	// members, or it has found a higher authority elsewhere. It is set before any start
+	// path is exposed and is read by Core alone, including by the libvirt start hook, so it
+	// holds through a reboot and through the complete loss of the Controller.
+	Restricted *poolRestrictedRecord
+	// BootAuthority is written only after this boot has confirmed the authority which can
+	// start managed guests. The libvirt hook binds it to this host and pool before allowing
+	// an autostart that could otherwise beat the agent process at boot.
+	BootAuthority *poolBootAuthorityConfirmation
+	// SelfFence records that a fence profile for THIS host, of a kind a promotion could
+	// actually turn into a proof, has been part of this pool's replicated authority. It is
+	// the durable evidence the boot rule reads: a master no member could ever have fenced
+	// cannot have been promoted away behind its back. It outlives the profile itself,
+	// because a member holding an older replica still holds the profile that replica
+	// carried.
+	SelfFence *poolSelfFenceExposure
+	// FenceCredentials is the master's private digest of the material behind each recorded
+	// fence profile, keyed by the host the profile fences. It never leaves this file: it
+	// exists so the master can tell rotated material from the same material re-recorded,
+	// and move the replicated credential version only when the material actually changed.
+	FenceCredentials map[string]poolFenceCredentialRecord
+}
+
+// poolFenceCredentialRecord is a digest and a counter, never material.
+type poolFenceCredentialRecord struct {
+	Ref     string
+	Digest  string
+	Version uint64
+}
+
+// poolSelfFenceExposure is present exactly while this host may still be fence-promotable by
+// somebody. ClearedAt is the authority generation from which the replicated authority no
+// longer carries a usable profile for this host; it is zero while the profile is still
+// recorded. The whole record is dropped once every ready member has acknowledged a replica
+// at or above ClearedAt, because no member can then still hold the profile.
+type poolSelfFenceExposure struct{ ClearedAt uint64 }
+
+// poolBootAuthorityConfirmation is private Core state. It is never Controller input or
+// inventory: it only binds an authority confirmation to the local kernel boot identity.
+type poolBootAuthorityConfirmation struct {
+	PoolID string
+	HostID string
+	BootID string
 }
 
 type poolRehome struct{ PoolID, PoolName string }

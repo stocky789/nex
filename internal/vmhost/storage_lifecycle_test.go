@@ -22,6 +22,11 @@ func lifecycleCommand(op, kind string, v protocol.StorageLifecycleRequest) proto
 
 func lifecyclePtr(s protocol.StorageRegistration) *protocol.StorageRegistration { return &s }
 
+func lifecycleMedia(id, pool, host, storage string) protocol.Media {
+	return protocol.Media{ID: id, PoolID: pool, HostID: host, StorageID: storage, Name: "disc.iso", SizeBytes: 40 << 10,
+		SHA256: "0000000000000000000000000000000000000000000000000000000000000000"}
+}
+
 // This uses mocked ZFS and QEMU commands; it exercises journal behavior, not a real mount.
 func TestStorageLifecycleAllowsIndependentRechecksAndGenerationChain(t *testing.T) {
 	ctx := context.Background()
@@ -227,4 +232,84 @@ func TestLocalPathChangeIsNotMetadataOnly(t *testing.T) {
 	if err != nil || result.Status != "failed" || !strings.Contains(result.Error, "cannot update while used") {
 		t.Fatalf("local path change was treated as metadata-only: %+v, %v", result, err)
 	}
+}
+
+// BUG-0354: storageDependencies scanned every succeeded iso-import entry for the repository
+// and never consulted the media tombstones, so one ISO imported onto a repository blocked its
+// detach for ever — removing the ISO first did not help. The wiped-disk half of the same
+// function already had this fixed (BUG-0222); the ISO half did not.
+func TestRemovedISOIsNotAStorageDependency(t *testing.T) {
+	repo := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: "host-1", Name: "shared", Path: "/srv/shared",
+		Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/exports"}}, Generation: 1}
+	media := lifecycleMedia("iso-1", "pool-1", "host-1", repo.ID)
+	js := []managedJournal{
+		{Command: protocol.Command{OperationID: "reg", Kind: "storage-register", Storage: &repo}, Result: protocol.Result{OperationID: "reg", Status: "succeeded"}},
+		{Command: protocol.Command{OperationID: "imp", Kind: "iso-import", Media: &media}, Result: protocol.Result{OperationID: "imp", Status: "succeeded"}},
+	}
+	if got := storageDependencies(js, repo.ID); len(got) != 1 || got[0] != "ISO iso-1" {
+		t.Fatalf("an imported ISO must block detach: %v", got)
+	}
+	js = append(js, managedJournal{
+		Command: protocol.Command{OperationID: "rm", Kind: "media-remove", ResourceLifecycle: &protocol.ResourceLifecycleRequest{
+			Action: "remove", Resource: "media", ResourceID: media.ID, PoolID: "pool-1", HostID: "host-1", ExpectedGeneration: 1}},
+		Result: protocol.Result{OperationID: "rm", Status: "succeeded"},
+	})
+	if got := storageDependencies(js, repo.ID); len(got) != 0 {
+		t.Fatalf("a removed ISO still blocks detach: %v", got)
+	}
+}
+
+// The dry run and the real refusal are one function, as CheckNetworkRemoval and the network
+// teardown are: a leave that prechecks must not be able to drift from the detach it precedes.
+func TestCheckStorageDetachReportsTheDependencyWithoutJournalling(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	e := NewManaged(filepath.Join(root, "state", "managed"))
+	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	repo := lifecycleLocalStorage("repo-1", filepath.Join(root, "srv"))
+	if err := os.MkdirAll(repo.Path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	media := lifecycleMedia("iso-1", repo.PoolID, repo.HostID, repo.ID)
+	for _, j := range []managedJournal{
+		{Command: protocol.Command{OperationID: "reg", Kind: "storage-register", Storage: &repo}, Result: protocol.Result{OperationID: "reg", Status: "succeeded"}},
+		{Command: protocol.Command{OperationID: "imp", Kind: "iso-import", Media: &media}, Result: protocol.Result{OperationID: "imp", Status: "succeeded"}},
+	} {
+		if err := e.save(j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, err := os.ReadDir(e.stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = e.CheckStorageDetach(ctx, repo.ID)
+	if err == nil || !strings.Contains(err.Error(), "storage cannot detach while used by ISO iso-1") {
+		t.Fatalf("CheckStorageDetach = %v", err)
+	}
+	after, err := os.ReadDir(e.stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("the precheck journalled: %d entries before, %d after", len(before), len(after))
+	}
+	// The real detach refuses in exactly the same words, so the two cannot drift.
+	result, err := e.Execute(ctx, lifecycleCommand("det", "storage-detach", protocol.StorageLifecycleRequest{
+		Action: "detach", RepositoryID: repo.ID, PoolID: repo.PoolID, HostID: repo.HostID, ExpectedGeneration: 1}), nil)
+	if err != nil || result.Status == "succeeded" {
+		t.Fatalf("detach with an ISO on it: %+v %v", result, err)
+	}
+	if result.Error != err2s(e.CheckStorageDetach(ctx, repo.ID)) {
+		t.Fatalf("precheck %q and detach %q disagree", err2s(e.CheckStorageDetach(ctx, repo.ID)), result.Error)
+	}
+}
+
+func err2s(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }

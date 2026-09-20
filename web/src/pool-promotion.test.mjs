@@ -1,0 +1,550 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// S6 "Fence-verified manual promotion and safe rejoin": same harness as the other pool tests —
+// esbuild bundles the real module and react-dom/server renders it.
+// Run with: node src/pool-promotion.test.mjs
+import { buildSync } from "esbuild";
+import { mkdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import assert from "node:assert/strict";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
+const outdir = fileURLToPath(new URL("../node_modules/.cache/nex", import.meta.url));
+mkdirSync(outdir, { recursive: true });
+const outfile = `${outdir}/pool-promotion.test-bundle.mjs`;
+buildSync({
+  entryPoints: [fileURLToPath(new URL("./pool-promotion.tsx", import.meta.url))],
+  bundle: true, format: "esm", jsx: "automatic", target: "es2022", outfile,
+  external: ["react", "react/jsx-runtime", "react-dom", "react-dom/server"],
+});
+const src = readFileSync(new URL("./pool-promotion.tsx", import.meta.url), "utf8");
+const membersSrc = readFileSync(new URL("./pool-members.tsx", import.meta.url), "utf8");
+const {
+  PromotionActions, PromotionDialog, PromotionStrip, PromotionVerdictView, RestrictedNote, FenceProfileDialog,
+  promotionBlock, fenceProfileBlock, fenceText, promotionRunnable, promotionStageText, promotionInProgress,
+  oldMasterReachable, fenceProfileMissing, fenceUnusableReason, lastPromotionText, restrictedClearsText,
+  fenceHostIDs, unfenceableBlockers, fenceBlockerReason, fenceCellText,
+  restrictedUnconfirmed, fenceBuildLimit, HostRestrictedBanner,
+} = await import(`file://${outfile}`);
+
+const master = { host_id: "host-a", name: "core-a", role: "master", connection: "stale" };
+const member = {
+  host_id: "host-b", name: "core-b", role: "member", connection: "fresh",
+  transfer_supported: true, replica: { generation: 9, verified: true, state: "unverified" },
+};
+// The situation this slice exists for: the pool master is gone and the member reports itself.
+const report = {
+  pool_id: "pool-1", pool_name: "lab-pool", master_host_id: "host-a", master_connection: "stale",
+  authoritative: false, transfer_supported: true, promotion: null, last_promotion: null,
+  members: [master, member],
+};
+const liveReport = { ...report, master_connection: "fresh", authoritative: true, members: [{ ...master, connection: "fresh" }, member] };
+
+const notFenced = "the pool master host-a has not been fenced for this promotion; Core fences it and observes the power-off when the promotion is confirmed";
+const stillMaster = "the pool master host-a is reachable and holds this pool's authority; change the pool master with a planned master change instead of promoting";
+const noProfile = "the pool master host-a has no recorded fence profile; record one before promoting, and note that BMC fencing identity verification is not implemented";
+const ownershipConflict = "pool VM vm-7 is recorded differently by the host that owns it; resolve that before promoting";
+const noProfileReason = "no fence profile is recorded for host-a";
+const noCredential = "this host holds no fence credential for host-a; it cannot fence it, so it cannot be promoted over it";
+const unverifiable = "BMC fencing identity verification is not implemented";
+
+const verdictOf = (checks, extra = {}) => ({
+  pool_id: "pool-1", candidate_host_id: "host-b", old_master_host_id: "host-a",
+  authority_generation: 9, can_promote: false, fence_required: true, checks,
+  hosts: [
+    { host_id: "host-a", reachable: false, error: "dial tcp 198.51.100.11:9443: connect: no route to host" },
+    { host_id: "host-b", reachable: true, role: "member", authority_generation: 0, replica_generation: 9, membership_generation: 7 },
+  ],
+  vms: [], fence: null, blocking: [], observed_at: "2026-09-19T10:04:11Z", ...extra,
+});
+const ready = verdictOf([
+  { name: "replica-integrity", status: "passed" },
+  { name: "replica-supremacy", status: "passed" },
+  { name: "accepted-ownership", status: "passed" },
+  { name: "old-master-exclusion", status: "unknown", reason: notFenced, hosts: ["host-a"] },
+], { blocking: [notFenced], ready_to_fence: true, fence_recorded: true, fence_usable: true, fence_unusable_reason: "", fence_host_ids: ["host-a"] });
+// The same situation reported by a Core old enough to send none of the structural fields.
+const legacyReady = verdictOf(ready.checks, { blocking: [notFenced] });
+
+// react-dom/server escapes apostrophes, so Core's sentences are matched as they are rendered.
+const rx = text => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/'/g, "(&#x27;|')"));
+const dialogProps = { report, member, verdictBusy: false, verdictError: "", onPreflight: () => {}, busy: false, submitError: "", onConfirm: () => {}, onClose: () => {} };
+const dialog = props => renderToStaticMarkup(createElement(PromotionDialog, { ...dialogProps, ...props }));
+
+// ------------------------------------------------------------ action availability matrix
+
+assert.equal(promotionBlock(report, member), "", "a fresh member holding a verified copy can be promoted while the master is gone");
+assert.equal(promotionBlock(report, master), "This host is already the pool master.");
+// A pool master that is reporting is not promoted over; that is a planned master change.
+assert.match(promotionBlock(liveReport, member), /^The pool master core-a is reporting\. Use “Make pool master” for a planned master change; promoting is for a pool master that is gone\.$/);
+assert.equal(promotionBlock(report, { ...member, connection: "stale" }), "The promotion candidate must be fresh and active to be promoted.");
+assert.equal(promotionBlock(report, { ...member, transfer_supported: false }), "A fence-verified promotion needs pool-authority-transfer-v1 on the promotion candidate; upgrade core-b.");
+assert.equal(promotionBlock(report, { ...member, transfer_supported: undefined }), "", "an absent capability field is an older projection, not a no");
+assert.equal(promotionBlock(report, { ...member, replica: null }), "This host does not report a copy of the pool records it has verified, so it cannot be promoted.");
+assert.equal(promotionBlock(report, { ...member, replica: { generation: 9, verified: false, state: "unverified" } }), "This host does not report a copy of the pool records it has verified, so it cannot be promoted.");
+assert.equal(promotionBlock({ ...report, promotion: { host_id: "host-b", status: "pending", stage: "fence" } }, member), "A promotion is already running on this pool.");
+
+// A fence device lives in the membership record the master owns, so it needs a live master.
+assert.equal(fenceProfileBlock(liveReport, master), "");
+assert.match(fenceProfileBlock(report, master), /^The pool master is stale, so a fence device cannot be recorded now\. The pool master keeps this record, so it has to be recorded while the master is reporting\.$/);
+assert.equal(fenceProfileBlock({ ...liveReport, transfer_supported: false }, master), "Recording a fence device needs pool-authority-transfer-v1 on the pool master; upgrade core-a.");
+
+// The fence line: master-derived, so unknown without a fresh master, never a stale value.
+assert.equal(fenceText(member, false), "Fence device: unknown — the pool master keeps this record and is not reporting.");
+assert.equal(fenceText(member, true), "Fence device: not configured. A pool master with no fence device cannot be promoted over.");
+assert.equal(fenceText({ ...member, fence: { kind: "virsh", endpoint: "lab.example.test", configured: true, credential_version: 0 } }, true),
+  "Fence device: virsh · lab.example.test · configured · no credential recorded");
+// The master's own counter for the private material behind the profile: a recorded device with
+// no credential cannot actually power anything off, and the number itself is never shown.
+assert.equal(fenceText({ ...member, fence: { kind: "virsh", endpoint: "lab.example.test", configured: true, credential_version: 3 } }, true),
+  "Fence device: virsh · lab.example.test · configured · credential recorded");
+
+const actions = renderToStaticMarkup(createElement(PromotionActions, { report, member, authoritative: false, onPromote: () => {}, onFenceProfile: () => {} }));
+assert.match(actions, /<button type="button" class="danger">Promote to pool master…<\/button>/);
+assert.match(actions, /<button type="button" disabled="">Record fence device…<\/button>/);
+assert.match(actions, /Fence device: unknown/);
+// Without the handlers (an unavailable view) neither button is offered at all.
+assert.doesNotMatch(renderToStaticMarkup(createElement(PromotionActions, { report, member, authoritative: false })), /<button/);
+
+// ------------------------------------------------------------ the verdict, rendered
+
+const full = verdictOf([
+  { name: "replica-integrity", status: "passed" },
+  { name: "replica-supremacy", status: "blocked", reason: "pool host host-c holds a newer pool authority than this host; promote it instead", hosts: ["host-c"] },
+  { name: "accepted-ownership", status: "blocked", reason: ownershipConflict, vms: ["vm-7"] },
+  { name: "old-master-exclusion", status: "unknown", reason: notFenced, hosts: ["host-a"] },
+], {
+  vms: [
+    { vm_id: "vm-1", host_id: "host-b", state: "confirmed" },
+    { vm_id: "vm-4", host_id: "host-a", state: "fenced", reason: "its owner is unreachable and will be fenced" },
+    { vm_id: "vm-7", host_id: "host-c", state: "blocked", reason: "its owner reports definition revision 4, not 3" },
+  ],
+  fence: { host_id: "host-a", status: "failed", target_id: "core-01", exclusion_verified: false, observed_at: "2026-09-19T10:06:00Z", error: "virsh target identity was not independently confirmed" },
+  blocking: ["pool host host-c holds a newer pool authority than this host; promote it instead", ownershipConflict, notFenced],
+});
+const verdictMarkup = renderToStaticMarkup(createElement(PromotionVerdictView, { report, verdict: full }));
+// Each check is a word, not a colour, with Core's reason verbatim and the hosts and VMs named.
+assert.match(verdictMarkup, /badge ok">passed<\/span> This host&#x27;s copy of the pool records is whole and signed/);
+assert.match(verdictMarkup, /badge failed">blocked<\/span> No reachable host holds a newer copy/);
+assert.match(verdictMarkup, /badge failed">blocked<\/span> Every pool virtual machine&#x27;s owner agrees with the copy/);
+assert.match(verdictMarkup, /badge unknown">unknown<\/span> The old pool master is shut out/);
+assert.match(verdictMarkup, /pool host host-c holds a newer pool authority than this host; promote it instead/);
+assert.match(verdictMarkup, /<small>Hosts: host-c<\/small>/);
+assert.match(verdictMarkup, /<small>Virtual machines: vm-7<\/small>/);
+assert.match(verdictMarkup, /<strong>unknown<\/strong> stops a promotion exactly as <strong>blocked<\/strong> does/);
+// The per-host table, with an unreachable host's own error and no invented generations.
+assert.match(verdictMarkup, /<td>core-a<\/td><td>no answer<small class="task-error">dial tcp 198\.51\.100\.11:9443: connect: no route to host<\/small><\/td>/);
+assert.match(verdictMarkup, /<td>core-b<\/td><td>answered<\/td><td>member<\/td><td>0<\/td><td>9<\/td><td>7<\/td>/);
+assert.match(verdictMarkup, /<td>unknown<\/td><td>unknown<\/td><td>unknown<\/td>/, "a host that did not answer reports no generations");
+// The per-VM ownership table: every state in words, and what a blocked VM means.
+assert.match(verdictMarkup, /badge ok">confirmed by its owner</);
+assert.match(verdictMarkup, /badge warning">its owner is fenced</);
+assert.match(verdictMarkup, /badge failed">blocked</);
+assert.match(verdictMarkup, /its owner reports definition revision 4, not 3/);
+assert.match(verdictMarkup, /stays defined and stays visible in the pool after a promotion\. It cannot be started until the disagreement about where it lives is resolved/);
+assert.match(verdictMarkup, /Being visible is not the same as its disks being available/);
+// The fence status, and every blocking reason as the list of what stops it.
+assert.match(verdictMarkup, /Fence of core-a: <strong>failed<\/strong> · power-off not observed · target core-01 · 2026-09-19T10:06:00Z/);
+assert.match(verdictMarkup, /task-error">virsh target identity was not independently confirmed/);
+assert.match(verdictMarkup, /What stops this promotion/);
+assert.equal((verdictMarkup.match(/pool-promotion-blocking/g) || []).length, 1);
+assert.match(verdictMarkup, /holds copy 9 of the pool records/);
+// No fence yet is said as that, not as a pass.
+assert.match(renderToStaticMarkup(createElement(PromotionVerdictView, { report, verdict: ready })), /No fence of the old pool master has been performed for this promotion\. Nex Core fences it and observes the power-off itself/);
+assert.doesNotMatch(verdictMarkup, /spinner|progress-bar/i);
+
+// ------------------------------------------------------------ when step 2 is offered at all
+
+// The candidate answers this itself. `ready_to_fence` is the normal ready state — can_promote
+// stays false there, because Core only satisfies old-master-exclusion by fencing — and nothing
+// here infers it from the check statuses.
+assert.equal(promotionRunnable(ready), true);
+assert.equal(promotionRunnable({ ...ready, can_promote: true, ready_to_fence: false }), true, "the whole proof holding is enough on its own");
+assert.equal(promotionRunnable({ ...ready, ready_to_fence: false }), false, "Core's own no is final, whatever the checks look like");
+assert.equal(promotionRunnable(full), false, "another check blocked is never passed off as ready");
+assert.equal(promotionRunnable(null), false);
+assert.equal(promotionRunnable(verdictOf([])), false, "a verdict with no checks claims nothing");
+// Core's no outranks a set of checks that would otherwise read as ready: no inference is left.
+assert.equal(promotionRunnable({ ...legacyReady, ready_to_fence: false }), false);
+// Only a Core that reports neither field falls back to the per-check walk, which still never
+// reads an unknown as a pass.
+assert.equal(promotionRunnable(legacyReady), false, "without Core's structural fields nothing is inferred");
+assert.equal(promotionRunnable(verdictOf([{ name: "replica-integrity", status: "unknown" }])), false);
+const reachableVerdict = verdictOf([
+  { name: "replica-integrity", status: "passed" }, { name: "replica-supremacy", status: "passed" },
+  { name: "accepted-ownership", status: "passed" },
+  { name: "old-master-exclusion", status: "blocked", reason: stillMaster, hosts: ["host-a"] },
+], { hosts: [{ host_id: "host-a", reachable: true, role: "master", authority_generation: 9, membership_generation: 7 }, { host_id: "host-b", reachable: true, role: "member", replica_generation: 9 }], blocking: [stillMaster], ready_to_fence: false, fence_recorded: true, fence_usable: true });
+const noProfileVerdict = verdictOf([
+  { name: "replica-integrity", status: "passed" }, { name: "replica-supremacy", status: "passed" },
+  { name: "accepted-ownership", status: "passed" },
+  { name: "old-master-exclusion", status: "blocked", reason: noProfile, hosts: ["host-a"] },
+], { blocking: [noProfile], ready_to_fence: false, fence_recorded: false, fence_usable: false, fence_unusable_reason: noProfileReason });
+assert.equal(oldMasterReachable(reachableVerdict), true);
+assert.equal(oldMasterReachable(ready), false);
+assert.equal(oldMasterReachable(noProfileVerdict), false);
+// The fence states are Core's two booleans plus its own sentence — never its prose matched.
+assert.equal(fenceProfileMissing(noProfileVerdict), true);
+assert.equal(fenceProfileMissing(ready), false);
+assert.equal(fenceProfileMissing(reachableVerdict), false);
+assert.equal(fenceProfileMissing(legacyReady), false, "an older Core reports no flag, so nothing is claimed");
+assert.equal(fenceProfileMissing({ ...ready, fence_recorded: false }), true);
+// A profile that is recorded but cannot run: the candidate holds no credential for it, or the
+// kind cannot be verified at all. One branch, told apart by Core's own reason.
+const noCredentialVerdict = { ...ready, ready_to_fence: false, fence_usable: false, fence_unusable_reason: noCredential };
+const unverifiableVerdict = { ...ready, ready_to_fence: false, fence_usable: false, fence_unusable_reason: unverifiable };
+assert.equal(fenceUnusableReason(noCredentialVerdict), noCredential);
+assert.equal(fenceUnusableReason(unverifiableVerdict), unverifiable);
+assert.equal(fenceUnusableReason(ready), "", "a usable profile has no unusable reason");
+assert.equal(fenceUnusableReason(noProfileVerdict), "", "no profile is its own state, not an unusable one");
+assert.equal(fenceUnusableReason(legacyReady), "", "an older Core claims nothing here either");
+assert.equal(fenceUnusableReason({ ...ready, fence_usable: false }), "Nex Core reported no reason.");
+
+// ------------------------------------------------------------ the two-step dialog
+
+// No verdict yet: step 1 says what is being asked and step 2 offers nothing.
+const asking = dialog({ verdict: null, verdictBusy: true });
+assert.match(asking, /aria-labelledby="promotion-title"/);
+assert.match(asking, /Promote core-b to pool master of lab-pool/);
+assert.match(asking, /Asking core-b to check the pool\. It answers on its next report/);
+assert.match(asking, /Nothing is offered until Nex Core has reported its checks\./);
+assert.doesNotMatch(asking, /promotion-fence-confirm/);
+// A preflight refusal, including the 504 and the 499, is shown in Core's own words.
+assert.match(dialog({ verdict: null, verdictError: "the promotion candidate did not answer the promotion preflight before the deadline; retry" }),
+  /role="alert"[^>]*>the promotion candidate did not answer the promotion preflight before the deadline; retry/);
+assert.match(dialog({ verdict: null, verdictError: "the promotion candidate must be fresh and active to answer a preflight" }),
+  /role="alert"[^>]*>the promotion candidate must be fresh and active to answer a preflight/);
+assert.match(dialog({ verdict: null, verdictError: "the client disconnected before the promotion candidate answered; retry" }), /the client disconnected before the promotion candidate answered; retry/);
+// The preflight stores nothing, so it can be re-run from the dialog.
+assert.match(asking, /<button type="button" disabled="">Checking…<\/button>/);
+assert.match(dialog({ verdict: ready }), /<button type="button">Check again<\/button>/);
+
+// A blocked verdict: no step 2 at all, and no promise that submitting would change anything.
+const blockedDialog = dialog({ verdict: full });
+assert.doesNotMatch(blockedDialog, /promotion-fence-confirm/);
+assert.doesNotMatch(blockedDialog, /Type the pool name/);
+assert.match(blockedDialog, /This promotion is stopped by the checks above\./);
+assert.match(blockedDialog, /nothing here can pass a check that did not pass/);
+
+// The old master answered: no step 2, Core's own sentence, and the planned operation named.
+const reachableDialog = dialog({ verdict: reachableVerdict });
+assert.doesNotMatch(reachableDialog, /promotion-fence-confirm/);
+assert.match(reachableDialog, rx(stillMaster));
+assert.match(reachableDialog, /use <strong>Make pool master<\/strong> on core-b&#x27;s row instead/);
+
+// No fence device recorded: no step 2, the D2 limit stated outright, and why it is too late.
+// The state comes from fence_recorded; Core's reason is still rendered, never matched on.
+const noProfileDialog = dialog({ verdict: noProfileVerdict });
+assert.doesNotMatch(noProfileDialog, /promotion-fence-confirm/);
+assert.match(noProfileDialog, /No fence device is recorded for core-a, so core-b cannot shut it out and cannot be promoted over it\./);
+assert.match(noProfileDialog, /has no recorded fence profile; record one before promoting/);
+assert.match(noProfileDialog, /only be recorded while the pool master is reporting — that is, before it is lost/);
+assert.match(noProfileDialog, /Only lab virsh fence devices can be verified in this release; a physical pool cannot be promoted this way yet\./);
+assert.match(fenceBuildLimit, /^Only lab virsh fence devices can be verified in this release/);
+// A verdict with fence_recorded false and no check reason at all still reaches this state.
+assert.match(dialog({ verdict: { ...noProfileVerdict, checks: [] } }), /No fence device is recorded for core-a/);
+
+// Recorded but unusable: one branch for both reasons, Core's sentence verbatim, D2 kept.
+const noCredentialDialog = dialog({ verdict: noCredentialVerdict });
+assert.doesNotMatch(noCredentialDialog, /promotion-fence-confirm/);
+assert.match(noCredentialDialog, /A fence device is recorded for core-a, but core-b cannot use it, so it cannot be promoted over it\./);
+assert.match(noCredentialDialog, rx(noCredential));
+assert.match(noCredentialDialog, /Only lab virsh fence devices can be verified in this release/);
+const unverifiableDialog = dialog({ verdict: unverifiableVerdict });
+assert.doesNotMatch(unverifiableDialog, /promotion-fence-confirm/);
+assert.match(unverifiableDialog, rx(unverifiable));
+assert.match(unverifiableDialog, /Only lab virsh fence devices can be verified in this release/);
+
+// Ready: step 2 states plainly what Nex Core will do, and is gated on both confirmations.
+const readyDialog = dialog({ verdict: ready });
+assert.match(readyDialog, /<strong>Nex Core on core-b powers core-a off<\/strong> through its recorded fence device, and verifies that it is off, before it takes the pool authority/);
+assert.doesNotMatch(readyDialog, /Virtual machines running on the hosts that survive/);
+assert.doesNotMatch(readyDialog, /When core-a comes back it rejoins/);
+assert.match(readyDialog, /<label for="promotion-confirm">Type the pool name lab-pool to confirm<\/label>/);
+assert.match(readyDialog, /<input id="promotion-fence-confirm" type="checkbox"\/?>/);
+assert.match(readyDialog, /I understand this powers off: core-a/);
+// Neither confirmation is pre-filled, so the button cannot submit by itself.
+assert.match(readyDialog, /<button class="primary danger" disabled="">Promote to pool master<\/button>/);
+assert.match(dialog({ verdict: ready, busy: true }), /disabled=""[^>]*>Submitting…</);
+assert.match(dialog({ verdict: ready, submitError: "promoting this host powers the old pool master off; confirm that before the promotion can run" }),
+  /role="alert"[^>]*>promoting this host powers the old pool master off; confirm that before the promotion can run/);
+// Both gates are genuinely required, not decoration.
+assert.match(src, /const ready = runnable && fenceIDs\.length > 0 && confirmMatches\(typed, report\.pool_name\) && acknowledged;/);
+assert.match(src, /if \(!ready\) return;/);
+assert.match(src, /import \{ confirmMatches \} from "\.\/managed"/);
+// The dialog cannot be dismissed while the request is in flight.
+assert.match(src, /onClose=\{\(\) => \{ if \(busy\) dialog\.current\?\.showModal\(\); else onClose\(\); \}\}/);
+
+// ------------------------------------------- every host this promotion powers off
+
+// A partitioned member that could be promoted too: Core reports it as blocking, names it in
+// fence_host_ids, and the promotion powers both hosts off. The operator is told all of it.
+const twoHosts = verdictOf([
+  { name: "replica-integrity", status: "passed" }, { name: "replica-supremacy", status: "unknown", reason: "pool host host-c is unreachable and holds this pool's authority replica, so it could be promoted too; it must be fenced before this host can be promoted", hosts: ["host-c"] },
+  { name: "accepted-ownership", status: "passed" },
+  { name: "old-master-exclusion", status: "unknown", reason: notFenced, hosts: ["host-a", "host-c"] },
+], {
+  hosts: [
+    { host_id: "host-a", reachable: false, blocks: false, fence_recorded: true, fence_usable: true, error: "no route to host" },
+    { host_id: "host-b", reachable: true, role: "member", blocks: false, fence_recorded: false, fence_usable: false, replica_generation: 9 },
+    { host_id: "host-c", reachable: false, blocks: true, fence_recorded: true, fence_usable: true, error: "no route to host" },
+  ],
+  ready_to_fence: true, fence_recorded: true, fence_usable: true, fence_host_ids: ["host-a", "host-c"],
+});
+const threeReport = { ...report, members: [master, member, { host_id: "host-c", name: "core-c", role: "member", connection: "stale" }] };
+assert.deepEqual(fenceHostIDs(twoHosts), ["host-a", "host-c"]);
+assert.deepEqual(fenceHostIDs(ready), ["host-a"]);
+assert.deepEqual(fenceHostIDs(legacyReady), [], "an older Core names none, so nothing is claimed");
+assert.deepEqual(unfenceableBlockers(twoHosts), [], "a blocking host Core will fence is not a blocker for the operator");
+
+// The per-host table says, for every host, whether it stops the promotion and what happens to it.
+const twoMarkup = renderToStaticMarkup(createElement(PromotionVerdictView, { report: threeReport, verdict: twoHosts }));
+assert.match(twoMarkup, /<th>Stops this promotion<\/th><th>Fence<\/th>/);
+assert.match(twoMarkup, /<td>core-c<\/td>.*?<span class="badge failed">stops it<\/span><\/td><td>powered off by this promotion<\/td>/);
+assert.match(twoMarkup, /<td>core-a<\/td>.*?<span class="badge ok">no<\/span><\/td><td>powered off by this promotion<\/td>/);
+assert.match(twoMarkup, /<td>core-b<\/td>.*?<span class="badge ok">no<\/span><\/td><td>not powered off<\/td>/);
+assert.match(twoMarkup, /This promotion powers off core-a, core-c, and Nex Core verifies each one is off/);
+
+// Step 2 names every host by name, in the acknowledgement too, and says why an unreachable
+// member is powered off as well.
+const twoDialog = dialog({ report: threeReport, verdict: twoHosts });
+assert.match(twoDialog, /<strong>Nex Core on core-b powers core-a, core-c off<\/strong> through their recorded fence devices, and verifies that they are off/);
+assert.doesNotMatch(twoDialog, /pool-promotion-fenced/);
+assert.match(twoDialog, /I understand this powers off: core-a, core-c/);
+// One host is still said in the singular, and the old sentence is unchanged for it.
+assert.match(readyDialog, /I understand this powers off: core-a/);
+assert.doesNotMatch(readyDialog, /core-c/);
+
+// A blocking host that cannot be fenced: no step 2 at all, Core's reason verbatim, and the two
+// things that actually resolve it. No override is offered, because there is none.
+const unfenceable = verdictOf([
+  { name: "replica-integrity", status: "passed" }, { name: "replica-supremacy", status: "unknown", reason: "pool host host-c is unreachable and holds this pool's authority replica, so it could be promoted too; it must be fenced before this host can be promoted", hosts: ["host-c"] },
+  { name: "accepted-ownership", status: "passed" },
+  { name: "old-master-exclusion", status: "blocked", reason: "this host cannot fence host-c: no fence profile is recorded for host-c, so it cannot be promoted while those hosts are unreachable", hosts: ["host-a", "host-c"] },
+], {
+  hosts: [
+    { host_id: "host-a", reachable: false, blocks: false, fence_recorded: true, fence_usable: true },
+    { host_id: "host-c", reachable: false, blocks: true, fence_recorded: false, fence_usable: false, fence_unusable_reason: "no fence profile is recorded for host-c" },
+  ],
+  ready_to_fence: false, fence_recorded: true, fence_usable: true, fence_host_ids: ["host-a"],
+});
+assert.deepEqual(unfenceableBlockers(unfenceable).map(host => host.host_id), ["host-c"]);
+assert.equal(fenceBlockerReason(unfenceable.hosts[1]), "no fence profile is recorded for host-c");
+assert.equal(fenceBlockerReason({ host_id: "host-d", reachable: false, blocks: true, fence_recorded: false }), "No fence device is recorded for this host.");
+assert.equal(fenceBlockerReason({ host_id: "host-d", reachable: false, blocks: true, fence_recorded: true, fence_usable: false }), "Nex Core reported no reason.");
+assert.equal(fenceCellText(unfenceable, unfenceable.hosts[1]), "cannot be fenced — no fence profile is recorded for host-c");
+const unfenceableDialog = dialog({ report: threeReport, verdict: unfenceable });
+assert.doesNotMatch(unfenceableDialog, /promotion-fence-confirm/, "no step 2 while a blocking host cannot be powered off");
+assert.doesNotMatch(unfenceableDialog, /Type the pool name/);
+assert.match(unfenceableDialog, /core-c stops this promotion and cannot be powered off, so core-b cannot be promoted\./);
+assert.match(unfenceableDialog, /<li class="task-error">core-c: no fence profile is recorded for host-c<\/li>/);
+assert.match(unfenceableDialog, /That host must be brought back so core-b can see it again, or be given a fence device on the pool master while it is still reporting\./);
+assert.match(unfenceableDialog, /core-b cannot prove no other host could take the pool authority as well/);
+assert.match(unfenceableDialog, /Only lab virsh fence devices can be verified in this release/);
+// Even a verdict Core still calls ready_to_fence does not reach step 2 while one exists.
+assert.doesNotMatch(dialog({ report: threeReport, verdict: { ...unfenceable, ready_to_fence: true } }), /promotion-fence-confirm/);
+
+// Core's mismatch refusal, verbatim, with the one thing that resolves it — and it is shown
+// wherever step 2 has gone, not only inside the form.
+const mismatch = "this promotion must power off host-a host-c, which is not what was confirmed; confirm the hosts this pool reports and try again";
+for (const markup of [dialog({ verdict: ready, submitError: mismatch }), dialog({ report: threeReport, verdict: unfenceable, submitError: mismatch })]) {
+  assert.match(markup, rx(mismatch));
+  assert.match(markup, /Re-run the check above, read the hosts it names now, and confirm those\./);
+}
+
+// The list the operator confirmed is what is sent, and the acknowledgement is dropped whenever
+// a re-run changes that list: what was agreed to is a set of named hosts, not a checkbox.
+assert.match(src, /const fenceIDs = fenceHostIDs\(verdict\);/);
+assert.match(src, /const fenceKey = fenceIDs\.join\("\\n"\);/);
+assert.match(src, /useEffect\(\(\) => \{ setAcknowledged\(false\); \}, \[fenceKey\]\);/);
+assert.match(src, /onConfirm\(typed\.trim\(\), fenceIDs\);/);
+
+// A ready verdict that names no host at all is not offered either: Core refuses an empty list.
+assert.match(dialog({ verdict: { ...ready, fence_host_ids: [] } }), /Nex Core reports no host that this promotion would power off/);
+assert.doesNotMatch(dialog({ verdict: { ...ready, fence_host_ids: [] } }), /promotion-fence-confirm/);
+
+// The POST body is exactly the contract's, with the explicit power-off acknowledgement, Core's
+// own host list sent back unchanged, and a held request id so a retry after a lost reply
+// replays the same promotion — while a different list is a different request.
+assert.match(membersSrc, /`pools\/\$\{encodeURIComponent\(poolID\)\}\/master\/promote`, "POST", \{ request_id, host_id: member\.host_id, confirmation, fence_confirmed: true, fence_host_ids: fenceHostIDs \}\)/);
+assert.match(membersSrc, /heldRequestID\(heldPromotion\.current, `\$\{poolID\}\\npromote\\n\$\{member\.host_id\}\\n\$\{confirmation\}\\n\$\{fenceHostIDs\.join\(","\)\}`\)/);
+assert.match(membersSrc, /onConfirm=\{\(confirmation, fenceHostIDs\) => void promote\(promotionTarget, confirmation, fenceHostIDs\)\}/);
+assert.match(membersSrc, /`pools\/\$\{encodeURIComponent\(poolID\)\}\/master\/promote\/preflight`, "POST", \{ host_id: member\.host_id \}\)/);
+assert.doesNotMatch(membersSrc.slice(membersSrc.indexOf("async function promote("), membersSrc.indexOf("} finally { setPromotionBusy(false); }")), /expected_version/);
+
+// ------------------------------------------------------------ the progress strip
+
+assert.equal(renderToStaticMarkup(createElement(PromotionStrip, { report })), "", "nothing reported, no panel");
+assert.equal(promotionStageText(null), "unknown");
+assert.equal(promotionStageText({ host_id: "host-b", stage: "fence" }), "powering the old pool master off and verifying it");
+assert.equal(promotionStageText({ host_id: "host-b", stage: "activate" }), "taking the pool authority");
+assert.equal(promotionStageText({ host_id: "host-b", stage: "invented" }), "invented", "an unknown stage is printed as Core sent it");
+assert.equal(promotionInProgress({ ...report, promotion: { host_id: "host-b", status: "pending" } }), true);
+assert.equal(promotionInProgress(report), false);
+const running = renderToStaticMarkup(createElement(PromotionStrip, { report: { ...report, promotion: { host_id: "host-b", operation_id: "op-1", stage: "fence", status: "pending", observed_at: "2026-09-19T10:05:02Z" } } }));
+assert.match(running, /Candidate <strong>core-b<\/strong>/);
+assert.match(running, /stage <strong>powering the old pool master off and verifying it<\/strong>/);
+assert.match(running, /status <strong>pending<\/strong>/);
+assert.match(running, /Reported by core-b at 2026-09-19T10:05:02Z/);
+assert.doesNotMatch(running, /spinner|progress-bar/i);
+// A promotion fences, so Core reports cancellable false at every stage. The sentence is said;
+// no cancel is ever offered, and the stage name decides nothing.
+const forwardOnly = renderToStaticMarkup(createElement(PromotionStrip, { report: { ...report, promotion: { host_id: "host-b", stage: "fence", status: "pending", cancellable: false } } }));
+assert.match(forwardOnly, /Nex Core reports that this promotion cannot be cancelled\. It can only go forward\./);
+assert.doesNotMatch(forwardOnly, /<button/);
+assert.doesNotMatch(running, /cannot be cancelled/, "a Core that reports no flag claims nothing");
+assert.doesNotMatch(renderToStaticMarkup(createElement(PromotionStrip, { report: { ...report, promotion: { host_id: "host-b", stage: "done", status: "succeeded", cancellable: false } } })), /cannot be cancelled/);
+const attention = renderToStaticMarkup(createElement(PromotionStrip, { report: { ...report, promotion: { host_id: "host-b", stage: "activate", status: "needs_attention", error: "the old pool master was not excluded: virsh target identity was not independently confirmed" } } }));
+assert.match(attention, /status <strong>needs attention<\/strong>/);
+assert.match(attention, /task-error">the old pool master was not excluded: virsh target identity was not independently confirmed/);
+// The embedded verdict is rendered where the promotion is, not summarized away.
+assert.match(renderToStaticMarkup(createElement(PromotionStrip, { report: { ...report, promotion: { host_id: "host-b", stage: "preflight", status: "failed", verdict: full } } })), /What stops this promotion/);
+
+// The asynchronous refusal, verbatim. Nothing about a promotion is retried unchanged.
+assert.equal(lastPromotionText(null), "");
+assert.equal(lastPromotionText({ operation_id: "op-1", action: "promote", status: "succeeded" }), "");
+assert.equal(lastPromotionText({ operation_id: "op-1", action: "promote", status: "failed", error: stillMaster }), `The promotion failed: ${stillMaster}`);
+assert.equal(lastPromotionText({ operation_id: "op-1", action: "promote", status: "failed", conflict: true, error: ownershipConflict }),
+  `${ownershipConflict} Nothing was promoted. Resolve what Nex Core named and check the pool again before submitting another promotion.`);
+assert.match(lastPromotionText({ operation_id: "op-1", action: "promote", status: "needs_attention", error: "" }), /^Needs attention: Nex Core reported no message\. The promotion is durable and still running on Nex Core/);
+assert.match(lastPromotionText({ operation_id: "op-1", action: "promote", status: "queued" }), /^The promotion was submitted\./);
+const refused = renderToStaticMarkup(createElement(PromotionStrip, { report: { ...report, last_promotion: { operation_id: "op-1", action: "promote", status: "failed", error: noProfile } } }));
+assert.match(refused, /task-error"[^>]*>The promotion failed: the pool master host-a has no recorded fence profile/);
+
+// ------------------------------------------------------------ restricted hosts
+
+const superseded = { reason: "this host's pool authority was superseded by another master; it starts no shared-storage guest and writes no pool authority until it has rejoined and reconciled (VM ownership conflicts: vm-7)", kind: "superseded", since: "2026-09-19T10:11:00Z", conflicts: ["vm-7"] };
+const unconfirmed = { reason: "this pool master has not confirmed its authority since it restarted; until every other member confirms it, it starts no shared-storage guest and writes no pool authority", kind: "unconfirmed", since: "2026-09-19T10:11:00Z" };
+// Core classifies the restriction; the kind is what chooses the text, never its sentence.
+assert.equal(restrictedUnconfirmed(unconfirmed), true);
+assert.equal(restrictedUnconfirmed(superseded), false);
+assert.equal(restrictedUnconfirmed(null), false);
+// The kinds swap cleanly even when the sentences would say the opposite, which is exactly what
+// sentence matching used to get wrong.
+const swapped = { ...report, members: [{ ...master, connection: "fresh", restricted: { ...unconfirmed, reason: superseded.reason } }, member] };
+assert.match(restrictedClearsText(swapped, swapped.members[0]), /^It clears by itself once every other ready member/);
+assert.match(restrictedClearsText({ ...report, members: [{ ...master, restricted: { ...superseded, reason: unconfirmed.reason } }, member] }, { ...master, restricted: { ...superseded, reason: unconfirmed.reason } }),
+  /^It clears by itself once this host has rejoined the current pool master/);
+// A Core old enough to report no kind is not guessed at: the reason still shows, the claim does not.
+const kindless = { ...master, connection: "fresh", restricted: { reason: superseded.reason, since: "2026-09-19T10:11:00Z" } };
+assert.equal(restrictedClearsText({ ...report, members: [kindless, member] }, kindless), "");
+const kindlessMarkup = renderToStaticMarkup(createElement(RestrictedNote, { report, member: kindless }));
+assert.match(kindlessMarkup, /badge failed">Restricted<\/span>/);
+assert.match(kindlessMarkup, /superseded by another master/);
+assert.doesNotMatch(kindlessMarkup, /It clears/);
+
+const supersededMarkup = renderToStaticMarkup(createElement(RestrictedNote, { report, member: { ...member, restricted: superseded } }));
+assert.match(supersededMarkup, /badge failed">Restricted<\/span>/);
+assert.match(supersededMarkup, /task-error">this host&#x27;s pool authority was superseded by another master; it starts no shared-storage guest and writes no pool authority until it has rejoined and reconciled \(VM ownership conflicts: vm-7\)/);
+assert.match(supersededMarkup, /<small>Since 2026-09-19T10:11:00Z<\/small>/);
+assert.match(supersededMarkup, /Virtual machines this host still defines that the pool records elsewhere: vm-7/);
+assert.match(supersededMarkup, /starts no virtual machine and makes no pool change\. Stopping a virtual machine, its console, local recovery and its own reporting all still work\./);
+assert.match(supersededMarkup, /clears by itself once this host has rejoined the current pool master, taken its copy of the pool records and reconciled with it/);
+assert.match(supersededMarkup, /never started twice and it is never deleted here/);
+assert.equal(renderToStaticMarkup(createElement(RestrictedNote, { report, member })), "", "a host reporting no restriction shows none");
+
+// A restarted master with every other member reporting: it clears itself.
+const allFresh = { ...report, members: [{ ...master, connection: "fresh", restricted: unconfirmed }, member] };
+assert.equal(restrictedClearsText(allFresh, allFresh.members[0]),
+  "It clears by itself once every other ready member of this pool answers and names this host as its master.");
+// OWNER DECISION OD-5: a restarted master plus a member that stays unreachable. The host must
+// be brought back or restored, and no action of any kind is offered for it.
+const od5 = { ...report, members: [{ ...master, connection: "fresh", restricted: unconfirmed }, member, { host_id: "host-c", name: "core-c", role: "member", connection: "stale" }] };
+const od5Markup = renderToStaticMarkup(createElement(RestrictedNote, { report: od5, member: od5.members[0] }));
+assert.match(od5Markup, /core-c is not reporting, so it cannot answer\./);
+assert.match(od5Markup, /Bring that host back, or restore its Nex Core state from a backup\./);
+assert.match(od5Markup, /Nothing here can clear the restriction instead, and waiting does not clear it\./);
+assert.doesNotMatch(od5Markup, /<button/, "OD-5: there is no action, so none is offered");
+const od5Two = { ...od5, members: [od5.members[0], { ...member, connection: "stale" }, od5.members[2]] };
+assert.match(restrictedClearsText(od5Two, od5Two.members[0]), /core-b, core-c are not reporting, so they cannot answer\./);
+
+// ------------------------------------------------------------ the fence device dialog
+
+const fenceProps = { report: liveReport, member: { ...master, connection: "fresh" }, busy: false, submitError: "", onConfirm: () => {}, onClear: () => {}, onClose: () => {} };
+const fenceDialog = renderToStaticMarkup(createElement(FenceProfileDialog, fenceProps));
+assert.match(fenceDialog, /aria-labelledby="fence-title"/);
+assert.match(fenceDialog, /Fence device for core-a/);
+assert.match(fenceDialog, /Only lab virsh fence devices can be verified in this release/);
+assert.match(fenceDialog, /<label for="fence-endpoint">Host running libvirt<\/label>/);
+assert.match(fenceDialog, /<label for="fence-target">libvirt domain of core-a<\/label>/);
+assert.match(fenceDialog, /<label for="fence-login">SSH login<\/label>/);
+assert.match(fenceDialog, /id="fence-port"[^>]*type="number"[^>]*value="22"/);
+assert.match(fenceDialog, /pinned to qemu:\/\/\/system over this SSH identity/);
+// The credential is entered once, never stored by the Controller and never shown back.
+assert.match(fenceDialog, /<textarea id="fence-key" required="" class="secret" autoComplete="off" spellCheck="false"[^>]*><\/textarea>/);
+assert.match(fenceDialog, /<textarea id="fence-known-hosts" required="" class="secret"[^>]*><\/textarea>/);
+assert.match(fenceDialog, /never stored by this Controller, never written to the audit trail and never shown back here/);
+assert.doesNotMatch(fenceDialog, /BEGIN OPENSSH PRIVATE KEY/);
+// The state holding the credential is emptied as soon as it is handed over.
+assert.match(src, /setKey\(""\);\n\s*setKnownHosts\(""\);/);
+// Nothing in the dialog ever renders a credential the server sent: only the two inputs hold one.
+assert.doesNotMatch(src, /credential_ref|ssh_host_key_ref/);
+// Core's record-time refusal arrives verbatim.
+assert.match(renderToStaticMarkup(createElement(FenceProfileDialog, { ...fenceProps, submitError: "this fence profile cannot be verified by this host: BMC fencing identity verification is not implemented" })),
+  /role="alert"[^>]*>this fence profile cannot be verified by this host: BMC fencing identity verification is not implemented/);
+// Clearing is offered only when a profile exists, and only behind its own confirmation.
+assert.doesNotMatch(fenceDialog, /Clear fence device…/);
+const configured = renderToStaticMarkup(createElement(FenceProfileDialog, { ...fenceProps, member: { ...fenceProps.member, fence: { kind: "virsh", endpoint: "lab.example.test", configured: true } } }));
+assert.match(configured, /Fence device: virsh · lab\.example\.test · configured/);
+assert.match(configured, /<button type="button" class="danger">Clear fence device…<\/button>/);
+
+// The two bodies are exactly the contract's: the profile as sent, the credential in its own
+// field, and `fence: null` to clear. The credential is never part of the request identity.
+assert.match(membersSrc, /\/fence-profile`, "POST", credential \? \{ request_id, fence, credential \} : \{ request_id, fence \}\)/);
+assert.match(membersSrc, /heldRequestID\(heldFence\.current, `\$\{poolID\}\\nfence-profile\\n\$\{member\.host_id\}\\n\$\{JSON\.stringify\(fence\)\}`\)/);
+assert.match(membersSrc, /onClear=\{\(\) => void setFenceProfile\(fenceTarget, null\)\}/);
+assert.match(src, /kind: "virsh", endpoint: endpoint\.trim\(\), target_id: targetID\.trim\(\), virsh_uri: "qemu:\/\/\/system", ssh_login: login\.trim\(\), ssh_port: Number\(port\)/);
+
+// ------------------------------------------------------------ OD-5: no escape hatch anywhere
+
+// Owner decision OD-5: no route, field or affordance offers a force, an override, a way to
+// set a host aside as gone, or a timeout-based path — and none may be added here.
+for (const [name, text] of [["pool-promotion.tsx", src], ["pool-authority.tsx", readFileSync(new URL("./pool-authority.tsx", import.meta.url), "utf8")]]) {
+  assert.doesNotMatch(text, /\bforce[ds]?\b/i, `${name} offers no force`);
+  assert.doesNotMatch(text, /\boverrid(e|es|den|ing)\b/i, `${name} offers no override`);
+  assert.doesNotMatch(text, /\bdeclar(e|es|ed|ing)\b/i, `${name} declares no host anything`);
+}
+// "lost" is allowed as a plain description of a master that is gone, never as an action.
+for (const markup of [actions, readyDialog, noProfileDialog, reachableDialog, blockedDialog, od5Markup, supersededMarkup, running, configured]) {
+  assert.doesNotMatch(markup, /\b(force[ds]?|overrid\w*|declar\w*|permanently lost|host lost)\b/i);
+  assert.doesNotMatch(markup, /<button[^>]*>[^<]*\blost\b[^<]*<\/button>/i);
+}
+
+// ------------------------------------- the restriction on the host's own page
+
+// The host page has no pool report of its own, so the banner reads the one pool projection the
+// host belongs to and renders the same note.
+{
+  const asked = [];
+  const poolAnswer = { ...report, members: [{ ...master, connection: "fresh", restricted: unconfirmed }, member] };
+  const api = path => { asked.push(path); return Promise.resolve(poolAnswer); };
+  const { renderToString } = await import("react-dom/server");
+  assert.equal(renderToString(createElement(HostRestrictedBanner, { poolID: "pool-1", hostID: "host-a", api })), "");
+  assert.deepEqual(asked, [], "static render performs no request");
+}
+assert.match(src, /api<PromotionReport>\(`pools\/\$\{encodeURIComponent\(poolID\)\}\/members`\)/);
+assert.match(src, /if \(!report \|\| !member\?\.restricted\) return null;/);
+assert.match(src, /window\.addEventListener\("focus", onFocus\)/);
+assert.match(src, /window\.setInterval\(\(\) => load\.current\(\), 10_000\)/);
+assert.match(src, /if \(!restricted\) return;/);
+// main.tsx renders it on the host page only, keyed by host so a different host refetches.
+{
+  const mainSrc = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
+  assert.match(mainSrc, /<HostRestrictedBanner key=\{host\.id\} poolID=\{host\.pool_id\} hostID=\{host\.id\} api=\{api\} \/>/);
+  assert.equal((mainSrc.match(/HostRestrictedBanner/g) || []).length, 2, "one import and one use");
+}
+
+// ------------------------------------- no Core sentence is matched on any more
+
+// Every state above is chosen by a structural field. These are the sentences this file used to
+// match on to tell those states apart; matching them again is the defect, so their absence is
+// asserted. Rendering a reason Core sent stays fine — it arrives as data, not as a literal.
+for (const sentence of [
+  "has no recorded fence profile",
+  "has not confirmed its authority since it restarted",
+  "holds no fence credential",
+]) assert.ok(!src.includes(sentence), `pool-promotion.tsx must not match on Core's sentence ${JSON.stringify(sentence)}`);
+// And nothing reads a reason, an error or a stage as a string to decide with.
+assert.doesNotMatch(src, /\.(reason|error|detail|stage)[^\n]*\.(includes|startsWith|endsWith|match)\(/);
+
+console.log("pool-promotion.test.mjs: ok");

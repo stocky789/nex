@@ -1,0 +1,39 @@
+{
+  "summary": "Correct guide, API and Phase 4 closure plan after BUG-0387 native proof that drained members refuse manual virsh start via StorageGuard reading verified pool-replica.json.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/guide/host-maintenance-mode.md",
+    "docs/plans/2026-09-19-phase4-closure.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Member manual virsh starts on a drained host are refused by the libvirt hook, not a known limit.",
+    "pages": [
+      "docs/guide/host-maintenance-mode.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Document BUG-0387 behaviour already implemented; no endpoint or schema change.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Documentation correction only; no roadmap item changed."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation-only correction; durable drain state remains Core-owned on the pool master and replica."
+  },
+  "verification": {
+    "method": "Aligned guide, API, closure plan and BUG-0387 ledger note with stated native lab evidence (2026-09-20, Core binary sha256 327b7ec9…). No new lab execution in this change.",
+    "evidence": [
+      "docs/plans/2026-09-19-phase4-closure.md",
+      "docs/guide/host-maintenance-mode.md"
+    ]
+  }
+}

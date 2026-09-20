@@ -48,6 +48,12 @@ func localPoolVMPlacement(ctx context.Context, s *Store, generation uint64, oper
 	if err != nil || membership.Generation != generation || !placementCommand(cmd) || cmd.OperationID != operationID || cmd.VM.HostID != s.State.HostID || cmd.VM.PoolID != s.State.PoolID {
 		return poolPlacementReply{}, errors.New("VM placement preflight is invalid")
 	}
+	// This host's freshest verified copy of the master's drain intent — its own record on
+	// the master, the stored authority replica on a member. The master refuses again from
+	// its own record; refusing here keeps a drained member from doing the native work first.
+	if err = poolHostInMaintenance(s, s.State.HostID); err != nil {
+		return poolPlacementReply{}, err
+	}
 	engine := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms"))
 	journaled, replay := engine.JournaledCommand(cmd.OperationID)
 	if replay && !reflect.DeepEqual(journaled, cmd) {
@@ -117,6 +123,12 @@ func placementError(err error) string {
 func poolVMPlacement(ctx context.Context, s *Store, membership protocol.PoolMembership, member protocol.PoolMember, cmd protocol.Command) (poolPlacementReply, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	// Every new placement and every definition transition passes here on the master, for a
+	// member and for the master's own guests alike, so this is the one refusal that covers
+	// them all. It is decided from the master's own membership, never from a mirror.
+	if err := poolMaintenanceRefusal(membership, member.HostID); err != nil {
+		return poolPlacementReply{}, err
+	}
 	if member.HostID == s.State.HostID {
 		return localPoolVMPlacement(ctx, s, membership.Generation, cmd.OperationID, cmd)
 	}

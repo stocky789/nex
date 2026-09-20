@@ -1,0 +1,48 @@
+{
+  "summary": "Bump the changelog-derived project version from 0.3.5 to 0.4.0 and record the staged Phase 4 multi-host pool work under that heading. API impact: none for release metadata.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/guide/host-maintenance-mode.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/change-management-network.md",
+    "docs/guide/software-updates.md",
+    "docs/guide/publish-a-release.md",
+    "docs/guide/install-nex-core.md",
+    "installer/README.md",
+    "docs/changes/2026-09-20-version-0.4.0.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Phase 4 feature pages and current-working-version notes now name development product 0.4.0.",
+    "pages": [
+      "docs/guide/host-maintenance-mode.md",
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/guide/join-a-pool.md",
+      "docs/guide/change-management-network.md",
+      "docs/guide/software-updates.md",
+      "docs/guide/publish-a-release.md",
+      "docs/guide/install-nex-core.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Version metadata only; feature contracts stay under their own assessments."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No phase or publication claim; 0.4.0 is the working-tree heading for already-accepted disposable-lab Phase 4 work."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Version metadata adds no durable product state."
+  },
+  "verification": {
+    "method": "python3 scripts/release-version.py --current returns 0.4.0; python3 -m unittest tests.test_release_version passed (10 tests). Original 0.3.5 section restored with its committed notes; staged Phase 4 entries live under 0.4.0. No 0.4.0 build, tag or publication is claimed.",
+    "evidence": [
+      "scripts/release-version.py",
+      "tests/test_release_version.py",
+      "CHANGELOG.md"
+    ]
+  }
+}

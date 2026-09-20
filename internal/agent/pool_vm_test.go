@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -214,6 +215,178 @@ func setPoolVMAutostartOwner(t *testing.T, owner func(uint32) bool) {
 	previous := poolVMAutostartOwner
 	poolVMAutostartOwner = owner
 	t.Cleanup(func() { poolVMAutostartOwner = previous })
+}
+
+// autostartFixture writes one local-storage and one shared-storage managed VM, each with the
+// requested autostart intent, into a real managed journal this host's own projection reads.
+func autostartFixture(t *testing.T, s *Store, localAutostart, sharedAutostart bool) (local, shared protocol.VMCreateSpec) {
+	t.Helper()
+	dir := filepath.Join(s.dir, "managed-vms")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name string, value any) {
+		t.Helper()
+		b, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(dir, name+".json"), b, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	localRepo := protocol.StorageRegistration{ID: "local-1", PoolID: s.State.PoolID, HostID: s.State.HostID, Name: "local", Path: "/var/lib/nex-storage/local-1", Kind: protocol.StorageKindLocal, Generation: 1}
+	sharedRepo := protocol.StorageRegistration{ID: "repo-1", PoolID: s.State.PoolID, HostID: s.State.HostID, Name: "shared", Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/exports", Directory: "guests"}}, Generation: 1}
+	for _, repo := range []protocol.StorageRegistration{localRepo, sharedRepo} {
+		write("register-"+repo.ID, map[string]any{
+			"command":         protocol.Command{OperationID: "register-" + repo.ID, Kind: "storage-register", Storage: &repo},
+			"result":          protocol.Result{OperationID: "register-" + repo.ID, Status: "succeeded"},
+			"applied_storage": repo,
+		})
+	}
+	local = *poolVMTestSpec("11111111-1111-4111-8111-111111111111", s.State.HostID)
+	local.PoolID, local.Name, local.Autostart = s.State.PoolID, "Local guest", localAutostart
+	local.Disks[0].StorageID = localRepo.ID
+	shared = *poolVMTestSpec("22222222-2222-4222-8222-222222222222", s.State.HostID)
+	shared.PoolID, shared.Autostart = s.State.PoolID, sharedAutostart
+	shared.Disks[0].StorageID = sharedRepo.ID
+	for _, vm := range []protocol.VMCreateSpec{local, shared} {
+		write("create-"+vm.ID, map[string]any{
+			"command": protocol.Command{OperationID: "create-" + vm.ID, Kind: "vm-create", VM: &vm},
+			"result":  protocol.Result{OperationID: "create-" + vm.ID, Status: "succeeded"},
+		})
+	}
+	return local, shared
+}
+
+// autostartVirsh stands in for libvirt: both fixture domains are defined and shut off. It
+// records each invocation without the leading --connect pair, so a test can read back exactly
+// which guest Core asked libvirt to start rather than which flag it set.
+func autostartVirsh(t *testing.T, ids ...string) func() []string {
+	t.Helper()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "virsh.log")
+	script := "#!/bin/sh\nshift 2\nprintf '%s\\n' \"$*\" >> " + log + "\ncase \"$1\" in\n  list) printf '%s\\n' " + strings.Join(ids, " ") + " ;;\n  domstate) printf 'shut off\\n' ;;\nesac\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "virsh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return func() []string {
+		b, err := os.ReadFile(log)
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		return strings.Split(strings.TrimSpace(string(b)), "\n")
+	}
+}
+
+func autostartAttempted(t *testing.T, s *Store, vmID, bootID string) bool {
+	t.Helper()
+	_, err := os.Stat(filepath.Join(s.dir, "pool-vm-autostart-attempts", vmID+"-"+bootID+".json"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	return err == nil
+}
+
+// A local-storage guest's autostart is libvirt's flag, and libvirt tries it once at boot,
+// before this host has confirmed its pool authority — the startup hook refuses it there and
+// nothing retried it, so the guest never came back from a reboot. Core's own pass must take
+// that attempt once the drain and authority gates have passed.
+func TestAutostartPassAttemptsLocalStorageGuests(t *testing.T) {
+	s := peerStore(t, "host-a", "pool-1")
+	maintenanceMembership(t, s, "host-a", maintenanceMember("host-a", false))
+	local, shared := autostartFixture(t, s, true, false)
+	virshLog := autostartVirsh(t, "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222")
+	const boot = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	setPoolVMAutostartBootID(t, boot)
+
+	if reason := ReconcilePoolVMAutostart(context.Background(), s); reason != "" {
+		t.Fatalf("the autostart pass did not run: %q", reason)
+	}
+	if !autostartAttempted(t, s, local.ID, boot) {
+		t.Fatal("the pass skipped a local-storage autostart guest, so a reboot leaves it shut off")
+	}
+	if !slices.Contains(virshLog(), "start "+local.ID) {
+		t.Fatalf("Core never asked libvirt to start the local-storage autostart guest: %q", virshLog())
+	}
+	if autostartAttempted(t, s, shared.ID, boot) {
+		t.Fatal("the pass claimed a boot attempt for a guest that did not ask for autostart")
+	}
+	// Autostart is an on-boot intent, not a keepalive policy: the same boot claims once.
+	if reason := ReconcilePoolVMAutostart(context.Background(), s); reason != "" {
+		t.Fatalf("the second pass did not run: %q", reason)
+	}
+	setPoolVMAutostartBootID(t, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+	if reason := ReconcilePoolVMAutostart(context.Background(), s); reason != "" {
+		t.Fatalf("the pass after a reboot did not run: %q", reason)
+	}
+	if !autostartAttempted(t, s, local.ID, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb") {
+		t.Fatal("the next boot did not attempt the local-storage autostart guest again")
+	}
+}
+
+// The window this must never reopen is BUG-0381's: while the host is drained or has not
+// confirmed this boot's pool authority, no attempt is made and no boot claim is spent, so the
+// attempt is still available once the restriction clears.
+func TestAutostartPassMakesNoLocalAttemptWhileDrainedOrRestricted(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		arrange func(*testing.T, *Store)
+		reason  string
+	}{
+		{"drained", func(t *testing.T, s *Store) {
+			maintenanceMembership(t, s, "host-a", maintenanceMember("host-a", true))
+		}, "maintenance mode"},
+		{"restricted", func(t *testing.T, s *Store) {
+			maintenanceMembership(t, s, "host-a", maintenanceMember("host-a", false))
+			poolPeerMu.Lock()
+			defer poolPeerMu.Unlock()
+			state, err := loadPoolPeer(s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.Restricted = &poolRestrictedRecord{Kind: poolRestrictedUnconfirmed, Reason: poolUnconfirmedReason, Since: time.Now().UTC()}
+			if err = savePoolPeer(s, state); err != nil {
+				t.Fatal(err)
+			}
+		}, "restricted"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := peerStore(t, "host-a", "pool-1")
+			tc.arrange(t, s)
+			local, _ := autostartFixture(t, s, true, false)
+			virshLog := autostartVirsh(t, "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222")
+			const boot = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+			setPoolVMAutostartBootID(t, boot)
+
+			if reason := ReconcilePoolVMAutostart(context.Background(), s); !strings.Contains(reason, tc.reason) {
+				t.Fatalf("the pass reported %q", reason)
+			}
+			if autostartAttempted(t, s, local.ID, boot) {
+				t.Fatal("a local-storage guest's boot attempt was spent while the host could not start it")
+			}
+			if slices.Contains(virshLog(), "start "+local.ID) {
+				t.Fatalf("a guest was started on a host that must start none: %q", virshLog())
+			}
+		})
+	}
+}
+
+func TestPoolVMOnSharedStorageSeparatesLocalFromShared(t *testing.T) {
+	s := peerStore(t, "host-a", "pool-1")
+	local, shared := autostartFixture(t, s, true, true)
+	autostartVirsh(t, "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222")
+	managed, checks := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(context.Background())
+	if !managedVMChecksReady(checks) {
+		t.Fatalf("managed observations are not ready: %#v", checks)
+	}
+	if poolVMOnSharedStorage(managed, local) {
+		t.Fatal("a guest on a local repository was classed as shared, so it would wait for a master permit")
+	}
+	if !poolVMOnSharedStorage(managed, shared) {
+		t.Fatal("a guest on an NFS repository was classed as local, so it would start with no master admission")
+	}
 }
 
 func TestPoolVMExecutionRetainsOwnerAcrossStopAndRejectsSecondHost(t *testing.T) {
@@ -1349,5 +1522,44 @@ func TestSharedVMAsleepIsAdmittedAsWake(t *testing.T) {
 	}
 	if record := mustLoadPoolVMs(t, s).VMs[vm.ID]; record.State != "running" || record.Epoch != epoch {
 		t.Fatalf("wake completion changed the durable owner record: %+v", record)
+	}
+}
+
+// P-6. `define` with Create=false has two real callers — reconcileRemoteVMCreateStopped
+// (managed.go) and the local vm-update outcome confirmation (run.go) — so it is reachable,
+// not unreachable as the plan's correction assumed. It is an idempotent owner *check*: with
+// no record it refuses, and with a matching record it writes nothing at all, which is why it
+// needs no placement or start guard and why the authority freeze deliberately allows it.
+func TestDefineWithoutCreateOnlyChecksTheOwnerRecord(t *testing.T) {
+	s := peerStore(t, "host-a", "pool-1")
+	const vm = "11111111-1111-4111-8111-111111111111"
+	spec := poolVMTestSpec(vm, "host-a")
+	if err := poolVMLocal(s, vm, "define", nil, false, spec, nil); err == nil {
+		t.Fatal("define without create seeded an owner record that did not exist")
+	}
+	if _, err := os.Stat(poolVMFile(s)); err == nil {
+		t.Fatal("a refused owner check wrote the durable record")
+	}
+	if err := poolVMLocal(s, vm, "define", nil, true, spec, nil); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(poolVMFile(s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = poolVMLocal(s, vm, "define", nil, false, spec, nil); err != nil {
+		t.Fatalf("matching owner check refused: %v", err)
+	}
+	after, err := os.ReadFile(poolVMFile(s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("an owner check rewrote the durable record:\n%s\n%s", before, after)
+	}
+	// It grants nothing, so a drained host does not refuse it either.
+	maintenanceMembership(t, s, "host-a", maintenanceMember("host-a", true))
+	if err = poolVMLocal(s, vm, "define", nil, false, spec, nil); err != nil {
+		t.Fatalf("a drained host refused an owner check: %v", err)
 	}
 }

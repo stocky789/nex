@@ -1,0 +1,35 @@
+{
+  "summary": "Phase 4 S2 native close on disposable lab Core 327b7ec9: ordered maintenance suite passed (prep, core 24/24, autostart 17/17 including local return after exit, restarts 5/5, hook 9/9 master+member, hosts 9/9). Closes post-review S2 revalidation named in the QA report. API impact: none.",
+  "paths": [
+    "docs/qa/2026-09-19-phase4-native-acceptance.md",
+    "docs/plans/2026-09-19-phase4-closure.md",
+    "docs/plans/2026-09-09-pool-master-model.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/changes/2026-09-20-phase4-s2-native-close.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Evidence and status only; operator steps for maintenance were updated in the companion BUG-0392/0393 and member-hook doc changes.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No route or contract change; records native S2 results against already-implemented contracts.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase 4 disposable-lab acceptance was already closed; this only records the outstanding S2 native revalidation as passed in plan and QA status pages.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation of lab evidence only."
+  },
+  "verification": {
+    "method": "Disposable three-host lab. Built Core 327b7ec90e624946…, dual-deployed to /root and /usr/lib/nex on core1–3, cleared drains, ran s2_maintenance.py prep→core→autostart→restarts→hook→hosts; hook re-run after orphan cleanup and member-hook assertion update. All phases PASS. Evidence in .cache/phase4-acceptance/s7/results/s2-*.json and logs/s2-ordered-*.log.",
+    "evidence": [
+      "docs/qa/2026-09-19-phase4-native-acceptance.md"
+    ]
+  }
+}

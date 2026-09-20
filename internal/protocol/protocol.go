@@ -115,6 +115,29 @@ type ManagedState struct {
 	CredentialReceipts []StorageCredentialReceipt `json:"credential_receipts,omitempty"`
 	ZFSProvisions      []ZFSProvisionHostResult   `json:"zfs_provisions,omitempty"`
 	Membership         *PoolMembership            `json:"membership,omitempty"`
+	// Join is this host's durable staged pool join, reported until it is ready so a
+	// replaced Controller adopts an interrupted join instead of losing it.
+	Join *PoolJoinStatus `json:"join,omitempty"`
+	// Replica is this member's stored copy of the master's signed pool authority. It is
+	// observed state: what this host holds and how fresh it is. Nothing acts on it, no
+	// health is derived from it, and the Controller mirrors it without storing it.
+	Replica *PoolReplicaStatus `json:"replica,omitempty"`
+	// Transfer is this host's own part of a planned master change or a member eject. Every
+	// participant reports its own stage; the Controller assembles the picture and drives
+	// nothing, so a transfer finishes with no Controller connection at all.
+	Transfer *PoolTransferStatus `json:"transfer,omitempty"`
+	// Authority is the pool master's own durable authority number and the content digest it
+	// numbered. Only a master reports it, and it is what a member's reported replica
+	// generation is compared against: without it a replica that is one generation behind is
+	// indistinguishable from a current one.
+	Authority *PoolAuthorityRecord `json:"authority,omitempty"`
+	// Promotion is a candidate's own fence-verified promotion: its durable stage and, when
+	// it has one, the structured verdict of the proof. The Controller displays it.
+	Promotion *PoolPromotionStatus `json:"promotion,omitempty"`
+	// Restricted is this host's own Core-enforced refusal to act on pool authority while it
+	// cannot prove it holds the current one. It is reported so an operator sees why a host
+	// starts nothing; it is enforced on Core whether or not anything is reading it.
+	Restricted *PoolRestrictedStatus `json:"restricted,omitempty"`
 }
 
 // Ports lists the physical NICs or bonds enslaved to this bridge.
@@ -156,9 +179,13 @@ type Inventory struct {
 	// the Core journal. Controller mirrors it: any entry it does not hold is adopted with the
 	// same identity and name, so a replaced Controller recovers a pool from its master.
 	Managed *ManagedState `json:"managed,omitempty"`
-	Disks   []Disk        `json:"disks"`
-	VMs     []VM          `json:"vms"`
-	Checks  []Check       `json:"checks"`
+	// ManagementNetwork is this host's own staged/applied management network change,
+	// host-scoped rather than pool-scoped. It is the only path by which a Controller
+	// learns that a rollback deadline is running.
+	ManagementNetwork *ManagementNetworkStatus `json:"management_network,omitempty"`
+	Disks             []Disk                   `json:"disks"`
+	VMs               []VM                     `json:"vms"`
+	Checks            []Check                  `json:"checks"`
 }
 type Host struct {
 	Capabilities []string   `json:"capabilities,omitempty"`
@@ -211,6 +238,7 @@ type Command struct {
 	CredentialRetire  *StorageCredentialRetireRequest `json:"credential_retire,omitempty"`
 	ZFSProvision      *ZFSProvisionRequest            `json:"zfs_provision,omitempty"`
 	Pool              *PoolCommand                    `json:"pool,omitempty"`
+	ManagementNetwork *ManagementNetworkRequest       `json:"management_network,omitempty"`
 	OperationID       string                          `json:"operation_id"`
 	Kind              string                          `json:"kind"`
 }
@@ -228,6 +256,7 @@ type ReportRequest struct {
 	Results            []Result                 `json:"results"`
 	StorageDiscoveries []StorageDiscoveryResult `json:"storage_discoveries,omitempty"`
 	StorageClusters    []StorageClusterResult   `json:"storage_clusters,omitempty"`
+	PoolResults        []PoolResult             `json:"pool_results,omitempty"`
 }
 type ReportResponse struct {
 	Commands               []Command                 `json:"commands"`
@@ -239,6 +268,7 @@ type ReportResponse struct {
 	StorageDiscoveries     []StorageDiscoveryRequest `json:"storage_discoveries,omitempty"`
 	StorageClusterRequests []StorageClusterRequest   `json:"storage_clusters,omitempty"`
 	StatsChannels          []StatsChannelRequest     `json:"stats_channels,omitempty"`
+	PoolRequests           []PoolRequest             `json:"pool_requests,omitempty"`
 }
 
 // StorageClusterCapability acknowledges the proof request identifier. A Core

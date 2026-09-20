@@ -1,0 +1,34 @@
+{
+  "summary": "Keep an accepted VM-create advisory warning visible across its matching task-route change. API impact: none.",
+  "paths": [
+    "web/src/main.tsx",
+    "web/src/managed.test.mjs",
+    "tests/integration/phase1_browser.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The VM creation workflow and Core warning semantics are unchanged; this preserves an already accepted UI notice.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No route, request, response or caller contract changed.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This Controller presentation fix does not change Phase 4 acceptance scope.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The route association is transient UI state; no durable record is added or changed."
+  },
+  "verification": {
+    "method": "Independent review cleared isolated intercepted browser coverage at 1280 px and 360 px. A current-source-only unconditional-clear reproduction failed at warning visibility; the restored fixture and retained persistent Phase 1 browser run passed. This is UI fixture evidence only.",
+    "evidence": [
+      "web/src/managed.test.mjs",
+      "tests/integration/phase1_browser.py"
+    ]
+  }
+}

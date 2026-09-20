@@ -1,0 +1,36 @@
+{
+  "summary": "Record the first final-campaign three-host fence-backed promotion evidence. API impact: existing contract.",
+  "paths": [
+    "docs/qa/2026-09-19-phase4-native-acceptance.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/changes/2026-09-20-phase4-s6-native-promotion-subset.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The guide verification section now records the manual-promotion browser evidence and its limits; the promotion workflow did not change.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The native run exercised existing promotion, fence-profile and membership operations without changing their contracts.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "One fenced promotion does not complete the manual-recovery or Phase 4 gates.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Core owns fence proof, promotion transfer, authority and membership records.",
+    "record": "Existing Core pool-peer transfer, authority replica and membership records remain authoritative and are reported for Controller adoption."
+  },
+  "verification": {
+    "method": "Retained final-campaign Core records passed candidate preflight, fence exclusion and promotion. A separate reviewed browser walkthrough retained typed pool confirmation and explicit fence acknowledgement, one queued operation through terminal success, and the requested candidate as fresh authoritative master in the final members response; 1280 px and 360 px captures were inspected. External nested-libvirt power-off and old-master rejoin are executor reports awaiting independently retained normalized artifacts, so are not counted. No restricted interval was observed and empty QEMU inventories cannot prove no duplicate live workload; broader S6 remains open.",
+    "evidence": [
+      "docs/qa/2026-09-19-phase4-native-acceptance.md"
+    ]
+  }
+}

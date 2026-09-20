@@ -1,0 +1,106 @@
+{
+  "summary": "Phase 4 defect batch: eight defects found by the native acceptance lab and by slice review, each reproduced with a failing test before its fix - a registration the pool master refused could never be discarded, a placement against a member with stale shared-storage access sat silent, an applied management-network change could not be rolled back on request, a member retried a failed pool VLAN apply only on the clock hour and re-posted the replayed failure as a fresh observation, re-adding a member before its master read as a broken host, an abandoned clustered-storage request was answered 200, a cancel was accepted after an eject was already durable, and the fence credential never reached the host that does the fencing - plus the shared apply precheck they exposed and the runtime package dependencies Nex Core's networking actually needs",
+  "paths": [
+    "internal/agent/pool_network.go",
+    "internal/agent/pool_network_test.go",
+    "internal/agent/pool_media_test.go",
+    "internal/agent/pool_transfer.go",
+    "internal/agent/pool_transfer_test.go",
+    "internal/agent/management_network_test.go",
+    "internal/vmhost/vlan.go",
+    "internal/vmhost/vlan_test.go",
+    "internal/vmhost/management_network.go",
+    "internal/vmhost/management_network_test.go",
+    "internal/protocol/hostnetwork.go",
+    "internal/controller/addhost.go",
+    "internal/controller/identity.go",
+    "internal/controller/storage.go",
+    "internal/controller/storage_cluster.go",
+    "internal/controller/managed.go",
+    "internal/controller/controller.go",
+    "internal/controller/failed_registration_discard_test.go",
+    "internal/controller/placement_warning_test.go",
+    "internal/controller/readd_member_retryable_test.go",
+    "internal/controller/storage_cluster_abandoned_test.go",
+    "internal/controller/hostnetwork_e2e_test.go",
+    "web/src/managed.tsx",
+    "web/src/managed.test.mjs",
+    "web/src/storage.tsx",
+    "web/src/storage.test.mjs",
+    "web/src/main.tsx",
+    "web/src/host-network.tsx",
+    "web/src/host-network.test.mjs",
+    "packaging/core-local/build-inside.sh",
+    "tests/test_core_local_package.py",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer.html",
+    "tests/test_api_contract.py",
+    "docs/BUG_LEDGER.md",
+    "docs/LICENSING.md",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/change-management-network.md",
+    "docs/guide/remove-pool-network-or-iso.md",
+    "docs/guide/storage-repositories.md",
+    "docs/guide/manage-controller.md",
+    "docs/guide/create-virtual-machine.md",
+    "CHANGELOG.md",
+    "docs/plans/2026-09-19-phase4-closure.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Six operator-visible behaviours changed, and one documented workaround became false. The networking and storage guides gain the discard of a registration the pool master refused - that it is only Nex Controller's record, that discarding asks no host to do anything, that a failed storage row is identified by a pending-storage key rather than a repository ID, and that a row a host reports as applied is refused and removed with detach instead. The management-network guide's open-defect note is replaced: Roll back now works, the stage list gains rolled back at your request, the rollback triggers gain the operator's own request, and the guide now says that an operator rollback reports no failing health check because an undo you asked for is an outcome. The join guide's once per hour retry sentence is replaced with what the member actually does - it re-checks the uplink every pull pass, and only a failure it cannot see in advance waits out the hour, during which its reported observation time deliberately stops advancing. The controller guide gains the retryable add-host conflict as a wait rather than a failure, with the one-click retry. The VM creation guide gains the advisory placement warning: what it means, that it is not a refusal, and that it clears itself. Every Verification section keeps its existing statement that nothing here has been walked through natively or in a browser for this build.",
+    "pages": [
+      "docs/guide/join-a-pool.md",
+      "docs/guide/change-management-network.md",
+      "docs/guide/remove-pool-network-or-iso.md",
+      "docs/guide/storage-repositories.md",
+      "docs/guide/manage-controller.md",
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Client-facing Controller API: DELETE /api/v1/networks/{id} gains a bodyless local discard branch for a registration whose operation failed and which no host reports as applied, with a 409 for one a host does report; DELETE /api/v1/storage/{id} is a new route with the same shape; GET and POST /api/v1/storage answer a failed typed registration's id as the Controller's own pending-storage request key instead of an empty string, while a queued or dispatched one still answers empty because Core allocates repository IDs; POST /api/v1/vms may answer its 202 with an optional advisory warnings array and GET /api/v1/operations may carry the same array on a still-dispatched vm-create, recomputed on read and stored nowhere; POST /api/v1/sites/{id}/hosts answers the relayed pool identity is held refusal with 409 plus the new retryable and host_error fields instead of a 502; the three clustered-storage relay routes answer 499 instead of a bare 200 when the client disconnects; and two audit actions, network.discard and storage.discard, are added. Controller-to-Core: the management-network command's cancel action now performs the rollback on an applied, unconfirmed change and the inventory gains management_network.requested_rollback, so the host can say an undo was asked for rather than having failed, and its management-network health check is suppressed for that case; PoolTransferStatus and PoolPromotionStatus gain cancellable, Core's own answer to whether a transfer may still be cancelled, computed from the same predicate the cancel is gated on. Core's pool VLAN convergence semantics are clarified rather than changed: member_access[].observed_at is documented as when the member last evaluated the network, not when it last sent a row. Both sides of every changed contract are implemented in this batch.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/api/index.html",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Defect fixes inside Phase 4 work that the published board already shows as in progress. Nothing moves to built, no feature is added and no claim on the board changes; the Phase 4 native acceptance gate that would move anything is still outstanding, and five of these eight defects were found by the lab run whose completion that gate depends on.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Seven of the eight fixes create no durable state at all - they are status codes, refusal text, advisory strings recomputed on read, a retry gate that removes journal entries rather than adding any, and a cancel predicate computed from a record that already existed. The one new durable bit, requested_rollback, belongs to the host. The network and storage discards do delete a row, and that row is Controller-scoped by the closed list: a failed request record is this Controller's own operation history and audit trail, no host holds it, nothing can be asked to undo it, and a fresh Controller would never recreate it - which is exactly why the discard relays nothing and why its guard refuses a row any host reports as applied. No pool-scoped state is created, kept, derived or deleted by any of it.",
+    "record": "The management-network operator rollback is recorded in the host's own <state-dir>/management-network.json as requested_rollback, set before the restore begins so an interrupted rollback resumes as the same operator rollback rather than as a failure, and projected into Inventory.management_network, which is the whole adoption path: a fresh Controller reads the stage, the flag and any running deadline back from the host with nothing to re-enter. PoolTransferStatus.cancellable is computed on each tick from the Transfer record the pool master and every participant already keep in their own pool-peer.json and is never stored. The pool VLAN apply precheck and the replayed-failure guard write nothing: they remove managed-journal entries that were being written, and the member_access overlay the master keeps stays process-local and re-derived after restart, as before. The discarded rows are Controller operation history and audit rows, which are backed up and restored with the Controller, separately from any pool.",
+    "record_note": "The discard is the only fix that deletes anything. It deletes one managed_resources request row and nothing else - the operation and its audit history are kept, no host is contacted, and a row whose command any host has reported as applied is refused with 409, so the guard cannot reach the projection of a live pool resource. Core-reported tombstones and adoption are untouched: a host report recreates a row at any time."
+  },
+  "verification": {
+    "method": "IMPLEMENTED; NATIVE RE-RUN OUTSTANDING. Every one of the eight defects was reproduced with a test written and observed failing before its fix; the observed pre-fix output is recorded per defect in docs/BUG_LEDGER.md entries BUG-0325 through BUG-0332. Go race suites: go test -race -count=1 -timeout 30m ./internal/agent ./internal/protocol ./internal/localcore ./internal/vmhost and go test -race -count=1 -timeout 30m ./internal/controller, all ok - internal/controller 256.627s for the Controller batch, agent 16.452s and vmhost 12.829s for the pool VLAN retry fix, agent 17.0s for the eject cancel predicate, controller 14.128s for the management-network operator rollback end-to-end test. Named regressions: TestFailedNetworkRegistrationIsDiscardable and TestFailedStorageRegistrationIsAddressableAndDiscardable, TestStaleMemberAccessWarnsWithoutRefusingPlacement, TestReaddingAMemberBeforeItsMasterIsARetryableConflict, TestAbandonedStorageClusterRequestIsNotSuccessAndReleasesBroker, TestHostNetworkOperatorRollbackEndToEnd with TestManagementNetworkOperatorRollback and the extended TestReportRecordsManagementConnectivityAndProjectsStatus, TestPoolNetworkApplyRefusalJournalsNothingAndRetriesWhenTheCauseIsFixed with TestPoolNetworkUnexpectedFailureJournalsAtMostOncePerHour, TestPoolNetworkReplayedFailureKeepsTheMastersObservation, TestPoolNetworkApplyPrecheckRefusals, TestPoolMediaAdoptionFailureIsReEvaluatedEveryTickAndJournalsNothing and TestCheckNetworkApplyAndTheNativeApplyRefuseAlike, and TestPoolEjectCannotBeCancelledOnceTheMembershipIsWritten with TestPoolTransferCancellableMatchesTheCancelAtEveryStage. Packaging: CoreLocalPackageTests.test_depends_cover_what_core_networking_runs ties each declared dependency to the construct in Nex Core that needs it and was verified to fail with the dependencies removed; python3 -m unittest tests.test_core_local_package tests.test_distribution_packaging ran 42 tests, OK. UI: npm run typecheck clean and npm test green, covering the row-action visibility matrix for failed network and storage rows, the discard paths and confirm text, the placement warning text and its two surfaces, the retryable add-host state machine, and the new rolled back at your request label and note. Offline contract checks: python3 -m unittest discover -s tests -p 'test_api_contract.py' and python3 scripts/generate_api.py --check. Documentation gate: python3 scripts/check_docs.py --worktree. CI coverage confirmed by inspection, not edited: .github/workflows/phase1.yml and .gitea/workflows/phase1.yml both trigger on push to '**' and on pull_request, and both run go test -race -timeout 20m ./... at line 29, python3 -m unittest discover -s tests -p 'test_*.py' at line 53 and npm --prefix web run test at line 70, so every regression above runs on both runners with no workflow change. NOT executed and recorded as outstanding: no native two-host lab rerun of any of these defects against their fixes; no real ifup/ifdown bounce or real management-network rollback, because the namespace test that would do it has still never executed anywhere; no real fence, so the fence credential's use against a real virsh endpoint is unproven; no confirmation of the Debian 13 hook ownership behind the new ifupdown, bridge-utils and vlan dependencies, which rests on the packaging layout and one laboratory observation; and no browser review of the discard actions, the warning surfaces or the add-host retry banner.",
+    "evidence": [
+      "internal/controller/failed_registration_discard_test.go",
+      "internal/controller/placement_warning_test.go",
+      "internal/controller/readd_member_retryable_test.go",
+      "internal/controller/storage_cluster_abandoned_test.go",
+      "internal/controller/hostnetwork_e2e_test.go",
+      "internal/agent/pool_network_test.go",
+      "internal/agent/pool_media_test.go",
+      "internal/agent/pool_transfer_test.go",
+      "internal/vmhost/vlan_test.go",
+      "internal/vmhost/management_network_test.go",
+      "tests/test_core_local_package.py",
+      "web/src/managed.test.mjs",
+      "web/src/storage.test.mjs",
+      "web/src/host-network.test.mjs",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

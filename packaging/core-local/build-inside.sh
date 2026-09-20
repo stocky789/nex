@@ -59,12 +59,20 @@ cp /input/trusted-key.raw "$pkg/usr/share/nex/appliance/release.pub"
 # every host that can resolve it (apt skips an unsatisfiable recommendation), the
 # ISO installs it explicitly from installer/packages.txt, postinst enables contrib,
 # and Core reports ZFS discovery as unavailable until the packages are present.
+#
+# ifupdown, bridge-utils and vlan are what Core's networking actually runs on: it writes
+# /etc/network/interfaces and interfaces.d stanzas and calls ifup/ifdown (ifupdown), the
+# guest and management bridges are bridge_ports/bridge_stp/bridge_fd stanzas whose hooks
+# ship in bridge-utils, and a tagged management NIC is a vlan-raw-device stanza whose hook
+# ships in vlan. Without them a pool VLAN registration or a management network edit fails
+# on a host that installed this package on its own. All three are main, so they are hard
+# dependencies rather than Recommends.
 cat > "$pkg/DEBIAN/control" <<CONTROL
 Package: nex-core-local
 Version: ${NEX_VERSION}
 Architecture: amd64
 Maintainer: Nex contributors
-Depends: init-system-helpers, libc6 (>= 2.41), python3, python3-virt-firmware, openssl, libpam0g, libpam-modules, iproute2, libvirt-clients, libvirt-daemon-system, qemu-system-x86, qemu-utils, genisoimage, nfs-common, libnfs-utils, cifs-utils, smbclient, open-iscsi, corosync, dlm-controld, gfs2-utils, pacemaker, pacemaker-cli-utils, pcs, fence-agents-redfish, fence-agents-ipmilan, fence-agents-virsh
+Depends: init-system-helpers, libc6 (>= 2.41), python3, python3-virt-firmware, openssl, libpam0g, libpam-modules, iproute2, ifupdown, bridge-utils, vlan, libvirt-clients, libvirt-daemon-system, qemu-system-x86, qemu-utils, genisoimage, nfs-common, libnfs-utils, cifs-utils, smbclient, open-iscsi, corosync, dlm-controld, gfs2-utils, pacemaker, pacemaker-cli-utils, pcs, fence-agents-redfish, fence-agents-ipmilan, fence-agents-virsh
 Recommends: linux-headers-amd64, zfs-dkms, zfsutils-linux
 Section: admin
 Priority: optional

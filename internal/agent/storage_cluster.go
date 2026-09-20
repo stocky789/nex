@@ -815,6 +815,19 @@ func ExecuteStorageClusterRequest(_ context.Context, s *Store, request protocol.
 		result.Status, result.Error = "failed", "invalid cluster request scope"
 		return result
 	}
+	// A clustered-storage configuration is a replicated authority section, so an apply or a
+	// fence request is an authority write and takes the same guard every other registry
+	// write takes: a frozen, handed-over or restricted master starts none, because it would
+	// move content a pinned generation already names. "status" is a read and is unaffected,
+	// and work already in flight is never interrupted — this is the entry point, not the
+	// resume. The refusal is the retryable one, so the Controller can simply try again once
+	// the master change completes.
+	if request.Action != "status" {
+		if err := requirePoolAuthorityWritable(s); err != nil {
+			result.Status, result.Error = "failed", err.Error()
+			return result
+		}
+	}
 	rawDigest := clusterDigest(request)
 	if request.Action == "apply" {
 		if len(request.Config.FenceProofs) != 0 {

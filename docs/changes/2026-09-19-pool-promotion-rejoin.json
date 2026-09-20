@@ -1,0 +1,114 @@
+{
+  "summary": "Fence-verified manual promotion and safe rejoin: an operator names one surviving member, Nex Core on that member proves replica integrity, replica supremacy and accepted VM ownership, produces its own fence proof by powering the lost pool master off and observing it, and only then takes the pool authority at generation+1; a host that cannot prove it holds the pool's current authority restricts itself before any start path is exposed and rejoins automatically only after it has reconciled, with no automatic succession, no election, no quorum and no force, override or timeout-based escape anywhere in the product",
+  "paths": [
+    "internal/protocol/pool.go",
+    "internal/protocol/protocol.go",
+    "internal/protocol/pool_promotion_test.go",
+    "internal/agent/pool_promote.go",
+    "internal/agent/pool_promote_test.go",
+    "internal/agent/pool_promote_partition_test.go",
+    "internal/agent/pool_fence_credential_test.go",
+    "internal/agent/pool_authority.go",
+    "internal/agent/pool_authority_freeze_test.go",
+    "internal/agent/pool_transfer.go",
+    "internal/agent/pool_transfer_lost_target_test.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/poolca.go",
+    "internal/agent/run.go",
+    "internal/agent/managed.go",
+    "internal/vmhost/pool_fence.go",
+    "internal/vmhost/pool_fence_test.go",
+    "internal/vmhost/storage_fence.go",
+    "internal/vmhost/storage_guard.go",
+    "internal/localcore/pool.go",
+    "internal/localcore/pool_restricted_test.go",
+    "internal/controller/poolpromotion.go",
+    "internal/controller/poolpromotion_test.go",
+    "internal/controller/pool_reported_fields_test.go",
+    "internal/controller/pool_evidence_test.go",
+    "internal/controller/pooljoin.go",
+    "internal/controller/pooltransfer.go",
+    "internal/controller/controller.go",
+    "internal/controller/managed.go",
+    "internal/controller/identity.go",
+    "web/src/pool-promotion.tsx",
+    "web/src/pool-promotion.test.mjs",
+    "web/src/pool-members.tsx",
+    "web/src/pool-members.test.mjs",
+    "web/src/pool-authority.tsx",
+    "web/src/pool-authority.test.mjs",
+    "web/src/style.css",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/local-openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/local.html",
+    "docs/api/peer.html",
+    "tests/test_api_contract.py",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/README.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/plans/2026-09-19-phase4-closure.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "website/src/routes/roadmap/+page.svelte"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Three new operator workflows, one of which powers a host off, plus a Core-enforced state an operator will meet without asking for it. The pool authority page gains: how to record a fence device and why it must be done while the master still reports; what a promotion is and when to use it instead of a planned master change; the preflight checklist with what each of the four checks means and why unknown blocks exactly as a refusal does; what the typed pool name and the separate power-off acknowledgement do and do not prove; what happens to blocked virtual machines, stated as visibility rather than disk availability; what the returning old master does; both kinds of restricted host, what still works on one and how each kind clears; the owner decision OD-5 limit - a restricted master with a permanently dead member stays restricted, there is no escape action and none may be added, and the recovery is to bring that host back or restore its Core state; the D2 build limit that only a virsh fence device can be recorded, so a physical pool cannot be fence-promoted; every new refusal with what to do about it; and, before any of it, the trust statement that every ready member holds the pool CA key and the fence credentials sealed to it, so any ready member could power off any profiled host - admit only hosts you trust. Automatic succession is still stated as unavailable, now beside the manual path that does exist. The Verification section says plainly that nothing on the page has been walked through natively or in a browser for this build and that no real fence has ever run, because every promotion test injects a double where Core calls one.",
+    "pages": [
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "Three Controller routes - POST /api/v1/pools/{id}/master/promote/preflight (one brokered report round trip to the candidate that stores, journals and audits nothing), POST /api/v1/pools/{id}/master/promote (addressed to the candidate, typed pool name plus a separate fence_confirmed acknowledgement, no expected_version) and POST /api/v1/pools/{id}/members/{host_id}/fence-profile (relayed to the master, optional credential delivered over the existing one-time encrypted handoff and never stored by the Controller) - each with its full status and literal-refusal matrix; two Core command kinds, pool-promote addressed to the candidate and pool-fence-profile addressed to the master, both carried by PoolCommand, which gains fence and fence_confirmed; the brokered pool request action promotion-preflight with its own deadline and abandonment sentences; six new protocol types (PoolPromotionCheck, PoolPromotionHost, PoolPromotionVM, PoolPromotionVerdict, PoolPromotionStatus, PoolWrappedFenceCredential), PoolRestrictedStatus.kind, PoolMember.fence and PoolMember.fence_credential_version, PoolAuthorityReplica.fence_credentials, PoolTransferStatus.cancellable and PoolResult.promotion; two reported inventory fields, managed.promotion and managed.restricted; two health checks, pool-restricted and pool-promotion; an additive extension of the existing peer GET /api/v1/pool/authority probe (always restricted, and with ?vms=1 also vms and vms_reported) with no new peer endpoint; and projection additions to GET /api/v1/pools/{id}/members - master_seen_at, promotion, last_promotion, per-member transfer_supported, fence and restricted, the checks array grown to seven fixed entries, and the corrected member-own freshness rule that stops a stale master blanking a member's own report. No new capability string: pool-authority-transfer-v1 gates all of it. Both sides, authentication, admission, validation, bounded refusal texts, idempotency by operation ID, asynchronous Core refusals surfaced in last_promotion rather than as invented HTTP statuses, and Controller/Core version compatibility are implemented in this slice. Amended 2026-09-19: POST /api/v1/pools/{id}/master/promote now requires a non-empty fence_host_ids - exactly the set the candidate's fresh preflight named - and the verdict carries fence_host_ids with per-host blocks, fence_recorded, fence_usable and fence_unusable_reason, because a promotion fences every host that blocks it and not only the old master. Each member's fence object gains credential_version. Both sides are implemented; the detail is in docs/changes/2026-09-19-phase4-review-fixes.json.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/local-openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/api/index.html",
+      "docs/api/local.html",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "The published board's open items for this milestone said manual master recovery and safe rejoin did not exist, and that a Controller screen for joining a host to a pool did not exist either. Both are now implemented in development, so leaving those sentences would make the site claim something untrue. Nothing moves to built: the five affected entries stay under open and are reworded as implemented in development with the evidence that is missing named plainly - no real power-off has been exercised, a fence device must be recorded while the master still works, and only a libvirt-based fence device can be recorded, so only a disposable laboratory pool can be recovered this way. The milestone itself stays in testing, and the Phase 4 gate and the manual-recovery gate both stay outstanding.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Every durable record belongs to the hosts. Nex Controller writes only Controller-scoped rows: for each mutation one operations row, one managed_resources replay row of kind pool-promote or pool-fence-profile, and the audit rows pool.promote and pool.fence-profile - the ordinary durable-command pattern. The preflight writes nothing at all and audits nothing, because it changes nothing. The Controller records no candidate, no stage, no verdict, no fence proof, no restriction and no generation, derives none, and never sees a fence credential: the material goes over the memory-only credential broker and only Core's opaque reference reaches the command, so nothing reaches SQLite, the audit trail, a response or a log. A Controller restarted or replaced mid-promotion therefore keeps nothing to recover and re-projects the whole thing from the hosts' next reports.",
+    "record": "The promotion candidate's own pool-replica.json - the pool-CA-signed copy it already held - is what it promotes into its own pool-peer.json authority, in one atomic write that takes the unwrapped pool CA key, the new membership and authority generation N+1 after it has adopted the replicated VM ownership map into its own pool-vms.json byte-identically. The fence proof lives in that host's Transfer record in its own pool-peer.json, bound by digest to this pool, this excluded host, this operation and this generation and valid for fifteen minutes, so it cannot be borrowed by another promotion or replayed later. Restricted{kind, reason, since, conflicts} and SelfFence{cleared_at} live in each host's own pool-peer.json and are written before any start path is exposed, so the refusal survives a reboot and holds with no Controller connected - the libvirt hook reads that same file directly and fails closed if it cannot. The fence credential material itself is a 0600 file in each holding host's own state directory, sealed per member inside PoolAuthorityReplica.fence_credentials on every push, with only a private FenceCredentials{ref, digest, version} map on the master and only the replicated PoolMember.fence_credential_version counter on the wire. PoolMember.fence lives in the pool master's durable membership and is replicated with it, so a promoted master inherits every recorded fence device and re-seals its material for the members that remain. No new file is introduced. The promotion verdict is deliberately not durable: it is an observation with a lifetime and is recomputed, never stored. A fresh or rebuilt Controller recovers all of it from reported inventory with nothing for an operator to re-enter - fence devices from Inventory.Managed.Membership, the promotion and the restriction from managed.promotion and managed.restricted, and a promoted master by the same adoption rule a planned master change already uses, a report from the host its own membership names as master at a strictly higher membership generation.",
+    "record_note": "The unwrapped pool CA key and any opened fence credential exist on the promoted host only after it activates, in the same 0600 files inside the already-0700 state directory the previous master used. Neither the key, the credential material, the credential reference nor any fence proof is ever logged, reported to the Controller or placed in any Controller store; the tests assert their absence from log capture, command results, verdict reasons and reported replica status. A ready member can open the material addressed to it at any time, which is an owner-visible property of the design rather than a lock, and is stated as such in the guide.",
+    "notes": "Amended 2026-09-19 by the review-fix batch (docs/changes/2026-09-19-phase4-review-fixes.json): an independent review of this slice reproduced three defects in it, all fixed with regressions - BUG-0333 (two partitioned survivors could both be promoted, plus the reachable-healthy-master and concurrent-candidate defects found while fixing it), BUG-0334 (the pool's virtual-machine owner records still moved during an authority freeze) and BUG-0352 (the promote route could not drive a current Nex Core). The durable record named above is amended accordingly: Transfer.Fence became Transfer.Fences, one verified proof per excluded host, and Transfer.FenceAgreed records the set the operator confirmed. Nothing moves to Nex Controller."
+  },
+  "verification": {
+    "method": "IMPLEMENTED; NATIVE ACCEPTANCE OUTSTANDING. Go unit tests with the race detector (go test -race -count=1 -timeout 30m on internal/agent, internal/protocol, internal/localcore, internal/vmhost; go test -race -count=1 -timeout 30m on internal/controller) running several hosts in one process over the real mutual-TLS pool peer transport with real certificates and real pool-CA signatures, with a test double injected at the point where Nex Core calls the fence. Covered: the whole preflight verdict matrix (no replica, tampered replica, a reachable healthy old master, a member at a higher generation, a reachable owner that disagrees about a VM, everything-but-the-fence passing and reported unknown rather than passed, no fence profile recorded); six refusals of things that are not proof, namely an acknowledged-only fence, a stale one, and proofs bound to another operation, host, generation or digest; the destructive acknowledgement being mandatory; full promotions on a two-host and a three-host pool with VM records proven byte-identical and certificates, peer origins and the pool ID unchanged; interruption at preflight, fence, activate and repoint each resuming to exactly one master; the boot rule with and without an unreachable member, a single-host pool never restricted, and a pool that never recorded a usable fence device restarting its master unrestricted; a returning old master restricted before any peer contact, refusing starts, defines, updates and authority numbering while still allowing stops and reporting, converging to member only on signed evidence and clearing only after reconciliation; an ownership conflict leaving it restricted with the VM named and the local definition intact, never started and never deleted; every start path refused including autostart leaving no permit; the sealed fence credential round trip master to replica to candidate asserting the exact identity bytes reach the candidate's own directory, with the wrong member, the wrong generation and tampered ciphertext all refused, retire on clear and on replace but never a reference another profile or a clustered-storage node still names, and the material proven absent from log capture, command results, verdict reasons and reported status; and the restricted-master-with-a-permanently-dead-member deadlock pinned as its own test, because owner decision OD-5 makes it a stated limit rather than an accident. Controller tests cover the three routes, their refusal matrix including deliberately accepting a promotion while the old master is perfectly fresh to the Controller, the credential never reaching the database, the audit trail or the response, the projection with a stale master keeping member-own reports while every master-derived field stays unknown, adoption of a promoted master, three stale old-master reports not flapping the pool row, a returning restricted old master projected with its own reason, and a Controller reopened from the same database mid-promotion. UI component suite (npm run typecheck, npm test) covers the verdict view, the two-step dialog with its typed pool name and power-off checkbox, the progress strip, the restricted note for both kinds, the fence device dialog, the row-action availability matrix, and a source-level assertion that no force, override or declare-lost wording exists anywhere in the promotion components. Offline contract checks: python3 -m unittest discover -s tests -p 'test_api_contract.py' with the new PoolPromotionContractTests, asserting the eleven protocol types against their Go structs in both contracts, the three routes against their registrations with their security and CSRF headers, the request shapes against the handler structs, every literal route refusal, every asynchronous Core refusal against the command semantics, the command kinds and their routing, the seven-entry checks list against the handler's own order, the member-own freshness rule against the projection source, the host-local restricted field against its handler, and that no request field or enum value offers a force, an override, a declare-lost or any timeout-based escape; python3 scripts/generate_api.py --check reports the generated reference current. Documentation gate: python3 scripts/check_docs.py --worktree. NOT executed and recorded as outstanding: any native multi-host promotion; any real fence - no fence_virsh power-off has ever run, so the central step of this slice is unproven outside a test double; a real reboot of a fenced old master; a real ownership conflict; a real restricted host; the Debian hook ownership behind the packaged host's networking dependencies; and any browser or 360 px review of the promotion dialog, the verdict list, the progress strip, the recovery view or the restricted banner. All of it is deferred to the Phase 4 native acceptance slice, which must not claim the OD-5 case at all.",
+    "evidence": [
+      "internal/agent/pool_promote_test.go",
+      "internal/agent/pool_fence_credential_test.go",
+      "internal/agent/pool_promote_partition_test.go",
+      "internal/agent/pool_transfer_lost_target_test.go",
+      "internal/agent/pool_authority_freeze_test.go",
+      "internal/protocol/pool_promotion_test.go",
+      "internal/vmhost/pool_fence_test.go",
+      "internal/localcore/pool_restricted_test.go",
+      "internal/controller/poolpromotion_test.go",
+      "internal/controller/pool_reported_fields_test.go",
+      "internal/controller/pool_evidence_test.go",
+      "web/src/pool-promotion.test.mjs",
+      "web/src/pool-members.test.mjs",
+      "tests/test_api_contract.py",
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/plans/2026-09-19-phase4-closure.md"
+    ]
+  }
+}

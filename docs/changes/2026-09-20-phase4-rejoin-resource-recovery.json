@@ -1,0 +1,53 @@
+{
+  "summary": "Correct Phase 4 same-pool rejoin recovery: retain old-pool VM-delete tombstones and safely consume signed eject-cleanup provenance for shared resources. API impact: existing contract.",
+  "paths": [
+    "internal/agent/pool_transfer.go",
+    "internal/agent/pool_network.go",
+    "internal/agent/pool_storage.go",
+    "internal/agent/pool_media.go",
+    "internal/agent/pool_vm_inventory_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/pool.go",
+    "internal/vmhost/pool_test.go",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/guide/join-a-pool.md",
+    "docs/qa/2026-09-19-phase4-native-acceptance.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Same-pool rejoin no longer requires an operator to remove and add the affected shared resources again.",
+    "pages": [
+      "docs/guide/join-a-pool.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Existing pool reconciliation and VM inventory operations keep their wire shapes; Core corrects durable rejoin results.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The fixes do not close Phase 4 or its recovery gates; native clean replay remains outstanding.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Core owns VM-delete history, managed resource lifecycle and eject-cleanup provenance; Controller adopts the resulting Core inventory.",
+    "record": "The member's Core managed journal stores signed eject-cleanup provenance and its one-time consumption receipt. pool-vms.json retains an old-pool vm-delete tombstone; the pool master adopts it from the rejoined member's current inventory and prunes only the matching stale owner record."
+  },
+  "verification": {
+    "method": "Reported focused, package and race checks were independently reviewed. A reset native final campaign passed retained-local eject after fresh target inventory, solo-pool deletion, same-ID Controller-driven rejoin, and original shared network/repository/ISO ID reapplication. It does not establish old-pool tombstone pruning or Phase 4 acceptance.",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "docs/qa/2026-09-19-phase4-native-acceptance.md",
+      "internal/vmhost/managed_test.go",
+      "internal/vmhost/pool_test.go",
+      "internal/agent/pool_vm_inventory_test.go"
+    ]
+  }
+}

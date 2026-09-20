@@ -1,0 +1,34 @@
+{
+  "summary": "Correct management-network UI copy and narrow-viewport hidden-label positioning, with retained browser evidence. API impact: none.",
+  "paths": [
+    "web/src/host-network.tsx",
+    "web/src/style.css",
+    "tests/integration/phase1_browser.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The guide already describes the host-side staged record and in-place bridge reconfiguration; corrected UI copy now matches it.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "This is Controller presentation, CSS and browser coverage using the existing host-network route; no caller or contract changed.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Intercepted UI evidence does not close a native or guide-walkthrough gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state is added or changed."
+  },
+  "verification": {
+    "method": "Reported web tests and typecheck passed. The retained Phase 1 browser command exited successfully on the reviewed dirty working tree; its unconditional U7/U10 assertions cover intercepted validation and requested-rollback UI states at 360 px. Isolated captures were visually inspected. No Core mutation occurred.",
+    "evidence": [
+      "tests/integration/phase1_browser.py",
+      "web/src/host-network.tsx"
+    ]
+  }
+}

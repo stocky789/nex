@@ -1,8 +1,24 @@
 # Production-readiness handoff
 
-Created: 2026-09-14. Updated: 2026-09-18. Status: **not production-ready**.
+Created: 2026-09-14. Updated: 2026-09-20. Status: **not production-ready**.
 
 ## Current status
+
+**Phase 4 is closed for disposable virtual-lab scope (2026-09-20); production remains open.** S1–S6
+are implemented in the dirty working tree. The final `f714` source-validation run passed Go race
+checks and the 374-test Python suite; it is not a release. Reviewed native evidence includes the
+repeated G1 lifecycle and missing-uplink recovery/cleanup, and S6-14 boot restriction, autostart
+suppression, refusal, rejoin and post-clear normal start/stop. `BUG-0372`–`BUG-0381` are fixed and
+the newest Core keeps its boot marker private. The final `f714` S6-18 strict harness is
+partial/FAIL: safe eject refusal for a live shared-storage reservation differed from its expected
+wording, so that run exited before timed-suppression observation. Its older scoped S6-18 result is
+separate historical evidence.
+
+Phase 4 and the initial manual-recovery gate are accepted for disposable virtual-lab scope only.
+OD-6 is decided: the strict unreachable-ready-member rule is approved (fence or fail-closed).
+Permanent limits stay open forever for this lab class: physical/BMC, five-host, package-install,
+authentic owner-conflict S6-12/16, OD-5 no-escape, and broader duplicate-writer/workload evidence.
+These results make no production or release claim.
 
 The BUG-0173 clean build (with BUG-0172) and the later storage-cluster refactor
 rebuild each passed guarded three-Core rollout, a clean 150-sample idle health
@@ -62,12 +78,25 @@ and Phase 3 installation evidence**, followed by native placement acceptance.
    membership changes and Controller replacement. Prove one durable
    owner and no second writer. Use the [placement plan](2026-09-18-master-vm-placement.md#acceptance)
    as the checklist; code implementation is complete, this evidence is not.
-4. **Complete the remaining Phase 4 Core foundation.** Member join plus storage/VLAN/shared-ISO
-   convergence are implemented in Core (unit/peer evidence; native two-host acceptance still
-   open). Close interrupted-reconciliation native proof and staged **management** network
-   recovery before treating a Controller join screen as completion. Then deliver signed
-   authority replicas and fenced transfer/eject/promotion with their recovery checks;
-   automatic succession retains its own quorum/fencing gate.
+4. **Phase 4 acceptance — closed for disposable virtual-lab scope (2026-09-20).** Every closure
+   slice is implemented and reviewed native/browser evidence is recorded in the
+   [native acceptance report](../qa/2026-09-19-phase4-native-acceptance.md) and
+   [closure plan](2026-09-19-phase4-closure.md). OD-6 strict unreachable-member rule is approved.
+   Permanent limits (physical/BMC, five-host, package-install, authentic S6-12/16, OD-5 no-escape)
+   are not claimed for this lab class. Post-review binary redeploy and S2/maintenance revalidation
+   remain underway. Automatic succession retains its own quorum/fencing gate and is untouched.
+   **Historical note (2026-09-19):** two independent reviews of the unreleased slices ran before the
+   campaign; every blocking finding is fixed (`BUG-0333`–`BUG-0353`). Four named design limits
+   remain documented: only a `virsh` fence profile can be recorded; an opted-in pool whose master
+   restarts while one other ready member is permanently dead stays restricted with no escape
+   (OD-5); the management-network rollback needs the Nex Core agent running (both units are now
+   `Restart=always`, but a deliberately stopped or masked unit arms nothing); a manual `virsh start`
+   of a managed guest on a drained **member** is not refused by the libvirt hook; a
+   management-network spec that omits a NIC carrying guest VLANs leaves that device unconfigured at
+   the next boot; and the 1 MiB pool-authority replica ceiling ends the ability to promote with no
+   operator lever. **OD-6 (project owner, 2026-09-20):** a promotion blocks while a ready member is
+   unreachable unless the same promotion fences it — the approved strict rule; a promotion can
+   power off more than one host.
 5. **Only then expand into the dependent roadmap.** Snapshots precede independent
    backup and verified restoration, followed by migration and later HA. Managed
    container applications stay after the VM foundation. Shared storage alone does
@@ -103,9 +132,9 @@ unexecuted items are kept apart.
 | Storage placement transitions | BUG-0132's stopped local → NFS → local walkthrough passed. Broader transitions and native disk-placement conversion remain open. |
 | Activation failure/replay | The selected BUG-0135 master fence/replay passed. The remaining failure modes are open. |
 | Five-host scale and soak | Three-host results do not certify five hosts, long-duration load or repeated fault recovery. |
-| Member authority replica | Planned, not implemented: signed, generation-numbered master push of pool authority to every ready member, with observed replica generation. See [pool authority transfer](2026-09-08-nex-platform.md#pool-authority-transfer-and-master-succession). |
-| Authority transfer / automatic succession | Planned, not implemented: planned handover, eject, manual promotion and quorum-plus-fence automatic succession, with their lab gates in the same section. |
-| Master-owned VM placement acceptance | **Implemented, acceptance open.** Core now approves create/update and VM media definition changes from the pool master's records using a fresh target-host preflight; Controller mirrors no longer grant or reject placement. Focused tests, browser review and bounded two-node nested-KVM/NFS checks passed ([native evidence](../qa/2026-09-18-native-placement-lab.md)). Controller replacement, storage-identity faults, membership races and interrupted multi-host recovery remain open. |
+| Member authority replica | **Implemented in the dirty working tree; full acceptance open.** The master signs its durable pool authority with the pool CA key, seals it per member, declares per-section digests and pushes it to ready members; members store it read-only and act on none of it. Reviewed G1/S5/S6 lifecycle evidence observes signed replicas, while complete replica-push/master-restart, fault and browser acceptance remains open. It is a recoverable copy, not independent authority. See [pool authority transfer](2026-09-08-nex-platform.md#pool-authority-transfer-and-master-succession) and the [pool authority guide](../guide/pool-authority-and-recovery.md). |
+| Authority transfer / automatic succession | **Closed for disposable virtual-lab scope (2026-09-20).** Planned master change, member eject, fence-verified promotion and safe rejoin are implemented; scoped reviewed native/browser evidence covers selected eject, transfer, promotion and rejoin cases with external `virsh` power-off. It does not establish physical fencing, workload continuity, duplicate-writer safety, authentic owner-conflict handling or all recovery paths. S6-14 boot restriction, autostart suppression, rejoin and post-clear start/stop were independently reviewed. The final `f714` S6-18 strict harness is partial/FAIL; its older scoped result is separate. Only a `virsh` fence profile can be recorded. OD-5 remains restricted/no-escape; OD-6 strict unreachable-member rule is approved. Automatic succession is still planned and not implemented. |
+| Master-owned VM placement acceptance | **Implemented, acceptance open.** Core now approves create/update and VM media definition changes from the pool master's records using a fresh target-host preflight; Controller mirrors no longer grant or reject placement. Focused tests, browser review and bounded two-node nested-KVM/NFS checks passed ([native evidence](../qa/2026-09-18-native-placement-lab.md)). Controller replacement, storage-identity faults, membership races and interrupted multi-host recovery remain open; the Phase 4 closure lab exercised the join/convergence matrix on the old build but has not yet run the placement fault matrix at all. One related defect was found and fixed there: a create aimed at a member whose shared-storage access the master last reported as stale sat `dispatched` with no operator signal, and now carries an advisory warning that refuses nothing and clears itself (`BUG-0326`). |
 | Physical SAN/NAS and fence devices | Needs an explicitly disposable supported hardware profile covering durability, power loss and exclusion. Nested virsh fencing does not certify physical devices. |
 | Recovery, mobility and HA | Snapshots, verified backup/restore, permanent host/master loss, migration, upgrades and separately gated automatic HA/failback keep their platform gates. Shared storage does not provide them. |
 | Latest ISO installation evidence | The local 0.3.2 snapshot (`ddb3887a…cac6d5`) passed offline BIOS/KVM installation, first boot/reboot, installed Core service and nested KVM in the [artifact lab](../qa/2026-09-18-release-artifact-lab.md); its UEFI coverage is menu-only and management was explicitly loopback-configured. The earlier exact 0.2.9 release ISO (`4c44133a…2f2b9`) passed BIOS/UEFI menu boots and unattended offline UEFI installation, first boot and reboot under TCG; Secure Boot host installation, the full Phase 3 multi-disk/network/recovery gate and physical hardware remain unaccepted. |

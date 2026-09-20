@@ -58,7 +58,10 @@ func (c *Controller) placementHost(tx *sql.Tx, pool, host string) error {
 	if json.Unmarshal([]byte(masterRaw), &masterCaps) != nil || !slices.Contains(masterCaps, protocol.PoolVMPlacementCapability) {
 		return fmt.Errorf("the pool master does not support master-owned VM placement; upgrade Nex Core")
 	}
-	return nil
+	// Presentation only: a host the master reports as drained is not offered as a placement
+	// target, so the operator sees the reason here instead of waiting for it. The Controller
+	// decides nothing about maintenance; the master refuses this placement again.
+	return c.maintenanceRefusal(tx, pool, master, host)
 }
 func (c *Controller) saveResource(tx *sql.Tx, user, requestID, pool, host, name, id string, cmd protocol.Command, payload any) (protocol.Operation, error) {
 	return c.saveResourceStatus(tx, user, requestID, pool, host, name, id, "queued", cmd, payload)
@@ -154,6 +157,23 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 		return map[string]any{"resource": cmd.ResourceLifecycle.Resource, "resource_id": cmd.ResourceLifecycle.ResourceID, "action": cmd.ResourceLifecycle.Action, "operation": op}
 	case cmd.CredentialRetire != nil:
 		return map[string]any{"receipt": cmd.CredentialRetire.Receipt, "action": "retire", "operation": op}
+	case cmd.Pool != nil:
+		if cmd.Pool.Action == "maintenance" {
+			return map[string]any{"host_id": cmd.Pool.MemberHostID, "enabled": cmd.Pool.Enabled, "operation": op}
+		}
+		// A master change, an eject and a cancel answer with the subject host and the
+		// action that was asked for; the transfer's stage is reported by the hosts.
+		// A promotion answers with the candidate it was addressed to; a fence profile with
+		// the host the profile belongs to. Neither response carries the profile itself, so
+		// no credential reference is ever echoed back to a client.
+		if cmd.Pool.Action == "master-change" || cmd.Pool.Action == "eject" || cmd.Pool.Action == "transfer-cancel" || cmd.Pool.Action == "promote" || cmd.Pool.Action == "fence-profile" {
+			return map[string]any{"host_id": cmd.Pool.MemberHostID, "action": cmd.Pool.Action, "operation": op}
+		}
+		// Never the invitation, the pool CA or the master URL: a join response carries only
+		// who was asked to join and the durable operation that asked.
+		return map[string]any{"host_id": cmd.Pool.MemberHostID, "peer_origin": cmd.Pool.PeerOrigin, "operation": op}
+	case cmd.ManagementNetwork != nil:
+		return map[string]any{"host_id": cmd.ManagementNetwork.HostID, "action": cmd.ManagementNetwork.Action, "operation": op}
 	case cmd.ZFSProvision != nil:
 		response := map[string]any{"name": cmd.ZFSProvision.Name, "pool_id": cmd.ZFSProvision.PoolID, "scope": cmd.ZFSProvision.Scope, "hosts": cmd.ZFSProvision.Hosts, "operation": op}
 		if cmd.ZFSProvision.RepositoryID != "" {
@@ -165,6 +185,75 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 	}
 }
 
+// resourceRowResponse projects a stored registration, filling in the Controller's own row key
+// for one that failed without a Core-allocated ID. A typed repository's identity is Core's to
+// mint, so a registration still in flight is honestly answered with an empty id — but a
+// registration the host refused will never get one, and with an empty id it could not be
+// addressed at all, not even to discard it.
+func resourceRowResponse(rowID string, cmd protocol.Command, op protocol.Operation) any {
+	if op.Status == "failed" && cmd.Storage != nil && cmd.Storage.ID == "" {
+		s := *cmd.Storage
+		s.ID = rowID
+		cmd.Storage = &s
+	}
+	return resourceResponse(cmd, op)
+}
+
+// registrationApplied reports whether a stored registration command is the mirror of
+// something a host has reported as applied. The mirroring passes rewrite the command's
+// status, so this is the Controller's own evidence that the resource exists on a host —
+// independent of the operation status, which keeps the original request's outcome.
+func registrationApplied(raw string) bool {
+	var cmd protocol.Command
+	if json.Unmarshal([]byte(raw), &cmd) != nil {
+		return true // Unreadable: never treat it as a discardable request record.
+	}
+	switch {
+	case cmd.Network != nil:
+		return cmd.Network.Status == "succeeded"
+	case cmd.Storage != nil:
+		return cmd.Storage.Status == "succeeded"
+	}
+	return true
+}
+
+// discardFailedRegistration answers a delete of a registration the host refused, and reports
+// whether it answered. A failed registration is Controller-scoped operation history, not pool
+// state: no host holds a record of it, nothing can be asked to undo it, and a fresh Controller
+// would never recreate it. So the discard deletes this Controller's own request row and relays
+// nothing — the same model the failed ISO import already has in deleteMedia. The operation and
+// its audit history stay, and the call takes no body.
+//
+// The guard is narrow on purpose: only a row whose operation failed *and* whose command no host
+// has reported as applied is discardable, so this can never delete the projection of a live
+// pool resource. Anything else is left to the caller's ordinary relayed-removal path.
+func (c *Controller) discardFailedRegistration(w http.ResponseWriter, user, id, kind string) bool {
+	tx, err := c.db.Begin()
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "storage unavailable")
+		return true
+	}
+	defer tx.Rollback()
+	var status, raw string
+	if tx.QueryRow("SELECT o.status,r.command FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.id=? AND r.kind=?", id, kind).Scan(&status, &raw) != nil || status != "failed" {
+		return false
+	}
+	if registrationApplied(raw) {
+		fail(w, http.StatusConflict, "a host reports this registration as applied, so it is not a failed request record; remove it on the host instead of discarding it")
+		return true
+	}
+	if _, err = tx.Exec("DELETE FROM managed_resources WHERE id=? AND kind=?", id, kind); err != nil {
+		fail(w, http.StatusInternalServerError, "discarding the failed registration failed")
+		return true
+	}
+	if c.audit(tx, user, strings.TrimSuffix(kind, "-register")+".discard", id) != nil || tx.Commit() != nil {
+		fail(w, http.StatusInternalServerError, "discarding the failed registration failed")
+		return true
+	}
+	write(w, http.StatusOK, map[string]any{"id": id, "deleted": true})
+	return true
+}
+
 // failedVMCreateRecordID is an internal primary key for a failed create's retained replay
 // record. Valid guest IDs cannot contain a colon, so this cannot be a guest identity.
 func failedVMCreateRecordID(operationID string) string { return "failed-vm-create:" + operationID }
@@ -174,7 +263,7 @@ func moveFailedVMCreateRecord(tx *sql.Tx, id string) error {
 	return err
 }
 func (c *Controller) listResources(w http.ResponseWriter, kind string) {
-	rows, err := c.db.Query("SELECT r.command,o.id,o.host_id,o.kind,o.request_id,o.status,o.error,o.created_at,o.updated_at,o.actor FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind=? ORDER BY r.name,r.id", kind)
+	rows, err := c.db.Query("SELECT r.id,r.command,o.id,o.host_id,o.kind,o.request_id,o.status,o.error,o.created_at,o.updated_at,o.actor FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind=? ORDER BY r.name,r.id", kind)
 	if err != nil {
 		fail(w, 500, "resource lookup failed")
 		return
@@ -182,9 +271,9 @@ func (c *Controller) listResources(w http.ResponseWriter, kind string) {
 	defer rows.Close()
 	out := []any{}
 	for rows.Next() {
-		var raw, created, updated string
+		var rowID, raw, created, updated string
 		var op protocol.Operation
-		if rows.Scan(&raw, &op.ID, &op.HostID, &op.Kind, &op.RequestID, &op.Status, &op.Error, &created, &updated, &op.Actor) != nil {
+		if rows.Scan(&rowID, &raw, &op.ID, &op.HostID, &op.Kind, &op.RequestID, &op.Status, &op.Error, &created, &updated, &op.Actor) != nil {
 			fail(w, 500, "resource decode failed")
 			return
 		}
@@ -193,7 +282,7 @@ func (c *Controller) listResources(w http.ResponseWriter, kind string) {
 			fail(w, 500, "resource decode failed")
 			return
 		}
-		out = append(out, resourceResponse(cmd, op))
+		out = append(out, resourceRowResponse(rowID, cmd, op))
 	}
 	if rows.Err() != nil {
 		fail(w, 500, "resource read failed")
@@ -362,12 +451,18 @@ func (c *Controller) renameNetwork(w http.ResponseWriter, r *http.Request, user,
 // Controller keeps nothing: the mirror row disappears only when the master reports the
 // tombstone, and a fresh Controller rebuilds the same picture from that report alone.
 func (c *Controller) networkLifecycle(w http.ResponseWriter, r *http.Request, user, action string) {
+	id := r.PathValue("id")
+	// A registration the master refused published nothing on any host, so discarding it is
+	// local and takes no body. Answered before the removal body is even read, exactly as
+	// deleteMedia answers a failed import.
+	if action == "remove" && identifierValid(id) && c.discardFailedRegistration(w, user, id, "network-register") {
+		return
+	}
 	var body resourceLifecycleAPIRequest
 	if !decode(w, r, &body) {
 		return
 	}
 	body.Name = strings.TrimSpace(body.Name)
-	id := r.PathValue("id")
 	if !identifierValid(id) || !nameValid(body.RequestID) || !nameValid(body.PoolID) {
 		fail(w, http.StatusBadRequest, "network, pool_id and stable request_id required")
 		return
@@ -541,7 +636,7 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		// A remote repository's configuration belongs to its master. Members may report
 		// their own access while reconnecting, but that observation must never replace
 		// the master's mirrored record or manufacture a second repository row.
-		if m.Membership != nil && m.Membership.Valid() == nil && m.Membership.PoolID == pool && m.Membership.MasterHostID != host && (protocol.IsPoolSharedStorage(s) || s.ZFSProvisioned) {
+		if m.Membership != nil && m.Membership.Valid() == nil && m.Membership.PoolID == pool && m.Membership.MasterHostID != host && (protocol.IsPoolSharedStorage(s) || s.ZFSProvisioned) && !s.Tombstone {
 			continue
 		}
 		if s.OperationID == "" {
@@ -952,7 +1047,7 @@ func (c *Controller) adoptAppliances(tx *sql.Tx, host, pool string, inv *protoco
 
 func managedKind(kind string) bool {
 	switch kind {
-	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "network-remove", "network-update", "iso-import", "media-remove", "vm-create", "vm-update", "vm-power", "vm-delete", "vm-media":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "network-remove", "network-update", "iso-import", "media-remove", "vm-create", "vm-update", "vm-power", "vm-delete", "vm-media", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "management-network":
 		return true
 	}
 	return false
@@ -1188,6 +1283,43 @@ func cpuFeaturesSupported(tx *sql.Tx, spec protocol.VMCreateSpec) error {
 	return nil
 }
 
+// vmCreateWarnings names the shared pool resources this Controller's mirror does not
+// currently show the selected host able to use. It is advisory and nothing else: Core owns
+// placement (see createVM below), refuses again on its own evidence, and may well accept a
+// request warned about here once the host reports working access. The warnings exist so an
+// operator can tell a request that is merely slow from one aimed at a host whose access to a
+// required repository, network or ISO the master last reported as failed or stale.
+func (c *Controller) vmCreateWarnings(tx *sql.Tx, spec protocol.VMCreateSpec) []string {
+	var out []string
+	seen := map[string]bool{}
+	warn := func(kind, id string) {
+		if id == "" || seen[kind+id] {
+			return
+		}
+		seen[kind+id] = true
+		out = append(out, fmt.Sprintf("the pool master's last report does not show this host's access to %s %s as current; the request may sit dispatched until it does", kind, id))
+	}
+	for _, disk := range spec.Disks {
+		if _, err := c.readyStorageForHost(tx, disk.StorageID, spec.PoolID, spec.HostID); err != nil {
+			warn("storage repository", disk.StorageID)
+		}
+	}
+	for _, nic := range spec.NICs {
+		if _, err := c.readyNetworkForHost(tx, nic.NetworkID, spec.PoolID, spec.HostID); err != nil {
+			warn("network", nic.NetworkID)
+		}
+	}
+	for _, media := range []string{spec.MediaID, spec.DriversMediaID} {
+		if media == "" {
+			continue
+		}
+		if _, err := c.readyMediaForHost(tx, media, spec.PoolID, spec.HostID); err != nil {
+			warn("ISO", media)
+		}
+	}
+	return out
+}
+
 func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf string) {
 	var v createVMRequest
 	if !decode(w, r, &v) {
@@ -1238,12 +1370,17 @@ func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf
 	b := random()[:32]
 	spec.ID = fmt.Sprintf("%s-%s-4%s-a%s-%s", b[:8], b[8:12], b[13:16], b[17:20], b[20:])
 	cmd := protocol.Command{OperationID: random(), Kind: "vm-create", VM: &spec}
+	warnings := c.vmCreateWarnings(tx, spec)
 	op, err := c.saveResource(tx, user, v.RequestID, v.PoolID, v.HostID, v.Name, spec.ID, cmd, v)
 	if err != nil || tx.Commit() != nil {
 		fail(w, 500, "VM operation storage failed")
 		return
 	}
-	write(w, 202, resourceResponse(cmd, op))
+	response := resourceResponse(cmd, op)
+	if body, ok := response.(map[string]any); ok && len(warnings) > 0 {
+		body["warnings"] = warnings
+	}
+	write(w, 202, response)
 }
 
 // refreshVM makes the Controller's mirror of a VM it already holds match the definition its
@@ -1254,7 +1391,7 @@ func (c *Controller) refreshVM(tx *sql.Tx, pool, host string, reported protocol.
 		return nil
 	}
 	var raw string
-	err := tx.QueryRow("SELECT r.command FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind='vm-create' AND r.id=? AND r.pool_id=? AND r.host_id=? AND o.status='succeeded'", reported.ID, pool, host).Scan(&raw)
+	err := tx.QueryRow("SELECT r.command FROM managed_resources r JOIN operations o ON o.id=r.operation_id WHERE r.kind='vm-create' AND r.id=? AND r.host_id=? AND o.status='succeeded'", reported.ID, host).Scan(&raw)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -1279,7 +1416,7 @@ func (c *Controller) refreshVM(tx *sql.Tx, pool, host string, reported protocol.
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec("UPDATE managed_resources SET command=?,name=? WHERE id=? AND kind='vm-create'", string(command), next.Name, next.ID)
+	_, err = tx.Exec("UPDATE managed_resources SET pool_id=?,host_id=?,command=?,name=? WHERE id=? AND kind='vm-create'", pool, host, string(command), next.Name, next.ID)
 	return err
 }
 

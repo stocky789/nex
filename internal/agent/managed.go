@@ -10,6 +10,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+
 	"nex.local/nex/internal/protocol"
 	"nex.local/nex/internal/vmhost"
 	"path/filepath"
@@ -21,7 +23,7 @@ import (
 
 func managedCommand(kind string) bool {
 	switch kind {
-	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "storage-zfs-provision", "network-register", "network-remove", "network-update", "media-remove", "iso-import", "vm-create", "vm-update", "vm-power", "vm-delete", "vm-media", "pool-member-join", "pool-storage-reconcile":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "storage-zfs-provision", "network-register", "network-remove", "network-update", "media-remove", "iso-import", "vm-create", "vm-update", "vm-power", "vm-delete", "vm-media", "pool-member-join", "pool-storage-reconcile", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "management-network":
 		return true
 	}
 	return false
@@ -87,15 +89,6 @@ type managedCompletion struct {
 	background bool
 }
 
-func sendManagedCompletion(ctx context.Context, completed chan<- managedCompletion, result managedCompletion) bool {
-	select {
-	case completed <- result:
-		return true
-	case <-ctx.Done():
-		return false
-	}
-}
-
 // defaultsInterval is how often the worker retries default storage/network registration
 // (including when the default storage directory was missing at enroll) and looks for new uplinks.
 const defaultsInterval = time.Minute
@@ -147,7 +140,9 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 				log.Printf("pool ZFS provisioning did not complete; inspect the Core journal")
 			} else {
 				for _, result := range resumed {
-					if !sendManagedCompletion(ctx, completed, managedCompletion{result: result, background: true}) {
+					select {
+					case completed <- managedCompletion{result: result, background: true}:
+					case <-ctx.Done():
 						return
 					}
 				}
@@ -161,7 +156,7 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 				}
 			}
 			_ = PublishPoolVMInventory(ctx, memberStore)
-			ReconcilePoolVMAutostart(ctx, memberStore)
+			_ = ReconcilePoolVMAutostart(ctx, memberStore)
 			// Retry NFS/SMB mounts that failed at boot on every host, including joined pools.
 			engine.StartRemoteMounts(ctx)
 			// Joined pools reconcile remote repositories through the master-owned desired
@@ -187,7 +182,25 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 				result.Error = "managed command host identity does not match enrolled host"
 			} else {
 				if cmd.Pool != nil {
-					if cmd.Kind == "pool-storage-reconcile" && cmd.Pool.Action == "storage-reconcile" {
+					if cmd.Kind == "pool-maintenance" {
+						// Master-owned drain intent: one durable membership field,
+						// no native work, and a definite result either way.
+						result = ExecutePoolMaintenance(&Store{dir: dir, State: identity}, cmd)
+					} else if cmd.Kind == "pool-promote" {
+						// A fence-verified promotion, driven by the candidate itself:
+						// the same durable, resumable machine, proved before it moves.
+						result = ExecutePoolPromotion(ctx, &Store{dir: dir, State: identity}, cmd)
+					} else if cmd.Kind == "pool-fence-profile" {
+						// One master-owned membership field: how this pool would exclude
+						// a host, recorded before it has to be excluded.
+						result = ExecutePoolFenceProfile(&Store{dir: dir, State: identity}, cmd)
+					} else if cmd.Kind == "pool-transfer" {
+						// A planned master change or an eject: a durable, resumable Core
+						// state machine. This worker executes one command at a time, so
+						// no other authority write of this host is in flight while it
+						// freezes.
+						result = ExecutePoolTransfer(ctx, &Store{dir: dir, State: identity}, cmd)
+					} else if cmd.Kind == "pool-storage-reconcile" && cmd.Pool.Action == "storage-reconcile" {
 						memberStore := &Store{dir: dir, State: identity}
 						var masterURL string
 						masterURL, err = PoolMasterURL(memberStore)
@@ -197,9 +210,16 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 					} else {
 						err = vmhost.HandlePoolCommand(ctx, dir, identity.HostID, cmd)
 					}
-					if err == nil {
+					// Maintenance and a transfer already produced their own definite
+					// result; every other pool command reports success by returning no
+					// error.
+					if err == nil && cmd.Kind != "pool-maintenance" && cmd.Kind != "pool-transfer" && cmd.Kind != "pool-promote" && cmd.Kind != "pool-fence-profile" {
 						result = protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: time.Now().UTC()}
 					}
+				} else if cmd.Kind == "management-network" {
+					// Host-scoped and pool-free: this host's own /etc files and its
+					// durable staged record, with no membership or storage fence.
+					result = ExecuteManagementNetwork(ctx, dir, cmd)
 				} else if cmd.Kind == "storage-zfs-provision" {
 					result, err = ExecutePoolZFSProvision(ctx, &Store{dir: dir, State: identity}, cmd)
 				} else {
@@ -224,6 +244,13 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 					var finishVMExecution func(protocol.Result, error) error
 					executed := false
 					replayBlocked := false
+					if err == nil {
+						// One guard for every Controller-driven pool registry change this
+						// host performs. VM commands are deliberately absent: they are
+						// guarded inside the durable ownership record instead, so a stop,
+						// a shutdown or a force-stop is never blocked by a master change.
+						err = poolRegistryCommandWritable(memberStore, cmd)
+					}
 					if err == nil {
 						finishMutation, err = BeginPoolStorageMutation(ctx, memberStore, cmd)
 					}
@@ -281,11 +308,96 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 					}
 				}
 			}
-			if !sendManagedCompletion(ctx, completed, managedCompletion{result: result, err: err}) {
+			select {
+			case completed <- managedCompletion{result: result, err: err}:
+			case <-ctx.Done():
 				return
 			}
 		}
 	}
+}
+
+// osHostname is what this host calls itself, and what it reports as Inventory.Hostname; tests
+// replace it to exercise the apply confirmation without renaming the machine.
+var osHostname = os.Hostname
+
+// ExecuteManagementNetwork performs one step of this host's staged management-network edit.
+// Every refusal is a definite failed result carrying Core's own sentence, never a local
+// execution error: a Controller maps a result whose error ends in
+// protocol.ManagementNetworkConflict to 409 and anything else to a plain failure.
+func ExecuteManagementNetwork(ctx context.Context, dir string, cmd protocol.Command) protocol.Result {
+	result := protocol.Result{OperationID: cmd.OperationID, Status: "failed", ObservedAt: time.Now().UTC()}
+	v := cmd.ManagementNetwork
+	if v == nil {
+		result.Error = "management network command carries no request"
+		return result
+	}
+	if v.OperationID != cmd.OperationID {
+		result.Error = "management network request does not match its command"
+		return result
+	}
+	if err := v.Valid(); err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	var err error
+	// Two identities, deliberately: the command's own OperationID is the managed journal's key,
+	// so a redelivered command replays its recorded result instead of acting twice, while the
+	// change the engine acts on is named by ChangeID. Staging creates the change, so there they
+	// are the same; every later step names the change the host itself recorded and reported.
+	switch v.Action {
+	case "stage":
+		_, err = vmhost.StageManagementNetwork(dir, v.Spec, v.OperationID, v.ExpectedRevision, time.Duration(v.WindowSeconds)*time.Second)
+	case "apply":
+		// The one edit that can strand a host names its target explicitly, and the host
+		// itself checks the name: a Controller mirror can be stale, the hostname cannot.
+		if err = confirmsThisHost(v.Confirmation); err == nil {
+			var rec *vmhost.ManagementNetworkRecord
+			if rec, err = vmhost.ApplyManagementNetwork(ctx, dir, v.ChangeID); err == nil {
+				armManagementRollback(dir, rec.Deadline)
+			}
+		}
+	case "confirm":
+		_, err = vmhost.ConfirmManagementNetwork(dir, v.ChangeID)
+	case "cancel":
+		// Discards a staged change, or rolls an applied one back early at the operator's
+		// request. The rollback bounces the management interface, so this result may not
+		// reach the Controller until the host reports again on the previous configuration;
+		// the managed journal keeps it until then.
+		_, err = vmhost.CancelManagementNetwork(ctx, dir, v.ChangeID)
+	}
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	result.Status = "succeeded"
+	return result
+}
+
+func confirmsThisHost(confirmation string) error {
+	name, err := osHostname()
+	if err != nil || name == "" {
+		return errors.New("this host cannot read its own name to check the confirmation")
+	}
+	if !strings.EqualFold(strings.TrimSpace(confirmation), name) {
+		return errors.New("the confirmation does not name this host")
+	}
+	return nil
+}
+
+// armManagementRollback makes the deadline exact for as long as this process lives. It is an
+// optimization, not the guarantee: the deadline is durable, and RecoverManagementNetwork runs
+// at agent start and on every probe tick regardless. Re-arming is harmless because recovery
+// takes the record lock and does nothing unless the change is still applied and out of time.
+func armManagementRollback(dir string, deadline time.Time) {
+	if deadline.IsZero() {
+		return
+	}
+	time.AfterFunc(time.Until(deadline)+time.Second, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_, _ = vmhost.RecoverManagementNetwork(ctx, dir)
+	})
 }
 
 // BeginPoolResourceRemoval is the master-side, pool-wide refusal for a Controller-issued
@@ -316,6 +428,13 @@ func BeginPoolResourceRemoval(ctx context.Context, s *Store, cmd protocol.Comman
 		// A rename moves a name and a generation; no VM definition references it.
 		return nil
 	}
+	// A master change leaves the new master holding ISO records it adopted from shared
+	// storage while it was a member. Removal never unlinks an adopted file — the pool's
+	// only copy belongs to the host that imported it — so removing one here would drop the
+	// pool's record and leave the file behind with nothing to remove it. Say so instead.
+	if v.Resource == "media" && vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).MediaAdoptedHere(v.ResourceID) {
+		return errors.New("this pool master adopted this ISO from shared storage rather than importing it; the file stays on shared storage, so remove it from the host that imported it")
+	}
 	incomplete := errors.New("pool VM inventory is incomplete; wait for every member to report before removing this " + noun)
 	poolVMMu.Lock()
 	state, err := loadPoolVMs(s)
@@ -327,6 +446,12 @@ func BeginPoolResourceRemoval(ctx context.Context, s *Store, cmd protocol.Comman
 		// This host's own VMs are covered by Core's local dependency check inside Execute;
 		// a single-host pool therefore needs no published inventory at all.
 		if member.HostID == s.State.HostID {
+			continue
+		}
+		// An ejected row is kept in membership for ever and its host is no longer part of
+		// this pool: its last snapshot describes VMs that left with it and must not hold a
+		// pool network or ISO against removal. recordPoolVMInventory drops the snapshot.
+		if member.Status == "ejected" {
 			continue
 		}
 		// A member that is not ready still runs the VMs it last published, so its snapshot
@@ -452,9 +577,29 @@ func commandHost(cmd protocol.Command) string {
 		if cmd.CredentialRetire != nil {
 			return cmd.CredentialRetire.HostID
 		}
-	case "pool-member-join", "pool-storage-reconcile":
+	case "pool-member-join", "pool-storage-reconcile", "pool-maintenance", "pool-transfer", "pool-fence-profile":
+		// Maintenance, a master change, an eject and a fence profile are all performed by
+		// the master about another host, so the command's target is the master, not that
+		// host.
 		if cmd.Pool != nil {
 			return cmd.Pool.Membership.MasterHostID
+		}
+	case "pool-promote":
+		// A promotion is the one transfer the master cannot perform: it is gone. The
+		// command goes to the surviving member the operator selected.
+		if cmd.Pool != nil {
+			return cmd.Pool.MemberHostID
+		}
+	case "pool-join":
+		// The only pool command addressed to a host that is not the master: the joining
+		// host performs the whole exchange itself. Run executes it, not the worker,
+		// because completing it rewrites the pool identity the worker snapshotted.
+		if cmd.Pool != nil {
+			return cmd.Pool.MemberHostID
+		}
+	case "management-network":
+		if cmd.ManagementNetwork != nil {
+			return cmd.ManagementNetwork.HostID
 		}
 	case "network-register":
 		if cmd.Network != nil {

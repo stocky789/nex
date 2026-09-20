@@ -22,6 +22,7 @@ import (
 const poolNetworkPath = "/api/v1/pool/networks/"
 
 var poolNetworkMu sync.Mutex
+var poolReadyMembership = Membership                                                  // test seam for callers that must not take a second membership snapshot
 var poolNetworkAccess = map[string]map[string]map[string]protocol.PoolNetworkAccess{} // dir -> network -> host -> access
 
 // applyPoolNetwork materializes one master-owned VLAN on this member. Tests stub it.
@@ -38,15 +39,14 @@ func poolNetworkAccessFor(s *Store) map[string]map[string]protocol.PoolNetworkAc
 // when this host is not the master. Only the master reports member access: a member has no
 // members of its own, and rows for a host no longer in the pool must stop being reported.
 func readyPoolMembers(s *Store) []string {
-	membership, err := Membership(s)
+	membership, err := poolReadyMembership(s)
 	if err != nil || membership.MasterHostID != s.State.HostID {
 		return nil
 	}
-	var out []string
-	for _, member := range membership.Members {
-		if member.HostID != s.State.HostID && member.Status == "ready" {
-			out = append(out, member.HostID)
-		}
+	peers := poolConfirmationPeers(membership, s.State.HostID)
+	out := make([]string, len(peers))
+	for i, member := range peers {
+		out[i] = member.HostID
 	}
 	return out
 }
@@ -345,6 +345,13 @@ func reconcilePoolNetwork(ctx context.Context, s *Store, c *http.Client, masterU
 		NetworkID: network.ID, HostID: s.State.HostID, Generation: network.Generation, ObservedAt: time.Now().UTC(),
 	}
 	if err := applyPoolNetwork(ctx, s, network); err != nil {
+		// A replayed journal result is not an observation: this pass did not evaluate the
+		// condition, so stamping it with this pass's clock would show the master a failure
+		// nobody checked as freshly seen. Leave the member's last real observation standing.
+		var replayed poolReplayedFailure
+		if errors.As(err, &replayed) {
+			return err
+		}
 		access.Error = err.Error()
 		_ = postPoolNetworkAccess(ctx, c, masterURL, network.ID, access)
 		return err
@@ -399,17 +406,71 @@ func applyPoolNetworkNative(ctx context.Context, s *Store, network protocol.Netw
 		return err
 	}
 	if removed {
-		return poolConvergeRefusalf("pool network %s was removed on this host and is listed again by the master; remove it on the master and add it again", network.ID)
+		membership, membershipErr := Membership(s)
+		if membershipErr != nil {
+			return membershipErr
+		}
+		command := protocol.Command{OperationID: poolConvergeOperation("network-apply", network.ID, network.Generation), Kind: "network-register", Network: &network}
+		allowed, grantErr := engine.EjectCleanupReapplyAvailable(command, s.State.PoolID, s.State.HostID, membership.Generation)
+		if grantErr != nil {
+			return poolConvergeRefusalf("pool network %s cannot be reapplied: %s", network.ID, grantErr)
+		}
+		if !allowed {
+			return poolConvergeRefusalf("pool network %s was removed on this host and is listed again by the master; remove it on the master and add it again", network.ID)
+		}
+		if err := poolNetworkApplyRefusal(network); err != nil {
+			return err
+		}
+		result, executeErr := engine.ExecuteEjectCleanupReapply(ctx, command, s.State.PoolID, s.State.HostID, membership.Generation)
+		if executeErr != nil {
+			return executeErr
+		}
+		if result.Status != "succeeded" {
+			return errors.New(result.Error)
+		}
+		return nil
 	}
+	// Precheck before Execute, as the removal path does. A host precondition the native apply
+	// refuses — no such uplink yet, the wrong kind of uplink — is re-evaluated on every probe
+	// tick and journals nothing, so the operator's fix converges on the next tick instead of
+	// waiting for the hour-pinned operation ID below to change.
+	if err := poolNetworkApplyRefusal(network); err != nil {
+		return err
+	}
+	started := time.Now().UTC()
 	result, err := engine.Execute(ctx, protocol.Command{OperationID: poolConvergeOperation("network-apply", network.ID, network.Generation), Kind: "network-register", Network: &network}, nil)
 	if err != nil {
 		return err
 	}
 	if result.Status != "succeeded" {
-		if result.Error != "" {
-			return errors.New(result.Error)
+		detail := result.Error
+		if detail == "" {
+			detail = "pool network apply did not succeed"
 		}
-		return errors.New("pool network apply did not succeed")
+		// An older result means Execute replayed this hour's entry rather than attempting
+		// the apply again; the caller must not report it as a new observation.
+		if result.ObservedAt.Before(started) {
+			return poolReplayedFailure{at: result.ObservedAt, detail: detail}
+		}
+		return errors.New(detail)
+	}
+	return nil
+}
+
+// poolNetworkApplyRefusal reports the host preconditions of a pool VLAN apply that can be
+// evaluated without touching anything, so a member that cannot apply yet journals nothing and
+// retries the moment the operator fixes the cause. The conditions and their wording are the
+// native apply's own (vmhost.CheckNetworkApply, which ensureGuestBridge runs first), so the
+// precheck and the apply can never disagree. It only ever refuses, and never approves an
+// apply — a condition it cannot see from here (an uplink the host itself is addressed on,
+// unreadable host network configuration) is still refused natively, under the hour-pinned
+// operation ID.
+func poolNetworkApplyRefusal(n protocol.NetworkRegistration) error {
+	if err := protocol.ValidateVLAN(n); err != nil {
+		return poolConvergeRefusalf("pool network %s is not a valid VLAN registration: %s", n.ID, err)
+	}
+	if err := vmhost.CheckNetworkApply(n); err != nil {
+		return poolConvergeRefusalf("%s", err)
 	}
 	return nil
 }
@@ -480,18 +541,33 @@ func poolConvergeRefusalf(format string, args ...any) error {
 	return poolConvergeRefusal{detail: detail}
 }
 
+// poolReplayedFailure is a failure the managed journal replayed for an operation ID this pass
+// did not attempt again. It is a stored result, not an observation, so the member reports the
+// converge outcome from it but never re-stamps the master's member row with this pass's clock.
+type poolReplayedFailure struct {
+	at     time.Time
+	detail string
+}
+
+func (e poolReplayedFailure) Error() string { return e.detail }
+
 // poolJournalIncomplete is what a peer list answers with when this host cannot read its own
 // journal whole. It is a fixed string: it names no file and carries nothing from the journal.
 const poolJournalIncomplete = "pool resource list unavailable: managed journal is incomplete"
+
+// poolConvergeNow is the clock the operation ID below is pinned to. Tests simulate a day.
+var poolConvergeNow = time.Now
 
 // poolConvergeOperation names a member-side converge operation deterministically within the
 // current UTC hour. A converge pass runs every probe tick, so a salted ID would write one
 // journal entry per tick for an operation that keeps failing and reach the engine's
 // retained-entry cap within a day, after which every managed operation on the host fails.
 // Replaying the hour's ID returns the stored failure without repeating any effect; the next
-// hour's ID retries for real.
+// hour's ID retries for real. It is the backstop for a failure no precheck saw coming, and
+// bounds one persistently failing resource to 24 journal entries a day; a cause a precheck
+// can evaluate is refused before Execute, journals nothing and retries on the next tick.
 func poolConvergeOperation(action, id string, generation uint64) string {
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(action+"\x00"+id+"\x00"+strconv.FormatUint(generation, 10)+"\x00"+time.Now().UTC().Format("2006-01-02T15"))))
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(action+"\x00"+id+"\x00"+strconv.FormatUint(generation, 10)+"\x00"+poolConvergeNow().UTC().Format("2006-01-02T15"))))
 }
 
 func recordPoolConverge(s *Store, name string, err error) {
@@ -507,8 +583,12 @@ func recordPoolConverge(s *Store, name string, err error) {
 // Only a member converges, and the reported error is an outcome word, never remote text.
 func PoolConvergeChecks(s *Store) []protocol.Check {
 	membership, err := Membership(s)
-	if err != nil || membership.MasterHostID == s.State.HostID {
+	if err != nil {
 		return nil
+	}
+	if membership.MasterHostID == s.State.HostID {
+		now := time.Now().UTC()
+		return []protocol.Check{{Name: poolNetworkConvergeCheck, Status: "healthy", Freshness: "fresh", ObservedAt: now}, {Name: poolMediaConvergeCheck, Status: "healthy", Freshness: "fresh", ObservedAt: now}}
 	}
 	poolConvergeStatus.Lock()
 	observed := map[string]poolReconcileObservation{}

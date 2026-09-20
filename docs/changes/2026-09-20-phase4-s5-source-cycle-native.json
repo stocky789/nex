@@ -1,0 +1,37 @@
+{
+  "summary": "Record corrected final-campaign S5 source-cycle and durable-boundary interruption evidence. API impact: existing contract.",
+  "paths": [
+    "docs/qa/2026-09-19-phase4-native-acceptance.md",
+    "docs/guide/pool-authority-and-recovery.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The master-change workflow is unchanged, but its verification section must no longer say that no native master-change evidence exists.",
+    "pages": [
+      "docs/guide/pool-authority-and-recovery.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The rerun exercised existing transfer and replica behavior without changing a route or wire field.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "One S5 source-cycle result does not establish S6 promotion or complete Phase 4.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Core owns the durable transfer and replica records used to resume the source cycle.",
+    "record": "The existing Core pool-peer transfer record and pool replica remain authoritative and are reported for Controller adoption."
+  },
+  "verification": {
+    "method": "The initial final-campaign S5-3 result failed and is retained. The corrected same-operation source-cycle rerun passed with transfer success and converged replica/membership observations. On candidate 2f50, debugger-bounded S5-4 stopped the source after durable Frozen activate and before HandedOff; source cycle then converged the three-host transfer. S5-5 stopped the target after durable master persistence and before its reply; the handed-off source refused a Controller-routed maintenance write, then source cycle converged the transfer. Earlier polling, inotify and TLS-fault attempts are invalid historical attempts. Neither result proves VM-workload continuity or foreign-owner safety; broader S6 remains open.",
+    "evidence": [
+      "docs/qa/2026-09-19-phase4-native-acceptance.md"
+    ]
+  }
+}

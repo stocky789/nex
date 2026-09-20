@@ -3655,3 +3655,1828 @@ Append resolved defects with their evidence and the approach to avoid.
 - Avoid: retrying under fresh operation IDs without releasing the failed reservation (the retry
   is refused by the reservation, not by the host condition), and releasing a `needs_attention`
   entry whose native state is ambiguous.
+
+## BUG-0318 — A staged management network change could never be applied, confirmed or discarded
+
+- Date: 2026-09-19; found in lane review of the unshipped staged management-network slice
+  (S3), before any release.
+- Symptom: every `apply`, `confirm` and `cancel` of a staged management-network edit failed
+  with `no management network change is staged as <id>: management network conflict`. A
+  staged change could be created and then neither applied nor discarded. Both unit suites
+  passed, because neither crossed the Controller/Core boundary.
+- Root cause: two distinct identities were being served by one field. The Controller minted a
+  fresh `operation_id` per REST call — correct, it is the durable managed journal's replay key
+  — while Nex Core matched the action against the *staged change's* own ID and additionally
+  required `request.operation_id == command.operation_id`. The REST body carried no field for
+  the staged change's ID.
+- Fix: a separate `change_id` on `protocol.ManagementNetworkRequest`, required by `Valid()`
+  for `apply`, `confirm` and `cancel` and refused on `stage`; Core matches on it; the
+  Controller fills it from the host's own reported `management_network.operation_id`, never
+  from Controller memory, and refuses a body `change_id` that names a different change.
+  `ManagementNetworkStatus.window_seconds` was added in the same change so a staged change can
+  still state its window after a page reload.
+- Regression: `internal/controller/hostnetwork_e2e_test.go` —
+  `go test -race -count=1 -timeout 30m ./internal/controller` passed (`ok
+  nex.local/nex/internal/controller 32.453s` for the `TestHostNetwork|TestPoolJoin|TestPoolMembers`
+  subset re-run by the documentation lane; `TestHostNetworkStagedEditEndToEnd` and
+  `TestHostNetworkActionsNameTheReportedChange` both PASS). The test drives stage to apply to
+  confirm and stage to cancel through the real Controller HTTP handlers into the real Nex Core
+  engine on a scratch `/etc`, and was observed failing on the pre-fix code with the text above.
+  Both the GitHub and Gitea foundation workflows run it, because each runs
+  `go test -race -timeout 20m ./...` on pushes and pull requests. No native host run: the
+  interface bounce is faked and `TestManagementNetworkNetns` has never executed.
+- Avoid: collapsing the two identities — making the command ID the change ID breaks journal
+  replay, and having Core ignore the ID lets a stale command act on a change the operator never
+  saw. Equally, do not have the Controller remember the staged change's ID; that would put host
+  state in the Controller. Do not trust two green unit suites either side of a boundary as
+  evidence that the boundary works.
+
+## BUG-0319 — A quiet pool master erased every member's peer origin
+
+- Date: 2026-09-19; found in documentation-lane review of the unshipped Controller-driven
+  pool-join slice (S1), before any release.
+- Symptom: `GET /api/v1/pools/{id}/members` returned `peer_origin: ""` for every member
+  whenever `authoritative` was false, so the Hosts tab's `master_url` prefill silently vanished
+  exactly when an operator was likely to be diagnosing a quiet master.
+- Root cause: `peer_origin` was assigned inside the `if out.Authoritative` block in
+  `poolMembers`, alongside genuine observations (`status`, `error`, `checks`, access counts).
+  It is not an observation: it is part of the master's durable membership record.
+- Fix: assign it unconditionally, with a comment stating why.
+- Regression: `go test -race -count=1 ./internal/controller -run
+  TestPoolMembersKeepsPeerOriginWhenMasterIsNotFresh` passes (PASS, re-run by the documentation
+  lane); the failure was observed first by reverting the fix in place. Both the GitHub and Gitea
+  foundation workflows run it through `go test -race -timeout 20m ./...` on pushes and pull
+  requests.
+- Avoid: making `authoritative` true for a stale master, or caching the last-seen origin in the
+  Controller — that would make the Controller the only holder of a host address.
+
+## BUG-0320 — A quiet pool master's stale failure rows were presented as current
+
+- Date: 2026-09-19; found in documentation-lane review of the unshipped S1 slice.
+- Symptom: member rows carried `failures` entries mirrored from the master's resource
+  registrations even when `authoritative` was false, contradicting the contract's rule that an
+  unobserved value is shown as unknown.
+- Root cause: the `uplinkFailures` append sat after the `if out.Authoritative` block instead of
+  inside it; the neighbouring `memberAccess` failures were already inside it.
+- Fix: guard the append with `out.Authoritative`.
+- Regression: `go test -race -count=1 ./internal/controller -run
+  TestPoolMembersReportsNoFailuresWhenMasterIsNotFresh` passes (PASS, re-run by the
+  documentation lane); it also asserts the rows *do* appear while the master is fresh, so it
+  proves withholding rather than an empty fixture. Both workflows run it as above.
+- Avoid: blanket-blanking every field for a non-fresh master. `guests` comes from the member's
+  own inventory, `last_maintenance` from the Controller's own operations table, and `replica`
+  has its own staleness ladder. Check each field's owner before hiding it.
+
+## BUG-0321 — A terse Core refusal produced an empty 409 body
+
+- Date: 2026-09-19; found in documentation-lane review of the unshipped S1 slice.
+- Symptom: a `failed` PoolResult carrying an empty `error` produced `409 {"error":""}`; the UI
+  showed a refusal with no text.
+- Root cause: `poolResultValid` permits an empty `Error` on a failure, and `addPoolMember`
+  relayed `result.Error` straight into `fail`.
+- Fix: fall back to `the pool master refused to issue a join invitation` when the relayed
+  message is empty; a non-empty Core message is still relayed verbatim.
+- Regression: `go test -race -count=1 ./internal/controller -run
+  TestPoolJoinTerseCoreRefusalIsReadable` passes (PASS, re-run by the documentation lane); the
+  pre-fix failure `terse Core refusal: 409 ""` was observed first. Both workflows run it as above.
+- Avoid: tightening `poolResultValid` to reject empty-error failures instead — that turns an
+  honest if terse refusal into a 504 broker timeout, which is a worse lie and makes the retry
+  advice wrong.
+
+## BUG-0322 — An abandoned pool-join request was answered with a bare 200
+
+- Date: 2026-09-19; found in documentation-lane review of the unshipped S1 slice.
+- Symptom: when the client disconnected while the handler waited on the broker, the handler
+  returned having written nothing, so net/http emitted `200` with an empty body — a success
+  status for an operation that never happened.
+- Root cause: `case <-r.Context().Done(): return` in `relayPoolRequest`'s select wrote no
+  response.
+- Fix: write `499` with `the client disconnected before the pool master answered; retry with
+  the same request_id`. The pre-existing `defer` already deletes the broker entry, so an exact
+  retry with the same `request_id` is accepted rather than refused as already active.
+- Regression: `go test -race -count=1 ./internal/controller -run
+  TestPoolJoinAbandonedRequestIsNotSuccessAndReleasesBroker` passes (PASS, re-run by the
+  documentation lane); the pre-fix failure `an abandoned join was answered with success: 200`
+  was observed first. The test cancels the request context while the broker holds it, then
+  retries the same `request_id` and expects 202. Both workflows run it as above.
+- Avoid: deleting the broker entry only on the success and timeout paths, or dropping the
+  `Context().Done()` case altogether — the handler would then hold a goroutine and a broker slot
+  for the full join wait after the client left. `internal/controller/storage_cluster.go`'s
+  `relayStorageCluster` carried the identical defect; another lane fixed it in the same working
+  tree (`internal/controller/storage_cluster_abandoned_test.go`), which is where the "grep every
+  caller of the shape, not only the one the report names" rule paid off.
+
+## BUG-0323 — An expired pool-join invitation could outlive its window after a Controller restart
+
+- Date: 2026-09-19; found in documentation-lane review of the unshipped S1 slice.
+- Symptom: a single-use pool-join invitation and pool CA could sit in
+  `managed_resources.command` past the 15-minute TTL in a Controller that restarted and then
+  received no further pool traffic.
+- Root cause: the scrub was armed only by an in-process `time.AfterFunc`, which dies with the
+  process, and by two of the three pool-join routes; `poolJoinCandidates` never called it,
+  although the sweep's own comment claimed every pool-join route did.
+- Fix: call `scrubPoolJoinInvitations` from `Open` (immediately before the health monitor
+  starts) and from `poolJoinCandidates`, and correct the comment.
+- Regression: `go test -race -count=1 ./internal/controller -run
+  TestPoolJoinInvitationScrubbedOnControllerStart` passes (PASS, re-run by the documentation
+  lane); it backdates the queued operation past the TTL, closes and reopens the Controller and
+  asserts the invitation and pool CA are gone with no HTTP request made. The pre-fix failure was
+  observed first. Both workflows run it as above.
+- Avoid: adding a background ticker goroutine for this — one query at start plus the route calls
+  covers it without another lifecycle to stop and test. And do not trust a comment that claims a
+  hook runs everywhere: grep the callers.
+
+## BUG-0324 — Controller and host-local API disagreed on a trailing-slash origin
+
+- Date: 2026-09-19; found in documentation-lane review of the unshipped S1 slice.
+- Symptom: `POST /api/v1/pools/{id}/members` returned `400` for `https://host:9444/` while the
+  host-local `POST /api/local/v1/pool/join` accepted the identical string, so the same operator
+  input worked on one path and not the other. Only API clients hit it; the UI normalises first.
+- Root cause: `bareHTTPSOrigin` required an empty path and an exact match against
+  `https://`+host, whereas the host-local `validHTTPSOrigin` allows a single `/`.
+- Fix: `normalizedHTTPSOrigin` accepts at most one trailing `/` and returns the canonical
+  slash-less form; `bareHTTPSOrigin` delegates to it. The Controller normalises `peer_origin`
+  and `master_url` *before* building the replay payload and before forwarding, and normalises a
+  host-reported `peer_origin` too, so the two spellings are the same request for exact-retry
+  replay. Paths, queries, fragments, userinfo and non-HTTPS schemes are still refused.
+- Regression: `go test -race -count=1 ./internal/controller -run
+  TestPoolJoinOriginAcceptsTrailingSlashLikeTheHostLocalAPI` passes (PASS, re-run by the
+  documentation lane); it joins with slashed origins, asserts the forwarded command carries the
+  normalised form, asserts the unslashed spelling of the same `request_id` replays with 200, and
+  asserts a real path is still 400. The pre-fix failure was observed first. Both workflows run it
+  as above.
+- Avoid: relaxing only the validator and leaving the raw string in the payload — then the two
+  spellings become different payloads and an exact retry turns into `request_id already used
+  with another payload`. Normalise at the boundary, once, before the replay record is built.
+  Equally, do not loosen the Controller further than the host-local rule; the point is parity,
+  not permissiveness.
+
+## BUG-0325 — A registration the pool master refused could never be discarded
+
+- Date: 2026-09-19; found by the Phase 4 native acceptance campaign (lab check D1), before release.
+- Symptom: a pool VLAN registration the master refused stayed in `GET /api/v1/networks` for ever
+  with `status: failed`. `DELETE` and `PATCH /api/v1/networks/{id}` both answered `404 network is
+  not registered on this pool's master`, so the row could not be removed or renamed and no action
+  existed to clear it. The storage twin was worse: a `storage-register` the master rejected produced
+  a row whose `id` was the empty string, so no route could address it at all. The failed ISO import
+  already had the right model — a separate **Discard failed import** that asks no host to do
+  anything.
+- Root cause: `networkLifecycle` (`internal/controller/managed.go`) requires
+  `operations.status = 'succeeded'` before relaying and 404s otherwise, with no discard branch of
+  the kind `deleteMedia` has. Separately `registerStorage` (`internal/controller/storage.go`) stored
+  a typed registration under the synthetic row key `pending-storage-<operation_id>` while leaving
+  `cmd.Storage.ID` empty, because Core allocates the repository ID; the mirroring renames the row to
+  Core's ID on success, so only refused registrations were left with an empty `id` in the response
+  and the list, which key on the command, not on the row.
+- Fix: one shared helper `discardFailedRegistration`, used by the network `DELETE` and by a new
+  `DELETE /api/v1/storage/{id}`. It deletes only the Controller's `managed_resources` row, relays
+  nothing, audits `network.discard` / `storage.discard`, keeps the operation and its audit history,
+  and takes no body. Its guard is narrow: discardable only when the operation failed **and** the
+  stored command is not one a host has reported as applied; a mirrored-applied row answers `409` and
+  survives. `resourceRowResponse` fills the row key into the `id` of a *failed* storage registration
+  only, so a pending one still honestly answers `id: ""` and the Controller still never invents a
+  repository ID.
+- Regression: `internal/controller/failed_registration_discard_test.go`,
+  `TestFailedNetworkRegistrationIsDiscardable` and
+  `TestFailedStorageRegistrationIsAddressableAndDiscardable`. Command:
+  `go test -race -count=1 -run 'TestFailedNetworkRegistrationIsDiscardable|TestFailedStorageRegistrationIsAddressableAndDiscardable' ./internal/controller`
+  — passes. Observed failing first: `DELETE /api/v1/networks/4cfa76a1…: got 400 want 200:
+  {"error":"invalid JSON request"}` and `a storage registration answered with an empty id, so no
+  route can address it`. Full package: `ok nex.local/nex/internal/controller 256.627s`. Both
+  `.github/workflows/phase1.yml:29` and `.gitea/workflows/phase1.yml:29` run
+  `go test -race -timeout 20m ./...` on pushes to `'**'` and on pull requests, so no workflow change
+  was needed. UI coverage: `web/src/managed.test.mjs` and `web/src/storage.test.mjs`, run by
+  `npm --prefix web run test` at line 70 of both workflow files. **No native two-host lab rerun of
+  D1 against the fix.**
+- Avoid: relaxing `networkLifecycle`'s `succeeded` requirement so a failed row can be relayed — the
+  master has nothing to remove and would refuse again. Do not key the discard on the operation
+  status alone: a failed operation's row can later become the mirror of a host-reported resource
+  (the mirror passes rewrite that row's command while `operations.status` stays `failed`), and
+  discarding it would delete a live pool resource's projection. Do not answer a pending typed
+  registration with a Controller-minted repository ID; that is Core's to allocate.
+
+## BUG-0326 — A placement against a member with stale shared-storage access sat silent
+
+- Date: 2026-09-19; found by the Phase 4 native acceptance campaign (lab check A3, fault b), before
+  release.
+- Symptom: with NFS dropped from a member, the master's `member_access` row for that member froze.
+  Three minutes later `POST /api/v1/vms` targeting that member on the shared repository still
+  answered `202`, and the operation sat `dispatched` for the whole outage with no operator signal,
+  then succeeded when NFS returned. Nothing unsafe happened — the master's preflight is the
+  authority and the VM was only created once access returned — but an operator had no way to tell
+  that request from a merely slow one.
+- Root cause: `createVM` (`internal/controller/managed.go`) calls only `placementHost` and
+  `cpuFeaturesSupported`. `readyStorageForHost` / `readyNetworkForHost` / `readyMediaForHost`, which
+  carry the `-stale-after` gate, were used for the placement hint, media import and `vm-media` but
+  never for `vm-create` — a deliberate "Core validates, Controller mirrors" choice — and nothing
+  exposed the mirror's opinion anywhere an operator would see it.
+- Fix: an honest non-blocking signal, no Controller veto and no change to acceptance semantics.
+  `vmCreateWarnings` reuses the three `ready*ForHost` helpers as advisory only and returns one
+  sentence per required repository, network or ISO the mirror does not show the selected host able
+  to use. `createVM` adds them to the `202` body as `warnings` when non-empty; `operationWarnings`
+  recomputes them for every still-`dispatched` `vm-create` in the operations listing, so the signal
+  is live rather than a snapshot and nothing extra is stored.
+- Regression: `internal/controller/placement_warning_test.go`,
+  `TestStaleMemberAccessWarnsWithoutRefusingPlacement`. Command:
+  `go test -race -count=1 -run TestStaleMemberAccessWarnsWithoutRefusingPlacement ./internal/controller`
+  — passes. Observed failing first: `no warning for a create against a member whose repository
+  access is stale`. It first proves a fresh member is **not** warned about, so the warning is not
+  blanket. Both workflows run it as above (`phase1.yml:29`). UI coverage in
+  `web/src/managed.test.mjs` via `npm --prefix web run test` (line 70 of both files). **No native
+  lab rerun against the fix.**
+- Avoid: turning this into a Controller-side placement veto. The mirror is a 30-second-old copy of
+  the master's observation; refusing on it would make the Controller a second placement authority
+  and would refuse placements the master would accept. Do not store the warnings with the request
+  either — a stored warning goes stale the moment the host recovers, which is the failure this
+  defect is about.
+
+## BUG-0327 — "Roll back now" could not undo an applied management-network change
+
+- Date: 2026-09-19; found in documentation-lane review of the unshipped S3 slice, before release.
+- Symptom: on an applied, unconfirmed management network change the host network panel offers
+  **Roll back now**, which submits action `cancel`. Nex Core refused it with `management network
+  change <id> is applied and cannot be cancelled: management network conflict`, so an operator who
+  could see that the new configuration was wrong, and still had connectivity, could not undo it
+  early; the only way out was to wait for the rollback deadline.
+- Root cause: `CancelManagementNetwork` (`internal/vmhost/management_network.go`) accepted only the
+  `staged` stage, and no command action reached `RollbackManagementNetwork`. The REST contract and
+  the UI both assumed `cancel` rolled an applied change back; all three layers passed their own unit
+  suite while the flow could not work.
+- Fix: `cancel` on an applied, unconfirmed change now runs the same `rollbackLocked` restore with
+  the reason `rolled back at the operator's request`, and records
+  `ManagementNetworkRecord.RequestedRollback` **before** the restore begins, so a rollback
+  interrupted before the interface came back up resumes as the same operator rollback. It is
+  reported as `management_network.requested_rollback`, and the agent's `management-network` health
+  check is derived from stage `rolled-back` **and** `!requested_rollback`, so a rollback the
+  operator asked for is an outcome, not a failure. Staged cancel (discard) and the
+  confirmed/cancelled/rolled-back conflicts are unchanged.
+- Regression: `TestHostNetworkOperatorRollbackEndToEnd`
+  (`internal/controller/hostnetwork_e2e_test.go`, Controller → real `agent.ExecuteManagementNetwork`
+  → real engine, with the result delivered on a *later* report to model the cut connection),
+  `TestManagementNetworkOperatorRollback` (`internal/vmhost/management_network_test.go`,
+  byte-identical restore of all three files) and the extended
+  `TestReportRecordsManagementConnectivityAndProjectsStatus` (`internal/agent`). Command:
+  `go test -race -count=1 -run 'TestHostNetworkOperatorRollbackEndToEnd' ./internal/controller` →
+  `ok 14.128s`. Observed failing first: `the operator's early rollback was refused by the host:
+  {Status:failed Error:management network change … is applied and cannot be cancelled: management
+  network conflict}`. Both workflows run all three via `go test -race -timeout 20m ./...`
+  (`phase1.yml:29`); `web/src/host-network.test.mjs` covers the new label and note and runs via
+  `npm --prefix web run test` (line 70 of both files). **The namespace test that would bounce a
+  real interface has still never executed**, so no real `ifup`/`ifdown` rollback has been observed.
+- Avoid: do not special-case the UI to hide the button, and do not let the Controller drive the
+  rollback. The rollback is Core's and must stay re-runnable and durable, because it can cut the
+  very connection that asked for it. Do not distinguish an operator rollback from an automatic one
+  by stage plus error text: only a durable flag can say which it was after a restart.
+
+## BUG-0328 — A member retried a failed pool VLAN apply only on the clock hour, and re-posted the replayed failure as a fresh observation
+
+- Date: 2026-09-19; found by the Phase 4 native acceptance campaign (lab checks A2/D3), before
+  release.
+- Symptom: after a member's pool VLAN apply failed because the uplink NIC did not exist, fixing the
+  uplink did not converge the member. Convergence happened only when the UTC clock hour rolled over
+  — anywhere from seconds to 60 minutes later — so `pool-network-reconciliation` stayed `failed` and
+  the network row stayed unusable for placement. Meanwhile every 10 s converge tick re-posted the
+  *replayed* journal error to the master with a brand-new `observed_at`, so the master's
+  `member_access` row looked like a fresh observation of a condition that no longer existed.
+- Root cause: `applyPoolNetworkNative` (`internal/agent/pool_network.go`) called
+  `ManagedEngine.Execute` with an operation ID that hashes the current UTC clock hour. That hour
+  pinning exists on purpose — it bounds journal growth from a persistently failing apply, because a
+  salted ID would mint one entry per 10 s tick and reach the engine's 10000-entry cap within a day,
+  after which every managed operation on the host fails — but it was the *only* retry gate on the
+  apply path, so every tick inside the hour replayed the stored failure instead of re-evaluating the
+  host precondition, and `reconcilePoolNetwork` stamped that replayed result with `time.Now()`
+  before posting it. The removal path already ran `CheckNetworkRemoval` before `Execute`; the apply
+  path had no precheck.
+- Fix: (1) a side-effect-free precheck before `Execute` — now `vmhost.CheckNetworkApply`, beside
+  the existing `CheckNetworkRemoval`, holding the six conditions the native apply refuses on
+  (invalid registration, missing uplink, uplink is a bridge/VLAN/loopback, uplink is a bond member,
+  VLAN port owned by another bridge, bridge name taken by a non-bridge). It reads only
+  `/sys/class/net` and `/proc/net/vlan`, only ever refuses, journals nothing, and is re-evaluated
+  every tick, so an operator's fix converges on the next pass. (2) `poolReplayedFailure`: a result
+  whose `ObservedAt` predates this pass was replayed, not evaluated, and is **not** posted — the
+  master's last real observation and its original `observed_at` stand. The hour-pinned ID stays as
+  the backstop for failures no precheck can see, so the journal bound is unchanged at ≤ 24 entries
+  per resource per day.
+- Regression: in `internal/agent/pool_network_test.go` —
+  `TestPoolNetworkApplyRefusalJournalsNothingAndRetriesWhenTheCauseIsFixed`,
+  `TestPoolNetworkUnexpectedFailureJournalsAtMostOncePerHour` (a simulated day of 1440 ticks),
+  `TestPoolNetworkReplayedFailureKeepsTheMastersObservation`, `TestPoolNetworkApplyPrecheckRefusals`;
+  in `internal/agent/pool_media_test.go`,
+  `TestPoolMediaAdoptionFailureIsReEvaluatedEveryTickAndJournalsNothing`; and in
+  `internal/vmhost/vlan_test.go`, `TestCheckNetworkApplyAndTheNativeApplyRefuseAlike`, which proves
+  the precheck and the native apply return byte-identical errors for each condition. Command:
+  `go test -race -count=1 -timeout 30m ./internal/agent ./internal/vmhost` →
+  `ok nex.local/nex/internal/agent 16.452s`, `ok nex.local/nex/internal/vmhost 12.829s`. Observed
+  failing first with a temporary reproduction on the unmodified tree (three passes returning the
+  identical stored `observed_at`, one journal entry per refused apply) and, for the second half, by
+  deleting the replay guard and re-running the kept test. Both workflows run them via
+  `go test -race -timeout 20m ./...` (`phase1.yml:29`). **No native lab rerun against the fix.**
+- Avoid: do **not** salt the converge operation ID (timestamp, counter, random) so every tick
+  retries for real — that is exactly what the hour pinning prevents, and it reaches the engine's
+  `managed journal full; manual recovery required` cap in a day, after which every managed operation
+  on the host fails. Shortening the window is the same mistake more slowly. The retry gate must be a
+  *precondition re-evaluated for free*. And do not re-stamp a replayed journal result with the
+  current clock to keep a row looking fresh — that is what made the lab row lie.
+
+## BUG-0329 — Re-adding a member before its master read as a broken host
+
+- Date: 2026-09-19; found by the Phase 4 native acceptance campaign (lab check A6), before release.
+- Symptom: adding a pool member to a replacement Controller before its master had reported it
+  answered `502 {"error":"host could not enroll with the controller at …: controller rejected
+  request (HTTP 409): pool identity is held; the pool master has not reported this ready member"}`.
+  A retry 30 s later succeeded with the member's original host and pool IDs. The order is documented
+  in `docs/guide/manage-controller.md`, but a 502 wrapping a nested 409 reads like a broken host
+  rather than a normal wait.
+- Root cause: `addSiteHost` (`internal/controller/addhost.go`) wrapped every non-200, non-409 answer
+  from the host's local enrollment endpoint into one 502. The Controller's own refusal reaches it
+  indirectly — the host relays it as its own error text — so a well-known refusal was flattened into
+  a transport failure.
+- Fix: the refusal sentence is a named constant `poolIdentityHeldRefusal` beside where `enroll`
+  emits it (`internal/controller/identity.go`), and `addSiteHost` special-cases that one string: it
+  answers `409` with plain guidance, `"retryable": true` (the marking `poolTransferOperation`
+  already uses for a conflict an operator retries unchanged) and `host_error` carrying the host's
+  own words. Every other host-side enrollment failure is still a 502.
+- Regression: `internal/controller/readd_member_retryable_test.go`,
+  `TestReaddingAMemberBeforeItsMasterIsARetryableConflict`. Command:
+  `go test -race -count=1 -run TestReaddingAMemberBeforeItsMasterIsARetryableConflict ./internal/controller`
+  — passes; it asserts the 409, the guidance, `retryable`, the preserved `host_error`, and that a
+  different host-side failure is still 502. Observed failing first: `got 502 want 409`. Both
+  workflows run it as above (`phase1.yml:29`); the UI state machine is covered in
+  `web/src/managed.test.mjs` via `npm --prefix web run test` (line 70 of both files). **No native
+  Controller-replacement rerun against the fix.**
+- Avoid: mapping every nested 409 from a host to a Controller 409 — the enrollment endpoint has
+  other 409s (`host identity already enrolled`, `presented pool name does not match the
+  Core-reported pool`) that are not retryable waits. And do not have the Controller wait or poll for
+  the master's report inside the add-host request: the master reports on its own schedule and the
+  Controller must not drive a multi-step operation.
+
+## BUG-0330 — An abandoned clustered-storage request was answered 200
+
+- Date: 2026-09-19; found by independent review of the pool-join fixes, **in shipped code**.
+- Symptom: when a client disconnected while `relayStorageCluster` waited on the storage-cluster
+  broker, the handler returned having written nothing, so net/http emitted a bare `200` with an
+  empty body — a success status for clustered-storage work no Core ever answered. It affected every
+  route through that relay: `GET /api/v1/storage/cluster`, `POST /api/v1/storage/cluster/apply` and
+  `POST /api/v1/storage/cluster/verify-fence`.
+- Root cause: `case <-r.Context().Done(): return` in `relayStorageCluster`'s select
+  (`internal/controller/storage_cluster.go`) wrote no response. Identical to the pool-join defect
+  fixed in `relayPoolRequest`.
+- Fix: write `499` (`statusClientClosedRequest`, already defined in `pooljoin.go`) with an
+  explanatory body. The pre-existing `defer` already deletes the broker entry, so an exact retry
+  with the same `request_id` is accepted rather than refused as already active.
+- Regression: `internal/controller/storage_cluster_abandoned_test.go`,
+  `TestAbandonedStorageClusterRequestIsNotSuccessAndReleasesBroker`. Command:
+  `go test -race -count=1 -run TestAbandonedStorageClusterRequestIsNotSuccessAndReleasesBroker ./internal/controller`
+  — passes; it parks an apply on the broker, cancels the request context, asserts the answer is not
+  in the 2xx range, then retries the same `request_id`, lets Core answer it and expects 200.
+  Observed failing first: `an abandoned clustered-storage request was answered with success: 200`.
+  Both workflows run it via `go test -race -timeout 20m ./...` (`phase1.yml:29`).
+- Avoid: dropping the `Context().Done()` case instead — the handler would then hold a goroutine and
+  a broker slot for the full 30 s after the client left. Do not delete the broker entry only on the
+  success and timeout paths. This is the second instance of the same shape; when adding a relay with
+  a `select`, write a status on **every** branch.
+
+## BUG-0331 — A cancel was accepted after an eject was already durable
+
+- Date: 2026-09-19; found in documentation-lane review of the unshipped S5 slice, before release.
+- Symptom: `POST /api/v1/pools/{id}/master/cancel` for an in-flight eject was accepted at stages
+  `repoint` and `leave`, after the membership without that member had been written at the next
+  generation. Core set `stage: aborted` without restoring the membership and stopped the
+  re-point/leave loop, so the ejected host might never be told to leave and the remaining members
+  converged only via the authority probe — an aborted transfer and a removed member at once. The UI
+  never offered it, but the route did. A cancelled eject also recorded the *master change* sentence.
+- Root cause: `cancelPoolTransfer` (`internal/agent/pool_transfer.go`) gated only on a terminal
+  stage and on the target having activated — the master-change rule — with no rule for an eject's
+  own irreversible step.
+- Fix: one predicate `poolTransferCancellable`, enforced by `cancelPoolTransfer` **and** reported as
+  `protocol.PoolTransferStatus.cancellable` (and on `PoolPromotionStatus`), so the reported flag and
+  the accepted cancel cannot drift. Cancellable only before the first irreversible durable step:
+  a master change until the signed hand-off, an eject until the membership write (stages `freeze`,
+  `remove`), a promotion never. New refusals: `host <id> is already removed from this pool's
+  membership; the eject can only go forward` and `this pool promotion has powered the old pool
+  master off; it cannot be cancelled and can only go forward`. A cancelled eject now records `the
+  pool member eject was cancelled by an operator`.
+- Regression: `internal/agent/pool_transfer_test.go`,
+  `TestPoolEjectCannotBeCancelledOnceTheMembershipIsWritten` (cancel refused, record untouched at
+  `repoint`, the eject then completing on the next tick with exactly one master throughout) and
+  `TestPoolTransferCancellableMatchesTheCancelAtEveryStage` (15 records over every stage of all
+  three actions, asserting the reported flag equals whether `cancelPoolTransfer` actually accepts
+  it, including a handed-off master change doing the real abort RPC). Command:
+  `go test -race -count=1 ./internal/agent` → `ok 17.0s`. Observed failing first: `cancel after the
+  membership removal = {Status:"failed", Error:"the pool master change was cancelled by an
+  operator"}` and `master-change freeze: reported cancellable = false, want true`. Both workflows
+  run them via `go test -race -timeout 20m ./...` (`phase1.yml:29`). **No native multi-host run of
+  the refused-cancel path**; the evidence is the in-process lab over the real mTLS peer transport.
+- Avoid: refusing every cancel once a transfer is frozen. A master change must stay cancellable
+  through the freeze and the replicate, and the hand-off window must still be attemptable — the
+  target's durable never-activate record decides it, not the stage name. Equally, do not leave the
+  UI to infer cancellability from a hard-coded stage list: Core owns the predicate and reports it.
+
+## BUG-0332 — The fence credential reached the master, but the candidate does the fencing
+
+- Date: 2026-09-19; found by independent review of the unshipped S6 slice, before release.
+- Symptom: a fence-verified promotion could never actually fence. The fence credential is delivered
+  to the pool **master**, which records the profile, and `vmhost` reads the material locally from
+  `<state-dir>/storage-cluster/fence-credentials/<ref>`. But the host that fences during a promotion
+  is the **candidate**, and Core replicated the profile (with its reference) in the membership
+  without the material, so the candidate never held the file. Every promotion test passed, because
+  they all injected a fake fence at the verification seam; a real promotion would have failed at the
+  one step the whole design exists for.
+- Root cause: the credential handoff was designed for clustered storage, where the host that
+  records a profile is the host that uses it. Nothing carried the material to the host that would
+  need it *after* the recording host was gone — and it cannot be delivered then, by definition.
+- Fix: each replica push reads the material once and seals it **per member** with the same primitive
+  as the pool CA key, under a distinct context binding pool, member, generation, fenced host and
+  reference (`protocol.PoolWrappedFenceCredential`, carried in `PoolAuthorityReplica.fence_credentials`).
+  The sealed blob is inside `SigningBytes`, so tampering is detected, and excluded from
+  `ContentDigest`, so one generation keeps one digest for every member. A member stores it sealed and
+  opens it only while performing a promotion; the preflight opens it only to answer truthfully and
+  keeps nothing. `ExecutePoolFenceProfile` refuses to record a profile unless the master actually
+  holds the material, bounds it at 16 KiB, and keeps a private digest in its own `pool-peer.json`;
+  only `PoolMember.fence_credential_version` is replicated, so rotated material advances the
+  authority generation and identical material re-recorded moves nothing.
+- Regression: `internal/agent/pool_fence_credential_test.go` (new) plus additions to
+  `internal/agent/pool_promote_test.go`, `internal/protocol/pool_promotion_test.go` and
+  `internal/vmhost/pool_fence_test.go`: a credential round trip master → replica → candidate with
+  the fake fence asserting it received **the exact identity bytes** from the candidate's own
+  directory; wrong member, wrong generation and tampered ciphertext all refused; the record-time
+  refusal with no material; the version moving on rotation and not on an identical re-record; the
+  oversize refusal; retire on clear and on replace, never retiring a reference another profile or a
+  clustered-storage node still names; the preflight blocked structurally with no credential; two-
+  and three-host promotions fencing with the unwrapped material and the new master re-wrapping for
+  the remaining member; and log capture plus command result, verdict reasons and replica status
+  asserted free of the key, the host-key string and the PEM header. Command:
+  `go test -race -count=1 -timeout 30m ./internal/agent ./internal/protocol ./internal/localcore ./internal/vmhost`
+  → `ok agent 16.926s`, `ok protocol 1.051s`, `ok localcore 10.261s`, `ok vmhost 12.775s`. Both
+  workflows run them via `go test -race -timeout 20m ./...` (`phase1.yml:29`), and
+  `tests/test_api_contract.py::PoolPromotionContractTests` holds the wire shape, run by
+  `python3 -m unittest discover -s tests -p 'test_*.py'` at `phase1.yml:53` in both files.
+  **No real fence has ever run**: every test injects a double where Core calls the fence, so the
+  credential's use against a real `virsh` endpoint is unproven.
+- Avoid: do not "fix" this by delivering the credential to every host at record time over the
+  Controller — the Controller must never hold fence material, and a host that joins later would
+  still miss it. Do not give the candidate the material only when a promotion starts, either: the
+  master it must fence is gone by then, which is the whole problem. And do not present the sealing
+  as an access control — a ready member can open what is addressed to it whenever it likes, which is
+  an owner-visible property of the design and is stated in the guide, not a lock.
+
+## BUG-0333 — Two partitioned survivors could both be promoted, giving one pool two masters
+
+- Date: 2026-09-19; found by an **independent review** of this campaign's unreleased Phase 4 work
+  (authority review, `.cache/.../reports/review-authority.md`, finding F1), before release. Never
+  present in a published build.
+- Symptom: with the pool master dead and the two surviving ready members unable to reach each
+  other, promoting each of them in turn succeeded. Both ended as pool master of the same pool. The
+  reviewer's scenario, reproduced verbatim: `DUAL MASTER: [member-1 member-2]`.
+- Root cause: `probePoolPromotionHosts` (`internal/agent/pool_promote.go`) let an **unreachable**
+  host pass the `replica-supremacy` check silently — the rule was "any *reachable* host holding a
+  higher generation blocks". An unreachable ready member that is not the old master is exactly the
+  host that holds this pool's authority replica and could therefore be promoted the same way, so
+  its silence is not evidence of anything. A second defect was found while fixing it:
+  `poolPromotionRefusal(verdict, "old-master-exclusion")` skipped the exclusion check whatever its
+  status, so a promotion aimed at a **reachable, healthy** master would have passed the preflight
+  stage and fenced it. A third: nothing stopped two reachable hosts running concurrent promotions
+  of the same pool.
+- Fix: an unreachable ready non-master member now sets `Blocks` and puts `replica-supremacy` into
+  `unknown` naming it, and passes only when this promotion has itself excluded it with a verified,
+  promotion-bound fence proof. The exclusion became multi-host: Core computes `FenceHostIDs` (the
+  old master plus every blocking host with a recorded profile, sorted), refuses when any of them
+  cannot be fenced naming the per-host reason, and passes only when every one has a proof bound to
+  pool + host + operation + generation and at most 15 minutes old. `poolTransferRecord.Fence`
+  became `Fences []StorageClusterFenceStatus`, each persisted before the host is acted on. The
+  exclusion refusal now tolerates only `unknown` ("nothing fenced yet"); `blocked` is a refusal, so
+  a healthy master can never be fenced. A reachable host reporting a non-terminal promotion of its
+  own blocks with `pool host <ids> is already performing a promotion of this pool; let it finish or
+  cancel it before promoting another host`. And the whole set became **operator consent**: the
+  command carries `fence_host_ids`, compared against Core's freshly computed list at the preflight
+  stage and again inside the fence stage, so a pool that changed after the operator confirmed stops
+  the promotion before anything is powered off.
+- Regression: `internal/agent/pool_promote_partition_test.go` (new) —
+  `TestPartitionedSurvivorsAreNotBothPromoted` (line 43) and
+  `TestPromotionNeverFencesAReachableHealthyMaster` (line 198) — plus additions to
+  `internal/agent/pool_promote_test.go` covering the per-host `blocks`/`fence_recorded`/
+  `fence_usable` preflight rows, a promotion succeeding once both hosts are fenced, refusals for a
+  stale / other-operation / other-host proof of the *second* host, four wrong host lists with the
+  fence seam asserting it never ran, and concurrent reachable candidates. Command:
+  `go test -race -count=1 -timeout 30m ./internal/agent` → `ok nex.local/nex/internal/agent 17.766s`.
+  Cross-layer: `internal/controller/poolpromotion_e2e_test.go:47`
+  `TestPromotionFenceConsentReachesCoreEndToEnd` drives preflight → promote through the real
+  handlers into Core's own `agent.ExecutePoolPromotion`, and `TestPromoteFenceHostRefusals`
+  (line 113) pins the route's refusals; command
+  `go test -race -count=1 -timeout 30m ./internal/controller` → `ok … 285.920s`. Both
+  `.github/workflows/phase1.yml:29` and `.gitea/workflows/phase1.yml:29` run
+  `go test -race -timeout 20m ./...` on pushes to `'**'` and on pull requests, so no workflow change
+  was needed. **No real fence has ever run**: every promotion test injects a double at the
+  `poolFenceVerify` seam.
+- Avoid: do not treat an unreachable host as "not in the way". Do not let the Controller compute,
+  complete or correct the fence set — it is Core's, and Core must be able to refuse a confirmation
+  that no longer matches. And do not skip the exclusion check on any status but `unknown`: that is
+  what let a healthy master be fenced.
+
+## BUG-0334 — The pool's virtual-machine owner records still moved while the authority was frozen
+
+- Date: 2026-09-19; found by the same independent review (finding F3), before release. Never
+  present in a published build.
+- Symptom: while a master change held the authority freeze, the content the frozen generation names
+  changed underneath it. Reproduced as `a frozen authority's content changed: 3f75b48d476a2477…
+  then c8d739bcd8951ffc…`. The generation handed to the new master therefore did not identify what
+  was handed over.
+- Root cause: `recordPoolVMInventory` (`internal/agent/pool_vm_inventory.go`) ran
+  `prunePoolVMOwners`/`seedPoolVMOwners` — writes to the replicated `vms` section — with no
+  authority guard, while every neighbouring write path took one. An audit of every replicated
+  section found two more unguarded entry points: the `/api/v1/pool/advertise` peer-origin write
+  into `membership`, and `ResumeStorageClusterOperations` driving `storage_clusters` from the tick.
+- Fix: `recordPoolVMInventory` stores the snapshot (an observation, never refused) and then takes
+  `requirePoolAuthorityWritable` **inside the same `poolVMMu` section** before the prune and seed,
+  returning the new sentinel `errPoolVMOwnersDeferred`, which the peer handler maps to the existing
+  `202 Accepted`. Deferred, not dropped: the next publication settles it on whichever host is master
+  then. The advertise write defers through the member's existing `PendingPeerOrigin` retry, and the
+  clustered-storage resume is skipped while frozen, handed-off or restricted, so work already in
+  flight is never interrupted.
+- Regression: `internal/agent/pool_authority_freeze_test.go` (new) —
+  `TestFrozenAuthorityContentDigestNeverMoves` (line 47), table-driven over placement, start, peer
+  inventory, peer prune, own inventory, maintenance, fence profile, join invitation, every registry
+  kind, advertise and clustered storage; and `TestOwnerRecordsSettleAfterTheFreezeEnds` (line 158).
+  Command: `go test -race -count=1 -timeout 30m ./internal/agent` → `ok … 17.766s`; CI as
+  BUG-0333.
+- Avoid: do not refuse the *observation* — a member reporting its own inventory must always be
+  accepted, or a member is punished for a master's transfer. Defer the derived write instead.
+
+## BUG-0335 — A master change handed to a host that then died killed the pool permanently
+
+- Date: 2026-09-19; found by the same independent review (finding F2), before release. Never
+  present in a published build.
+- Symptom: on a two-host pool, a master change that had signed the hand-off and whose target was
+  then destroyed left the pool with no host that would act. The cancel path needs an RPC to the
+  target, so it failed: `the fence-backed cancel = failed "pool peer member-1 did not answer this
+  transfer step"`, `masters = []`. Nothing an operator could do recovered it.
+- Root cause: `handed_off` correctly refuses every authority write on the source for good, and the
+  only escape was a cancellation the dead target had to agree to. A malicious or merely unlucky
+  Controller could therefore wedge a pool by issuing a master change to a host about to die.
+- Fix: a fence-backed resume on the source (`resumeAfterFencedPoolTarget`,
+  `internal/agent/pool_transfer.go`), reached through the existing cancel route carrying
+  `fence_confirmed` + `fence_host_ids: ["<target>"]`. Preconditions, all enforced: the target is
+  probed and unreachable; the operator named exactly that host; the source is still the recorded
+  master, still holds the pool CA key and is **not restricted**; the target has a recorded profile;
+  and Core's own fence produces a verified, digest-bound power-off. It resumes at authority
+  generation **+ 2**, because a target that activated before it died minted exactly + 1 — so the
+  resumed source supersedes it by the strictly-higher rule every host already applies, and the
+  returning target (restricted by construction, since it was just fenced with its own profile)
+  takes the superseded path. A host that was itself fenced and rebooted is restricted, and is
+  refused here; that is what stops a fenced host resuming over the host that fenced it.
+- Regression: `internal/agent/pool_transfer_lost_target_test.go` (new) —
+  `TestHandedOffMasterResumesOnAFenceProofOfTheTarget` (line 69), covering activated-then-died and
+  never-activated both resuming to exactly one master with the returning target converging, no
+  proof leaving the pool handed off, and proofs of another host / stale / acknowledged-only / wrong
+  host list all refused with the source still non-writable. Command:
+  `go test -race -count=1 -timeout 30m ./internal/agent` → `ok … 17.766s`; CI as BUG-0333.
+- Avoid: do not add a timeout-based or "declare host lost" escape. The only thing that makes this
+  safe is an observed power-off bound to this operation and generation, and the restriction rule
+  that refuses a host which was itself fenced.
+
+## BUG-0336 — A member's self-claim could take the pool, and a member-first Controller replacement deadlocked
+
+- Date: 2026-09-19; found by an **independent review** of this campaign's unreleased work
+  (invariant review, finding C-1), before release. Never present in a published build.
+- Symptom: a pool member reporting a membership that named itself master took the Controller's
+  `pools.master_host_id` row and re-keyed every storage, network and media mirror row to it, with
+  no evidence from the pool at all: `a self-claim with no evidence took the pool: master is
+  c05c82aa…`. Separately, and traced while fixing it, a replacement Controller that a **member**
+  reconnected to first was permanently stuck: the member created the pool row with itself recorded
+  as master, and the real master's enrolment was then refused for ever with
+  `409 pool identity is held; the pool master has not reported this ready member`.
+- Root cause: in `adoptReportedMaster` (`internal/controller/pooltransfer.go:412-416`) the
+  strictly-higher-generation guard sat inside `if mirrored != nil`, and `hostInventory` returns
+  `(zero, nil)` for a `NULL hosts.inventory` — so with no mirrored membership there was no check at
+  all. The enrolment half: `coreReportedPoolMember` (`internal/controller/identity.go:277`) required
+  `membership.MasterHostID == master`, which the member-first ordering can never satisfy.
+- Fix: the evidence check is unconditional and fails closed — an inventory read error is an error,
+  and no mirrored membership for this pool means no adoption. Evidence is either a strictly higher
+  generation **or** the recorded master's own mirrored membership already naming the claimant as
+  master (the reconnect case, where both agree at one generation). `coreReportedPoolMember` accepts
+  that same record, so the recorded master's report naming **the enrolling host** as pool master
+  lifts the enrolment hold. Only the recorded master's authenticated report is ever read, and the
+  host must still be listed `ready`, so no member can use either arm to take a pool.
+- Regression: `internal/controller/pool_evidence_test.go` (new) —
+  `TestSelfClaimedMasteryIsRefusedWithoutMirroredEvidence` (line 26) and
+  `TestMemberFirstReconnectStillAdoptsTheRealMaster` (line 56, covering fresh-Controller adoption of
+  an existing multi-host pool, member-first reconnect and an equal-generation rival afterwards).
+  Observed failing first with the quoted line above and with enrolment answering
+  `409 pool identity is held`. Command:
+  `go test -race -count=1 -timeout 30m ./internal/controller` → `ok … 278.195s`; CI as BUG-0333.
+- Avoid: do not fix this by adding the missing `mirrored == nil` condition alone. It closes the
+  hole and silently leaves member-first Controller replacement deadlocked at enrolment for ever —
+  the two halves are one change.
+
+## BUG-0337 — A join invitation outlived its 15 minutes in the Controller database after a restart
+
+- Date: 2026-09-19; found by the same invariant review (finding C-6), before release. Never present
+  in a published build.
+- Symptom: a single-use join invitation and the pool CA PEM stayed in `managed_resources.command`
+  past their 15-minute TTL when the Controller restarted inside the window and was never asked
+  about pools again: `a restarted Controller kept an expired invitation: …Invitation:lab-single-use-invitation-token`.
+- Root cause: `pooljoin.go:351` deliberately skips a still-queued young row, and the only triggers
+  were `Open`, the three pool routes and a process-local `time.AfterFunc` armed by the issuing
+  request. A restart loses the timer and re-arms nothing.
+- Fix: `healthTick` sweeps at most once per `poolJoinScrubInterval` (one minute, a new constant),
+  gated by `c.joinScrubbed` under the existing `c.mu` — in memory only, no durable state added. The
+  fail-open on an unparseable `created_at` was also inverted: such a row is now scrubbed.
+- Regression: `internal/controller/pool_evidence_test.go:121`
+  `TestPoolJoinInvitationScrubbedAfterARestartInsideTheTTL` (restart inside the TTL with no pool
+  route ever called). Command: `go test -race -count=1 -timeout 30m ./internal/controller` →
+  `ok … 278.195s`; CI as BUG-0333.
+- Avoid: do not call the scrub from the 250 ms tick — it is a database write per tick for a
+  one-minute-granularity rule.
+
+## BUG-0338 — A scrubbed pool-join command was redelivered with an empty invitation
+
+- Date: 2026-09-19; found by the same invariant review (finding C-7), before release. Never present
+  in a published build.
+- Symptom: `an uncollected expired join stayed deliverable: queued ""` — every report redelivered
+  the `pool-join` command with empty `invitation` and `pool_ca_pem`, which the host must reject,
+  risking a join legitimately in progress being marked failed.
+- Root cause: `identity.go:701` redelivers every `queued`/`dispatched` operation and reloads the
+  command payload from `managed_resources` (`identity.go:728`) after the scrub emptied it.
+- Fix: split by what the row had actually done. A row scrubbed while still **queued** was never
+  collected, so the operation is failed terminally with `the join invitation expired before the
+  host collected it; start the join again`, visible on `GET /api/v1/operations`. A row scrubbed
+  after **dispatch** is simply never re-sent — failing it would declare a healthy in-progress join
+  dead, and that join's own result settles the operation.
+- Regression: `internal/controller/pool_evidence_test.go:157`
+  `TestExpiredPoolJoinFailsInsteadOfBeingRedeliveredEmpty`, covering both halves including the
+  in-progress one staying `dispatched`. Command:
+  `go test -race -count=1 -timeout 30m ./internal/controller` → `ok … 278.195s`; CI as BUG-0333.
+- Avoid: do not fail every scrubbed row. That marks joins that are working as failed.
+
+## BUG-0339 — A host could move itself out of its pool with no report from the master
+
+- Date: 2026-09-19; found by the same invariant review (finding P-3), before release. Never present
+  in a published build.
+- Symptom: any enrolled host could leave its pool in the Controller's view by reporting a new
+  single-host membership, leaving the old pool's mirror rows pointing at a non-member:
+  `a member left its pool with no report from the master: pool-after-eject`.
+- Root cause: `adoptReportedMaster` routes any self-claim carrying a different `PoolID` to
+  `adoptReinitializedPool`, which only checked single-host shape and pool-ID collision. An eject is
+  the **master's** record, not the leaving host's, and nothing required it.
+- Fix: while another host is the old pool's recorded master, that master's own mirrored membership
+  must exist and must no longer hold this host as a member (`maintenanceMember` already treats
+  `ejected` as gone, which is what `nextPoolMembership` writes). A host that is its own pool's
+  master is unaffected. Convergence is automatic: the leaver retries every heartbeat and is adopted
+  on the first report after the master publishes the eject.
+- Regression: `internal/controller/pool_evidence_test.go:93`
+  `TestAMemberCannotLeaveItsPoolWithoutTheMastersReport`, plus
+  `internal/controller/pooltransfer_test.go:422` `TestEjectedHostReinitializesIntoAnAdoptedPool`
+  updated to the real flow (the master reports the eject first) with its assertions unchanged.
+  Command: `go test -race -count=1 -timeout 30m ./internal/controller` → `ok … 278.195s`; CI as
+  BUG-0333.
+- Avoid: do not allow adoption when the old master has reported no membership at all. That is the
+  same fail-open as BUG-0336.
+
+## BUG-0340 — The management-network rollback used the wall clock, so it failed exactly when needed
+
+- Date: 2026-09-19; found by the same invariant review (finding C-3), before release. Never present
+  in a published build.
+- Symptom: a host cut off by its own management-network change never rolled back after a power
+  cycle. With the trigger mutated back to the clock path: `a wrong RTC after a reboot disabled the
+  rollback: <nil> &{… Stage:applied …}`, plus a clock step rolling a live change back early and a
+  backwards step postponing the rollback.
+- Root cause: both triggers compared wall-clock values — `Deadline`, and `AppliedAt` against a boot
+  time derived from `time.Now() - uptime`. A host that lost its time source with the change and
+  rebooted with a wrong RTC read `time.Now()` behind `AppliedAt`, so neither arm fired. That is
+  precisely the case the rollback exists for.
+- Fix: apply stamps `BootID` (`/proc/sys/kernel/random/boot_id`) and `AppliedUptime`
+  (`/proc/uptime`) into `<state-dir>/management-network.json`. "Rebooted" is a boot-id string
+  inequality, never a timestamp; "window spent" is `uptime - AppliedUptime >= window` within the
+  same boot. `Deadline` survives only as the operator-facing value, `ReadManagementNetworkStatus`
+  computes `seconds_remaining` the same boot-relative way so the countdown cannot disagree with the
+  trigger, and `ConfirmManagementNetwork` uses the same helper so a confirm can never be accepted
+  for a change recovery is about to undo. A record written without the two fields falls back to the
+  previous comparisons.
+- Regression: `internal/vmhost/management_network_test.go:814`
+  `TestManagementNetworkRollbackIsClockIndependent` — four subtests (wrong RTC after a reboot,
+  clock forward, clock backward, legacy record) with an injectable boot id and uptime, each
+  observed failing with the guard reverted. Command:
+  `go test -race -count=1 -timeout 30m ./internal/vmhost` → `ok nex.local/nex/internal/vmhost 12.756s`;
+  CI as BUG-0333.
+- Avoid: never compare a persisted timestamp against `time.Now()` to decide a management-network
+  rollback. The host that needs it is the host whose clock you cannot trust.
+
+## BUG-0341 — Applying a management-network change destroyed the bridge and cut off every guest on it
+
+- Date: 2026-09-19; found by the same invariant review (finding C-4), before release. Never present
+  in a published build.
+- Symptom: applying or rolling back a management-network change dropped networking for every guest
+  on the untagged default network until its domain was restarted. With `ifdown br0` re-added:
+  `a command that destroys br0 ran: "ifdown br0"`.
+- Root cause: apply and rollback ran `ifdown br0; ifup br0`. ifupdown's bridge hook runs
+  `brctl delbr br0`; guest taps are enslaved to `br0` itself and libvirt does not re-enslave them.
+  The guide's claim that "a VM using a guest VLAN bridge is not affected at all" was true, but it
+  quietly omitted every guest on the management bridge.
+- Fix: `bounceManagement` is gone. `applyManagementBridge(ctx, want, have)` reconfigures `br0` in
+  place with `ip(8)` — address, route, hardware address and DHCP client — and moves its uplink port
+  only when the management interface or VLAN changes. `want`/`have` come from one parser,
+  `parseManagementBridge`, run over the rendered and the on-disk `/etc/network/interfaces`, so
+  rollback works identically and is correct after a crash before the file swap. `ifdown`, `brctl`,
+  `ip link del` and `ip link set br0 down` are never run while the bridge exists, and no port the
+  engine did not itself enslave is ever detached. The three files are still rendered byte-for-byte,
+  so the next boot is unchanged. Where the uplink must move and the interfaces file records no
+  `bridge_ports`, the engine refuses at stage time and lists the attached ports rather than
+  rebuilding the bridge.
+- Regression: `internal/vmhost/management_network_test.go:729`
+  `TestManagementNetworkNeverDestroysTheBridge` (a `br0` with two `vnet` taps, across confirm,
+  deadline rollback and operator rollback, asserting no destroying command, no guest port detached
+  and the new uplink enslaved) and line 780
+  `TestManagementNetworkKeepsTheUplinkWhenOnlyAddressingChanges`. Command:
+  `go test -race -count=1 -timeout 30m ./internal/vmhost` → `ok … 12.756s`; CI as BUG-0333.
+  **Scope of that evidence:** the scratch sysfs and `PATH` fakes prove *which* commands run and
+  that the destroying ones never do. They prove nothing about the kernel's reaction, and
+  `TestManagementNetworkNetns` has still never executed anywhere.
+- Avoid: do not "fix" a bounce by re-adding the ports afterwards. The bridge index changes and the
+  guests are already gone.
+
+## BUG-0342 — A management-network change could be confirmed on evidence that never crossed it
+
+- Date: 2026-09-19; found by the same invariant review (finding C-2), before release. Never present
+  in a published build.
+- Symptom: the confirmation gate — the thing that stops an operator keeping a configuration that
+  has cut the host off — accepted an observation that proved nothing: a loopback local-API call, or
+  a Controller report that left over a second, unchanged NIC. With the guard removed:
+  `another NIC to controller: an observation that proves nothing confirmed the change`, plus
+  `the host talking to itself` and `no address at all`.
+- Root cause: `RecordManagementConnectivity` filtered only on a kind whitelist and a timestamp. It
+  never saw which addresses the connection actually used.
+- Fix: the signature became
+  `RecordManagementConnectivity(dir, kind string, at time.Time, local, peer netip.Addr)`. It records
+  only when the local address is one the applied spec puts on `br0` — the spec's own address for a
+  static configuration, an address `br0` currently holds for DHCP — and the peer is valid and not
+  loopback. The Controller report path captures the connection's addresses through
+  `httptrace.ClientTrace.GotConn`, attached only to that POST's context; the host-local API path
+  uses the accepting listener socket (`http.LocalAddrContextKey`) and `r.RemoteAddr`, recording
+  nothing when there is no local address. The refusal now names the path that counts.
+- Regression: `internal/vmhost/management_network_test.go:917`
+  `TestManagementNetworkConnectivityMustTerminateOnTheBridge` (seven accept/refuse cases including
+  the DHCP lease) and `internal/localcore/management_network_test.go:51`
+  `TestAuthenticatedLocalCallRecordsManagementConnectivity` (four listener/peer cases); the agent
+  test `internal/agent/management_network_test.go:137`
+  `TestReportRecordsManagementConnectivityAndProjectsStatus` now asserts a loopback report is **not**
+  recorded and that confirm is consequently refused. Command:
+  `go test -race -count=1 -timeout 30m ./internal/vmhost ./internal/localcore ./internal/agent` →
+  `ok vmhost 12.756s`, `ok localcore 10.216s`, `ok agent 17.911s`; CI as BUG-0333.
+  **Honest limit:** an observation that *does* count cannot be produced in-process, because every
+  in-process lab runs on loopback; what makes one count is proven in `internal/vmhost` alone.
+- Avoid: do not treat "the report got an answer" as proof the management path works. The answer may
+  have come back over the interface you did not change.
+
+## BUG-0343 — A management-network rollback that could not complete reported no failure
+
+- Date: 2026-09-19; found by the same invariant review (finding C-5), before release. Never present
+  in a published build.
+- Symptom: `a rollback that could not complete reported no management-network check` — a record
+  stuck at stage `applied` with an error was indistinguishable, in the health checks, from a
+  healthy applied change waiting to be confirmed.
+- Root cause: `internal/agent/run.go` emitted the `management-network` check only for a
+  `rolled-back` or unreadable record. The operator-requested rollback correctly emits none, and the
+  stage alone cannot tell "restoring, and failing" from "applied, fine".
+- Fix: a failed check is now also emitted for `Stage == applied && LastError != ""`, with its own
+  sentence `restoring the previous management network configuration has not completed: <reason>`.
+- Regression: an additional block in `internal/agent/management_network_test.go:137`
+  `TestReportRecordsManagementConnectivityAndProjectsStatus`, using a record with
+  `RequestedRollback: true` and an error still at `applied`. Command:
+  `go test -race -count=1 -timeout 30m ./internal/agent` → `ok … 17.911s`; CI as BUG-0333.
+- Avoid: do not report the operator's own successful rollback as a failure. An undo that was asked
+  for is an outcome.
+
+## BUG-0344 — A management-network spec was never checked against the host it was for
+
+- Date: 2026-09-19; found by the same invariant review (finding C-12, with P-2), before release.
+  Never present in a published build.
+- Symptom: a spec naming an interface the host does not have, or the wrong card, or an interface a
+  registered pool VLAN network is using, was staged and only failed at apply — with the rollback
+  window as the safety net. The engine's own comment asserted the spec "names interfaces that
+  already exist on the host"; nothing enforced it.
+- Root cause: validation checked the spec's *shape*, never the machine.
+- Fix: `checkManagementSpecAgainstHost` runs at stage time and reads
+  `/sys/class/net/<name>/address` for every NIC in the spec —
+  `interface <n> does not exist on this host`, `interface <n> has hardware address <a> on this
+  host, not <b>; the spec names a different card`. `br0` is refused as a NIC name by the validator,
+  because it would render two stanzas for one device. `guestVLANUplinks()` reads the host's own
+  `/etc/network/interfaces.d/nex-*` stanzas — the durable record of a registered guest VLAN — and
+  refuses a spec that disables such an interface or makes the management interface share its port.
+  A new uplink already enslaved to another bridge is refused too.
+- Regression: added cases in `internal/vmhost/management_network_test.go`, each observed failing
+  with the guard removed. Command: `go test -race -count=1 -timeout 30m ./internal/vmhost` →
+  `ok … 12.756s`; CI as BUG-0333.
+- Known gap left open, deliberately: a spec that simply **omits** a NIC carrying guest VLANs is not
+  refused — it loses its `iface … inet manual` stanza and the raw device is unconfigured at the
+  next boot. Whether an omitted NIC means "leave alone" or "disabled" is a product decision and is
+  recorded as open in the closure plan and in the guide.
+- Avoid: do not rely on the rollback window as validation. The window exists for the things that
+  cannot be checked in advance, like the switch port.
+
+## BUG-0345 — Re-staging a change ID with a different configuration silently replayed the old one
+
+- Date: 2026-09-19; found by the same invariant review (finding P-9), before release. Never present
+  in a published build.
+- Symptom: `stage` with the same `operation_id` and a **different** spec returned the record of the
+  change already staged, so the operator was shown, and could apply, a configuration they had
+  replaced.
+- Root cause: stage was idempotent on the operation ID alone.
+- Fix: an exact retry still replays; a `reflect.DeepEqual`-different spec is refused with
+  `management network change <id> is already staged with a different configuration: management
+  network conflict` — a conflict, so the Controller marks it as one and the page reloads.
+- Regression: `internal/vmhost/management_network_test.go:1068`
+  `TestManagementNetworkStageReplayWithADifferentSpecIsAConflict`. Command:
+  `go test -race -count=1 -timeout 30m ./internal/vmhost` → `ok … 12.756s`; CI as BUG-0333.
+- Avoid: do not widen the idempotency key to "same operation, latest spec wins". A stage that
+  silently retargets is how an operator applies something they never reviewed.
+
+## BUG-0346 — Maintenance mode did not block starting a local-storage guest at all
+
+- Date: 2026-09-19; found by the same invariant review (finding C-8, with P-5), before release.
+  Never present in a published build.
+- Symptom: drain a host, start a virtual machine on its own **local** storage from Nex Controller,
+  and it started: `a drained host admitted a local-storage start: <nil>`. Resuming a suspended
+  guest on a drained host worked too: `a drained host woke a suspended guest: <nil>`. This is the
+  commonest guest shape there is, so the feature did not do its job.
+- Root cause: `AdmitPoolVMExecution` (`internal/agent/pool_vm.go:965-971`) returns a no-op callback
+  for a non-shared, non-definition command **before any master contact**, and all five maintenance
+  guards sat downstream of that round trip — while the neighbouring *restriction* guard was
+  correctly placed before the same early return. No executing test drove the path.
+- Fix: a new `poolVMStartsExecution(cmd)` (start, wake, and create with `StartAfterCreate`) plus
+  `poolHostInMaintenance(s, s.State.HostID)` at the same choke point as `requirePoolStartPath`, i.e.
+  before the early return. `wake` was also added to the pre-lock check in `poolVMLocalPlacement` and
+  to the `reboot/force-reboot/wake/media` arm of `PoolVMHandler`, and `placement.go:53` now calls
+  `poolHostInMaintenance` so the target-side preflight guard is live. Reboot and force-reboot stay
+  allowed by decision — both require the guest to be `running` there already, so they are not a new
+  placement — and every reducing power request, media change and stop is untouched. The host reads
+  its own freshest **verified** membership copy (its own record on the master, the stored signed
+  authority replica on a member), so there is no master round trip and local-only power keeps
+  working with the master down.
+- Regression: `internal/agent/pool_maintenance_test.go` —
+  `TestMaintenanceRefusesStartingALocalStorageGuest` (line 237),
+  `TestMaintenanceRefusesWakingAGuestOnADrainedHost` (line 270),
+  `TestMaintenanceRefusesAMemberStartThroughThePeerHandler` (line 298),
+  `TestMemberReadsItsDrainFlagFromTheAuthorityReplica` (line 338),
+  `TestAutostartPassReturnsEarlyOnADrainedHost` (line 387) and
+  `TestMaintenanceRefusesAnEjectedHost` (line 400). Command:
+  `go test -race -count=1 -timeout 30m ./internal/agent` → `ok nex.local/nex/internal/agent 18.225s`;
+  CI as BUG-0333.
+- Avoid: do not add the check after `poolSharedVM`. The early return **is** the defect, and a guard
+  placed downstream of it looks correct and does nothing.
+
+## BUG-0347 — libvirt autostart returned guests to a drained host after a reboot
+
+- Date: 2026-09-19; found by the same invariant review (finding C-9), before release. Never present
+  in a published build.
+- Symptom: a drained host was rebooted and its managed guests came back up: `a drained host started
+  a managed guest`, with the recorded `virsh` calls showing `autostart <id>` and never
+  `--disable`. Rebooting is the workflow maintenance exists for.
+- Root cause: `internal/vmhost/managed.go:5783-5786` gives a local-storage `Autostart` virtual
+  machine libvirt `autostart=yes`, `ReconcilePoolVMAutostart` skipped non-shared virtual machines
+  entirely, and libvirtd starts domains before Nex Core's agent runs at all.
+- Fix, two layers. (1) A new `internal/vmhost/autostart.go` with
+  `(*ManagedEngine).SetManagedVMAutostart(ctx, spec, disable)`; `ReconcilePoolVMAutostart` computes
+  `drained`/`restricted` first and applies the flag to every managed domain before its early
+  returns. The **desired** value is never rewritten — the suppression sits on top of the managed
+  journal, which stays Nex's durable record, so leaving maintenance restores exactly what the
+  operator asked for. (2) `poolHostDrained(stateDir)` in `internal/vmhost/storage_guard.go`, called
+  from `StorageGuard` for any domain with a managed disk before any repository work. It reads only
+  Nex Core's own `state.json` and `pool-peer.json`, so it holds with no Controller connected and
+  fails closed on a present-but-unreadable record. It is exact on the pool **master**, including
+  every single-host pool, and deliberately silent on a **member**, whose own membership copy never
+  changes after join — a member's drain is enforced by layer 1.
+- Regression: `internal/vmhost/storage_guard_maintenance_test.go` (new) —
+  `TestPoolHostDrainedRefusesManagedStart` (line 34),
+  `TestStorageGuardRefusesAManagedGuestOnADrainedHost` (line 69) and
+  `TestSetManagedVMAutostartSuppressesWithoutRewritingTheDefinition` (line 84). Command:
+  `go test -race -count=1 -timeout 30m ./internal/vmhost` → `ok nex.local/nex/internal/vmhost 12.841s`;
+  CI as BUG-0333.
+  **Untested by design of the environment:** the agent-side wiring from `Applied` to
+  `SetManagedVMAutostart` needs a real libvirt, so the flag mapping and the hook refusal are each
+  tested but not the two together on a host.
+- Known limit, stated in the guide: a manual `virsh start` of a managed guest on a drained
+  **member** is not refused by the hook; the suppressed flag is the enforcement there.
+- Avoid: do not store a second "desired autostart" value anywhere to remember what to restore. The
+  managed journal is the record; the suppression is a view on top of it.
+
+## BUG-0348 — A join reported "failed" while the master already held a ready membership row
+
+- Date: 2026-09-19; found by the same invariant review (finding C-10), before release. Never
+  present in a published build.
+- Symptom: an admitted host reported `Stage:joined Status:failed Error:pool master did not answer`,
+  while the master's record said it was a ready member. Recovery was then shut in both directions —
+  minting and redeeming each refuse an existing member — so a roughly two-minute network outage
+  produced an unrecoverable split: `the join could not be completed after the reply was lost`.
+- Root cause: the attempt budget that ends a join as `failed` applied to the **post-admission**
+  stage as well as the pre-admission ones, and `acceptPeerJoin` refused the idempotent replay once
+  the offer's TTL had passed.
+- Fix: in `poolJoinStatus` (`internal/agent/pool_join.go`), stage `joined` with an exhausted budget
+  is `needs_attention`, never `failed`; only `precheck` and `csr` — the stages before the master
+  could have admitted the host — can end `failed`. In `acceptPeerJoin` (`internal/agent/peer.go`)
+  the TTL now bounds only the **first** redemption: an offer that has already issued a certificate
+  replays past its expiry, returning the same certificate to the same host and public key. It
+  admits nothing new, because the CSR hash is bound and the member row already exists — so the
+  truth stays learnable after a lost reply.
+- Regression: `internal/agent/pool_join_test.go:416`
+  `TestJoinNeverReportsFailedAfterTheMasterMayHaveAdmittedIt` (master admits, reply lost, record
+  pinned at `joined` with the attempt budget exhausted and every offer expired; asserts not
+  `failed`, then that `advancePoolJoin` completes to `ready`). Command:
+  `go test -race -count=1 -timeout 30m ./internal/agent` → `ok … 18.225s`; CI as BUG-0333. This is
+  also what now makes the guide's sentence *"Join failed — the join stopped before any membership
+  change"* true rather than merely intended.
+- Avoid: do not "solve" it by widening the invitation TTL. The replay, not the clock, is what makes
+  it recoverable.
+
+## BUG-0349 — The host-local join path destroyed a Controller-driven join record
+
+- Date: 2026-09-19; found by the same invariant review (finding P-7), before release. Never present
+  in a published build.
+- Symptom: `the host-local path discarded the Controller-driven join record: {OperationID: Stage:ready …}`
+  — the operation ID was lost, so the Controller's operation could never be settled by the host.
+- Root cause: `CompletePoolJoinStages` overwrote the stored record unconditionally.
+- Fix: it now loads and **merges**. An in-progress record (not `succeeded`/`failed`) keeps its
+  `OperationID`, is advanced to at least `rehomed` through a new `poolJoinStageIndex`, has its
+  invitation and error cleared, and takes the new peer origin if one was given. Only an absent or
+  terminal record is replaced.
+- Regression: `internal/agent/pool_join_test.go:503`
+  `TestCompletePoolJoinStagesKeepsAnExistingJoinRecord`. Command:
+  `go test -race -count=1 -timeout 30m ./internal/agent` → `ok … 18.225s`; CI as BUG-0333.
+- Avoid: do not treat the two join entry points as separate state machines. There is one durable
+  record.
+
+## BUG-0350 — The join invitation stayed at rest on the joining host after the join completed
+
+- Date: 2026-09-19; found by the same invariant review (finding P-4), before release. Never present
+  in a published build.
+- Symptom: `the redeemed invitation is still stored on the joining host` — the single-use token
+  remained in `pool-peer.json` indefinitely after it had been redeemed.
+- Root cause: nothing cleared it; resume logic kept the whole pending record.
+- Fix: `advancePoolJoin` clears `pending.Invitation` the moment the `joined` stage completes, and
+  `CompletePoolJoinStages` clears it on merge. Resuming from any later stage needs only `MasterURL`
+  and `CAPEM`.
+- Regression: `internal/agent/pool_join_test.go:478` `TestJoinInvitationIsScrubbedOnceRedeemed`,
+  which also greps the `pool-peer.json` bytes. Command:
+  `go test -race -count=1 -timeout 30m ./internal/agent` → `ok … 18.225s`; CI as BUG-0333.
+- Not done, deliberately: the agent journal entry for the `pool-join` command still contains the
+  invitation. `applyResponse` rejects the whole report with *"controller reused command ID with
+  different input"* on any byte difference between the journaled and a redelivered command, so
+  scrubbing the host's copy while the Controller may still redeliver an unscrubbed one would break
+  reporting. Recorded as open in the closure plan.
+- Avoid: do not scrub the journal copy on the host alone.
+
+## BUG-0351 — A clustered-storage apply could move the pool's records during an authority freeze
+
+- Date: 2026-09-19; found while fixing BUG-0334 (the replicated-section write audit), before
+  release. Never present in a published build.
+- Symptom: `a frozen master answered a clustered-storage apply with {… Status:failed Error:cluster
+  credentials are unavailable}` — that is, it passed the (absent) guard and entered the apply path
+  while the authority was frozen for a master change.
+- Root cause: `ExecuteStorageClusterRequest` (`internal/agent/storage_cluster.go`) had no authority
+  guard, although `storage_clusters` is a replicated section like every registry kind.
+- Fix: `requirePoolAuthorityWritable(s)` at the top of the function for every action but `status`,
+  returning the existing retryable sentence `pool authority is frozen for a master change; retry
+  when it completes`. `status` is a read and stays available. This is the entry point, not the
+  resume, so no native operation in flight is interrupted.
+- Regression: the `storage_clusters/apply` case in the table-driven
+  `internal/agent/pool_authority_freeze_test.go:47` `TestFrozenAuthorityContentDigestNeverMoves`,
+  asserting the frozen sentence for both write actions and that `status` still answers. Command:
+  `go test -race -count=1 -timeout 30m ./internal/agent` → `ok … 18.225s`; CI as BUG-0333.
+- Avoid: do not guard the resume instead of the entry point — that interrupts work already running
+  on the host.
+
+## BUG-0352 — The promote route could not drive a current Nex Core, and a successful cancel read as a failure
+
+- Date: 2026-09-19; found by cross-layer review while closing the fence-consent work of BUG-0333,
+  before release. Never present in a published build.
+- Symptom: Nex Core refuses a `pool-promote` command carrying no confirmed fence set, and the
+  Controller route neither accepted nor forwarded one. Reproduced end to end:
+  `POST /api/v1/pools/…/master/promote: got 400 want 202: {"error":"invalid JSON request"}` (the
+  route rejected `fence_host_ids` outright) and `got 202 want 400` (a promotion with no list was
+  accepted and would then have been refused by Core). Separately, a cancellation Nex Core actually
+  **performed** arrived as `status: "succeeded"` with its sentence in a field no client read, so the
+  interface rendered a completed cancellation as a failed transfer; and `poolMemberFence` rebuilt
+  three fields and dropped `fence_credential_version`, so an operator could not see whether rotated
+  fence material had been replicated.
+- Root cause: the multi-host fence landed on the Core side after the Controller and interface lanes
+  had finished their slices.
+- Fix: `PoolPromoteRequest` gains a **required**, non-empty `fence_host_ids`, normalised (sorted,
+  blanks and duplicates refused) so the same set typed in any order is a replay; the Controller
+  computes and corrects nothing and forwards it verbatim, refusing only a host its own mirror places
+  in another pool. The cancel route gains optional `fence_confirmed` + `fence_host_ids`, accepted
+  both or neither and forwarded verbatim; neither is accepted on the master-change or eject route,
+  which now have their own body structs. `poolTransferOperation` gains `reason`, carrying Core's
+  sentence on a succeeded operation with `error` empty. `poolMemberFence` projects
+  `credential_version`.
+- Regression: `internal/controller/poolpromotion_e2e_test.go` (new) —
+  `TestPromotionFenceConsentReachesCoreEndToEnd` (line 47), which drives preflight → promote through
+  the real handlers, takes the exact queued `protocol.Command` and executes it with Core's own
+  exported `agent.ExecutePoolPromotion` against a real `agent.OpenStore` directory, asserting the
+  command is not refused for missing consent and that the same command with the list removed **is**
+  refused with Core's exact sentence — so the test fails if either side moves the gate; and
+  `TestPromoteFenceHostRefusals` (line 113). Plus a new cancel test in
+  `internal/controller/pooltransfer_test.go`. Command:
+  `go test -race -count=1 -timeout 30m ./internal/controller` → `ok nex.local/nex/internal/controller 285.920s`.
+  Contract coverage: `tests/test_api_contract.py::PoolPromotionContractTests` and
+  `PoolTransferContractTests`, run by `python3 -m unittest discover -s tests -p 'test_*.py'` at line
+  53 of both workflow files; UI coverage `web/src/pool-promotion.test.mjs`,
+  `pool-authority.test.mjs` and `pool-members.test.mjs`, run by `npm --prefix web run test` at line
+  70 of both workflow files. CI otherwise as BUG-0333.
+- Avoid: do not let the Controller fill in a fence set it computed itself, and do not have a client
+  infer a performed cancellation from the absence of an error.
+
+## BUG-0353 — The resume offer keyed on a sentence, and the rollback timer died with the agent
+
+- Date: 2026-09-19; found by review while closing BUG-0335 and BUG-0340 (review finding P-1),
+  before release. Never present in a published build.
+- Symptom: two small defects in the same final batch. (1) Nothing on the wire said a master change
+  had been handed over: `HandedOff` existed only on the peer probe, not on the reported
+  `PoolTransferStatus`, so the interface had to decide whether to offer **Resume on the current
+  master…** by matching the text of one of Nex Core's refusal sentences. A wording change would have
+  silently removed the only recovery from a dead hand-off target. (2) Both systemd units were
+  `Restart=on-failure`, so an out-of-memory kill or any exit the unit treats as clean left nothing
+  armed to perform a management-network rollback until someone started the service by hand — and
+  every rollback trigger runs inside that process.
+- Root cause: (1) the field was never projected; (2) the unit files predate the staged
+  management-network work and its rollback window.
+- Fix: (1) a new always-present `handed_off` boolean on `PoolTransferStatus` — like
+  `cancellable` — filled from the durable record in `poolTransferStatus` and projected verbatim by
+  the existing Controller view; the interface gate is now structural (`role === "source" &&
+  handed_off`, plus the target row not being fresh). An older Nex Core that omits the field offers
+  nothing, which is the safe direction. (2) both units are `Restart=always`, with a comment naming
+  the rollback window. Checked before changing it: nothing in the repository relies on a clean exit
+  staying down — `packaging/core-local/prerm` uses `deb-systemd-invoke stop` and
+  `Conflicts=nex-core-agent.service` are stop jobs, which `Restart=always` does not affect.
+- Regression: `internal/protocol/pool_test.go` (wire presence: `false` is emitted, `true` reaches
+  the wire), the stage matrix in `internal/agent/pool_transfer_test.go` asserting reported
+  `handed_off` per case, and `internal/controller/pool_reported_fields_test.go` asserting
+  pass-through on the master's `transfer` (true) and the target's row (present, false). Units:
+  `tests/test_agent_service.py:37` and `tests/test_core_local_package.py:404`, each
+  `self.assertEqual(settings.get('Restart'), 'always')`. Commands:
+  `go test -race -count=1 -timeout 40m ./...` → all packages ok (controller 291.025s), and
+  `python3 -m unittest discover -s tests -p 'test_*.py'` → 373 tests. Both run in CI at
+  `phase1.yml:29` and `phase1.yml:53` in `.github/workflows/` and `.gitea/workflows/`. UI:
+  `web/src/pool-authority.test.mjs` and `pool-promotion.test.mjs` at line 70 of both files.
+  `docs/qa/fresh-install/installed-host.txt:41` is a **historical capture** showing the old
+  `Restart=on-failure` line and is deliberately left as recorded past evidence.
+- Avoid: do not gate an interface affordance on the text of a server message, and do not assume a
+  deliberate `systemctl stop` is covered by `Restart=always` — the stopped and masked cases remain
+  open and are stated in the guide and the plan.
+
+## BUG-0354 — A removed ISO blocked its repository's detach for ever
+
+- Date: 2026-09-19; found by the S7 native acceptance lab before release.
+- Symptom: a removed ISO still made `storage-detach` fail as in use.
+- Root cause: the storage dependency check read succeeded imports without excluding media removal
+  tombstones.
+- Fix: one dependency predicate now serves both detach and its dry run, and ignores removed media.
+- Regression: `TestRemovedISOIsNotAStorageDependency` and
+  `TestCheckStorageDetachReportsTheDependencyWithoutJournalling` in
+  `internal/vmhost/storage_lifecycle_test.go`; the reported pre-fix test failed and the S7 Core
+  batch recorded `go test -race -count=1 -timeout 40m ./...` passing. Native rerun is open.
+- API impact: none.
+- Avoid: do not infer removal from a missing file; use the durable tombstone.
+
+## BUG-0355 — A host with a detached remote repository could never join a pool
+
+- Date: 2026-09-19; found by the S7 native acceptance lab before release.
+- Symptom: Core refused a host whose only remote repository was already detached, while the
+  Controller preview called it eligible.
+- Root cause: a detach tombstone has no storage kind and was counted as remote storage by Core.
+- Fix: Controller and Core now call `StorageBlocksPoolJoin`, which excludes tombstones.
+- Regression: `TestPoolJoinPrecheckIgnoresADetachedRepository` in
+  `internal/agent/pool_join_test.go`; the reported pre-fix test failed and the S7 Core batch
+  recorded `go test -race -count=1 -timeout 40m ./...` passing. Native rerun is open.
+- API impact: none.
+- Avoid: do not duplicate the tombstone rule at each caller.
+
+## BUG-0356 — An ejected member could remain stranded
+
+- Date: 2026-09-19; found twice by the S7 native acceptance lab before release.
+- Symptom: the master marked membership ejected while the host retained pool resources and could
+  not rejoin.
+- Root cause: leave replayed a stored detach failure, detach treated removed media as live, and the
+  join-only rehome path refused normal leave records; its orphan loop could also grow the journal.
+- Fix: leave removes adopted ISO metadata, repositories and VLANs in dependency order with dry-run
+  checks and bounded retry IDs; a leave-specific rehome retains local VMs, and the master rejects
+  an eject that would strand a local VM using a pool VLAN or ISO.
+- Regression: `internal/agent/pool_leave_test.go` covers release order, named blockers, bounded
+  journal growth, stranded-state recovery and the eject precheck. The reported pre-fix tests failed;
+  the S7 Core batch recorded `go test -race -count=1 -timeout 40m ./...` passing. The lab host has
+  not been upgraded and rerun.
+- API impact: none.
+- Avoid: master completion means membership removal only; use the ejected host's transfer report.
+
+## BUG-0357 — A member's local repository retained its pre-join pool scope
+
+- Date: 2026-09-19; found by the S7 native acceptance lab before release.
+- Symptom: VM creation on a joined member's local storage failed because its retained projections
+  still named the old pool.
+- Root cause: rehome changed only command copies and stopped at workload entries, while projections
+  read applied storage, lifecycle and downloaded-media copies.
+- Fix: one idempotent pass rehomes every retained scope-bearing copy and skips workload entries;
+  removal tombstones stay in the old pool.
+- Regression: `TestRehome` in `internal/vmhost/pool_test.go` failed before and passed after.
+  The reported full Go race run had one unrelated timing flake, which passed on rerun; native
+  confirmation remains open.
+- API impact: none.
+- Avoid: do not change projection preference or rehome removal tombstones.
+
+## BUG-0358 — An ejected membership row prevented shared VM ownership from settling
+
+- Date: 2026-09-19; found by the S7 native acceptance lab before release.
+- Symptom: any ejected row left a stopped shared VM recorded running and future starts refused.
+- Root cause: inventory completeness required every retained membership row to be ready.
+- Fix: completeness excludes only ejected rows; pending and failed rows still block, and obsolete
+  snapshots are pruned.
+- Regression: `TestPoolVMInventory*` and `TestPoolEject*` in
+  `internal/agent/pool_vm_inventory_test.go` failed before and passed after. The reported full Go
+  race run had one unrelated timing flake, which passed on rerun; native confirmation remains open.
+- API impact: none.
+- Avoid: do not relax the rule for pending or failed members.
+
+## BUG-0359 — The real-ifupdown test used an obsolete rollback trigger
+
+- Date: 2026-09-19; found on its first lab execution before release.
+- Symptom: the test moved the old wall-clock deadline but the boot-relative rollback correctly did
+  nothing.
+- Root cause: a record with a boot ID uses elapsed uptime, not the deadline.
+- Fix: the test now moves applied uptime past the window and retains deadline only as the fallback.
+- Regression: it skips cleanly where `ifupdown` is unavailable; the corrected native re-run is
+  outstanding.
+- API impact: none.
+- Avoid: do not reintroduce wall-clock triggering to make the test pass.
+
+## BUG-0360 — A DHCP management-network change could remove resolver configuration
+
+- Date: 2026-09-19; found during the S7 management-network work before release.
+- Symptom: confirming a DHCP change with no DNS override could delete `/etc/resolv.conf`, leaving
+  the host unable to resolve names after a supported transition.
+- Root cause: the DHCP render used a nil resolver file and the common writer interpreted nil as a
+  request to remove the snapshotted file before the DHCP hook had replaced it.
+- Fix: apply retains the existing resolver configuration when DHCP has no DNS override; the DHCP
+  hook can replace it, and rollback still restores a genuinely absent prior file.
+- Regression: `TestManagementNetworkDHCPKeepsExistingResolvConf` in
+  `internal/vmhost/management_network_test.go` failed before and passed after; the reported
+  `go test -race -count=1 -timeout 20m ./internal/vmhost` passed. Native acceptance remains open.
+- API impact: existing contract.
+- Avoid: do not delete the resolver file before proving the DHCP hook will replace it.
+
+## BUG-0361 — Omitted optional management-network revision was treated as zero
+
+- Date: 2026-09-19; found during the S7 management-network work before release.
+- Symptom: a client omitting documented-optional `expected_revision` could not stage a second
+  change after a first confirmed change.
+- Root cause: Core compared the omitted zero value with the current revision while Controller
+  already treated zero as no optimistic-concurrency condition.
+- Fix: Core compares expected revision only when it is nonzero.
+- Regression: `TestManagementNetworkStageApplyConfirm` in
+  `internal/vmhost/management_network_test.go` failed before and passed after; the reported
+  `go test -race -count=1 -timeout 20m ./internal/vmhost` passed. Native acceptance remains open.
+- API impact: existing contract.
+- Avoid: do not treat a zero value from an optional field as an explicit revision.
+
+## BUG-0362 — Adopted media kept a shared-storage reservation after convergence
+
+- Date: 2026-09-19; found during S7 acceptance before release.
+- Symptom: an otherwise converged member could not be ejected because adopted ISO metadata kept a
+  storage reservation. The correction initially missed an attached drivers ISO, which was found
+  and fixed before the final review.
+- Fix: reservation release excludes adopted media while retaining imported, installation and
+  drivers-media references.
+- Regression: reported failing-first reservation-selection and authenticated peer release tests;
+  final whole-tree race evidence is pending.
+- API impact: existing contract.
+
+## BUG-0363 — An ejected host could not rejoin its former pool
+
+- Date: 2026-09-19; found during S7 acceptance before release.
+- Symptom: an ejected host was refused as already a member by Controller and Core.
+- Fix: only the historical `ejected` row can be replaced by a newly certified ready membership;
+  active members remain refused. Controller also reprojects a retained local VM under the host's
+  new pool.
+- Regression: reported failing-first peer and Controller rejoin tests passed under focused race
+  suites; an initial native same-identity rejoin is superseded by the later media correction.
+- API impact: existing contract.
+
+## BUG-0364 — Forward-only master-change cancellation named an eject
+
+- Date: 2026-09-19; found during S7 acceptance before release.
+- Symptom: an irreversible master-change cancel could return an eject sentence, or reject a
+  demoted source or activated target before reading its durable receipt.
+- Root cause: the first helper-only correction did not reach the ordinary command path: stale
+  expected-version validation ran before the activated target or demoted source receipt was read.
+- Fix: `ExecutePoolTransfer` now reads that irreversible receipt before ordinary version and role
+  validation, then returns the documented forward-only master-change result from either participant.
+- Regression: the final narrow guard applies only to activated targets and demoted sources, leaving
+  ordinary cancellation version validation intact. Independent review cleared focused command,
+  guard and candidate tests. The final whole-tree race result remains pending.
+- API impact: existing contract.
+
+## BUG-0365 — Eject could mishandle local VMs or hide a shared VM behind stale inventory
+
+- Date: 2026-09-19; independent review finding during S7 acceptance before release.
+- Symptom: generic old-pool records blocked verified local-only VMs, while absent or stale target
+  inventory could hide a shared VM.
+- Fix: eject requires current target inventory, retains every shared or unverifiable record, and
+  retires only verified local-only ownership after authority freeze before rehoming that VM journal.
+- Regression: reported stale-inventory and local-VM eject lifecycle tests passed; final whole-tree
+  race and review recheck are pending.
+- API impact: existing contract.
+
+## BUG-0366 — A member ZFS tombstone left a stale Controller projection
+
+- Date: 2026-09-19; found during S7 acceptance before release.
+- Symptom: a member-reported ZFS detach tombstone did not clear its host-scoped mirror row.
+- Fix: tombstones reach existing mirror cleanup while live master-owned records remain protected.
+- Regression: `TestMemberZFSTombstoneDropsItsProjection` failed first and passed in the reported
+  focused Controller race run; final whole-tree race evidence is pending.
+- API impact: existing contract.
+
+## BUG-0367 — Disabled pool transfer actions did not expose their shared block reason
+
+- Date: 2026-09-19; found during Phase 4 UI review before release.
+- Symptom: while another transfer blocked pool actions, **Make pool master** and **Eject from
+  pool** were disabled without an accessible association to the displayed reason.
+- Fix: each row action now has an instance-unique `useId` description for its own disabled reason.
+  When a pool-wide transfer also blocks it, `aria-describedby` references both that local reason
+  and the existing `pool-actions-blocked` status.
+- Regression: `web/src/pool-members.test.mjs` and `web/src/pool-authority.test.mjs` assert both
+  associations. Independent review cleared the tests; the reported focused test, typecheck and
+  full web suite passed. Browser recapture after UI deployment is still open.
+- API impact: existing contract.
+- Avoid: do not duplicate the transfer reason in every row; one status and stable association
+  preserves the single source of truth.
+
+## BUG-0368 — A deleted VM could reappear after eject and same-pool rejoin
+
+- Date: 2026-09-20; found during the Phase 4 native acceptance campaign before release.
+- Symptom: after a host was ejected and rejoined its former pool, a VM deleted in that old pool
+  could remain as a stale owner record because the host no longer published its delete tombstone.
+- Root cause: leaving rehomed a succeeded `vm-delete` tombstone into the temporary single-host
+  pool, although that tombstone is history of the old pool.
+- Fix: leave retains a successful delete tombstone in its old pool scope while rehoming a live
+  local VM definition; the rejoined host then publishes the deletion and the master prunes the
+  stale owner record only from complete current inventory.
+- Regression: `TestRehomeLeavingPoolScopeRehomesAppliedCopies` and
+  `TestPoolVMInventoryPublishesOldPoolDeleteAfterEjectAndSamePoolRejoin` pass. The reports do
+  not retain a failing-first command result for this follow-up. Independent review cleared focused,
+  package and race checks. A clean native replay is
+  pending; the existing lab state lacks the required provenance and will be archived and reset as
+  an unreleased-fixture replay, not repaired in place.
+- Native scope: the reset final campaign first refused eject until current target inventory matched
+  the retained VM/spec, then ejected successfully while the same host, VM and running QEMU process
+  remained. The VM was stopped and deleted only in its solo pool. This proves retained-local eject
+  and solo deletion lifecycle; it does not by itself prove an old-pool tombstone-prune result.
+- API impact: existing contract.
+- Avoid: do not retarget a deletion tombstone merely because the host changes pools.
+
+## BUG-0369 — Same-pool rejoin could leave shared resources permanently removed
+
+- Date: 2026-09-20; found during the Phase 4 native acceptance campaign before release.
+- Symptom: after eject and same-pool rejoin, a host could require manual remove-and-readd of a
+  shared network, repository or ISO that its leave had removed locally.
+- Root cause: a normal local removal and an eject-created cleanup removal were indistinguishable
+  in the durable managed journal, so reapply correctly failed closed for both.
+- Fix: a signed leave record marks only the successful eject-created cleanup entry. Reconciliation
+  may reapply the same ID only with a newer membership generation and a current-enough desired
+  resource generation; its successful journal entry consumes that one receipt. Unmarked or newer
+  removals remain effective, and interrupted reapply retries through the existing lifecycle.
+- Regression: `TestEjectCleanupReapplyConsumesOnlyTheMarkedRemoval` passes. The report does not
+  retain a failing-first command result for this follow-up. Independent review cleared focused,
+  package and race checks. A clean native replay is pending;
+  the existing lab state will be archived and reset as an unreleased-fixture replay rather than
+  repaired in place.
+- Native scope: after same-ID Controller-driven rejoin reached ready, the original shared network,
+  repository and ISO IDs reapplied on the returning member. This proves the same-ID convergence
+  path; it does not close unrelated pool recovery or promotion cases.
+- API impact: existing contract.
+- Avoid: do not infer an eject cleanup grant from a removal, journal filename or operation ID.
+
+## BUG-0370 — VM creation could offer a drained or unknown host as a placement target
+
+- Date: 2026-09-20; found in Phase 4 UI review before release.
+- Symptom: the VM form used host inventory alone, so it could offer a fresh host before it had the
+  pool master's current maintenance state.
+- Root cause: the form had not read the existing authoritative pool-members projection while open.
+- Fix: the form reads that existing projection only while the VM form is open, clears it while
+  loading, and disables placement for maintenance, missing, stale or failed reports. `readyHost`
+  and non-placement resource eligibility remain unchanged; Core still makes the final decision.
+- Regression: `web/src/vm-create.test.mjs` covers loading, maintenance, reported-ready and unknown
+  state. Independent review cleared the source; reported focused tests, typecheck and full web
+  suite passed. Simulated 1280 px and 360 px captures on the final UI were inspected for
+  maintenance, missing, stale and unavailable reports; mutation routes were aborted. The retained
+  Phase 1 browser command passed on the reviewed dirty working tree, but its new unconditional
+  assertions exercise U7/U10 rather than this U6 fixture; it does not prove Core placement.
+- API impact: existing contract.
+- Avoid: do not infer placement authority from a host inventory observation.
+
+## BUG-0371 — Hidden management-network labels caused narrow-page overflow
+
+- Date: 2026-09-20; found in Phase 4 UI review before release.
+- Symptom: visually hidden labels in the management-network form could place an absolute box
+  outside its scroll area and widen a 360 px page.
+- Root cause: the form's scroll container did not establish the positioning context for those
+  labels.
+- Fix: the management-network form's actual scroll container is positioned, keeping hidden labels
+  available to assistive technology without contributing to document width.
+- Regression: `tests/integration/phase1_browser.py` intercepts the existing host-network route for
+  validation and requested rollback, asserts no 360 px overflow and captures both states. The
+  isolated U7–U10 captures passed. The retained persistent Phase 1 browser command also passed on
+  the reviewed dirty working tree; its unconditional assertions exercise the intercepted
+  validation and requested-rollback UI states at 360 px, without a Core mutation.
+- API impact: existing contract.
+- Avoid: do not remove labels to suppress layout overflow.
+
+## BUG-0372 — Accepted VM-create warning vanished on its task route
+
+- Date: 2026-09-20; found in Phase 4 UI review before release.
+- Symptom: an accepted VM creation could return a Core advisory warning, then immediately navigate
+  to its task route and clear that warning before an operator could read it.
+- Root cause: the hashchange handler cleared every notice, including the notice attached to the
+  route it had just assigned.
+- Fix: the shell records the route for a task-bound notice and preserves it through that matching
+  route change. An ordinary navigation or terminal task state still clears it.
+- Regression: `web/src/managed.test.mjs` covers the warning text, route guard and terminal-task
+  projection. Independent review cleared isolated intercepted browser coverage at 1280 px and
+  360 px: the warning survives the task-route change and clears on task completion or ordinary
+  navigation. A current-source-only unconditional-clear reproduction failed at warning visibility;
+  the restored fixture and persistent Phase 1 browser run then passed. This is browser fixture
+  evidence, not a Core placement or native acceptance result.
+- API impact: none.
+- Avoid: do not clear a task-bound notice solely because the accepted request changed the route.
+
+## BUG-0373 — A prior solo-pool VM owner could reappear after joining and promotion
+
+- Date: 2026-09-20; found during Phase 4 native acceptance before release.
+- Symptom: a host's solo-pool VM ownership cache could survive joining another pool and later
+  reappear through promotion, resurrecting an ownership record from the former pool.
+- Root cause: the join rehome resume path cleared its durable pending-rehome marker before it had
+  scrubbed old solo-pool VM ownership and inventory state.
+- Fix: Core clears that old state before clearing `PendingRehome`. If cleanup fails, it retains the
+  marker and uses the existing cancellation-aware retry backoff, so a repaired durable record can
+  resume safely.
+- Regression: the lifecycle test starts with a completed solo-pool VM-delete journal and stale
+  solo-pool ownership state, then joins, resumes, receives a signed replica and completes a fenced
+  promotion. It proves that only the destination authority remains and its VM record is
+  byte-identical. A temporary disabled-scrub negative control failed with the stale authority
+  still present. Cancellation with corrupt ownership state retains `PendingRehome`, and the retry
+  completes after repair. Reported passes: focused `go test` and `go test -race` lifecycle suites,
+  plus full `internal/agent` ordinary and race suites. The source test runs in the existing Go
+  package coverage used by push and pull-request workflows. A clean native replay is pending; no
+  already-corrupt replica was repaired in place.
+- API impact: existing contract; join and resume behavior changed without a route or wire change.
+- Avoid: do not retain or re-publish ownership records from a pool the host has left.
+
+## BUG-0374 — A managed local VM could start while its host was restricted
+
+- Date: 2026-09-20; found during Phase 4 native acceptance before release.
+- Symptom: a direct libvirt start of a managed VM with local storage bypassed the restricted-host
+  gate, although the Core API correctly refused the same start and the recovery guide promises that
+  restricted hosts start no VM.
+- Root cause: the libvirt storage hook checked the restriction only inside its shared-storage
+  permit branch, which local managed disks never enter.
+- Fix: every managed disk now checks the existing durable Core restriction before repository work.
+  Shared-storage permit consumption is unchanged, and unmanaged appliance domains remain outside
+  this guard.
+- Regression: `TestStorageGuardRefusesRestrictedLocalManagedGuestAndLeavesApplianceAlone` failed
+  before the change and passes now; it proves a local managed VM is refused and an unmanaged
+  appliance is admitted. The focused guard suite passed, as did `go test ./internal/vmhost`
+  (8.602s) and `go test -race ./internal/vmhost` (12.767s). Independent review cleared the fix;
+  the repository privacy test passed. Native proof on the later hook-only Core delta used the same
+  valid stopped local managed VM: both the Core API and direct libvirt hook refused it while the
+  host was `Restricted · unconfirmed`; it remained stopped, then started and stopped normally after
+  recovery. This does not prove every start path, a bounded full restricted interval, duplicate-
+  writer safety or permanently-dead-member recovery.
+- API impact: existing contract; the existing Core restriction state governs existing start
+  behavior without a new Controller contract.
+- Avoid: do not apply the restriction gate only to shared-storage start paths.
+
+## BUG-0375 — An expired promotion fence proof could leave activation retrying forever
+
+- Date: 2026-09-20; found during Phase 4 acceptance before release.
+- Symptom: when a fence proof expires while a promotion is at activation, retries can remain at
+  that stage without returning to fencing for a fresh proof.
+- Root cause: activation treated every failed live verdict as terminal, although the existing
+  durable record had already advanced to activation and could no longer re-run fencing.
+- Fix: only a fully bound proof set that was valid when recorded and has since expired moves the
+  same durable candidate record from activation back to fencing. The retry replaces only expired
+  proofs. Malformed, mismatched, unconfirmed or newly required proofs, and authority or ownership
+  failures, remain refused.
+- Regression: `TestPoolPromotionRefencesExpiredProofBeforeActivation` failed first with no fresh
+  fence call and now passes. Three focused tests cover retaining a fresh proof while re-fencing an
+  expired peer, malformed expired proof refusal, and higher-authority refusal. Focused tests,
+  `go test ./internal/agent` (10.606s), and `go test -race ./internal/agent` (23.845s) passed;
+  independent review cleared the fix. Native expiry validation held an aged, bound proof at
+  activation while the old master was externally off, then replaced it for the same operation,
+  host, target and configuration before promotion succeeded. A separate retained restart kept the
+  same operation-bound fresh proof byte-identical across the candidate's new boot identity, with
+  the old master still off; promotion then succeeded and cleanup returned that host unrestricted.
+  Earlier incomplete fresh-proof attempts are superseded historical evidence.
+- API impact: existing contract; the existing promotion status can again move from activation to
+  fencing when its durable evidence expires.
+- Avoid: do not retry activation with an expired fence proof or leave it in an unbounded retry
+  loop.
+
+## BUG-0376 — A historical ejection receipt could suppress a later missed-eject recovery
+
+- Date: 2026-09-20; found during Phase 4 native acceptance before release.
+- Symptom: after an ejected host had rejoined, an old terminal ejection receipt could cause Core
+  to ignore a later authoritative missed-eject observation, leaving the host out of convergence.
+- Root cause: missed-eject recovery treated every historical terminal `ejected` role as current,
+  instead of considering whether a newer authoritative membership state superseded it.
+- Fix: Core preserves an active eject leave, but permits a terminal historical receipt to be
+  replaced only after authenticated authority convergence reports the local caller ejected at a
+  strictly newer membership generation. Existing master-certificate pinning, returned-host
+  verification and newer-generation safeguards remain unchanged.
+- Regression: `TestRejoinedHostLearnsLaterMissedEjectDespiteHistoricalTerminalReceipt` failed
+  before the correction. It seeds the historical receipt, drives a later master eject while direct
+  notice is unavailable, restores authenticated convergence, verifies replacement, and completes
+  `ResumePoolLeave`. The seeded receipt is a limitation: it does not reproduce the preceding
+  ejection/rejoin sequence. Package `go test ./internal/agent` (10.594s) and
+  `go test -race ./internal/agent` (23.712s) passed; independent review cleared the fix. Native
+  historical execution transcripts report recovery of the preserved fixture, but lack retained raw
+  before/after provenance. They are not sufficient to elevate the native recovery claim; stronger
+  raw evidence remains pending. A later whole-tree race passed after this correction.
+- API impact: existing contract; this restores retry and recovery behavior within the existing Core
+  membership lifecycle.
+- Avoid: do not let a terminal receipt from an earlier membership generation suppress newer
+  authoritative recovery state.
+
+## BUG-0377 — Cleared Core checks could retain stale failure or pending status
+
+- Date: 2026-09-20; found during Phase 4 native acceptance before release.
+- Symptom: a host could report `restricted: null` in fresh inventory while the pool-members view
+  still showed its earlier `pool-restricted` health check as failed. The same producer pattern can
+  also retain an old failed promotion check or a pending transfer check after Core has reached its
+  corresponding clear or successful state.
+- Root cause: Core omitted a fresh healthy replacement after a readable producer reached a clear,
+  successful, terminal or not-applicable state. The Controller correctly retains omitted checks
+  across partial inventory reports. The omission affected all seven fixed check producers.
+- Status: source fixed and independently reviewed. The final combined whole-tree source gate and
+  Python suite passed. Retained native Controller and members captures verify all seven fresh
+  healthy check replacements on a fresh current master. Their contemporary API evidence is kept
+  distinct from a later direct-shell observation rather than treating the two captures as one
+  generation/provenance record.
+- Fix and regression: a readable durable clear emits the existing `pool-restricted` check as
+  healthy, fresh and observed now. An unreadable record emits no synthetic clear, and an active
+  restriction keeps its existing failed fresh reason. The all-producer correction applies the
+  same replacement rule to storage, network, media, authority-replica, promotion and transfer
+  checks. The failing-first
+  `TestPoolRestrictedCheckPublishesFreshHealthyClear` now proves failed to durably clear produces
+  `restricted: null` plus an explicit healthy replacement; Controller coverage retains the
+  failed-to-healthy merge and pool-members projection. Focused agent test (0.014s),
+  `go test ./internal/agent` (10.693s), and `go test -race ./internal/agent` (23.838s) passed;
+  independent review cleared the fix. Existing GitHub and Gitea Go race workflows cover the agent
+  package. A later full `go test -race -count=1 -timeout 20m ./...` run also passed after the
+  source freeze. Promotion success and transfer success now likewise emit explicit fresh healthy
+  checks; a readable absent record now emits healthy, while an unreadable record emits no synthetic
+  healthy replacement and a prior Controller-stored check can remain. The extension passed its package and race checks, and the final combined whole-tree source
+  gate then passed. Retained native Controller and members captures show all seven current healthy
+  replacements on a fresh current master; this is an observed producer outcome, not a Controller
+  state repair.
+- API impact: existing contract; this refreshes the status of an existing inventory
+  check without adding a route or field.
+- Avoid: do not make Controller infer a clear from a missing check or keep a second restriction
+  state outside Core.
+
+## BUG-0378 — A newer eject cleanup could remove resources after same-pool rejoin
+
+- Date: 2026-09-20; found during Phase 4 native acceptance before release.
+- Symptom: after repeated eject cleanup at the same resource generation across later membership
+  generations, rejoin could consume the older cleanup receipt. The newer removal then remained
+  effective, leaving the shared network, repository and media unavailable even though the UI
+  reported the host ready.
+- Root cause: durable reapply provenance chose marked cleanup by resource generation alone. When
+  generations tied, it could select the older membership cleanup rather than the newest applicable
+  one.
+- Status: source fixed, independently reviewed and natively verified for preserved-journal
+  recovery. The multi-cycle regression covers newest
+  membership selection, tied-generation fail-closed behavior and real media receipt projection;
+  it failed under a resource-generation-only selector and passes with the correction. Focused,
+  package and race checks passed. The preserved disposable fixture was not repaired in place. A
+  fresh full eject and same-pool rejoin cycle remains beyond this bounded recovery proof.
+- Native verification: ordinary reconciliation on the reviewed Core delta consumed the newest
+  applicable cleanup provenance from the preserved journal. The shared repository mounted and the
+  shared ISO reappeared; master-side repository access, media digest, API read/write, VM runtime
+  and locking checks were healthy. A deliberately unmarked later network removal remained absent,
+  as required. This is bounded preserved-journal recovery, not all-resource acceptance.
+- API impact: existing contract; selection changes Core-private managed-journal provenance without
+  a route, schema or Controller-owned record.
+- Guide impact: none; this restores the documented rejoin behavior without changing its operator
+  workflow.
+- State: Core — existing managed-journal eject-cleanup provenance and reapply-consumption records
+  remain authoritative and are reported through Core inventory to a replacement Controller.
+- Avoid: do not choose receipts by journal filename or operation ID, and do not repair a
+  previously damaged journal in place.
+
+## BUG-0379 — A later eject cycle could reuse an earlier cleanup receipt
+
+- Date: 2026-09-20; found during Phase 4 native acceptance before release.
+- Symptom: a second UI eject could leave a host pending when it still used shared media. Cleanup
+  IDs tied only to resource generation were reused across membership generations, although the
+  earlier removal had already been consumed by a prior rejoin.
+- Root cause: leave-created cleanup provenance did not bind all resource IDs to the membership
+  generation that created the cleanup, allowing an earlier consumption receipt to be matched again.
+- Status: source fixed, independently reviewed and natively verified for the preserved repeated
+  eject. A focused failing-first two-cycle regression
+  drives a first cleanup and reapply, then a second signed eject through `ResumePoolLeave`; it
+  proves distinct durable cleanup receipts for network, storage and media, with IDs stable across
+  retries and time changes. The preserved native pending leave was resumed without repair: its
+  original operation terminally completed, wrote distinct current-generation cleanup receipts for
+  network, storage and media, and left all three removed while the ejected host became the sole
+  ready master of its new pool with its runtime identity preserved. This does not establish a
+  subsequent rejoin or resource convergence.
+- API impact: existing contract; this is Core-private managed-journal identity selection with no
+  route, schema or Controller-owned record.
+- Guide impact: none; the visible eject and rejoin workflow is unchanged.
+- State: Core — existing managed-journal cleanup and consumption receipts remain authoritative and
+  are reported through Core inventory to a replacement Controller.
+- Avoid: do not reuse a cleanup or consumption receipt across membership generations, and do not
+  repair the preserved fixture in place.
+
+## BUG-0380 — Reapplied VLAN could report healthy without materializing
+
+- Date: 2026-09-20; found during Phase 4 native acceptance before release.
+- Symptom: after rejoin, fresh API state reported a VLAN healthy while direct native inspection
+  found its device absent.
+- Root cause: an hour-pinned reapply operation ID replayed a prior successful same-ID operation,
+  so Core neither materialized the VLAN nor consumed the new cleanup receipt.
+- Status: source fixed, independently reviewed and natively verified for the bounded preserved
+  reconciliation. A retained failing-before Engine network replay
+  test failed because the prior operation replayed instead of materializing a new cleanup/reapply
+  attempt; the focused corrected test passes. Package and race suites for the affected Core
+  packages passed. The regression covers two same-input signed network-cleanup cycles and stable
+  retry identity. Its intentionally missing test NIC makes native validation fail, so it is not a
+  successful real VLAN lifecycle. Shared-storage helper binding is source coverage only. The final
+  whole-tree race and 374-test Python gate passed.
+- Native verification: the reviewed candidate reconciled the preserved member without repair. A
+  retained before/after comparison shows the expected VLAN bridge, its VLAN child and owned network
+  stanza, alongside the shared repository and matching current API state. This is bounded
+  preserved-reconciliation evidence only; it does not establish the active two-cycle G1 workflow.
+- API impact: existing contract anticipated; the defect is in Core operation identity/replay, with
+  no new route, schema or Controller-owned state proposed.
+- Guide impact: none anticipated; the documented rejoin workflow is unchanged.
+- State: Core — existing managed-journal reapply and cleanup-consumption records remain
+  authoritative and are reported through Core inventory to a replacement Controller.
+- Avoid: do not infer a materialized native VLAN from a fresh API health report alone.
+
+## BUG-0381 — A returned master could autostart before its restriction persisted
+
+- Date: 2026-09-20; found during Phase 4 native acceptance before release.
+- Symptom: during a returned-master promotion scenario, Core API start was refused while the host
+  was superseded, but its managed VM had already autostarted before Core recorded the restriction.
+- Root cause: libvirt autostart could run before Core had persisted the returned master's
+  restriction, while the local hook still read the preceding clear state.
+- Fix: source correction records private current-boot `BootAuthority{PoolID, HostID, BootID}` in
+  Core's existing pool-peer state. Before the agent resumes authority work, `StorageGuard` fails
+  closed for a fence-exposed multi-member master whose current-boot confirmation is missing or
+  stale. It leaves solo, member, unopted and unmanaged cases unchanged.
+- Status: source fixed and independently reviewed. Focused agent (0.035s) and vmhost (0.008s),
+  package vmhost (8.510s) and agent (10.441s), and race vmhost (12.881s) and agent (24.170s)
+  checks passed. A labeled source-only negative control that bypassed only the new boot guard
+  failed its regression (exit 1); restoring the exact fixed source passed (exit 0). This is not
+  historical native evidence. The f714 whole-tree Go race gate (agent 24.311s, controller
+  288.588s and vmhost 12.878s) and 374-test Python gate (13.130s) passed. Independently reviewed
+  native S6-14 evidence then proved pre-publish API, installed-hook and authority-offer refusals,
+  53.4-second autostart suppression, ordinary rejoin clearance, and the same VM's normal
+  post-clear API start/QEMU observation and force-stop/final shutoff. This is bounded boot-window
+  safety evidence, not a whole-S6 or permanent-failure result.
+- API impact: existing contract — this is private Core pool-peer state and existing local start
+  enforcement; no route, wire field, Controller state or job is added.
+- Guide impact: updated in `docs/guide/pool-authority-and-recovery.md`. Clearing restriction
+  restores the requested libvirt autostart flag, but does not retry a VM denied earlier in that
+  boot; an operator may start it normally after clearance, and each boot revalidates authority.
+- State: Core — existing `pool-peer.json` now includes the private current-boot authority
+  confirmation alongside durable restriction and managed VM/autostart records. Core remains
+  authoritative; a replacement Controller does not own or reconstruct this boot-local proof.
+- Avoid: do not use the earlier scoped S6-18 result to infer this returned-master boot window is
+  safe.
+
+## BUG-0382 — Pool authority stayed writable between transfer record and freeze
+
+- Date: 2026-09-20; found in staged Phase 4 correctness review.
+- Symptom: between saving a new master-change/eject transfer record and completing freeze, joins,
+  maintenance and registry edits could still mutate authority.
+- Root cause: the initial transfer record was saved with `Frozen=false` until `freezePoolAuthority`
+  ran.
+- Fix: create the transfer record with `Frozen=true`; freeze remains idempotent.
+- Status: source fixed. Regression `TestFrozenAuthorityAtTransferRecordCreation` plus
+  `go test ./internal/agent/ -count=1` passed.
+- API impact: existing contract; freeze timing only.
+- Guide impact: none; operator steps unchanged.
+- State: Core — existing pool transfer record on the master.
+- Avoid: do not leave a recorded in-progress transfer writable until a later stage sets Frozen.
+
+## BUG-0383 — Join preview blocked hosts with only failed VM creates
+
+- Date: 2026-09-20; found in staged Phase 4 correctness review.
+- Symptom: Add host to pool could refuse a candidate that Core would accept, because failed
+  `vm-create` mirror rows (including `failed-vm-create:*`) counted as managed VMs.
+- Root cause: `joinCandidateRefusal` counted every `vm-create` row without joining operations or
+  filtering failures; storage-register similarly ignored failed ops.
+- Fix: count only non-failed `vm-create` rows excluding `failed-vm-create:%`; storage-register
+  skips failed operations before `StorageBlocksPoolJoin`.
+- Status: source fixed with controller join tests; `go test ./internal/controller/ -count=1`
+  passed.
+- API impact: existing contract; stricter preview alignment with Core.
+- Guide impact: none.
+- State: none — Controller mirror projection only.
+- Avoid: do not treat failed or retitled create rows as applied workloads.
+
+## BUG-0384 — Cross-site pool join was accepted by the API
+
+- Date: 2026-09-20; found in staged Phase 4 correctness review.
+- Symptom: POST join could attempt a join the join-candidates UI never offered, across sites.
+- Root cause: `poolJoinTargets` did not require matching `site_id`.
+- Fix: require joining host pool and target pool share `site_id`.
+- Status: source fixed with controller test coverage.
+- API impact: existing contract; stricter validation on the join route.
+- Guide impact: none; same-site join was already the documented workflow.
+- State: none — Controller routing only.
+- Avoid: do not rely on the UI alone to enforce site scope.
+
+## BUG-0385 — Every failed promotion was projected as a conflict
+
+- Date: 2026-09-20; found in staged Phase 4 correctness review.
+- Symptom: UI always told operators to resolve and retry after any failed promotion.
+- Root cause: `lastPoolPromotionOperation` set `Conflict=true` for every `failed` status.
+- Fix: set conflict only for membership-generation / fence-list mismatch refusals, matching
+  transfer conflict detection.
+- Status: source fixed with promotion tests.
+- API impact: existing contract; projection field semantics tightened.
+- Guide impact: none.
+- State: none — Controller projection of Core operation results.
+- Avoid: do not treat every Core refusal as a generation conflict.
+
+## BUG-0386 — Stale membership generation and restricted banner
+
+- Date: 2026-09-20; found in staged Phase 4 correctness review.
+- Symptom: maintenance/transfer could submit `expected_version: 0` and skip the generation gate;
+  a cleared restriction could leave a host banner until navigation.
+- Root cause: UI submitted before authoritative generation was known; restricted banner fetched
+  once on mount.
+- Fix: disable submit until authoritative generation > 0; re-fetch restricted status on focus
+  and while still restricted.
+- Status: source fixed; web unit suites passed.
+- API impact: none; client gating only.
+- Guide impact: none; same actions, safer submit.
+- State: none.
+- Avoid: do not send expected_version 0 as a way to skip freshness.
+
+## BUG-0387 — Maintenance drain lagged on members and missed the libvirt hook
+
+- Date: 2026-09-20; found in Phase 4 correctness follow-up.
+- Symptom: after drain on the master, members could still accept starts until the next replica
+  probe; the libvirt hook only read pool-peer.json, which members never update after join.
+- Root cause: ExecutePoolMaintenance did not push replicas; poolHostDrained ignored verified
+  pool-replica.json on members.
+- Fix: push replicas after a durable maintenance change (needs_attention if push fails); hook
+  reads verified replica membership for non-masters.
+- Status: source fixed with maintenance and storage_guard regression tests; agent and vmhost
+  packages passed.
+- API impact: existing contract.
+- Guide impact: none at fix time; drain behaviour already documented, now converges promptly.
+- State: Core — master membership + replica.
+- Avoid: do not enforce member drain from join-time peer membership alone.
+- Docs (2026-09-20): guide and API reference caught up after native lab proof (Core binary sha256
+  327b7ec9…) that a drained member refuses manual `virsh start` with the hook sentence; the prior
+  member hook limit is closed in the guide, API and Phase 4 closure plan.
+
+## BUG-0388 — Replica push short-circuited on member GET alone
+
+- Date: 2026-09-20; found in Phase 4 correctness follow-up.
+- Symptom: master skipped POST when GET reported matching generation/digest/verified, so a
+  member without a durable wrap after corruption/rotation might never be re-pushed.
+- Root cause: GET observation and successful POST ack shared one map; GET could justify skip.
+- Fix: separate POST-ack map; short-circuit only on master's last successful POST ack.
+- Status: source fixed with TestPoolReplicaPushShortCircuitsOnPostAckOnly.
+- API impact: existing contract.
+- Guide impact: none.
+- State: Core — in-memory push ack; durable replica still on members.
+- Avoid: do not trust peer GET alone to skip a replica POST.
+
+## BUG-0389 — Join invitation rejected on Controller clock skew
+
+- Date: 2026-09-20; found in Phase 4 correctness follow-up.
+- Symptom: a still-valid invitation from the master could be dropped if Controller time was ahead.
+- Root cause: ExpiresAt.After(time.Now()) with no skew grace.
+- Fix: 2-minute collectable skew; Core still enforces real expiry on join.
+- Status: source fixed with controller skew test.
+- API impact: existing contract; looser Controller collectability only.
+- Guide impact: none.
+- State: none — Controller relay validation.
+- Avoid: do not treat Controller wall clock as the invitation's authority.
+
+## BUG-0390 — Returned master stayed restricted without naming unreachable peers
+
+- Date: 2026-09-20; found in Phase 4 correctness follow-up (OD-6 territory).
+- Symptom: one unreachable ready peer left a restarted master restricted indefinitely with no
+  clear who blocked clearance; silence was correctly not treated as agreement.
+- Root cause: confirmPoolAuthorityAfterRestart returned early with no unreachable list and no
+  fence-evidence escape matching promotion discipline.
+- Fix: record unreachable hosts in the restriction reason; clear only when every unreachable
+  ready peer is already covered by a fresh verified fence proof on the durable transfer record
+  and reachable peers confirm. No auto-fence on tick; OD-6 not loosened to clear on silence.
+- Status: source fixed with promote restriction tests.
+- API impact: existing contract; Error text only.
+- Guide impact: none for this batch; OD-6 still unapproved as product policy.
+- State: Core — pool-peer restriction + transfer fences.
+- Avoid: do not clear unconfirmed authority because a peer is merely quiet.
+
+## BUG-0391 — Failed master activation could leave adopted VM ownership
+
+- Date: 2026-09-20; found in Phase 4 correctness follow-up.
+- Symptom: adoptPoolAuthorityFromReplica wrote pool-vms.json before the atomic master peer save;
+  a failed peer save left adopted ownership without master role.
+- Root cause: intentional adopt-before-master ordering without rollback on peer-save failure.
+- Fix: snapshot pool-vms before adopt; restore on peer-save failure. HandedOff-before-activate
+  ordering kept (dual-writer rule).
+- Status: source fixed with adopt rollback and HandedOff recovery-message tests.
+- API impact: existing contract.
+- Guide impact: none.
+- State: Core — pool-vms.json + pool-peer.json.
+- Avoid: do not leave adopted VM authority when master activation did not commit.
+
+## BUG-0392 — A local-storage guest never came back from a pool master's reboot
+
+- Date: 2026-09-20; found in Phase 4 native lab acceptance (S2-4, `s2-autostart`), where the
+  master's local-storage guest stayed `shut off` for 303.6s after a reboot taken with maintenance
+  already cleared and the libvirt flag restored to `enable`.
+- Symptom: on a multi-host pool master, a managed guest on local storage with `autostart` set did
+  not return after a normal (not drained, not restricted) reboot. A manual `virsh start` once the
+  agent was up succeeded, so the definition and the flag were both correct.
+- Root cause: libvirt attempts an autostart domain exactly once, at boot, before Core's agent
+  runs. For a fence-exposed master with other ready members that is inside the window
+  `EnsurePoolBootRestriction` opened, so `StorageGuard`'s `poolHostRestricted` refused the start —
+  correctly. Nothing then retried it: `ReconcilePoolVMAutostart` skipped every non-shared VM
+  (`if !shared { continue }`) on the grounds that libvirt owns those, which is only true for the
+  one attempt libvirt has already spent.
+- Fix: `ReconcilePoolVMAutostart` now takes the same once-per-boot attempt for a local-storage
+  autostart guest, after — and only after — its existing drain and restriction gates have passed.
+  The attempt is claimed by `ClaimPoolVMAutostartAttempt` exactly as the shared path claims it, so
+  an agent restart or a later manual stop cannot start the guest again in that boot. It takes no
+  master permit and no ownership transition, which is what an API start of a local-storage guest
+  does too (`AdmitPoolVMExecution` returns before any master round trip for one). Nothing in the
+  boot window changed: BUG-0381's refusal, and the `StorageGuard` gates behind it, are untouched.
+- Status: source fixed. Regressions `TestAutostartPassAttemptsLocalStorageGuests` (asserts Core
+  asks libvirt to start the guest, through a recording `virsh` stub) and
+  `TestAutostartPassMakesNoLocalAttemptWhileDrainedOrRestricted` (asserts no attempt is made and
+  no boot claim spent in either window). Negative control: with `startLocalAutostartVM` reverted
+  to `continue`, the first test failed with `Core never asked libvirt to start the local-storage
+  autostart guest: ["list --all --uuid" "autostart 1111..." "autostart --disable 2222..."
+  "domstate 1111..."]`; restoring the fix passed. Commands and package results are in
+  `docs/changes/2026-09-20-phase4-s2-autostart-and-drain-result.json`. The native S2-4 re-run is
+  outstanding and is not claimed here.
+- API impact: existing contract — no route, wire field or command kind changes. `docs/API.md`
+  records that Core's once-per-boot attempt now covers non-shared guests, and that such a start
+  goes through the same available-memory check every other start does.
+- Guide impact: updated in `docs/guide/pool-authority-and-recovery.md` (clearing the restriction
+  now also starts autostart guests that are still shut off, once for that boot) and
+  `docs/guide/host-maintenance-mode.md` (the next reboot after exiting maintenance brings local
+  guests back).
+- State: Core — the managed journal remains the durable record of the autostart intent and the
+  per-boot claim stays in private Core state under `pool-vm-autostart-attempts`. Nothing is added
+  to Controller.
+- Avoid: do not fix this by loosening `poolHostRestricted` or the `BootAuthority` gate to
+  shared-storage disks only. The reason string says "starts no shared-storage guest", but the gate
+  is also what stops a superseded master acting during a boot it has not accounted for; relaxing
+  it to make one retry possible trades a bounded, recoverable delay for a permanent hole. Retrying
+  after the gate has passed costs nothing and keeps BUG-0381's evidence valid. Also do not retry
+  on a tick without claiming the boot — that turns autostart into a keepalive that undoes an
+  operator's manual stop.
+
+## BUG-0393 — A drain of a host that was down finished as needs_attention
+
+- Date: 2026-09-20; found in Phase 4 native lab acceptance (S2-1, `s2-core`), where the check
+  stops the member's Core before the drain and the operation settled `needs_attention` with
+  `maintenance mode is recorded but has not yet been replicated to pool members`.
+- Symptom: entering or leaving maintenance for a host whose agent was stopped, powered off or
+  partitioned always reported `needs_attention`, asking an operator to act on something no action
+  would change. The guide already promised the opposite: "the host being drained does not need to
+  be reachable".
+- Root cause: `ExecutePoolMaintenance` downgraded its own result when the prompt
+  `PushPoolAuthorityReplicas` call failed. That made one authority write's result depend on a
+  member's reachability; no other authority write does — VM ownership, networks, storage and
+  master transfers all leave the catch-up to the probe tick at `run.go:846`.
+- Fix: keep the prompt push (it is what makes a reachable member refuse within seconds instead of
+  within a minute) and stop treating its failure as the operation's outcome. The drain is complete
+  when the master's own `pool-peer.json` record is saved, which is the record every placement,
+  definition and start is refused by; the member's replica is an early refusal on top of it, never
+  the decision. The replication shortfall stays visible per member in the members projection's
+  `replica` status and `connection`.
+- Status: source fixed. Regression `TestMaintenanceSucceedsWhenAMemberIsUnreachableForThePush`
+  (replaces `TestMaintenanceReplicaPushFailureNeedsAttention`) asserts the succeeded result, the
+  durable master record, that the member did **not** receive a replica, and that the master itself
+  refuses work on the drained host. Negative control: with the downgrade restored the test failed
+  with `unreachable member push = {... Status:needs_attention ...}`.
+  `TestMaintenanceDrainPushesReplicaPromptly` still passes, so the prompt push was not removed.
+- API impact: existing contract — same route, request, command kind and asynchronous refusal set;
+  one result status changes. `docs/API.md` records the change and the date.
+- Guide impact: updated in `docs/guide/host-maintenance-mode.md` — the task succeeds once the
+  master has recorded it, including when the host being drained is down.
+- State: Core — the drain stays in the pool master's membership record in `pool-peer.json` and is
+  re-adopted from the master's reported inventory. Nothing moves to Controller.
+- Avoid: do not make this succeed by dropping the prompt push as well; a reachable member should
+  still converge in seconds. And do not try to distinguish "member is dead" from "member is
+  partitioned" to decide the status — that judgement is made over the same channel that just
+  failed, so it cannot be trusted either way.

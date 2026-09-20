@@ -25,7 +25,7 @@ workflow on pushes that change `website/`; see [operate the website](operate-web
 - The exact release has completed every external-distribution requirement in
   [Nex licensing](../LICENSING.md#release-evidence), with reviewable evidence. A successful build,
   existing website content or a configured deployment secret does not satisfy this prerequisite.
-  The current working version, `0.3.5`, has not thereby been released. Its ZFS-enabled manifest
+  The current working version, `0.4.0`, has not thereby been released. Its ZFS-enabled manifest
   is rejected by both publication scripts until the ZFS external-distribution gates are closed.
 - Maintainer access to the Nex repository on the configured Git forge. The runner needs Docker;
   it may execute jobs inside a container, since the build locates the workspace on the Docker

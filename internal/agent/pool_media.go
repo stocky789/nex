@@ -345,7 +345,19 @@ func adoptPoolMediaNative(ctx context.Context, s *Store, media protocol.Media) e
 		return err
 	}
 	if removed {
-		return poolConvergeRefusalf("pool ISO %s was removed on this host and is listed again by the master; remove it on the master and add it again", media.ID)
+		membership, membershipErr := Membership(s)
+		if membershipErr != nil {
+			return membershipErr
+		}
+		command := protocol.Command{Kind: "iso-import", Media: &media}
+		allowed, grantErr := engine.EjectCleanupReapplyAvailable(command, s.State.PoolID, s.State.HostID, membership.Generation)
+		if grantErr != nil {
+			return poolConvergeRefusalf("pool ISO %s cannot be reapplied: %s", media.ID, grantErr)
+		}
+		if !allowed {
+			return poolConvergeRefusalf("pool ISO %s was removed on this host and is listed again by the master; remove it on the master and add it again", media.ID)
+		}
+		return engine.AdoptSharedMediaEjectCleanupReapply(ctx, media, membership.Generation)
 	}
 	return engine.AdoptSharedMedia(ctx, media)
 }

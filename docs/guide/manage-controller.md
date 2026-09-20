@@ -9,7 +9,10 @@ host's local UI enrolls that host automatically; other reachable hosts are added
 (address, root password, fingerprint confirmation), and the manual token procedure is the fallback
 for hosts the Controller cannot reach. Each enrolled host becomes the **pool master** of its own
 pool, named after its hostname. [VM creation](create-virtual-machine.md) has separate
-prerequisites. Changing the pool master and ejecting a member are not available.
+prerequisites. Controller-driven [member join](join-a-pool.md),
+[planned master change, promotion and eject](pool-authority-and-recovery.md) are available as
+development workflows. Their native acceptance and recovery evidence remain incomplete, so they
+do not establish the Phase 4 release gate.
 
 Use one Controller process with its SQLite database on local disk. It is authoritative only for
 sites, administrator accounts, audit history, enrollment tokens, the Controller CA and backup
@@ -251,6 +254,20 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
 - **Add host: "host rejected the root password":** re-check the host's current OS root
   password; it may have changed since a prior attempt. Repeated failures are rate-limited
   by the host's own local login (429), which passes its message through unchanged.
+- **Add host: "this host belongs to a pool whose master has not reported it yet" (409):** this is
+  a **wait, not a failure**, and the dialog says so: nothing has failed, your entries are kept, and
+  **Confirm and add host** is a one-click retry. It happens when you add a pool *member* to a
+  replacement Controller before its pool **master** has reported the member. Connect the pool
+  master first, or simply try again — usually within one report interval. The host's own words are
+  kept under the message for diagnosis. (Earlier builds answered this with a `502` that read like a
+  broken host.)
+
+  **Adding the member first now works too**, and it used to deadlock. If a member reconnects to a
+  replacement Controller before the master does, that member's report is what the Controller has,
+  and it names the real pool master — so the master is accepted when it enrols, and the pool row
+  moves to it on its own first report. Either order converges with nothing to re-enter. The
+  Controller still reads only the pool's own record: a member cannot take a pool by claiming to be
+  its master, because no host but the recorded master can produce the pointer that would allow it.
 - **Add host: 502 "host could not enroll with the controller at …":** the host authenticated
   but could not reach the Controller address you supplied at the field, or it rejected the
   token/CA. Confirm the Controller address is one the host's network can resolve and route
@@ -285,10 +302,10 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
   Changing a timeout does not repair the underlying failed capability.
 - **Pool master unknown:** the pool's **General** panel shows **Unknown** when the master
   host record is missing or revoked. The pool and its resources remain; re-enroll the same
-  host with **Re-enroll host** to restore it. Changing a pool's master is not available
-  in this build. Do not treat Controller replacement or host re-enrollment as a master
-  transfer: the future manual, fence-verified promotion and safe member rejoin flow remains
-  planned.
+  host with **Re-enroll host** to restore it. For an intentional authority change, use the
+  documented [planned master change or fence-verified promotion](pool-authority-and-recovery.md),
+  never Controller replacement or host re-enrollment. Those development workflows remain subject
+  to their stated acceptance limits.
 - **Confirm and add host reports "Already enrolled":** the message continues
   `Host <id> still trusts a Controller at this address. Use Re-enroll host on that host, or check the Controller address.`
   The host is already enrolled with a Controller at the same address and with the same
@@ -345,8 +362,9 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
   that could not be read; the other entries are still adopted. Limits: sites, administrator accounts,
   audit history, enrollment tokens and the Controller CA are not recovered and must be
   re-created. A pool member returns to its pool only after you also connect that member to
-  the new Controller and its master reports it as a ready member; members are joined through the
-  [host-local join workflow](join-a-pool.md), not from Controller. Never run the old and new Controller at the same time. If you re-enroll a
+  the new Controller and its master reports it as a ready member; add new members through the
+  Controller-driven [join workflow](join-a-pool.md), which asks Core to perform and retain the
+  host-side membership operation. Never run the old and new Controller at the same time. If you re-enroll a
   host with the *same* Controller under a new host record instead, its old records stay with
   the revoked host and are not moved; use **Re-enroll host**, which keeps the identity.
 

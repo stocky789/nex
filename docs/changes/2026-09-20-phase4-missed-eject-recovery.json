@@ -1,0 +1,36 @@
+{
+  "summary": "Recover a later missed eject after a rejoined host retains a historical terminal receipt. API impact: existing contract.",
+  "paths": [
+    "docs/BUG_LEDGER.md",
+    "internal/agent/pool_transfer.go",
+    "internal/agent/pool_transfer_test.go"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The documented eject recovery workflow is unchanged; Core now resumes its existing behavior after authenticated newer authority state.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Existing authority convergence and eject lifecycle behavior now recover from superseded history; no route or wire field changed.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The source fix does not complete remaining G1 native convergence or Phase 4 gates.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Core owns durable transfer history, membership and missed-eject recovery.",
+    "record": "The existing pool-peer transfer and membership records remain authoritative and are reported to a replacement Controller through inventory."
+  },
+  "verification": {
+    "method": "TestRejoinedHostLearnsLaterMissedEjectDespiteHistoricalTerminalReceipt failed before the correction. It seeds the historical receipt, drives a later master eject with direct notice unavailable, restores authenticated authority convergence, verifies receipt replacement, and completes ResumePoolLeave. The seeded receipt does not reproduce the preceding eject/rejoin sequence. go test ./internal/agent (10.594s) and go test -race ./internal/agent (23.712s) passed; independent review cleared the fix, and a later whole-tree race passed after the correction. Historical native execution transcripts report recovery of the preserved fixture but lack retained raw before/after provenance, so stronger native evidence remains pending.",
+    "evidence": [
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

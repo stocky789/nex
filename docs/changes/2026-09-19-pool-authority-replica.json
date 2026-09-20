@@ -1,0 +1,81 @@
+{
+  "summary": "Member authority replica: the pool master signs its durable authority with the pool CA, seals its CA key per member and pushes it over the existing pool peer transport; members store it, verify it and act on none of it, both sides report it honestly, and the pool's Hosts tab shows whether each member's copy is current",
+  "paths": [
+    "internal/protocol/pool.go",
+    "internal/protocol/protocol.go",
+    "internal/protocol/pool_replica_test.go",
+    "internal/agent/pool_authority.go",
+    "internal/agent/pool_replica_test.go",
+    "internal/agent/peer.go",
+    "internal/agent/run.go",
+    "internal/agent/poolca.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_inventory.go",
+    "internal/agent/pool_storage.go",
+    "internal/agent/pool_storage_test.go",
+    "internal/controller/pooljoin.go",
+    "internal/controller/pooljoin_test.go",
+    "internal/controller/identity.go",
+    "internal/controller/poolreplica_test.go",
+    "web/src/pool-members.tsx",
+    "web/src/pool-members.test.mjs",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer.html",
+    "tests/test_api_contract.py",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/README.md",
+    "docs/guide/join-a-pool.md",
+    "CHANGELOG.md",
+    "docs/plans/2026-09-19-phase4-closure.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "New operator-visible state with its own page: what the copy is, how to read the Authority copy column, what current, behind, awaiting, unverified, refused, unsupported and unknown mean, what to do about each, and the plain limits \u2014 a member never acts on the copy, the copy is not health evidence, and there is no promotion, master change or eject in this release. The Hosts-tab description in the join page names the new column, and the guide index lists the page. The Verification section states plainly that no native multi-host push and no browser review were executed.",
+    "pages": [
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/guide/README.md",
+      "docs/guide/join-a-pool.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "One peer route on the member (GET and POST /api/v1/pool/replica, authenticated as the pool master over the existing pinned pool mTLS transport, body bounded to 1 MiB), the signed PoolAuthorityReplica payload with its per-section digests and per-member sealed pool CA key (PoolWrappedKey, PoolReplicaSection), the PoolReplicaAck and PoolReplicaStatus shapes, the member-reported inventory field managed.replica, the master's four observed PoolMember replica fields, the pool-authority-replica health check, the pool-authority-replica-v1 capability, the new deleted field on the member's peer VM inventory, and the fail-closed 503 on the pool storage peer list. The existing GET /api/v1/pools/{id}/members projection gains replica_supported and a per-member replica object with its state ladder; no new Controller route and no new request field. Both sides, authentication, refusal texts, idempotent re-push, generation ordering and capability gating are implemented in this slice.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/api/index.html",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase 4 stays in progress and no milestone item moves to built: the replica has unit, Controller and contract evidence only, its native multi-host acceptance is outstanding, and the recovery capability it exists for (promotion) is not implemented. The board keeps built separate from in testing, so it still describes the project accurately.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Every durable record is written by Nex Core on the two hosts that own it. Nex Controller stores nothing for this slice \u2014 no column, no cache and no operation row \u2014 and derives no generation of its own; the projection is read out of the last inventory each host reported.",
+    "record": "The pool master's pool-peer.json gains AuthorityGeneration and AuthorityDigest, saved atomically beside the membership it already holds; each member writes <state-dir>/pool-replica.json at mode 0600 (temp file plus rename), holding the replica exactly as received with its content digest, the member's own received_at and verified. A fresh or rebuilt Controller recovers the whole picture from reported inventory with nothing for an operator to re-enter: each member reports Inventory.Managed.Replica (generation, digest, master host, signed_at, received_at, verified, error) and the master reports its own observation of every member's acknowledgement as the replica_generation, replica_digest, replica_error and replica_observed_at fields overlaid on the membership copy in Inventory.Managed.Membership. Those four master-side fields are memory-only observations by design: they are never written into the durable membership record and never feed the generation equality rule, so a restarted master reports 0 honestly until it observes an acknowledgement again.",
+    "record_note": "The sealed pool CA key inside the replica is key material at rest on each member, in the 0600 file above inside the already-0700 state dir. It is never logged, reported or placed in any Controller store, and no code path in this release unwraps it.",
+    "notes": "Amended 2026-09-19 by the review-fix batch (docs/changes/2026-09-19-phase4-review-fixes.json): the replicated-section write audit behind BUG-0334 added the missing authority guards - the peer-origin write through /api/v1/pool/advertise, the pool virtual-machine owner prune and seed, the clustered-storage resume from the tick, and the clustered-storage apply and verify-fence entry point (BUG-0351). A member also now reads its own drain flag from this stored replica, for that refusal only; acceptPoolAuthorityReplica's rule that a member never acts on the contents is unchanged, and the member's own membership record is not modified by that read."
+  },
+  "verification": {
+    "method": "Go unit tests with the race detector (go test -race -count=1 on internal/agent, internal/protocol, internal/localcore, internal/vmhost, all ok; internal/controller ok) covering the sign and verify round trip against the pool CA, per-member sealing including failure with another member's key and at another generation, tamper and truncation refusals (record, section digest, truncated sections, foreign member) with the stored replica proven unchanged, the generation rules (rollback refused, same generation with different contents refused, idempotent acknowledgement), crash-before-push generation persistence across a store reopen, a lagging and an unreachable member catching up, pending, failed and ejected members receiving nothing, proof that a replica grants no execution and that a member writes no pool-vms.json from one, both inventory projections, both health checks, concurrent authority writes and pushes under -race, the 1 MiB bound on the wire and on disk, the owner-record pruning matrix, and the fail-closed storage peer list with no member detach. Controller tests cover every state value, member-ahead and member-behind disagreement, stale master and stale member zeroing the row, a missing capability on each side, the master row carrying no replica, and a row-count assertion that a full projection adds nothing to operations, managed_resources or audit. UI component suite (npm run typecheck, npm test; pool-members.test.mjs ok). Offline contract checks: python3 -m unittest discover -s tests -p 'test_api_contract.py' \u2014 the new PoolAuthorityReplicaContractTests pass, asserting the five protocol types and PoolMember against their Go structs in both contracts, the section list and 1 MiB limit against the constants, the peer route's served statuses and every bounded member-side refusal against the reference, the master-side push failures against the reported replica_error, the capability, the documented state ladder against the handler's own switch, and the deleted field on the peer VM inventory; python3 scripts/generate_api.py --check reports the generated reference current. Documentation gate: python3 scripts/check_docs.py --worktree. NOT executed and recorded as outstanding: a native multi-host push including a master restart, and a browser/360 px review of the Authority copy column and its stale state, both deferred to the Phase 4 native acceptance slice.",
+    "evidence": [
+      "internal/agent/pool_replica_test.go",
+      "internal/agent/pool_storage_test.go",
+      "internal/protocol/pool_replica_test.go",
+      "internal/controller/poolreplica_test.go",
+      "web/src/pool-members.test.mjs",
+      "tests/test_api_contract.py",
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/plans/2026-09-19-phase4-closure.md"
+    ]
+  }
+}

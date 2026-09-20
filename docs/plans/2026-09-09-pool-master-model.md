@@ -51,12 +51,33 @@ single-host case trivial, and gives Phase 4 a defined starting point for joining
 
 ## Not in this change (planned, Phase 4)
 
+**Current Phase 4 status (2026-09-20): closed for disposable virtual-lab scope.** S1–S6 are
+implemented. Reviewed native evidence includes the repeated G1 join/eject lifecycle and
+missing-uplink recovery/cleanup, plus S6-14 boot restriction, refusal, rejoin and post-clear
+start/stop safety. The final `f714` S6-18 strict harness is partial/FAIL after a different safe
+eject refusal and did not observe timed suppression; its older scoped pass remains historical.
+OD-6 is decided (project owner, 2026-09-20): the strict unreachable-ready-member rule
+(fence or fail-closed). An authentic supported owner-conflict fixture is unavailable, and physical,
+workload/duplicate-writer and packaged-host evidence remain permanent C-class limits for this lab
+class. Closure does not authorize a release or claim those permanent limits.
+
 At the time of this change, joining a second host to an existing pool as a member under its
 master (“Add host to pool”), changing the pool master, and ejecting a member were
 [Phase 4 multi-host pool work](2026-09-08-nex-platform.md#4-multi-host-pools-and-shared-storage).
-Core peer join and configuration convergence are now implemented with bounded evidence, but the
-Controller join UI, master change and eject remain unavailable. Do not present those controls as
-available.
+Core peer join and configuration convergence are now implemented with bounded evidence. The
+Controller join UI is no longer absent: the pool's **Hosts** tab adds a host through the master's
+single-use invitation and one durable command. Reviewed G1 lifecycle and missing-uplink
+recovery/cleanup evidence now supplements its unit and contract checks; full acceptance remains
+open. A **planned
+master change and a member eject** are also implemented in the working tree (closure slice S5,
+2026-09-19), offered per member row on the same **Hosts** tab, with in-process multi-host, Controller
+and contract evidence plus scoped native/browser evidence; full recovery acceptance remains open. **Fence-verified manual
+promotion of a surviving member while the pool master is gone** is implemented in the working tree
+too (closure slice S6, 2026-09-19), with scoped native evidence of external `virsh` power-off.
+Only a `virsh` fence profile can be recorded, so a physical pool therefore cannot be fence-promoted, and a
+fence profile must be recorded **before** the master is lost. What remains unavailable, and must not
+be presented as available, is **automatic succession**: nothing elects a master by itself, and
+every promotion is an operator naming one candidate.
 
 Member convergence was add-only when this was written (found in review, 2026-09-19) and is no
 longer. Decision: project owner, 2026-09-19 — pool-wide changes received by the master propagate
@@ -86,8 +107,10 @@ Still open after that work:
 - No native two-host walkthrough of a removal or a rename. Unit, race and namespace tests and a
   stubbed-API browser check are the only evidence
   ([QA](../qa/2026-09-19-pool-removal-convergence.md)).
-- **Ejected-member cleanup remains out of scope**, unchanged: an ejected member loses membership,
-  so its converge pass returns before any teardown and it keeps what it applied.
+- **Ejected-member cleanup remains out of scope**, unchanged even now that an eject exists
+  (closure slice S5): an ejected member loses membership, so its converge pass returns before any
+  teardown and it keeps what it applied. It re-initializes as the master of its own new
+  single-host pool and keeps the bridges and ISO records it had applied; the guide says so.
 - An **older member** silently keeps a removed bridge or ISO until it is upgraded; the master
   cannot detect it. Documented in the guide, not engineered around.
 - A master **restored from a backup older than the removal** lists the resource again, so members
@@ -106,14 +129,17 @@ Still open after that work:
   media peer lists with `503`; its `managed-journal` health check names the entry it could not
   read. What an operator then does on the host is manual and has no documented procedure; the guide
   says so plainly rather than improvising one. Open.
-- **Absence-as-removal across a master change needs design (Phase 4).** Raised in independent
-  review, 2026-09-19. Two effects, both after a promotion: a promoted member holds an *adopted*
-  ISO record, and an adopted record never unlinks the file, so removing that ISO on the new master
-  would drop the pool's record while leaving the file on shared storage — a leak, never a loss.
-  And the Controller's mirror row for a pool VLAN is refreshed and tombstoned only by the pool's
-  recorded master, so the ex-master's row can neither refresh nor be tombstoned and goes stale;
-  a fresh Controller re-adopts correctly, so this is display only. Resolve both in the
-  master-change design rather than discovering them there.
+- **Absence-as-removal across a master change: resolved in closure slice S5 (2026-09-19).** Raised
+  in independent review, 2026-09-19; both effects are now handled rather than discovered later.
+  The new master refuses to remove an ISO it holds only as an *adopted* record, with a message
+  saying the file stays on shared storage and must be removed from the host that imported it — an
+  honest refusal instead of a silent leak. *Decision: recorded default, 2026-09-19* — a demoted
+  master keeps serving the ISO records it adopted from the old pool's shared storage, and the
+  importing host removes the file; a pool-wide "re-home the importer" operation would be new
+  product behaviour and is not invented here. The Controller's mirror rows for pool storage,
+  networks and media are re-keyed to the new master host ID when the hosts report a master change,
+  so they can be refreshed and tombstoned again; the re-key moves no content, and a fresh
+  Controller still re-adopts from the hosts' reports.
 - **The managed journal has no pruning.** Raised in independent review, 2026-09-19. The hourly
   converge operation IDs bound a permanently stuck resource to at most 24 journal entries a day
   (from 8 640), and the read-only dry runs write none at all, but nothing bounds the total: at the

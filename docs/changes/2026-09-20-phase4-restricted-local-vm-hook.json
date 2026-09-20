@@ -1,0 +1,37 @@
+{
+  "summary": "Enforce the existing restricted-host rule for direct starts of all managed VMs. API impact: existing contract.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "docs/plans/2026-09-19-phase4-closure.md",
+    "docs/qa/2026-09-19-phase4-native-acceptance.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The guide already states the intended behavior: a restricted host starts no managed VM. This fix makes the direct libvirt hook enforce it.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Existing Core restriction and start behavior now apply equally to local and shared managed disks; no route or wire shape changed.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The hook fix does not complete the remaining Phase 4 native recovery gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Core owns the durable restricted-host state that the local libvirt hook reads.",
+    "record": "The existing Core pool-peer restriction record remains authoritative and is reported through inventory to a replacement Controller."
+  },
+  "verification": {
+    "method": "TestStorageGuardRefusesRestrictedLocalManagedGuestAndLeavesApplianceAlone failed before the change and passes now. The focused guard suite, go test ./internal/vmhost (8.602s), and go test -race ./internal/vmhost (12.767s) passed; independent review cleared the fix and the repository privacy test passed. On the later hook-only Core delta, the same valid stopped local managed VM was refused by both the Core API and direct libvirt hook while Restricted unconfirmed, remained stopped, then started and stopped normally after recovery. This is not whole S6-18 or OD-5 evidence: no bounded full interval, all-start-path, duplicate-writer or permanently-dead-member claim is made.",
+    "evidence": [
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

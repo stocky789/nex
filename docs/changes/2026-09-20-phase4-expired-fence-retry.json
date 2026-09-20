@@ -1,0 +1,36 @@
+{
+  "summary": "Return an activation-stage promotion to fencing when its bound fence proof expires. API impact: existing contract.",
+  "paths": [
+    "docs/BUG_LEDGER.md",
+    "internal/agent/pool_promote.go",
+    "internal/agent/pool_promote_test.go"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The guide already requires a fresh fence proof; this corrects Core retry behavior to enforce that rule.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Existing promotion status and retry behavior now return to fencing for expired bound evidence; no route or wire field changed.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The source fix does not complete the remaining native S6 or Phase 4 gates.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Core owns the durable promotion transfer and fence proofs.",
+    "record": "The existing pool-peer transfer record and operation-bound fence proofs remain authoritative and are reported to a replacement Controller through inventory."
+  },
+  "verification": {
+    "method": "TestPoolPromotionRefencesExpiredProofBeforeActivation failed first with no fresh fence call and now passes. Three focused tests cover selective re-fencing and fail-closed malformed and higher-authority cases. Focused tests, go test ./internal/agent (10.606s), and go test -race ./internal/agent (23.845s) passed; independent review cleared the fix. A fresh whole-tree go test -race -count=1 -timeout 20m ./... passed after the correction, as did npm run typecheck, npm test, and the full 374-test Python suite. Native expiry validation held an aged operation-bound proof at activation while the old master was externally off, then replaced it for the same operation, host, target and configuration before promotion completed. A separate retained restart had a new candidate boot identity after proof persistence while retaining the same operation-bound fresh proof byte-identically; the old master stayed off, promotion completed, and cleanup returned it unrestricted. Earlier incomplete fresh-proof attempts are superseded historical evidence.",
+    "evidence": [
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

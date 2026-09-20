@@ -143,6 +143,24 @@ type managedJournal struct {
 	// because the stopped VM's persistent definition was observed to still be exactly its
 	// predecessor (see ReconcileRemoteVMUpdate).
 	UnappliedObserved bool `json:"unapplied_observed,omitempty"`
+	// EjectCleanup is written only by the local pool-leave state machine before it
+	// removes a member projection.  It is not a wire field: it binds the exact
+	// successful cleanup to the signed membership generation that caused it.
+	EjectCleanup *ejectCleanup `json:"eject_cleanup,omitempty"`
+	// EjectCleanupReapply consumes EjectCleanup logically only once this entry has
+	// succeeded.  Keeping the receipt in the successful reapply makes a crash before
+	// success fail closed without rewriting historical removal evidence.
+	EjectCleanupReapply *ejectCleanupReapply `json:"eject_cleanup_reapply,omitempty"`
+}
+
+type ejectCleanup struct {
+	PoolID, HostID, Resource, ResourceID string
+	MembershipGeneration                 uint64
+}
+
+type ejectCleanupReapply struct {
+	RemovalOperationID   string
+	MembershipGeneration uint64
 }
 
 func (e *ManagedEngine) save(j managedJournal) error {
@@ -467,6 +485,78 @@ func (e *ManagedEngine) readable() ([]managedJournal, []string) {
 // interrupted mutations are observed, never replayed. Errors indicate persistence
 // failure; callers must retain the command and report an uncertain outcome.
 func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch func(context.Context, string) (io.ReadCloser, error)) (protocol.Result, error) {
+	return e.execute(ctx, c, fetch, nil, nil)
+}
+
+// ExecuteEjectCleanup is the leave state machine's private removal path. The marker is
+// persisted with intent before native removal, so an interrupted leave cannot be mistaken
+// for a deliberate removal or silently reopened on a later join.
+func (e *ManagedEngine) ExecuteEjectCleanup(ctx context.Context, c protocol.Command, poolID, hostID string, membershipGeneration uint64) (protocol.Result, error) {
+	resource, id, generation, ok := lifecycleResource(c)
+	if !ok || poolID == "" || hostID == "" || membershipGeneration == 0 || generation == 0 {
+		return protocol.Result{OperationID: c.OperationID, Status: "failed", Error: "invalid eject cleanup", ObservedAt: time.Now().UTC()}, nil
+	}
+	return e.execute(ctx, c, nil, &ejectCleanup{PoolID: poolID, HostID: hostID, Resource: resource, ResourceID: id, MembershipGeneration: membershipGeneration}, nil)
+}
+
+// ExecuteEjectCleanupReapply is the member's private, authenticated rejoin path. It grants
+// the one matching cleanup tombstone only to a later membership and records consumption in
+// the normal successful registration journal entry.
+func (e *ManagedEngine) ExecuteEjectCleanupReapply(ctx context.Context, c protocol.Command, poolID, hostID string, membershipGeneration uint64) (protocol.Result, error) {
+	if poolID == "" || hostID == "" || membershipGeneration == 0 {
+		return protocol.Result{OperationID: c.OperationID, Status: "failed", Error: "invalid eject cleanup reapply", ObservedAt: time.Now().UTC()}, nil
+	}
+	js, bad := e.readable()
+	if len(bad) != 0 {
+		return protocol.Result{OperationID: c.OperationID, Status: "failed", Error: ErrManagedJournalIncomplete.Error(), ObservedAt: time.Now().UTC()}, nil
+	}
+	removal, err := eligibleEjectCleanup(js, c, poolID, hostID, membershipGeneration)
+	if err != nil {
+		return protocol.Result{OperationID: c.OperationID, Status: "failed", Error: err.Error(), ObservedAt: time.Now().UTC()}, nil
+	}
+	// A member reconcile command can intentionally be stable for an unchanged master
+	// resource. It cannot also name every later eject cleanup: Execute would return the
+	// earlier completed receipt before applying or recording consumption of this removal.
+	// Bind the internal receipt to the exact selected cleanup instead. The result is stable
+	// for retries of this cleanup and distinct for the next signed eject of the same ID.
+	c.OperationID = ejectCleanupReapplyOperation(c.OperationID, removal.Command.OperationID)
+	return e.execute(ctx, c, nil, nil, &ejectCleanupReapply{RemovalOperationID: removal.Command.OperationID, MembershipGeneration: membershipGeneration})
+}
+
+func ejectCleanupReapplyOperation(commandOperation, removalOperation string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte("eject-cleanup-reapply\x00"+commandOperation+"\x00"+removalOperation)))
+}
+
+// EjectCleanupReapplyAvailable tells a local reconciler whether an old tombstone names this
+// resource and, if it does, whether its one safe reapply grant is currently valid.
+func (e *ManagedEngine) EjectCleanupReapplyAvailable(c protocol.Command, poolID, hostID string, membershipGeneration uint64) (bool, error) {
+	js, bad := e.readable()
+	if len(bad) != 0 {
+		return false, ErrManagedJournalIncomplete
+	}
+	resource, id, _, _, _, ok := cleanupResource(c)
+	if !ok {
+		return false, nil
+	}
+	found, marked := false, false
+	for _, j := range js {
+		kind, removedID, _, removed := lifecycleResource(j.Command)
+		if removed && j.Result.Status == "succeeded" && kind == resource && removedID == id {
+			found = true
+			marked = marked || j.EjectCleanup != nil
+		}
+	}
+	if !found {
+		return false, nil
+	}
+	if !marked {
+		return false, nil
+	}
+	_, err := eligibleEjectCleanup(js, c, poolID, hostID, membershipGeneration)
+	return err == nil, err
+}
+
+func (e *ManagedEngine) execute(ctx context.Context, c protocol.Command, fetch func(context.Context, string) (io.ReadCloser, error), cleanup *ejectCleanup, reapply *ejectCleanupReapply) (protocol.Result, error) {
 	result := protocol.Result{OperationID: c.OperationID, Status: "failed", ObservedAt: time.Now().UTC()}
 	if err := validateManaged(c); err != nil {
 		result.Error = err.Error()
@@ -495,6 +585,18 @@ func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch f
 	if err != nil {
 		return result, err
 	}
+	if reapply != nil {
+		_, _, poolID, hostID, _, _ := cleanupResource(c)
+		removal, checkErr := eligibleEjectCleanup(js, c, poolID, hostID, reapply.MembershipGeneration)
+		if checkErr != nil || removal.Command.OperationID != reapply.RemovalOperationID {
+			if checkErr != nil {
+				result.Error = checkErr.Error()
+			} else {
+				result.Error = "eject cleanup reapply no longer matches its removal"
+			}
+			return result, nil
+		}
+	}
 	want, _ := json.Marshal(c)
 	for _, old := range js {
 		if old.Command.OperationID == c.OperationID {
@@ -519,7 +621,7 @@ func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch f
 	if len(js) >= 10000 {
 		return result, errors.New("managed journal full; manual recovery required")
 	}
-	j := managedJournal{Command: c, Result: result, Stage: "validating"}
+	j := managedJournal{Command: c, Result: result, Stage: "validating", EjectCleanup: cleanup, EjectCleanupReapply: reapply}
 	if c.Kind == "storage-register" && c.Storage.ID == "" {
 		allocated := *c.Storage
 		allocated.ID, allocated.Generation = hostID(), 1
@@ -557,7 +659,7 @@ func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch f
 		if c.Kind == "network-register" && old.Command.Kind == "network-register" && old.Result.Status == "failed" && old.Command.Network != nil && c.Network != nil && old.Command.Network.ID == c.Network.ID && protocol.IsPoolSharedNetwork(*c.Network) && protocol.IsPoolSharedNetwork(*old.Command.Network) {
 			continue
 		}
-		if managedResourceID(old.Command) == managedResourceID(c) {
+		if managedResourceID(old.Command) == managedResourceID(c) && !(reapply != nil && (old.Result.Status == "succeeded" || old.Result.Status == "failed")) {
 			j.Result.Error = "resource ID already reserved by another operation"
 			return j.Result, e.save(j)
 		}
@@ -740,6 +842,88 @@ func (e *ManagedEngine) MediaRemoved(id string) (bool, error) {
 	return ok, nil
 }
 
+func lifecycleResource(c protocol.Command) (string, string, uint64, bool) {
+	if v := c.ResourceLifecycle; v != nil && v.Action == "remove" {
+		return v.Resource, v.ResourceID, v.ExpectedGeneration, true
+	}
+	if v := c.StorageLifecycle; v != nil && v.Action == "detach" {
+		return "storage", v.RepositoryID, v.ExpectedGeneration, true
+	}
+	return "", "", 0, false
+}
+
+func cleanupResource(c protocol.Command) (resource, id, poolID, hostID string, generation uint64, ok bool) {
+	if c.Network != nil {
+		return "network", c.Network.ID, c.Network.PoolID, c.Network.HostID, protocol.NetworkGeneration(*c.Network), true
+	}
+	if c.Storage != nil {
+		return "storage", c.Storage.ID, c.Storage.PoolID, c.Storage.HostID, c.Storage.Generation, true
+	}
+	if c.Media != nil {
+		return "media", c.Media.ID, c.Media.PoolID, c.Media.HostID, protocol.MediaGeneration(*c.Media), true
+	}
+	return "", "", "", "", 0, false
+}
+
+// eligibleEjectCleanup intentionally decides from generations and explicit provenance,
+// never journal filenames or operation IDs. Any later unmarked removal is authoritative.
+func eligibleEjectCleanup(js []managedJournal, c protocol.Command, poolID, hostID string, membershipGeneration uint64) (managedJournal, error) {
+	resource, id, commandPool, commandHost, generation, ok := cleanupResource(c)
+	if !ok || resource == "" || id == "" || commandPool != poolID || commandHost != hostID {
+		return managedJournal{}, errors.New("eject cleanup reapply does not match this resource")
+	}
+	var found *managedJournal
+	for i := range js {
+		j := &js[i]
+		kind, removedID, removedGeneration, removed := lifecycleResource(j.Command)
+		if !removed || j.Result.Status != "succeeded" || kind != resource || removedID != id {
+			continue
+		}
+		if j.EjectCleanup == nil || j.EjectCleanup.PoolID != poolID || j.EjectCleanup.HostID != hostID || j.EjectCleanup.Resource != resource || j.EjectCleanup.ResourceID != id {
+			continue
+		}
+		// Eject cleanup is member-local. The master retained this resource at the
+		// removal's expected generation, so rejoin normally reapplies that same
+		// generation; only an older desired revision is stale.
+		if membershipGeneration <= j.EjectCleanup.MembershipGeneration || generation < removedGeneration {
+			continue
+		}
+		// A member can be ejected and rejoined more than once without the master
+		// changing this resource's generation. Membership generation is therefore
+		// the durable cleanup sequence; resource generation only breaks a tie.
+		if found == nil || j.EjectCleanup.MembershipGeneration > found.EjectCleanup.MembershipGeneration ||
+			(j.EjectCleanup.MembershipGeneration == found.EjectCleanup.MembershipGeneration && removedGeneration > lifecycleGeneration(found.Command)) {
+			copy := *j
+			found = &copy
+			continue
+		}
+		if j.EjectCleanup.MembershipGeneration == found.EjectCleanup.MembershipGeneration && removedGeneration == lifecycleGeneration(found.Command) && j.Command.OperationID != found.Command.OperationID {
+			return managedJournal{}, errors.New("eject cleanup provenance is ambiguous")
+		}
+	}
+	if found == nil {
+		return managedJournal{}, errors.New("eject cleanup reapply has stale membership or resource generation")
+	}
+	if ejectCleanupConsumed(js, found) {
+		return managedJournal{}, errors.New("eject cleanup reapply was already consumed")
+	}
+	// A deliberate removal with at least the cleanup's generation is later in the only
+	// durable resource sequence available. Equal generations are ambiguous and fail closed.
+	base := lifecycleGeneration(found.Command)
+	for _, j := range js {
+		kind, removedID, removedGeneration, removed := lifecycleResource(j.Command)
+		if removed && j.Result.Status == "succeeded" && kind == resource && removedID == id && j.EjectCleanup == nil && removedGeneration >= base {
+			return managedJournal{}, errors.New("resource has a deliberate removal after eject cleanup")
+		}
+	}
+	return *found, nil
+}
+
+func lifecycleGeneration(c protocol.Command) uint64 {
+	_, _, generation, _ := lifecycleResource(c)
+	return generation
+}
+
 // appliedNetworkProjection lists the networks this host still holds, in journal order, with
 // renames applied, followed by a tombstone row for each network it removed.
 func appliedNetworkProjection(js []managedJournal) []protocol.NetworkRegistration {
@@ -820,9 +1004,37 @@ func mediaAdopted(js []managedJournal, id string) bool {
 	return false
 }
 
+// MediaAdoptedHere reports whether this host's live record of an ISO is an adoption of a
+// file another host imported onto pool-shared storage, rather than an import this host
+// performed. Removal already refuses to unlink an adopted file — the pool's only copy
+// belongs to the host that imported it — so a pool master that holds only an adopted record
+// must say so instead of silently dropping the record and leaving the file behind.
+func (e *ManagedEngine) MediaAdoptedHere(id string) bool {
+	js, _ := e.readable()
+	return mediaAdopted(js, id)
+}
+
 // AdoptSharedMedia journals a succeeded iso-import for an ISO already present on
 // pool-shared storage after member pull. It verifies size and digest and never downloads.
 func (e *ManagedEngine) AdoptSharedMedia(ctx context.Context, media protocol.Media) error {
+	return e.adoptSharedMedia(ctx, media, nil)
+}
+
+// AdoptSharedMediaEjectCleanupReapply is the non-wire rejoin counterpart of
+// ExecuteEjectCleanupReapply for metadata-only shared ISO adoption.
+func (e *ManagedEngine) AdoptSharedMediaEjectCleanupReapply(ctx context.Context, media protocol.Media, membershipGeneration uint64) error {
+	js, bad := e.readable()
+	if len(bad) != 0 {
+		return ErrManagedJournalIncomplete
+	}
+	removal, err := eligibleEjectCleanup(js, protocol.Command{Kind: "iso-import", Media: &media}, media.PoolID, media.HostID, membershipGeneration)
+	if err != nil {
+		return err
+	}
+	return e.adoptSharedMedia(ctx, media, &ejectCleanupReapply{RemovalOperationID: removal.Command.OperationID, MembershipGeneration: membershipGeneration})
+}
+
+func (e *ManagedEngine) adoptSharedMedia(ctx context.Context, media protocol.Media, reapply *ejectCleanupReapply) error {
 	if media.ID == "" || media.StorageID == "" || media.SHA256 == "" || media.SizeBytes < 32774 {
 		return errors.New("invalid shared media adoption")
 	}
@@ -858,9 +1070,10 @@ func (e *ManagedEngine) AdoptSharedMedia(ctx context.Context, media protocol.Med
 		return err
 	}
 	return e.save(managedJournal{
-		Command:   command,
-		Result:    protocol.Result{OperationID: op, Status: "succeeded", ObservedAt: time.Now().UTC()},
-		MediaPath: path,
+		Command:             command,
+		Result:              protocol.Result{OperationID: op, Status: "succeeded", ObservedAt: time.Now().UTC()},
+		MediaPath:           path,
+		EjectCleanupReapply: reapply,
 	})
 }
 
@@ -1599,7 +1812,7 @@ func storageProjection(js []managedJournal) map[string]protocol.StorageRegistrat
 	for pass := 0; pass < len(js); pass++ {
 		changed := false
 		for _, j := range js {
-			if j.Result.Status != "succeeded" || j.Command.StorageLifecycle == nil {
+			if j.Result.Status != "succeeded" || j.Command.StorageLifecycle == nil || ejectCleanupConsumed(js, &j) || ejectCleanupSuperseded(js, &j) {
 				continue
 			}
 			v := j.Command.StorageLifecycle
@@ -1636,7 +1849,7 @@ func storageProjection(js []managedJournal) map[string]protocol.StorageRegistrat
 func storageTombstones(js []managedJournal) map[string]protocol.StorageRegistration {
 	out := map[string]protocol.StorageRegistration{}
 	for _, j := range js {
-		if j.Result.Status != "succeeded" || j.Command.StorageLifecycle == nil || j.Command.StorageLifecycle.Action != "detach" {
+		if j.Result.Status != "succeeded" || j.Command.StorageLifecycle == nil || j.Command.StorageLifecycle.Action != "detach" || ejectCleanupConsumed(js, &j) || ejectCleanupSuperseded(js, &j) {
 			continue
 		}
 		v := j.Command.StorageLifecycle
@@ -1684,12 +1897,18 @@ func storageDependencies(js []managedJournal, id string) []string {
 			wiped[j.Command.Delete.VMID] = true
 		}
 	}
+	// A removed ISO is not a reference any more. Its import entry stays succeeded for ever,
+	// so without the tombstones one ISO ever imported onto a repository would block its
+	// detach permanently — the same shape as the wiped retained disks above.
+	removedMedia := mediaTombstones(js)
 	for _, j := range js {
 		if j.Result.Status != "succeeded" {
 			continue
 		}
 		if j.Command.Media != nil && j.Command.Media.StorageID == id {
-			out = append(out, "ISO "+j.Command.Media.ID)
+			if _, removed := removedMedia[j.Command.Media.ID]; !removed {
+				out = append(out, "ISO "+j.Command.Media.ID)
+			}
 		}
 		if len(j.Retained) == 0 {
 			continue
@@ -1765,7 +1984,7 @@ func networkProjection(js []managedJournal) map[string]protocol.NetworkRegistrat
 	for pass := 0; pass < len(js); pass++ {
 		changed := false
 		for _, j := range js {
-			if j.Result.Status != "succeeded" || j.Command.ResourceLifecycle == nil || j.Command.ResourceLifecycle.Resource != "network" {
+			if j.Result.Status != "succeeded" || j.Command.ResourceLifecycle == nil || j.Command.ResourceLifecycle.Resource != "network" || ejectCleanupConsumed(js, &j) || ejectCleanupSuperseded(js, &j) {
 				continue
 			}
 			v := j.Command.ResourceLifecycle
@@ -1807,7 +2026,7 @@ func resourceTombstones[T any](js []managedJournal, resource string, row func(pr
 	out, at := map[string]T{}, map[string]uint64{}
 	for _, j := range js {
 		v := j.Command.ResourceLifecycle
-		if j.Result.Status != "succeeded" || v == nil || v.Resource != resource || v.Action != "remove" {
+		if j.Result.Status != "succeeded" || v == nil || v.Resource != resource || v.Action != "remove" || ejectCleanupConsumed(js, &j) || ejectCleanupSuperseded(js, &j) {
 			continue
 		}
 		if prior, ok := at[v.ResourceID]; ok && prior >= v.ExpectedGeneration+1 {
@@ -1816,6 +2035,49 @@ func resourceTombstones[T any](js []managedJournal, resource string, row func(pr
 		out[v.ResourceID], at[v.ResourceID] = row(*v), v.ExpectedGeneration+1
 	}
 	return out
+}
+
+func ejectCleanupConsumed(js []managedJournal, removal *managedJournal) bool {
+	if removal.EjectCleanup == nil || removal.Result.Status != "succeeded" {
+		return false
+	}
+	for _, candidate := range js {
+		if candidate.Result.Status != "succeeded" || candidate.EjectCleanupReapply == nil || candidate.EjectCleanupReapply.RemovalOperationID != removal.Command.OperationID || candidate.EjectCleanupReapply.MembershipGeneration <= removal.EjectCleanup.MembershipGeneration {
+			continue
+		}
+		resource, id, poolID, hostID, generation, ok := cleanupResource(candidate.Command)
+		removedResource, removedID, removedGeneration, removed := lifecycleResource(removal.Command)
+		if ok && removed && resource == removedResource && id == removedID && poolID == removal.EjectCleanup.PoolID && hostID == removal.EjectCleanup.HostID && generation >= removedGeneration {
+			return true
+		}
+	}
+	return false
+}
+
+// A later signed eject is a later lifecycle event even when the master retained the
+// resource's generation. Its cleanup supersedes an older cleanup on this host; otherwise a
+// deterministic media-adoption receipt rewritten for the newer cycle would resurrect the old
+// tombstone in projections.
+func ejectCleanupSuperseded(js []managedJournal, removal *managedJournal) bool {
+	if removal.EjectCleanup == nil || removal.Result.Status != "succeeded" {
+		return false
+	}
+	resource, id, generation, ok := lifecycleResource(removal.Command)
+	if !ok {
+		return false
+	}
+	for _, candidate := range js {
+		otherResource, otherID, otherGeneration, removed := lifecycleResource(candidate.Command)
+		if !removed || candidate.Result.Status != "succeeded" || candidate.EjectCleanup == nil || otherResource != resource || otherID != id {
+			continue
+		}
+		if candidate.EjectCleanup.PoolID == removal.EjectCleanup.PoolID && candidate.EjectCleanup.HostID == removal.EjectCleanup.HostID &&
+			(candidate.EjectCleanup.MembershipGeneration > removal.EjectCleanup.MembershipGeneration ||
+				(candidate.EjectCleanup.MembershipGeneration == removal.EjectCleanup.MembershipGeneration && otherGeneration > generation)) {
+			return true
+		}
+	}
+	return false
 }
 
 // networkDependencies names the VM definitions this host holds that attach the network.
@@ -1894,6 +2156,32 @@ func mediaRemovalRefusal(js []managedJournal, id string) error {
 		return errors.New("ISO cannot be removed while attached to VM " + strings.Join(deps, ", "))
 	}
 	return nil
+}
+
+// storageDetachRefusal is the whole durable-dependency refusal of a storage-detach. The
+// detach itself calls it and CheckStorageDetach calls it with no effect at all, so the dry
+// run and the real thing cannot drift.
+func storageDetachRefusal(js []managedJournal, id string) error {
+	if deps := storageDependencies(js, id); len(deps) > 0 {
+		return errors.New("storage cannot detach while used by " + strings.Join(deps, ", "))
+	}
+	return nil
+}
+
+// CheckStorageDetach is CheckNetworkRemoval for a repository: it reports why this host would
+// refuse to detach it, without journalling, locking or changing anything. A leaving host and
+// a member's orphan pass call it before Execute, so a detach that is refused on every probe
+// tick mints no journal entry at all and is re-evaluated for free on the next one.
+func (e *ManagedEngine) CheckStorageDetach(ctx context.Context, id string) error {
+	js, bad := e.readable()
+	if len(bad) != 0 {
+		return ErrManagedJournalIncomplete
+	}
+	current, err := managedStorage(js, id)
+	if err != nil {
+		return err
+	}
+	return storageDetachRefusal(js, current.ID)
 }
 
 // CheckMediaRemoval is CheckNetworkRemoval for an imported ISO.
@@ -2664,12 +2952,15 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 		}
 		switch v.Action {
 		case "recheck":
+			if err := repairStaleRemoteMount(ctx, js, current); err != nil {
+				return err
+			}
 			startRemoteMount(ctx, current)
 			_, err := managedStorageReady(ctx, current, 0)
 			return err
 		case "detach":
-			if deps := storageDependencies(js, current.ID); len(deps) > 0 {
-				return errors.New("storage cannot detach while used by " + strings.Join(deps, ", "))
+			if err := storageDetachRefusal(js, current.ID); err != nil {
+				return err
 			}
 			return storageDetachAt(ctx, current, filepath.Join(filepath.Dir(e.stateDir), credentialDirectory))
 		case "update":
@@ -5777,6 +6068,26 @@ func allocateDisk(ctx context.Context, path string, d protocol.VMDisk) error {
 	err = f.Sync()
 	f.Close()
 	return err
+}
+
+// SetManagedVMAutostart makes libvirt's own autostart flag for one managed domain match what
+// this host is currently allowed to do. libvirt starts its autostart domains at boot, before
+// Core's agent runs, so no agent-side admission can stop them; disabling the flag is the only
+// way a drained or restricted host stays empty across a reboot.
+//
+// disable is a suppression, never a new desired value: the operator's choice stays in the
+// managed journal, which is Nex's own durable record of the definition, so clearing the
+// suppression restores exactly what was asked for with no operator action and nothing to
+// migrate. It never starts or stops a guest.
+func (e *ManagedEngine) SetManagedVMAutostart(ctx context.Context, v protocol.VMCreateSpec, disable bool) error {
+	js, err := e.journals()
+	if err != nil {
+		return err
+	}
+	if disable {
+		v.Autostart = false
+	}
+	return setAutostart(ctx, v, js)
 }
 
 // setAutostart makes libvirt's autostart flag match the definition; it never starts a guest.

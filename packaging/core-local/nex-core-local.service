@@ -17,7 +17,11 @@ StateDirectoryMode=0700
 ExecStartPre=/usr/lib/nex/core-local-setup init
 ExecStart=/usr/lib/nex/core-local-setup run
 ExecStopPost=/usr/lib/nex/core-local-setup offline
-Restart=on-failure
+# Restart=always, not on-failure: a management-network change arms a rollback that only
+# runs when this service is running again, so a clean exit (an exit 0, a killed process
+# reaped as success) must not leave the host on an unconfirmed network with nothing armed.
+# `systemctl stop` and a package upgrade still stop the unit; only an exit does not.
+Restart=always
 RestartSec=5
 NoNewPrivileges=yes
 # The embedded agent verifies ISO storage as libvirt-qemu with runuser.

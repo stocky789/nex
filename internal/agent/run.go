@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/http/httptrace"
+	"net/netip"
 	"nex.local/nex/internal/protocol"
 	"nex.local/nex/internal/version"
 	"nex.local/nex/internal/vmhost"
@@ -33,8 +35,36 @@ var transientStorageClusters = struct {
 	byStore map[*Store][]protocol.StorageClusterResult
 }{byStore: map[*Store][]protocol.StorageClusterResult{}}
 
+// transientPoolResults answers the Controller's brokered pool requests on the next report.
+// Nothing here is durable: the master's own offer record is the authority.
+var transientPoolResults = struct {
+	sync.Mutex
+	byStore map[*Store][]protocol.PoolResult
+}{byStore: map[*Store][]protocol.PoolResult{}}
+
 const transientStorageDiscoveryLimit = 128
 const transientStorageClusterLimit = 128
+const transientPoolResultLimit = 32
+
+func drainPoolResults(s *Store) []protocol.PoolResult {
+	transientPoolResults.Lock()
+	defer transientPoolResults.Unlock()
+	out := transientPoolResults.byStore[s]
+	delete(transientPoolResults.byStore, s)
+	return out
+}
+
+func appendPoolResults(s *Store, results []protocol.PoolResult) {
+	transientPoolResults.Lock()
+	defer transientPoolResults.Unlock()
+	current := transientPoolResults.byStore[s]
+	if room := transientPoolResultLimit - len(current); room > 0 {
+		if len(results) > room {
+			results = results[:room]
+		}
+		transientPoolResults.byStore[s] = append(current, results...)
+	}
+}
 
 func drainStorageDiscoveries(s *Store) []protocol.StorageDiscoveryResult {
 	transientStorageDiscoveries.Lock()
@@ -227,8 +257,32 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	// Membership is a master-owned Core record (with the member's authenticated copy).
 	// Reporting it is the sole Controller adoption path; no Controller cache derives it.
 	if membership, err := Membership(s); err == nil {
-		managed.Membership = &membership
+		// The master overlays what each member acknowledged of its signed authority
+		// replica: an observation on a copy of the record, never written back to it.
+		managed.Membership = PoolReplicaMembership(s, &membership)
 	}
+	// This host's own stored replica, and the honest freshness of it on both sides. The
+	// replica is reported, never acted on, and no other check is derived from it.
+	managed.Replica = PoolReplicaReport(s)
+	checks = append(checks, PoolReplicaChecks(s, cfg.ProbeInterval)...)
+	// The master's own durable authority number and the content it numbered. Without it a
+	// member's reported replica generation has nothing to be compared against, and a
+	// lagging replica reads as a current one.
+	managed.Authority = PoolAuthorityReport(s)
+	// This host's own part of a master change or an eject, from every participant, so the
+	// Controller assembles one honest picture instead of keeping a job of its own.
+	managed.Transfer = PoolTransferReport(s)
+	checks = append(checks, PoolTransferCheck(s)...)
+	// A fence-verified promotion this host is performing, and this host's own durable
+	// refusal to act on pool authority while it cannot prove it holds the current one.
+	// Both are Core's records; the Controller displays them and enforces nothing.
+	managed.Promotion = PoolPromotionReport(s)
+	checks = append(checks, PoolPromotionCheck(s)...)
+	managed.Restricted = PoolRestrictedReport(s)
+	checks = append(checks, PoolRestrictedCheck(s)...)
+	// The staged join is Core's own durable record. Reporting it is how a replaced
+	// Controller adopts an interrupted join; the invitation is never part of it.
+	managed.Join = PoolJoinReport(s)
 	if storage != nil {
 		managed.Storage = storage.Overlay(managed.Storage)
 	}
@@ -248,6 +302,28 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	managed.Outcomes = confirmPoolVMUpdateOutcomes(confirmCtx, s, commandOutcomes(s.State.Journal, managed.Outcomes), managed.Storage)
 	cancelConfirm()
 	managed.ZFSProvisions = PoolZFSInventory(s)
+	// This host's own management network: the durable record projected for adoption, so a
+	// replaced Controller sees a running rollback deadline instead of losing it. The check
+	// stands failed while an automatic rollback is the last outcome, and disappears with the
+	// next successful apply, which is how an operator clears it. A rollback the operator asked
+	// for is not an automatic one: it is the outcome they chose, so it reports no check at all
+	// and nobody is sent looking for a failure to fix.
+	if status, statusErr := vmhost.ReadManagementNetworkStatus(s.dir); statusErr != nil {
+		checks = append(checks, protocol.Check{Name: "management-network", Status: "failed", Error: "the management network record is unreadable", ObservedAt: time.Now().UTC()})
+	} else if status != nil {
+		inv.ManagementNetwork = status
+		switch {
+		case status.Stage == protocol.ManagementNetworkRolledBack && !status.RequestedRollback:
+			checks = append(checks, protocol.Check{Name: "management-network", Status: "failed", Error: resultError(status.LastError), ObservedAt: status.ObservedAt})
+		case status.Stage == protocol.ManagementNetworkApplied && status.LastError != "":
+			// The host tried to restore itself and could not: the files are back but the
+			// bridge is not on them yet, and recovery is still retrying. Without this the
+			// one state that means "this host could not save itself" renders as an ordinary
+			// applied change whose countdown has run out, whoever asked for the rollback.
+			checks = append(checks, protocol.Check{Name: "management-network", Status: "failed",
+				Error: "restoring the previous management network configuration has not completed: " + resultError(status.LastError), ObservedAt: status.ObservedAt})
+		}
+	}
 	inv.Managed = managed
 	inv.Checks = append(inv.Checks, checks...)
 	completeJournal(s, inv, cfg.ProbeInterval+2*cfg.ProbeTimeout)
@@ -261,7 +337,7 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	// DriversDriveCapability is deliberately absent from the legacy v1 list below: a host
 	// defines the second CD drive either way, but the capability is the Controller's signal
 	// that it may send drive="drivers", and a strict v1 decoder must not be handed v2 names.
-	capabilities := []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.DriversDriveCapability, protocol.UsageHistoryCapability, protocol.CPUBaselineCapability, protocol.PoolResourceRemovalCapability}
+	capabilities := []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.DriversDriveCapability, protocol.UsageHistoryCapability, protocol.CPUBaselineCapability, protocol.PoolResourceRemovalCapability, protocol.PoolJoinCapability, protocol.PoolMaintenanceCapability, protocol.ManagementNetworkCapability, protocol.PoolAuthorityReplicaCapability, protocol.PoolAuthorityTransferCapability}
 	if s.State.StorageProtocolLegacy {
 		version = protocol.LegacyVersion
 		capabilities = []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.MediaCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.UsageHistoryCapability}
@@ -269,6 +345,7 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		legacy := *inv
 		legacy.Managed = nil
 		legacy.CPUBaseline = nil
+		legacy.ManagementNetwork = nil
 		inv = &legacy
 	}
 	if s.State.StorageProtocolReady {
@@ -298,7 +375,7 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		clusters = drainStorageClusters(s)
 		clusters = storageClusterResultsForController(clusters, s.State.StorageClusterSessionMonitorProtocolReady)
 	}
-	req := protocol.ReportRequest{Capabilities: capabilities, Version: version, Sequence: s.State.Sequence, Inventory: inv, Results: []protocol.Result{}, StorageDiscoveries: discoveries, StorageClusters: clusters}
+	req := protocol.ReportRequest{Capabilities: capabilities, Version: version, Sequence: s.State.Sequence, Inventory: inv, Results: []protocol.Result{}, StorageDiscoveries: discoveries, StorageClusters: clusters, PoolResults: drainPoolResults(s)}
 	for id, e := range s.State.Journal {
 		if e.Status != "pending" && !e.Acknowledged {
 			req.Results = append(req.Results, protocol.Result{OperationID: id, Status: e.Status, Error: resultError(e.Error), ObservedAt: e.ObservedAt})
@@ -316,7 +393,17 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	}
 	defer c.CloseIdleConnections()
 	var response protocol.ReportResponse
-	if err = post(ctx, c, s.State.Controller, "/api/v1/agent/report", req, &response); err != nil {
+	// Which socket carried the report decides whether it counts as evidence that the live
+	// management configuration works. A report that went out over a second, unchanged NIC
+	// proves nothing about the one under test, so the connection's own local address — not the
+	// fact that a reply arrived — is what Core records. GotConn fires once the connection is
+	// in hand, before the request is written.
+	var reportLocal, reportPeer netip.Addr
+	traced := httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) {
+		reportLocal = vmhost.ConnectionAddr(info.Conn.LocalAddr().String())
+		reportPeer = vmhost.ConnectionAddr(info.Conn.RemoteAddr().String())
+	}})
+	if err = post(traced, c, s.State.Controller, "/api/v1/agent/report", req, &response); err != nil {
 		var status httpStatusError
 		if version == protocol.Version && !s.State.StorageProtocolReady && errors.As(err, &status) && status.Status == 409 && legacyStorageSafe(s.State, managed, credentialsReadable) {
 			s.State.StorageProtocolLegacy = true
@@ -327,6 +414,11 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		}
 		return err
 	}
+	// An authenticated report answered by the enrolled Controller, over a socket whose local
+	// address is one the applied spec puts on the management bridge, is this host proving its
+	// connectivity over the configuration under test; a staged change cannot be confirmed
+	// without such an observation. A no-op unless one is applied.
+	_ = vmhost.RecordManagementConnectivity(s.dir, "controller-report", time.Now(), reportLocal, reportPeer)
 	if response.StorageRepositories != nil && response.StorageRepositories.ProtocolVersion == protocol.Version && (response.StorageRepositories.Capability == protocol.StorageRepositoryCapability || response.StorageRepositories.Capability == protocol.ZFSProvisionCapability) {
 		if !s.State.StorageProtocolReady {
 			s.State.StorageProtocolReady = true
@@ -392,6 +484,23 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 			}
 			appendStorageClusters(s, results)
 		}(append([]protocol.StorageClusterRequest(nil), response.StorageClusterRequests...))
+	}
+	if len(response.PoolRequests) > 0 {
+		// The master answers from its own durable offer record. The reply rides the next
+		// report, which is what the Controller's one-round-trip broker waits for.
+		go func(requests []protocol.PoolRequest) {
+			results := make([]protocol.PoolResult, 0, len(requests))
+			for _, request := range requests {
+				if request.Action == "promotion-preflight" {
+					work, done := context.WithTimeout(context.Background(), time.Minute)
+					results = append(results, ExecutePoolPromotionRequest(work, s, request, 20*time.Second))
+					done()
+					continue
+				}
+				results = append(results, ExecutePoolRequest(s, request))
+			}
+			appendPoolResults(s, results)
+		}(append([]protocol.PoolRequest(nil), response.PoolRequests...))
 	}
 
 	for _, console := range response.Consoles {
@@ -595,6 +704,20 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	if err := EnsurePoolMembership(s); err != nil {
 		log.Printf("pool membership could not be recorded; pool operations stay refused until it is")
 	}
+	// Before any start path is exposed: a pool master with other members cannot know, at
+	// boot, that it was not fenced and promoted away while it was down. It restricts itself
+	// until its members confirm it, and the restriction is durable, so it holds through a
+	// reboot and with no Controller connected.
+	if err := EnsurePoolBootRestriction(s); err != nil {
+		log.Printf("pool authority restriction could not be recorded; this host starts no pool guest until it is")
+	}
+	// Before this host reports anything: an unconfirmed management network change whose
+	// deadline passed, or that outlived a reboot, is restored now. A host that was cut off
+	// by its own new configuration and power-cycled therefore comes back on the previous
+	// one with no Controller involved at all.
+	if _, err := vmhost.RecoverManagementNetwork(ctx, s.dir); err != nil {
+		log.Printf("management network recovery did not complete; inspect the Core record")
+	}
 	c, err := client(s.State, true)
 	if err != nil {
 		return err
@@ -658,6 +781,14 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 				return
 			}
 			if membership.MasterHostID == s.State.HostID {
+				// A clustered-storage operation's accepted configuration is a replicated
+				// section too, so a frozen, handed-over or restricted authority starts no
+				// new cluster work: it would move the content a pinned generation names.
+				// Work already in flight is never interrupted, and the next tick resumes
+				// this pass once the transfer is over.
+				if requirePoolAuthorityWritable(s) != nil {
+					return
+				}
 				ResumeStorageClusterOperations(work, s)
 				return
 			}
@@ -675,11 +806,47 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		defer ticker.Stop()
 		tickStorage := func() {
 			scheduleClusterReconcile()
+			// The probe tick is the durable deadline timer: an applied change that was
+			// not confirmed in time is rolled back here even if the in-process timer
+			// armed at apply is gone with a restarted agent.
+			if _, err := vmhost.RecoverManagementNetwork(probeCtx, s.dir); err != nil {
+				log.Printf("management network recovery did not complete; inspect the Core record")
+			}
 			managed, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(probeCtx)
 			storage.Tick(probeCtx, managed.Storage)
 			// Only members reconcile from a master. The pass is not awaited by Run because a
 			// hung remote mount can outlive its deadline; a master never starts it.
-			if membership, err := Membership(s); err != nil || membership.MasterHostID == s.State.HostID {
+			membership, err := Membership(s)
+			if err != nil {
+				return
+			}
+			// A master change and an eject are Core state machines: every stage resumes
+			// here, on both hosts, with no Controller connection at all. A member also
+			// converges its own view of which host is the master, from signed evidence
+			// only, so one that missed a re-point catches up when it comes back.
+			runWork.Add(1)
+			go func() {
+				defer runWork.Done()
+				// A restricted host re-establishes where authority actually is, from
+				// signed evidence and live probes only, before anything else.
+				ReconcilePoolRestriction(probeCtx, s, cfg.ProbeTimeout)
+				AdvancePoolAuthorityTransfer(probeCtx, s, cfg.ProbeTimeout)
+				if membership.MasterHostID != s.State.HostID {
+					ConvergePoolAuthority(probeCtx, s, cfg.ProbeTimeout)
+				}
+			}()
+			if membership.MasterHostID == s.State.HostID {
+				// The master numbers and persists its authority generation here, then
+				// pushes the signed replica to every ready member that is behind. It is
+				// single-flight and never awaited: a member that cannot be reached is
+				// caught up on a later tick, and nothing waits on a replica.
+				runWork.Add(1)
+				go func() {
+					defer runWork.Done()
+					if err := PushPoolAuthorityReplicas(probeCtx, s, cfg.ProbeTimeout); err != nil && probeCtx.Err() == nil {
+						log.Printf("pool authority replica push did not complete for every member")
+					}
+				}()
 				return
 			}
 			if !poolReconcileRunning.CompareAndSwap(false, true) {
@@ -715,22 +882,84 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	}()
 	commands := make(chan protocol.Command, 1)
 	completed := make(chan managedCompletion, 1)
-	workerCtx, stopWorker := context.WithCancel(ctx)
-	workerDone := make(chan struct{})
-	identity := s.State
-	go func() { defer close(workerDone); managedWorker(workerCtx, s.dir, identity, commands, completed) }()
+	var stopWorker context.CancelFunc
+	var workerDone chan struct{}
+	// The worker snapshots this Core's identity once. A completed pool join rewrites that
+	// identity, so the worker is restarted on the new pool exactly as the host-local join
+	// path restarts the embedded agent; nothing else in Run changes the worker.
+	startWorker := func() {
+		workerCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		stopWorker, workerDone = cancel, done
+		identity := s.State
+		go func() { defer close(done); managedWorker(workerCtx, s.dir, identity, commands, completed) }()
+	}
+	startWorker()
 	defer func() { stopWorker(); <-workerDone }()
+	restartWorker := func() {
+		stopWorker()
+		<-workerDone
+		startWorker()
+	}
+	// A staged pool join runs on this goroutine, which owns the Store, under the
+	// convergence single-flight guard so no member pass sees a half-changed identity. A
+	// pass already running simply leaves the work for the next heartbeat.
+	joinPool := func(id string, cmd protocol.Command) error {
+		if !poolReconcileRunning.CompareAndSwap(false, true) {
+			return nil
+		}
+		join, done := context.WithTimeout(ctx, 2*time.Minute)
+		result, changed := ExecutePoolJoin(join, s, cmd)
+		done()
+		poolReconcileRunning.Store(false)
+		if _, err := completeManagedCommand(s, id, managedCompletion{result: result}, cfg.history); err != nil {
+			return err
+		}
+		if changed {
+			restartWorker()
+		}
+		return nil
+	}
+	resumePoolJoin := func() {
+		if !poolReconcileRunning.CompareAndSwap(false, true) {
+			return
+		}
+		join, done := context.WithTimeout(ctx, 2*time.Minute)
+		changed := ResumePoolJoin(join, s)
+		// An ejected host re-initializes as the master of its own new pool here, on the
+		// goroutine that owns the Store and under the same convergence guard, because it
+		// rewrites this Core's pool identity exactly as a completed join does.
+		changed = ResumePoolLeave(join, s) || changed
+		done()
+		poolReconcileRunning.Store(false)
+		if changed {
+			restartWorker()
+		}
+	}
 	active := ""
 	ticker := time.NewTicker(cfg.Heartbeat)
 	defer ticker.Stop()
 	disconnected := false
 	for {
+		joined := false
 		if active == "" {
 			if id := nextManagedCommand(s.State.Journal); id != "" {
 				// applyResponse already persisted the full command and admission order.
-				active = id
-				commands <- dispatchCommand(s.State.Journal[id])
+				if cmd := dispatchCommand(s.State.Journal[id]); cmd.Kind == "pool-join" {
+					if err = joinPool(id, cmd); err != nil {
+						return err
+					}
+					joined = true
+				} else {
+					active = id
+					commands <- cmd
+				}
 			}
+		}
+		// Re-attempt a persisted staged join after a restart, a reboot or a Controller
+		// outage: the join finishes with no Controller connection at all.
+		if !joined {
+			resumePoolJoin()
 		}
 		if disconnected {
 			m.Tick(probeCtx)

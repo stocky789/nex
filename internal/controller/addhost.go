@@ -350,6 +350,19 @@ func (c *Controller) addSiteHost(w http.ResponseWriter, r *http.Request, user, c
 		if detail == "" {
 			detail = "connection failed"
 		}
+		// Re-adding a pool member to a replacement Controller before its master has
+		// reported it is the documented order, not a broken host: the master owns the
+		// membership record and this Controller has not received it yet. Answer the
+		// conflict it is, with the wait explained and the host's own words kept for
+		// diagnosis. Every other host-side failure stays a transport error.
+		if strings.Contains(detail, poolIdentityHeldRefusal) {
+			write(w, http.StatusConflict, map[string]any{
+				"error":      "this host belongs to a pool whose master has not reported it yet; connect the pool master first, or retry once the master has reported this member — usually within one report interval",
+				"retryable":  true,
+				"host_error": detail,
+			})
+			return
+		}
 		fail(w, 502, fmt.Sprintf("host could not enroll with the controller at %s: %s", v.ControllerURL, detail))
 		return
 	}
