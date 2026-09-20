@@ -87,6 +87,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Release builds pin the offline package download to the same Debian snapshots as the
   source archive, so a new security package cannot land on the ISO without its source
   (BUG-0401).
+- ISO installer GUI rebuilds fetch cdebconf from those same pinned snapshots, so the
+  source step cannot run without deb-src configured (BUG-0402).
 - Controller foundation CI no longer starts five heavy jobs at once on the shared Gitea
   runner, which had been killing runs mid-check and falsely failing Installer after a clean
   pass when Docker cleanup timed out.

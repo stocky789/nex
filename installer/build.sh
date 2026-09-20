@@ -417,13 +417,19 @@ cp installer/late-install.sh installer/root-account.sh installer/packages.txt "$
 # Resolve the offline closure from the same immutable snapshots used for the
 # corresponding-source archive. Live trixie/security moves ahead of those pins
 # and leaves apt-get source unable to find the versions on the media.
-cat > "$cache/binary-sources.list" <<SOURCES
+# Include deb-src here too: build-gui.sh fetches the exact cdebconf ABI from
+# these pins (release run 4228 failed when only binary URIs were active).
+cat > "$cache/snapshot-sources.list" <<SOURCES
 deb $source_snapshot trixie main contrib non-free non-free-firmware
 deb $source_snapshot trixie-updates main contrib non-free non-free-firmware
 deb $security_snapshot trixie-security main contrib non-free non-free-firmware
+deb-src $source_snapshot trixie main contrib non-free non-free-firmware
+deb-src $source_snapshot trixie-updates main contrib non-free non-free-firmware
+deb-src $security_snapshot trixie-security main contrib non-free non-free-firmware
 SOURCES
+export NEX_SNAPSHOT_SOURCES=$cache/snapshot-sources.list
 apt_snapshot=(
-    -o "Dir::Etc::sourcelist=$cache/binary-sources.list"
+    -o "Dir::Etc::sourcelist=$cache/snapshot-sources.list"
     -o 'Dir::Etc::sourceparts=-'
     -o 'Acquire::Check-Valid-Until=false'
 )

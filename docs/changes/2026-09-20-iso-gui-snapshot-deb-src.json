@@ -1,0 +1,37 @@
+{
+  "summary": "Fetch the ISO GUI cdebconf source through the same pinned snapshot sources.list as the offline package closure (BUG-0402), after release run 4228 failed with missing deb-src URIs.",
+  "paths": [
+    "installer/build.sh",
+    "installer/build-gui.sh",
+    "tests/test_source_bundle.py",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-20-iso-gui-snapshot-deb-src.json",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "ISO builder apt pinning only; operator install and GUI steps are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core client, agent command, inventory or observed-result contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Release ISO build reliability; no phase acceptance change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No Nex durable pool or Controller state added or moved."
+  },
+  "verification": {
+    "method": "Inspected Gitea release run 4228. Local unittest for source-bundle evidence. docs gate --worktree. Hosted release rerun outstanding until push.",
+    "evidence": [
+      "tests/test_source_bundle.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

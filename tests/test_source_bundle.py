@@ -170,9 +170,13 @@ class SourceBundleTests(unittest.TestCase):
         # Binary closure and source-bundle pins must stay on the same snapshots.
         # Live trixie advanced past 20260916 and left unbound 1.26.1-0+deb13u1
         # without a matching source (release run 4223).
-        self.assertIn('binary-sources.list', build)
+        self.assertIn('snapshot-sources.list', build)
         self.assertIn('20260920T000000Z', build)
-        self.assertLess(build.index('binary-sources.list'), build.index('apt-get "${apt_snapshot[@]}" update'))
+        self.assertLess(build.index('snapshot-sources.list'), build.index('apt-get "${apt_snapshot[@]}" update'))
+        self.assertIn('export NEX_SNAPSHOT_SOURCES=', build)
+        gui = (ROOT / 'installer/build-gui.sh').read_text()
+        self.assertIn('NEX_SNAPSHOT_SOURCES', gui)
+        self.assertIn('apt-get "${apt_snapshot[@]}" source --download-only cdebconf=0.280', gui)
         for package in ('dahdi-firmware-nonfree', 'atmel-firmware', 'bluez-firmware',
                         'firmware-sof-signed', 'firmware-b43-installer',
                         'firmware-b43legacy-installer'):

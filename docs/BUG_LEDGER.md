@@ -5589,7 +5589,24 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: Default snapshots to `20260920T000000Z`, and download the offline binary
   closure through the same snapshot sources.list as the source bundle.
 - Regression: `tests.test_source_bundle.SourceBundleTests.test_iso_build_exports_complete_release_evidence`
-  asserts `binary-sources.list` and the bumped snapshot. Hosted release rerun is
+  asserts `snapshot-sources.list` and the bumped snapshot. Hosted release rerun is
   remaining evidence.
 - Avoid: Resolving the offline package closure from live trixie while pinning
   corresponding source to an older snapshot.debian.org archive.
+
+## BUG-0402 — ISO GUI rebuild lost deb-src after snapshot binary pin
+
+- Date: 2026-09-20
+- Symptom: Gitea release run 4228 failed in `installer/build-gui.sh` with
+  `E: You must put some 'deb-src' URIs in your sources.list` while fetching
+  `cdebconf=0.280`.
+- Root cause: The BUG-0401 pin used an isolated binary-only sources.list for the
+  offline package closure. `build-gui.sh` still called bare `apt-get source` and
+  found no configured deb-src URIs in that build environment.
+- Fix: Snapshot sources.list carries both `deb` and `deb-src`; export it as
+  `NEX_SNAPSHOT_SOURCES` and fetch cdebconf through those pins.
+- Regression: `tests.test_source_bundle.SourceBundleTests.test_iso_build_exports_complete_release_evidence`
+  asserts `NEX_SNAPSHOT_SOURCES` in `build.sh` and `build-gui.sh`. Hosted release
+  rerun is remaining evidence.
+- Avoid: Pinning binary apt through an isolated sources.list without giving later
+  `apt-get source` steps the matching deb-src URIs.

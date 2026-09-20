@@ -7,7 +7,18 @@ cache=/work/.cache/nex-iso/gui
 stage=/work/.cache/nex-iso/stage
 source=$cache/cdebconf
 mkdir -p "$cache"
-(cd "$cache" && apt-get source --download-only cdebconf=0.280)
+# Same immutable snapshots as the offline package closure (NEX_SNAPSHOT_SOURCES).
+# A bare apt-get source against the builder image failed in release run 4228 with
+# "You must put some 'deb-src' URIs in your sources.list" after the ISO build
+# pinned binary downloads through an isolated sources.list.
+snapshot_sources=${NEX_SNAPSHOT_SOURCES:?NEX_SNAPSHOT_SOURCES required}
+apt_snapshot=(
+    -o "Dir::Etc::sourcelist=$snapshot_sources"
+    -o 'Dir::Etc::sourceparts=-'
+    -o 'Acquire::Check-Valid-Until=false'
+)
+apt-get "${apt_snapshot[@]}" update
+(cd "$cache" && apt-get "${apt_snapshot[@]}" source --download-only cdebconf=0.280)
 rm -rf "$source"
 dpkg-source -x "$cache/cdebconf_0.280.dsc" "$source"
 cp installer/gui/nex-shell.c "$source/src/modules/frontend/gtk/"
