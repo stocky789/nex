@@ -496,11 +496,12 @@ class PoolJoinContractTests(unittest.TestCase):
         self.assertGreater(len(messages), 10, 'refusal adapter found nothing: check the handler style')
         for message in messages:
             self.assertIn(message.replace('%s', capability), documented, message)
-        # The 504 and 499 bodies are worded per relayed action by two helpers, so every
-        # sentence either of them can answer with reaches the reference.
-        relay = [re.search(r'func ' + name + r'\(.*?\n}\n', self.handlers, re.S)[0]
-                 for name in ('poolRequestAbandoned', 'poolRequestDeadline')]
-        sentences = {text for body in relay for text in re.findall(r'return "([^"]+)"', body)}
+        # The 504 and 499 bodies are worded per relayed action. Per-action copy lives on
+        # poolRequestCopyByAction; the helpers' default returns cover the join relay.
+        sentences = set(re.findall(r'(?:abandoned|deadline):\s+"([^"]+)"', self.handlers))
+        for name in ('poolRequestAbandoned', 'poolRequestDeadline'):
+            body = re.search(r'func ' + name + r'\(.*?\n}\n', self.handlers, re.S)[0]
+            sentences.update(re.findall(r'return "([^"]+)"', body))
         self.assertEqual(len(sentences), 4, 'relay adapter found the wrong number of sentences')
         for text in sentences:
             self.assertIn(text, documented, text)
@@ -944,7 +945,7 @@ class HostNetworkContractTests(unittest.TestCase, PoolStructParityMixin):
 
     def test_cancel_documents_the_applied_rollback_runtime_path(self):
         cancel = re.search(r'func CancelManagementNetwork\(.*?\n}\n', self.core, re.S)[0]
-        self.assertIn('managementApplied', cancel)
+        self.assertIn('protocol.ManagementNetworkApplied', cancel)
         self.assertIn('rollbackLocked', cancel)
         post = self.api['paths'][self.path]['post']
         for documented in (post['description'], post['responses']['409']['description'],
@@ -1038,8 +1039,10 @@ class PoolTransferContractTests(unittest.TestCase, PoolStructParityMixin):
     def test_documented_refusals_are_the_literal_handler_messages(self):
         # Three routes share one guard, so several refusals are templated. Expand each
         # template with the handler's own words rather than documenting the template.
-        purposes, unreported = (self.returns('poolTransferPurpose'),
-                                self.returns('poolTransferUnreported'))
+        # Purposes live on poolTransferRoutes after the per-action map refactor;
+        # unreported phrases stay as literal returns from poolTransferUnreported.
+        purposes = re.findall(r'purpose: "([^"]+)"', self.handlers)
+        unreported = self.returns('poolTransferUnreported')
         self.assertEqual((len(purposes), len(unreported)), (3, 3))
         messages = set(re.findall(r'fail\(w, http\.Status\w+, "([^"]+)"', self.handlers))
         messages |= set(re.findall(r'fmt\.Errorf\("([^"]+)"', self.handlers))

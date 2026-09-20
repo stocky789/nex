@@ -82,6 +82,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
+- Cross-site pool join refusal and management-network cancel wording stay aligned with the
+  live handlers in the API contract checks.
 - Virtual machines on a pool master's local storage now start themselves again after the master
   reboots. Previously the request was made too early in the boot, while the host was still
   confirming it is the pool master, and nothing tried again (BUG-0392).
