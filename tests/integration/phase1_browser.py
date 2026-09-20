@@ -353,6 +353,12 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
             hosts = route.fetch().json()
             for h in hosts:
                 h['capabilities'] = sorted(set(h.get('capabilities') or []) | {'vm-power-v1', 'vm-power-queue-v1'})
+                # This block is a simulated power UI against a fixture VM. Keep the real
+                # host's inventory, but do not inherit a transient stale/reconnect window
+                # left by earlier controller restart or cert-rotation steps in this lab.
+                if h.get('id') == host_id:
+                    h['connection'] = 'fresh'
+                    h['revoked'] = False
             route.fulfill(json=hosts)
         page.route('**/api/v1/hosts', with_power)
         power_requests = []
