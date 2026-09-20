@@ -1,0 +1,34 @@
+{
+  "summary": "Fix stale solo-pool VM ownership surviving join rehome and later promotion. API impact: existing contract.",
+  "paths": [
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This restores documented join and promotion ownership behavior without changing an operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Existing join and resume operations now clean stale Core ownership state; no route, request or response contract changed.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The fix does not complete the remaining Phase 4 native recovery gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Core owns VM ownership/inventory and the durable join rehome state.",
+    "record": "Core pool-vms.json ownership/inventory and pool-peer.json PendingRehome remain authoritative and are reported through inventory to a replacement Controller."
+  },
+  "verification": {
+    "method": "Reported passing checks: go test ./internal/agent -run 'TestPoolRehome(DoesNotResurrectDeletedSoloVMOnPromotion|CancellationKeepsMarkerForRetry|Resumes)$' -count=1; go test ./internal/agent -count=1; equivalent focused race test; and go test -race ./internal/agent -count=1. The lifecycle begins with a completed solo-pool delete journal and stale ownership state, then joins, resumes, receives a signed replica and completes a fenced promotion; only destination authority remains. A temporary disabled-scrub negative control failed. Corrupt-state cancellation retains PendingRehome and retry succeeds after repair. Clean native replay remains pending; no existing corrupt replica was repaired in place.",
+    "evidence": [
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

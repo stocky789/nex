@@ -1,0 +1,37 @@
+{
+  "summary": "Correct Core-private selection of the newest applicable eject-cleanup provenance on same-pool rejoin. API impact: existing contract.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-20-phase4-eject-cleanup-provenance-selection.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The existing same-pool rejoin workflow remains correct; this restores its durable provenance selection.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Core selects existing managed-journal provenance differently without a route, request, response, or schema change.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The pending correction does not complete S7 or Phase 4 acceptance.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Core owns eject-cleanup provenance and its reapply-consumption lifecycle.",
+    "record": "Existing managed-journal cleanup provenance carries the resource and membership generations used to select a one-use reapply grant; Core inventory remains the adoption path for a replacement Controller."
+  },
+  "verification": {
+    "method": "A preserved disposable fixture contains two marked eject cleanups at the same resource generation and different membership generations. The older receipt was consumed while the later removal remained effective. The newest-membership selection correction is independently reviewed. Its multi-cycle regression covers newest provenance selection, tied-generation fail-closed behavior and real media receipt projection; a resource-generation-only negative control fails. Focused, package and race checks passed, followed by the final whole-tree race and 374-test Python source gate. On the reviewed Core delta, ordinary reconciliation consumed the newest cleanup from the preserved journal: the shared repository mounted, the ISO reappeared, and master API read/write, VM runtime, locking and content-digest checks were healthy. An intentionally unmarked later network removal remained absent. The fixture was not repaired in place. This is bounded preserved-journal recovery, not a fresh full eject/rejoin cycle or Phase 4 acceptance.",
+    "evidence": [
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

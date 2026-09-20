@@ -343,7 +343,7 @@ console.log("managed.test.mjs: ok");
 {
   const {
     networkRemovable, mediaRemovable, confirmMatches, validResourceName, renameChanged,
-    lifecycleBlocker, networkRemoveBody, networkRenameBody, stableRequestID, resourceGeneration,
+    lifecycleBlocker, networkRemoveBody, networkRenameBody, stableRequestID, heldRequestID, resourceGeneration,
     networkMemberState, removalCapability,
   } = await import(`file://${outfile}`);
 
@@ -406,6 +406,11 @@ console.log("managed.test.mjs: ok");
   assert.equal(stableRequestID(store, "network:n1:rename", networkRenameBody({ generation: 2 }, "pool-1", "guests-3"), mint), "request-3", "a changed request mints a new identity");
   assert.equal(stableRequestID(store, "network:n1:remove", networkRemoveBody({ generation: 3 }, "pool-1"), mint), "request-4", "a moved generation is a different request");
 
+  const held = { id: "", signature: "" };
+  assert.equal(heldRequestID(held, "pool-1\nhost-b\ntrue", mint), "request-5");
+  assert.equal(heldRequestID(held, "pool-1\nhost-b\ntrue", mint), "request-5", "an unchanged retry replays the same request");
+  assert.equal(heldRequestID(held, "pool-1\nhost-b\nfalse", mint), "request-6", "a changed payload mints a new request");
+
   // Per-host convergence keeps reading sensibly through a rename: a member still on the old
   // generation has not applied the new name, so it is not reported as ready.
   const converged = { network_id: "n1", host_id: "member", generation: 2, uplink_present: true };
@@ -465,3 +470,72 @@ console.log("managed.test.mjs: ok");
 }
 
 console.log("managed.test.mjs: pool resource removal ok");
+
+// D1/D2/D4: a registration the pool master refused is only a Controller request record, placement
+// warnings ride along with an accepted create, and a re-add before the master has reported the
+// member is a wait rather than a failure.
+{
+  const { placementWarningNotice } = await import(`file://${outfile}`);
+  const managedSource = readFileSync(new URL("./managed.tsx", import.meta.url), "utf8");
+  const mainSource = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
+  const master = { id: "host-1", pool_id: "pool-1", hostname: "core-a", connection: "fresh", revoked: false, capabilities: ["managed-vm-v1", "pool-resource-removal-v1"], inventory: null };
+  const base = { ...props, masterHostID: "host-1", hosts: [master] };
+
+  // Networking: the discard replaces Rename/Remove on a failed row and appears nowhere else.
+  const vlan = { id: "net-1", pool_id: "pool-1", host_id: "host-1", name: "guests", operation_id: "op-n1", status: "succeeded", kind: "vlan", source: "nex-guests", uplink: "eno1", vlan: 100, generation: 2 };
+  const failedNetwork = renderToStaticMarkup(createElement(ManagedVMs, { ...base, tab: "Networking", networks: [{ ...vlan, status: "failed", error: "uplink eno1 is not present" }] }));
+  assert.match(failedNetwork, />Discard failed registration</);
+  assert.doesNotMatch(failedNetwork, />Rename</);
+  assert.doesNotMatch(failedNetwork, />Remove</);
+  for (const status of ["queued", "dispatched", "succeeded"]) {
+    const row = renderToStaticMarkup(createElement(ManagedVMs, { ...base, tab: "Networking", networks: [{ ...vlan, status }] }));
+    assert.doesNotMatch(row, />Discard failed registration</, `a ${status} network registration is not a discardable request record`);
+  }
+  // No id to address means no discard, whatever the status says.
+  assert.doesNotMatch(renderToStaticMarkup(createElement(ManagedVMs, { ...base, tab: "Networking", networks: [{ ...vlan, id: "", status: "failed" }] })), />Discard failed registration</);
+  // The confirmation, the body-less DELETE, and the refresh that follows a success. A 409 from
+  // the Controller ("a host reports this registration as applied") is surfaced by run() verbatim.
+  assert.match(managedSource, /if \(!confirm\(discardConfirmText\("network", n\.name\)\)\) return;/);
+  assert.match(managedSource, /await api\(`networks\/\$\{encodeURIComponent\(n\.id\)\}`, "DELETE"\);\s*\n\s*await reload\(\);/);
+  assert.match(managedSource, /setNotice\(`Discarded the failed registration for \$\{n\.name\}/);
+
+  // Storage: the same model, and a failed row's pending-storage id is never treated as a Core
+  // repository id — no recheck, update or detach is offered on it.
+  const repository = { id: "repo-1", pool_id: "pool-1", host_id: "host-1", name: "lab-nfs", operation_id: "op-s1", status: "succeeded", kind: "nfs", path: "", generation: 2, source: { nfs: { server: "nfs.example.test", export: "/vms" } }, access: { status: "healthy", readable: true, writable: true }, capabilities: { vm_disk: true } };
+  const failedStorage = renderToStaticMarkup(createElement(ManagedVMs, { ...base, tab: "Storage", storage: [{ ...repository, id: "pending-storage-op-s2", status: "failed", error: "export /vms is not exported to this host" }] }));
+  assert.match(failedStorage, />Discard failed registration</);
+  for (const action of ["Recheck", "Update", "Detach"]) assert.doesNotMatch(failedStorage, new RegExp(`>${action}`), `a failed storage registration offers no ${action}`);
+  const heldStorage = renderToStaticMarkup(createElement(ManagedVMs, { ...base, tab: "Storage", storage: [repository] }));
+  assert.doesNotMatch(heldStorage, />Discard failed registration</);
+  assert.match(heldStorage, />Recheck</);
+  assert.match(heldStorage, />Detach</);
+
+  // D2: warnings are advisory. They say the request was accepted and that Core decides.
+  assert.equal(
+    placementWarningNotice(["the pool master's last report does not show this host's access to storage repository repo-1 as current; the request may sit dispatched until it does"]),
+    "the pool master's last report does not show this host's access to storage repository repo-1 as current; the request may sit dispatched until it does.",
+  );
+  assert.equal(placementWarningNotice(["one", "two."]), "one. two.", "each warning is a sentence of its own");
+  // The create panel unmounts with the route change, so the 202's warnings go to the shell notice,
+  // tied to the operation so it clears itself when the task leaves queued/dispatched.
+  assert.match(managedSource, /const result = await api<\{ vm_id: string; operation: \{ id: string \}; warnings\?: string\[\] \}>\("vms", "POST"/);
+  // The App keeps a warning that was attached to its just-assigned route through that one
+  // hashchange, while the same handler still clears notices attached to an earlier route.
+  assert.match(managedSource, /if \(result\.warnings\?\.length\) onNotice\?\.\(placementWarningNotice\(result\.warnings\), result\.operation\.id\);/);
+  assert.match(mainSource, /const noticeRoute = useRef\(""\);/);
+  assert.match(mainSource, /noticeRoute\.current = text \? \(location\.hash\.slice\(1\) \|\| "\/"\) : ""/);
+  assert.match(mainSource, /if \(noticeRoute\.current !== nextRoute\) setNotice\(""\);/);
+  assert.match(mainSource, /onCreateVMShown=\{\(\) => setCreateVM\(false\)\} onNotice=\{setNotice\}/);
+  assert.doesNotMatch(mainSource, /o\.warnings\?\.map/, "create-time warnings stay on the 202 response, not the operations list");
+
+  // D4: a retryable 409 from add-host is a wait. The probe and password are kept (only a success
+  // clears them), the guidance says to try again, and the host's own words stay in a fold.
+  assert.match(mainSource, /retryable = failure\.retryable === true;/);
+  assert.match(mainSource, /hostError = failure\.host_error \|\| undefined;/);
+  assert.match(mainSource, /if \(e\.status === 409 && e\.retryable\) \{\s*\n\s*setHostRetry\(\{ message: [^\n]*hostError: e\.host_error \|\| "" \}\);\s*\n\s*return null;/);
+  assert.match(mainSource, /if \(!added\) return;\s*\n\s*setHostPassword\(""\);/);
+  assert.match(mainSource, /<p>\{hostRetry\.message\}<\/p>/);
+  assert.match(mainSource, /<summary>What the host reported<\/summary>/);
+}
+
+console.log("managed.test.mjs: failed-registration discard, placement warnings and retryable add-host ok");

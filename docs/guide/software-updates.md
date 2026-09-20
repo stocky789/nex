@@ -5,7 +5,7 @@
 Available in Nex Core / Controller development builds (alpha) that include
 the Updates APIs and packaged installers. Both packages ship the Nex archive signing
 key and configure the signed APT source, so an available package is signature-verified.
-The working `0.3.6` version is not evidence of a published candidate. In particular,
+The working `0.4.0` version is not evidence of a published candidate. In particular,
 the publisher intentionally rejects ZFS-enabled ISO manifests while the external-release
 gates in [Licensing](../LICENSING.md) remain open.
 

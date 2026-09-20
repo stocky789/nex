@@ -222,7 +222,9 @@ The exact final component/source licence review, matching corresponding source a
 notice retention, supported-kernel DKMS build, offline installation, Secure Boot
 signing/key handling where applicable, kernel-upgrade and known-good boot recovery
 must have inspected evidence. Until those gates close, ZFS-enabled images are for
-internal disposable labs only. Configuration changes and unit tests do not establish
+internal disposable labs only. Private forge releases of those images count as that
+internal lab delivery (project owner, 2026-09-19 follow-up); the public website download
+tree and APT archive remain blocked. Configuration changes and unit tests do not establish
 that an image builds, boots or can be redistributed. See the
 [rollout verification](qa/2026-09-19-zfs-provisioning.md) for actual checks and limits.
 That report records internal QA4 offline installation, first boot, reboot, and a
@@ -390,3 +392,27 @@ are bundled unmodified; if a noVNC file is ever changed, its source must remain 
 under MPL-2.0. The bundled notice file `web/public/third-party-notices.txt` and the source
 archive's retained npm package tarball carry the license texts. The Go WebSocket bridge is
 original Nex code; no Go dependency was added.
+
+## Nex Core host networking runtime dependencies — 2026-09-19
+
+The `nex-core-local` Debian package now declares `Depends: … ifupdown, bridge-utils, vlan`,
+because Nex Core's own networking code executes those programs and the ifupdown hooks they
+install rather than reimplementing them: `ifdown`/`ifup` are executed directly for a staged
+management network change; the `bridge_ports`, `bridge_stp` and `bridge_fd` stanza keywords
+are implemented by `bridge-utils`' `/etc/network/if-pre-up.d/bridge` hook; and the
+`vlan-raw-device` stanza written for a tagged management NIC needs the `vlan` package's own
+ifupdown hook. `iproute2` was already a dependency, and nothing executes `brctl`.
+
+Declaring a dependency on separate Debian programs is **aggregation on the medium**, not
+linking and not a combined work, so it raises no AGPL/GPL compatibility question. The three
+packages must still appear in the component manifest and the source-delivery path before any
+external ISO distribution, under the existing gate above. `ifupdown` and `bridge-utils`
+copyrights were inspected in the two notes above; `vlan` is new to the manifest and its
+packaged copyright has **not** yet been inspected — record that as outstanding.
+
+Not verified: the hook ownership above was reasoned from the packaging layout and from a
+laboratory observation that guest VLAN materialization failed until `ifupdown bridge-utils
+vlan` were installed by hand. It has **not** been confirmed against a Debian 13 archive with
+`apt-cache show` or `dpkg -L`; `tests/test_core_local_package.py` ties each declared
+dependency to the construct in Nex Core that needs it, which catches the dependency rotting
+but is not evidence about the Debian packages themselves.

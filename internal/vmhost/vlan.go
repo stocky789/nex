@@ -20,7 +20,17 @@ import (
 // its untagged path, addresses and routes are never touched, so applying one cannot cut
 // the host off. removeGuestBridge is the inverse, and touches only a bridge Nex provably
 // created: /etc/network/interfaces itself, its source line and the uplink stay untouched.
-const sysNet = "/sys/class/net/"
+// sysNet and procVLAN are the kernel views every guest-network check reads. They are
+// variables so a test can point them at scratch directories; nothing else rewrites them.
+var sysNet, procVLAN = "/sys/class/net/", "/proc/net/vlan/"
+
+// NetworkSysfsRootsForTests points the guest-network checks at scratch kernel views and
+// returns the restore function, as ManagementEtcRootForTests does for /etc.
+func NetworkSysfsRootsForTests(sysfs, vlanProc string) func() {
+	previousSys, previousVLAN := sysNet, procVLAN
+	sysNet, procVLAN = sysfs, vlanProc
+	return func() { sysNet, procVLAN = previousSys, previousVLAN }
+}
 
 func guestPort(n protocol.NetworkRegistration) string {
 	if n.VLAN == 0 {
@@ -36,6 +46,16 @@ func master(dev string) string {
 		return ""
 	}
 	return filepath.Base(target)
+}
+
+// netAttr reads one sysfs attribute of a network device, "" when the device or the attribute
+// is absent.
+func netAttr(dev, name string) string {
+	b, err := os.ReadFile(sysNet + dev + "/" + name)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // interfacesOwnership is the part of the stanza header that names which network Nex wrote the
@@ -100,9 +120,14 @@ func ensureSourceLine(path string) error {
 	return os.Chmod(path, 0644)
 }
 
-// ensureGuestBridge creates (idempotently) and persists the bridge for a VLAN registration.
-// networkDir is /etc/network on a host; tests supply a scratch directory.
-func ensureGuestBridge(ctx context.Context, n protocol.NetworkRegistration, networkDir string) error {
+// CheckNetworkApply reports every refusal a guest-network apply raises that can be
+// evaluated without touching anything, so a pool member that cannot apply yet can refuse
+// locally, journal nothing and retry the moment the operator fixes the cause.
+// ensureGuestBridge calls it first, so the precheck and the native apply cannot drift apart
+// — the same conditions, in the same words. It only ever refuses: the conditions it cannot
+// see from here (an uplink the host itself is addressed on, unreadable host network
+// configuration) are still refused by ensureGuestBridge alone.
+func CheckNetworkApply(n protocol.NetworkRegistration) error {
 	if err := protocol.ValidateVLAN(n); err != nil {
 		return err
 	}
@@ -110,15 +135,33 @@ func ensureGuestBridge(ctx context.Context, n protocol.NetworkRegistration, netw
 	if !exists(sysNet + n.Uplink) {
 		return fmt.Errorf("uplink %s does not exist on this host", n.Uplink)
 	}
-	if exists(sysNet+n.Uplink+"/bridge") || exists("/proc/net/vlan/"+n.Uplink) || n.Uplink == "lo" {
+	if exists(sysNet+n.Uplink+"/bridge") || exists(procVLAN+n.Uplink) || n.Uplink == "lo" {
 		return fmt.Errorf("uplink %s must be a physical NIC or bond, not a bridge, VLAN device or loopback", n.Uplink)
-	}
-	interfaces, err := os.ReadFile(filepath.Join(networkDir, "interfaces"))
-	if err != nil {
-		return fmt.Errorf("host network configuration unreadable: %v", err)
 	}
 	if m := master(n.Uplink); m != "" && exists(sysNet+m+"/bonding") {
 		return fmt.Errorf("uplink %s is a member of bond %s; use the bond as the uplink", n.Uplink, m)
+	}
+	if n.VLAN != 0 && exists(sysNet+port) {
+		if m := master(port); m != "" && m != bridge {
+			return fmt.Errorf("VLAN %d on %s is already used by %s in the host configuration", n.VLAN, n.Uplink, m)
+		}
+	}
+	if exists(sysNet+bridge) && !exists(sysNet+bridge+"/bridge") {
+		return fmt.Errorf("%s exists but is not a bridge", bridge)
+	}
+	return nil
+}
+
+// ensureGuestBridge creates (idempotently) and persists the bridge for a VLAN registration.
+// networkDir is /etc/network on a host; tests supply a scratch directory.
+func ensureGuestBridge(ctx context.Context, n protocol.NetworkRegistration, networkDir string) error {
+	if err := CheckNetworkApply(n); err != nil {
+		return err
+	}
+	port, bridge := guestPort(n), n.Source
+	interfaces, err := os.ReadFile(filepath.Join(networkDir, "interfaces"))
+	if err != nil {
+		return fmt.Errorf("host network configuration unreadable: %v", err)
 	}
 	if n.VLAN == 0 {
 		if m := master(n.Uplink); m != "" && m != bridge {
@@ -139,19 +182,16 @@ func ensureGuestBridge(ctx context.Context, n protocol.NetworkRegistration, netw
 		if addressed {
 			return fmt.Errorf("uplink %s carries host addresses; an untagged guest bridge would disconnect it, choose a VLAN ID", n.Uplink)
 		}
-	} else if exists(sysNet + port) {
-		if m := master(port); m != "" && m != bridge {
-			return fmt.Errorf("VLAN %d on %s is already used by %s in the host configuration", n.VLAN, n.Uplink, m)
+	} else if !exists(sysNet + port) {
+		if _, err := run(ctx, "ip", "link", "add", "link", n.Uplink, "name", port, "type", "vlan", "id", fmt.Sprint(n.VLAN)); err != nil {
+			return fmt.Errorf("create VLAN device %s: %v", port, err)
 		}
-	} else if _, err := run(ctx, "ip", "link", "add", "link", n.Uplink, "name", port, "type", "vlan", "id", fmt.Sprint(n.VLAN)); err != nil {
-		return fmt.Errorf("create VLAN device %s: %v", port, err)
 	}
+	// A bridge that exists but is not a bridge was refused by CheckNetworkApply above.
 	if !exists(sysNet + bridge) {
 		if _, err := run(ctx, "ip", "link", "add", bridge, "type", "bridge", "stp_state", "0", "forward_delay", "0"); err != nil {
 			return fmt.Errorf("create bridge %s: %v", bridge, err)
 		}
-	} else if !exists(sysNet + bridge + "/bridge") {
-		return fmt.Errorf("%s exists but is not a bridge", bridge)
 	}
 	if master(port) != bridge {
 		if _, err := run(ctx, "ip", "link", "set", port, "master", bridge); err != nil {

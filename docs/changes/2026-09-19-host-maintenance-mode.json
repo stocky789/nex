@@ -1,0 +1,74 @@
+{
+  "summary": "Host maintenance mode: a durable drain flag the pool master keeps in its own membership record, one durable pool-maintenance command relayed by Nex Controller, master-side refusal of new placement, define, start and autostart on the drained host, and a Maintenance column with its confirmation dialog on the pool's Hosts tab",
+  "paths": [
+    "internal/protocol/pool.go",
+    "internal/protocol/pool_maintenance_test.go",
+    "internal/agent/pool_maintenance.go",
+    "internal/agent/pool_maintenance_test.go",
+    "internal/agent/placement.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/managed.go",
+    "internal/agent/run.go",
+    "internal/controller/poolmaintenance.go",
+    "internal/controller/poolmaintenance_test.go",
+    "internal/controller/controller.go",
+    "internal/controller/managed.go",
+    "internal/controller/pooljoin.go",
+    "web/src/pool-members.tsx",
+    "web/src/pool-members.test.mjs",
+    "web/src/vm-create.tsx",
+    "web/src/vm-create.test.mjs",
+    "web/src/style.css",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "tests/test_api_contract.py",
+    "docs/guide/host-maintenance-mode.md",
+    "docs/guide/README.md",
+    "docs/guide/join-a-pool.md",
+    "CHANGELOG.md",
+    "docs/plans/2026-09-19-phase4-closure.md",
+    "docs/plans/2026-09-08-nex-platform.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "New operator workflow with its own page: entering and leaving maintenance from the pool's Hosts tab, what the flag does and deliberately does not do (it stops no running guest and never blocks stop, shutdown or force-stop), the guest list shown before confirming, the unknown state while the pool master is quiet, the asynchronous conflict and needs-attention messages, and the fact that the pool master enforces and keeps the flag so it survives a Controller restart or replacement. The Hosts-tab description in the join page names the new column, and the guide index lists the page. The Verification section states plainly that native multi-host drain remains unexecuted; the VM placement form has only simulated browser-capture evidence.",
+    "pages": [
+      "docs/guide/host-maintenance-mode.md",
+      "docs/guide/README.md",
+      "docs/guide/join-a-pool.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "One Controller route (POST /api/v1/pools/{id}/members/{host_id}/maintenance), the pool-maintenance command kind addressed to the pool master, PoolCommand.member_host_id/enabled/expected_version for that action, the PoolMember.maintenance and maintenance_since inventory fields, the pool-maintenance-v1 capability, and new fields on the existing GET /api/v1/pools/{id}/members projection (maintenance_supported; per member maintenance, maintenance_since, guests, last_maintenance). Both sides, authentication, authorization, validation, the 400/404/409/500 matrix, exact-retry replay, the asynchronous failed-result texts and their conflict marking, and capability gating are implemented in this slice. The placement refusal the Controller pre-checks is documented on the three routes that can return it; the authoritative refusal stays Core's. Amended 2026-09-19: no route or payload changed. Behaviour within this contract: vm-power start, wake and vm-create with start_after_create can now be refused with the existing maintenance sentence on local-storage guests and with the master unreachable; reboot and force-reboot stay allowed by decision.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase 4 stays in progress and no milestone item moves to built: this slice has unit, Controller, contract and limited simulated browser-capture evidence only. Native multi-host acceptance remains outstanding. The board keeps built separate from in testing, so it still describes the project accurately.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The drain flag is written and enforced entirely by the pool master's Nex Core. Nex Controller keeps only its own operation, managed-resource and audit rows for the request it relayed, and decides nothing about maintenance; its placement pre-check reads the master's mirrored report and Core refuses again regardless.",
+    "record": "PoolMember.Maintenance and PoolMember.MaintenanceSince inside the membership record in the pool master's pool-peer.json, saved atomically by the master. The master reports the same record in Inventory.Managed.Membership, so a fresh or rebuilt Controller re-adopts the flag and its timestamp for every member with nothing for an operator to re-enter, and a master restart reloads it from the file. The flag is deliberately outside the membership generation equality rule, so recording it never changes the generation other hosts check.",
+    "notes": "Amended 2026-09-19 by the review-fix batch (docs/changes/2026-09-19-phase4-review-fixes.json): BUG-0346 (maintenance did not block starting a local-storage guest at all, nor waking a suspended one) and BUG-0347 (libvirt autostart returned guests to a drained host after a reboot). The drain flag still lives only in the pool master's membership record; what changed is where it is read - the host now consults its own verified copy before any master round trip, and a member reads it from the stored signed authority replica. The libvirt autostart suppression writes no second desired value anywhere: the managed journal stays the record and the suppression sits on top of it."
+  },
+  "verification": {
+    "method": "Go unit tests with the race detector (go test -race -count=1 on internal/agent, internal/protocol, internal/localcore, internal/vmhost and internal/controller, all ok) covering flag persistence and reload from the master's own state, refusal of placement, define, start and autostart-by-placement on a drained host, stop still permitted, idempotent enable and disable with maintenance_since unmoved, a drained single-host pool, membership Valid() unaffected, and the Controller's placement refusal and full 400/404/409 matrix. UI component suite (npm run typecheck, npm test; pool-members.test.mjs and vm-create.test.mjs) covers the column, stale state, dialog, conflict, and VM-only loading/maintenance/known-ready/unknown placement states. Isolated simulated browser captures, with mutation routes aborted, inspected U6 placement reasons at 1280 px and 360 px on final UI fingerprint c4849462… (CSS 68c136b1…); they do not prove Core placement or a guide workflow. Offline contract checks: python3 -m unittest discover -s tests -p 'test_api_contract.py' \u2014 the new PoolMaintenanceContractTests pass, asserting the route is admin- and CSRF-gated, the request and accepted shapes against the handler structs, every literal handler refusal against the reference, the two Core conflict texts against internal/agent/pool_maintenance.go, the command kind, capability and master addressing, and the projection fields; python3 scripts/generate_api.py --check reports the generated reference current. Documentation gate: python3 scripts/check_docs.py --worktree. NOT executed and recorded as outstanding: a native multi-host drain and the full browser guide walkthrough, both deferred to the Phase 4 native acceptance slice.",
+    "evidence": [
+      "internal/agent/pool_maintenance_test.go",
+      "internal/controller/poolmaintenance_test.go",
+      "internal/protocol/pool_maintenance_test.go",
+      "web/src/pool-members.test.mjs",
+      "tests/test_api_contract.py",
+      "docs/guide/host-maintenance-mode.md",
+      "docs/plans/2026-09-19-phase4-closure.md"
+    ]
+  }
+}

@@ -289,6 +289,15 @@ Use an explicitly selected disposable lab host.
    reached Core, not that placement succeeded. If the task fails, the page shows **Creation
    failed** with Core's reason instead. Once the VM is reported, follow
    **Creation task** to its result and inspect **Observed state** and its freshness independently.
+7. **If a warning appears with the accepted request**, read it but do not treat it as a refusal.
+   It names a pool-shared repository, network or ISO whose access on the host you selected the
+   pool master's last report does **not** show as current — for example *the pool master's last
+   report does not show this host's access to storage repository `<id>` as current; the request
+   may sit dispatched until it does*. The request was accepted and the pool master still decides;
+   the warning only tells a request aimed at a host with a shared-access problem apart from one
+   that is merely slow. The same warning stays on the task while it is dispatched and **clears by
+   itself** when the master reports working access again. If it persists, fix that host's access
+   to the named resource — see [Join a pool](join-a-pool.md#troubleshooting).
 
 ### Memory modes
 

@@ -1,0 +1,27 @@
+{
+  "summary": "Add the Phase 4 closure plan: slices, shared design decisions, lanes and acceptance for multi-host pools, authority transfer and native acceptance",
+  "paths": ["docs/plans/2026-09-19-phase4-closure.md"],
+  "guide": {
+    "impact": "none",
+    "reason": "A planning document for work that is delivered slice by slice. Operator instructions are written in the same change as each implemented slice, not here; the plan explicitly labels what is planned rather than available.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Planning only. The plan names the contracts each slice must implement, but this document changes no Controller, Core, peer or host-local contract by itself; every slice records its own API impact when it lands.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone changed status. Phase 4 stays in progress on the published board: the plan schedules the remaining work and its acceptance gate rather than reporting anything built.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "A plan document persists nothing at runtime."
+  },
+  "verification": {
+    "method": "Reviewed the plan against the working tree it describes: the file:line references in its defect list, the hot-file table and the lane write sets were checked against the actual sources, and the documentation gate was run over the worktree.",
+    "evidence": ["docs/plans/2026-09-19-phase4-closure.md", "docs/plans/2026-09-08-nex-platform.md"]
+  }
+}

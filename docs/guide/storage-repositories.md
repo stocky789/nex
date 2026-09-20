@@ -115,7 +115,9 @@ for production workloads. Use an explicitly selected disposable lab host.
    repository from the VM's disks; see [Create a virtual machine](create-virtual-machine.md).
 7. Use **Recheck** after repairing a server, share, dataset, target or permission issue. If an
    NFS or SMB repository is not mounted, for example because Core started before the file server,
-   Core retries the mount about once a minute and **Recheck** retries it immediately. A
+   Core retries the mount about once a minute and **Recheck** retries it immediately. If its mount
+   root has a stale file handle and no disk, retained disk or ISO uses it, **Recheck** cycles the
+   Nex-managed mount unit; it names the dependency instead of remounting while anything uses it. A
    name-only **Update** (without new CHAP fields) does not reconnect and is allowed while in use.
    **Host** and **Repository type** stay fixed. SMB updates always include account, optional domain and password.
    Changing a local path or any ZFS, NFS, SMB or iSCSI source detail reconnects the repository, so
@@ -130,7 +132,7 @@ for production workloads. Use an explicitly selected disposable lab host.
    receipt became attached in the meantime. Retiring never deletes repository data.
 10. To stop using a local, NFS, SMB, ZFS or ordinary iSCSI repository, select **Detach**, type the
     exact **Repository name**, then select **Detach storage**. Core refuses while VM disks,
-    retained disks or media depend on it. Detach removes Nex configuration and Nex-managed
+    retained disks, active work or media that has not been removed depend on it. Detach removes Nex configuration and Nex-managed
     mount/session setup where applicable. For ZFS it unregisters Nex storage while
     leaving the native pool and dataset intact. It never deletes data, formats a LUN,
     touches the original ZFS dataset, or removes `.nex-storage-marker`.
@@ -387,6 +389,16 @@ A terminal `failed` task is not retried; fix the cause and submit a new request.
   Controller database reappears at the host's next report. Deleting the file on the host by hand is
   not supported. An import that is still `queued` or `dispatched` belongs to its host task; wait for
   the task to end before removing the entry.
+- **A registration the host refused stays in the list:** a repository registration whose task shows
+  **failed** was never created anywhere. It is only Nex Controller's record of the request, so its
+  row offers **Discard failed registration** and nothing else — no Recheck, no Update, no Detach.
+  Discarding it deletes only that record, asks no host to do anything, and keeps the task and the
+  audit history. Its identifier is Nex Controller's own request key (it begins `pending-storage-`),
+  not a repository ID: Nex Core allocates repository IDs and Nex Controller never invents one, so a
+  registration that is still queued or dispatched has no identifier at all yet. If a host has since
+  reported that repository as applied, the discard is refused with *a host reports this registration
+  as applied, so it is not a failed request record; remove it on the host instead of discarding it*
+  — use **Detach** for that one.
 - **Detach is refused:** remove or complete the listed VM/media dependency, or wait for Core to
   reconcile an uncertain operation. Do not register the same source under another name.
 - **A master NFS/SMB update, rotation or detach is refused for a member workload:** a member still

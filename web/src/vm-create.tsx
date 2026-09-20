@@ -5,6 +5,15 @@ import { storageUsable } from "./storage";
 
 export const describeNetwork = (n: Network) => n.kind === "network" ? `libvirt network ${n.source}` : n.uplink ? (n.vlan ? `VLAN ${n.vlan} on ${n.uplink}` : `Untagged on ${n.uplink}`) : `Existing bridge ${n.source}`;
 export const readyHost = (h: Host) => !h.revoked && h.connection === "fresh" && Boolean(h.capabilities?.includes("managed-vm-v1"));
+export type PlacementState = { maintenance?: boolean; reason?: string };
+// Maintenance belongs to the pool master. A fresh host inventory by itself is not enough to
+// offer it as a VM target until that authoritative observation is available.
+export function placementBlocker(h: Host, state?: PlacementState): string {
+  if (!readyHost(h)) return h.connection !== "fresh" ? "Host is not freshly connected." : "The host agent needs managed-VM support.";
+  if (!state) return "Checking the pool master's maintenance report.";
+  if (state.reason) return state.reason;
+  return state.maintenance ? "This host is in maintenance; the pool master refuses new VM placement here." : "";
+}
 
 /** Pool VLAN usable on a host when registered there, or when the master reported member apply. */
 export const networkUsable = (n: Network, hostID: string) => {
@@ -36,7 +45,7 @@ type Draft = {
   boot: BootRow;
   media_id: string; drivers_media_id: string; start_after_create: boolean; autostart: boolean;
 };
-type Props = { poolID: string; poolName: string; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[]; restored: () => Partial<Draft>; create: (payload: Record<string, unknown>) => Promise<void>; busy: boolean; unavailable: boolean; setTab: (tab: string) => void; onClose: () => void };
+type Props = { poolID: string; poolName: string; hosts: Host[]; placement: Record<string, PlacementState> | null; storage: Storage[]; networks: Network[]; media: Media[]; restored: () => Partial<Draft>; create: (payload: Record<string, unknown>) => Promise<void>; busy: boolean; unavailable: boolean; setTab: (tab: string) => void; onClose: () => void };
 
 const steps = ["Identity", "CPU and memory", "Disks", "Networks", "Boot and media", "Review"];
 const blank: Draft = {
@@ -214,7 +223,7 @@ export function autoDiskName(pool: string, vm: string, index: number) {
 
 // VMWizard collects one VM specification. It never submits by itself: the owning panel holds the
 // durable request identity, so an uncertain outcome keeps the same request on retry.
-export function VMWizard({ poolID, poolName, hosts, storage, networks, media, restored, create, busy, unavailable, setTab, onClose }: Props) {
+export function VMWizard({ poolID, poolName, hosts, placement, storage, networks, media, restored, create, busy, unavailable, setTab, onClose }: Props) {
   const [step, setStep] = useState(0);
   // The TPM follows the guest OS until the operator sets it themselves; a restored draft that
   // already carries one keeps it.
@@ -280,7 +289,7 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
   const mediaIssue = staleMedia ? "That ISO is no longer available on this host. Choose another or continue without install media."
     : staleDrivers ? "That driver disc is no longer available on this host. Choose another or continue without one." : "";
   const stepIssue = ["", cpuIssue || topoIssue, diskIssue || (staleDisks ? staleText : ""), macIssue || (staleNICs ? staleText : ""), mediaIssue, ""][step];
-  const hostReady = Boolean(selectedHost && readyHost(selectedHost));
+  const hostReady = Boolean(selectedHost && !placementBlocker(selectedHost, placement?.[selectedHost.id]));
   const blocked = Boolean(vmNameIssue(draft.name)) || !hostReady || staleDisks || staleNICs || staleMedia || staleDrivers || Boolean(cpuIssue || topoIssue || diskIssue || macIssue);
   const setTopo = (field: "sockets" | "cores" | "threads", raw: number) =>
     setDraft(d => renumber({ ...d, cpu: applyTopology(d.cpu, field, raw) }));
@@ -332,7 +341,8 @@ export function VMWizard({ poolID, poolName, hosts, storage, networks, media, re
             ...(tpmChosen ? {} : { boot: { ...draft.boot, tpm: defaultTPM(guest_os) } }),
           });
         }}><option value="linux">Linux</option><option value="windows">Windows</option><option value="other">Other</option></select><small>Chooses the firmware defaults on the Boot and media step: a Windows guest starts with an emulated TPM 2.0, which Windows 11 requires. Nex does not install or configure the guest.</small></label>
-        <label>Placement host<select required value={draft.host_id} onChange={e => chooseHost(e.target.value)}><option value="">Select host</option>{hosts.map(h => <option key={h.id} value={h.id} disabled={!readyHost(h)}>{h.hostname} · {h.connection}{!h.capabilities?.includes("managed-vm-v1") ? " · agent upgrade required" : ""}</option>)}</select></label>
+        <label>Placement host<select required value={draft.host_id} onChange={e => chooseHost(e.target.value)}><option value="">Select host</option>{hosts.map(h => { const blocker = placementBlocker(h, placement?.[h.id]); return <option key={h.id} value={h.id} disabled={Boolean(blocker)}>{h.hostname} · {blocker || h.connection}</option>; })}</select></label>
+        {hosts.map(h => { const blocker = placementBlocker(h, placement?.[h.id]); return blocker ? <small key={h.id} className="task-error">{h.hostname}: {blocker}</small> : null; })}
         <p className="help">The VM belongs to this pool and is assigned to the selected host. Local storage, networks and ISO images must be validated for that host.</p>
         {!hosts.some(readyHost) && <p className="warning">A freshly connected host with managed-VM support is required. Enroll, reconnect or upgrade the host agent first.</p>}
       </>}

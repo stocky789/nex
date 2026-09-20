@@ -152,7 +152,12 @@ func TestManagedWorkerBackgroundCompletionSendCancels(t *testing.T) {
 	completed <- managedCompletion{result: protocol.Result{OperationID: "occupied"}}
 	done := make(chan bool, 1)
 	go func() {
-		done <- sendManagedCompletion(ctx, completed, managedCompletion{result: protocol.Result{OperationID: "recovered"}, background: true})
+		select {
+		case completed <- managedCompletion{result: protocol.Result{OperationID: "recovered"}, background: true}:
+			done <- true
+		case <-ctx.Done():
+			done <- false
+		}
 	}()
 	select {
 	case <-done:

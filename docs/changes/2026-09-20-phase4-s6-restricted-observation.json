@@ -1,0 +1,35 @@
+{
+  "summary": "Preserve the limited historical S6-18 observation beside the later reviewed bounded rerun without closing the manual-recovery gate. API impact: existing contract.",
+  "paths": [
+    "docs/qa/2026-09-19-phase4-native-acceptance.md",
+    "docs/changes/2026-09-20-phase4-s6-restricted-observation.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This records acceptance evidence and limits only; the restricted-host operator workflow did not change.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The historical observation used existing Core authority and membership behavior without changing an API contract.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The historical summary and later bounded rerun do not complete the S6 or Phase 4 gates.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Core owns the durable restriction, authority and membership records observed by Controller.",
+    "record": "Existing Core pool-peer authority and membership records are reported to a replacement Controller through inventory."
+  },
+  "verification": {
+    "method": "A retained historical execution summary records a restricted-unconfirmed observation after an opted-in master restart with an unavailable ready member, an authority-write refusal, continuity of an unrelated running VM process, and clearing after the member returned ready. It remains historical context only because its raw mutation data and bounded samples are not retained. The later bounded rerun's earlier autostart/no-escape limit is superseded by reviewed timed-autostart suppression/restoration and a UI/source audit that found no force, override, declare-lost or timeout control; together they pass the exact S6-18 CHECKPLAN scope. Duplicate-writer safety, package installation, permanently-dead-member recovery and Phase 4 acceptance remain unclaimed.",
+    "evidence": [
+      "docs/qa/2026-09-19-phase4-native-acceptance.md"
+    ]
+  }
+}

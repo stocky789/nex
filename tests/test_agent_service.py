@@ -23,6 +23,19 @@ class AgentServiceTests(unittest.TestCase):
         self.assertEqual(settings.get('NoNewPrivileges'), 'yes')
         self.assertEqual(settings.get('RestrictSUIDSGID'), 'yes')
 
+    def test_agent_restarts_after_a_clean_exit_so_a_network_rollback_stays_armed(self):
+        """A management-network change is confirmed or rolled back by the running agent.
+
+        With Restart=on-failure an exit 0 (or a signal reaped as success) leaves the host on
+        an unconfirmed management network with nothing left to roll it back. `systemctl stop`
+        and dpkg's upgrade stop still stop a Restart=always unit, so upgrades are unaffected.
+        """
+        unit = (Path(__file__).resolve().parents[1] /
+                'packaging/systemd/nex-core-agent.service').read_text()
+        settings = dict(line.split('=', 1) for line in unit.splitlines()
+                        if '=' in line and not line.startswith('#'))
+        self.assertEqual(settings.get('Restart'), 'always')
+
 
 if __name__ == '__main__':
     unittest.main()

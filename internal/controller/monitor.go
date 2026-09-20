@@ -162,6 +162,9 @@ func mergeInventory(old, incoming *protocol.Inventory) *protocol.Inventory {
 	out.CPUModels = incoming.CPUModels
 	out.CPUBaseline = incoming.CPUBaseline
 	out.Managed = incoming.Managed
+	// The host reports its management-network record on every heartbeat, deadline included.
+	// A stalled base observation must not freeze a running rollback countdown.
+	out.ManagementNetwork = incoming.ManagementNetwork
 	out.VMs = old.VMs
 	if newer("libvirt") {
 		out.VMs = incoming.VMs
@@ -226,6 +229,18 @@ func (c *Controller) monitorHealth() {
 	}
 }
 func (c *Controller) healthTick(pending map[string]pendingHealth) {
+	// The scrub's own timer dies with the process, and a Controller restarted inside an
+	// invitation's lifetime finds the row still young. This sweep is what bounds how long an
+	// uncollected invitation can sit in a stored command when no pool route is ever called.
+	c.mu.Lock()
+	due := time.Since(c.joinScrubbed) >= poolJoinScrubInterval
+	if due {
+		c.joinScrubbed = time.Now()
+	}
+	c.mu.Unlock()
+	if due {
+		c.scrubPoolJoinInvitations()
+	}
 	rows, err := c.db.Query("SELECT id,revoked,inventory FROM hosts")
 	if err != nil {
 		return

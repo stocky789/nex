@@ -211,28 +211,34 @@ jobs:
             fi
           done
           missing=${missing# }
-          # ZFS-enabled ISOs may land on the private forge (internal labs) but must not
-          # hit the public download tree until docs/LICENSING.md external gates close.
-          zfs_gate=$(python3 scripts/release-publish.py --check-zfs-blocked \
-            "dist/nex-core-${NEX_VERSION}-compliance-manifest.json")
-          case "$zfs_gate" in
-            blocked) zfs_blocked=true ;;
-            clear) zfs_blocked=false ;;
-            *) echo "release-publish: unexpected zfs gate result: $zfs_gate" >&2; exit 1 ;;
-          esac
-          if [ -z "$missing" ] && [ "$zfs_blocked" = true ]; then
-            echo 'enabled=false' >> "$GITHUB_OUTPUT"
-            echo '::warning::ZFS-enabled ISO: forge release published; public website downloads and APT stay blocked until OpenZFS redistribution evidence is closed.'
-          elif [ -z "$missing" ]; then
-            echo 'enabled=true' >> "$GITHUB_OUTPUT"
-          elif [ "$missing" = "NEX_DEPLOY_HOST NEX_DEPLOY_USER NEX_DEPLOY_KEY NEX_DEPLOY_KNOWN_HOSTS" ]; then
-            echo 'enabled=false' >> "$GITHUB_OUTPUT"
-            echo 'No deploy secrets are set: publishing the Gitea release only, not the website.'
-          else
+          if [ -n "$missing" ] && [ "$missing" != "NEX_DEPLOY_HOST NEX_DEPLOY_USER NEX_DEPLOY_KEY NEX_DEPLOY_KNOWN_HOSTS" ]; then
             echo "Website publishing is half-configured; missing: $missing" >&2
             echo 'Set every deploy secret or none. Refusing to pass a release that silently skips the website.' >&2
             exit 1
           fi
+          if [ -n "$missing" ]; then
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+            echo 'No deploy secrets are set: publishing the Gitea release only, not the website.'
+            exit 0
+          fi
+          # Secrets are complete. ZFS-enabled ISOs may land on the private forge but must
+          # not hit the public download tree until docs/LICENSING.md external gates close.
+          # Only then read NEX_VERSION / the manifest so credential unit tests stay honest.
+          zfs_gate=$(python3 scripts/release-publish.py --check-zfs-blocked \
+            "dist/nex-core-${NEX_VERSION}-compliance-manifest.json")
+          case "$zfs_gate" in
+            blocked)
+              echo 'enabled=false' >> "$GITHUB_OUTPUT"
+              echo '::warning::ZFS-enabled ISO: forge release published; public website downloads and APT stay blocked until OpenZFS redistribution evidence is closed.'
+              ;;
+            clear)
+              echo 'enabled=true' >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "release-publish: unexpected zfs gate result: $zfs_gate" >&2
+              exit 1
+              ;;
+          esac
       - name: Publish to the website host
         if: steps.deploy.outputs.enabled == 'true'
         env:

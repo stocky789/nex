@@ -1,0 +1,87 @@
+{
+  "summary": "Add a host to a pool from Nex Controller: master-issued single-use invitation over one report round trip, one durable pool-join command the joining Core executes itself as a resumable staged join, membership and convergence projections, the Hosts tab, a host-local pool view, and the six Controller defects found reviewing it (BUG-0319 to BUG-0324), including an invitation scrub armed on Controller start",
+  "paths": [
+    "internal/protocol/pool.go",
+    "internal/protocol/protocol.go",
+    "internal/protocol/pool_test.go",
+    "internal/agent/pool_join.go",
+    "internal/agent/pool_join_test.go",
+    "internal/agent/peer.go",
+    "internal/agent/poolca.go",
+    "internal/agent/managed.go",
+    "internal/agent/run.go",
+    "internal/localcore/pool.go",
+    "internal/localcore/service.go",
+    "internal/localcore/pool_join_test.go",
+    "internal/controller/pooljoin.go",
+    "internal/controller/pooljoin_test.go",
+    "internal/controller/pooljoin_fixes_test.go",
+    "internal/controller/controller.go",
+    "internal/controller/identity.go",
+    "internal/controller/managed.go",
+    "web/src/pool-members.tsx",
+    "web/src/pool-members.test.mjs",
+    "web/src/style.css",
+    "web/src/main.tsx",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/local-openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/local.html",
+    "docs/api/peer.html",
+    "tests/test_api_contract.py",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/README.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-09-pool-master-model.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "New operator workflow: the pool's Hosts tab adds a host, with a compatibility preview, peer addresses, host-reported progress and needs-attention states. The page was rewritten around it, the host-local procedure kept as the recovery path, and the refusal messages, retry safety, Controller-loss behaviour and the one-way limitation documented. The Verification section states plainly that the Controller workflow has not been walked through natively or in a browser.",
+    "pages": [
+      "docs/guide/join-a-pool.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "Three Controller routes (POST and GET /api/v1/pools/{id}/members, GET /api/v1/pools/{id}/join-candidates), the pool-join command kind, the pool_requests/pool_results report-envelope fields, inventory managed.join, the pool-join-v1 capability, the host-local GET /api/local/v1/pool, and a changed POST /api/local/v1/pool/join response that reports the staged-join result instead of a conflict after a successful join. The peer join redemption now binds the CSR at first redemption for an unbound invitation, preserving the existing same-offer-same-certificate replay rule. Both sides, authentication, authorization, validation, errors, asynchronous results, safe retry, outage behaviour and version gating are implemented in this slice. Three reference statements were corrected after the six Controller defects found reviewing this slice: a bare HTTPS origin now accepts and normalises a single trailing slash, so the slashed and unslashed spellings are the same request for exact-retry replay (BUG-0324); the invitation scrub runs on Controller start and at the top of all three pool-join routes, which closes the residual risk the reference previously stated (BUG-0323); and a failed master result carrying no message becomes 409 \"the pool master refused to issue a join invitation\" (BUG-0321), with a request abandoned by a disconnecting client answered 499 and safe to retry with the same request_id (BUG-0322). The 499 response and the normalisation rule are recorded in docs/api/openapi.json as well as docs/API.md. Amended 2026-09-19 by the closure sweep: the projection this route's sibling GET serves has grown with later slices, and the reference now documents the corrected member-own freshness rule, the seven-entry checks list and the pool-level master_seen_at, promotion and last_promotion fields; those additions are owned by docs/changes/2026-09-19-pool-promotion-rejoin.json. The reference statement that joining is one-way in this release is removed: an eject, a master change and a fence-verified promotion all exist now. Amended 2026-09-19: no route or payload changed. Behaviour within this contract: a pool-join result can report needs_attention where it reported failed at the admission stage, an uncollected expired join appears on GET /api/v1/operations as a failed operation with its own sentence rather than being redelivered with empty fields, and POST /api/v1/agent/enroll accepts one further evidence shape so a member-first Controller replacement can enrol the real master.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/local-openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/api/index.html",
+      "docs/api/local.html",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase 4 stays in progress and no milestone item moves to built: the slice has unit and contract evidence only, and its native two-host and browser acceptance are outstanding. The board separates built from in testing, so it still describes the project accurately.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Every durable record is written by Nex Core. Nex Controller keeps only its own operation, managed-resource and audit rows for the request it relayed, and computes no membership.",
+    "record": "The pool master's pool-peer.json holds the membership rows (including each member's peer_origin, and the master's own peer_origin recorded from the first invitation) and the one-use join offer table; the joining host's pool-peer.json holds its pending-join record (operation, master URL, pool CA, invitation, peer origin, stage, attempts) beside its pool key. A fresh Controller recovers both from reported inventory: managed.membership for the pool and its members, and managed.join for an interrupted join, with the host-owned pool, host and member identities and names unchanged and nothing for an operator to re-enter. The invitation and pool CA held in the relayed command row are delivery data, not state: they are scrubbed once the operation leaves queued and unconditionally after 15 minutes.",
+    "notes": "Amended 2026-09-19 by the review-fix batch (docs/changes/2026-09-19-phase4-review-fixes.json): BUG-0337 (an invitation outlived its window in the Controller database after a restart, now swept from the health tick at most once a minute, in memory only), BUG-0338 (a scrubbed pool-join was redelivered empty; an uncollected expired one is now failed terminally), BUG-0348 (a join reported failed while the master already held a ready membership row), BUG-0349 (the host-local path destroyed a Controller-driven join record) and BUG-0350 (the invitation stayed at rest on the joining host, and is now cleared once the admission stage completes). No durable Controller state was added: the sweep timestamp is in memory and is re-earned after a restart."
+  },
+  "verification": {
+    "method": "Go unit tests (go test -race on internal/agent, internal/protocol, internal/localcore, internal/vmhost and internal/controller) covering the master invitation, CSR binding at first redemption and the replay rule, the staged join resumed from every persisted stage, the precheck refusals, concurrent joins, the broker round trip and deadline, the refusal matrix with exact-retry replay, and both projections; the UI component suite (npm run typecheck, npm test) including the stale-master unknown state; and offline contract checks (python3 -m unittest tests.test_api_contract.PoolJoinContractTests, 7 tests, OK) asserting the routes, request and projection shapes, the documented refusal strings against the handler literals, the absence of the invitation from every response schema, the command kind and routing, the invitation lifetime and the host-local view. Documentation gate: python3 scripts/check_docs.py --worktree. NOT executed and recorded as outstanding: a native two-host join driven from the Controller, and a browser/360 px review of the Hosts tab, both deferred to the Phase 4 native acceptance slice; tests/integration/pool_join_browser.py is not yet written. The six defects found in review (BUG-0319 to BUG-0324) each have a regression test in internal/controller/pooljoin_fixes_test.go, every one observed failing first by reverting its fix in place: go test -race -count=1 ./internal/controller passes with them (re-run by the documentation lane; all six named tests PASS). Both the GitHub and Gitea foundation workflows execute them, because each runs go test -race -timeout 20m ./... on pushes and pull requests.",
+    "evidence": [
+      "internal/agent/pool_join_test.go",
+      "internal/controller/pooljoin_test.go",
+      "internal/localcore/pool_join_test.go",
+      "web/src/pool-members.test.mjs",
+      "tests/test_api_contract.py",
+      "docs/guide/join-a-pool.md",
+      "docs/plans/2026-09-19-phase4-closure.md",
+      "internal/controller/pooljoin_fixes_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

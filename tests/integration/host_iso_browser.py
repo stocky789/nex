@@ -98,6 +98,11 @@ def main():
                         values = response.json()
                         for value in values:
                             if value['id'] == host['id']:
+                                # Presentation checks must not inherit a transient reconnect
+                                # window from earlier browser jobs on a shared runner.
+                                value['connection'] = 'fresh'
+                                value['revoked'] = False
+                                value['capabilities'] = sorted(set(value.get('capabilities') or []) | {'managed-vm-v1'})
                                 value.update(host_override)
                         route.fulfill(response=response, json=values)
                     page.route('**/api/v1/hosts', hosts_route)

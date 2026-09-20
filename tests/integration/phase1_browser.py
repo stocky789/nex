@@ -300,6 +300,49 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         capture('toolbar-new-vm')
         page.get_by_role('button', name='Close', exact=True).click()
         lab.passed('browser fixed toolbar: greyed VM power buttons with reasons, Back/Forward history, contextual New VM opening the pool wizard')
+        # An accepted create may include Core's advisory placement warning.  The create itself and
+        # its observations are fixture responses: neither request reaches the disposable agent.
+        warning_storage = {'id': 'warning-storage', 'pool_id': pool_id, 'host_id': host_id, 'name': 'Warning storage',
+                           'operation_id': '', 'status': 'succeeded', 'kind': 'local', 'path': '/fixture',
+                           'access': {'status': 'healthy', 'readable': True, 'writable': True}, 'capabilities': {'vm_disk': True}}
+        warning_network = {'id': 'warning-network', 'pool_id': pool_id, 'host_id': host_id, 'name': 'Warning network',
+                           'operation_id': '', 'status': 'succeeded', 'kind': 'bridge', 'source': 'br0'}
+        warning_operation = [{'id': 'warning-create', 'host_id': host_id, 'kind': 'vm-create', 'request_id': 'warning-create',
+                              'status': 'queued', 'actor': 'operator', 'created_at': '2026-09-20T00:00:00Z', 'updated_at': '2026-09-20T00:00:00Z'}]
+        page.route('**/api/v1/pools/*/members', lambda route: route.fulfill(json={
+            'authoritative': True, 'members': [{'host_id': host_id, 'maintenance': False}],
+        }))
+        page.route('**/api/v1/storage', lambda route: route.fulfill(json=[warning_storage]))
+        page.route('**/api/v1/networks', lambda route: route.fulfill(json=[warning_network]))
+        page.route('**/api/v1/operations', lambda route: route.fulfill(json=warning_operation))
+        page.route('**/api/v1/vms', lambda route: route.fulfill(status=202, json={
+            'vm_id': 'warning-vm', 'operation': {'id': 'warning-create'}, 'warnings': ['Placement warning from Core fixture'],
+        }) if route.request.method == 'POST' else route.continue_())
+        refresh_route('pools/' + pool_id)
+        tabs.get_by_role('button', name='Virtual machines', exact=True).click()
+        page.get_by_role('button', name='Create VM', exact=True).click()
+        page.get_by_label('VM name').fill('Warning fixture')
+        page.get_by_label('Placement host').select_option(host_id)
+        page.get_by_role('button', name='Next', exact=True).click()
+        page.get_by_label('CPU model').select_option('host-passthrough')
+        page.get_by_role('button', name='Next', exact=True).click()
+        page.get_by_role('group', name='Disk 1').get_by_label('Storage').select_option('warning-storage')
+        page.get_by_role('button', name='Next', exact=True).click()
+        page.get_by_role('group', name='Network interface 1').get_by_role('button', name='Remove network interface 1', exact=True).click()
+        for _ in range(2): page.get_by_role('button', name='Next', exact=True).click()
+        page.get_by_role('region', name='Create VM').get_by_role('button', name='Create stopped VM', exact=True).click()
+        warning = page.get_by_text('Placement warning from Core fixture', exact=False)
+        expect(warning).to_be_visible()
+        assert page.evaluate('location.hash') == '#/vms/warning-vm/warning-create', 'accepted create must navigate to its task route'
+        warning_operation[0]['status'] = 'succeeded'
+        toolbar.get_by_role('button', name='Refresh view', exact=True).click()
+        expect(warning).not_to_be_visible()
+        page.unroute('**/api/v1/vms')
+        page.unroute('**/api/v1/operations')
+        page.unroute('**/api/v1/networks')
+        page.unroute('**/api/v1/storage')
+        page.unroute('**/api/v1/pools/*/members')
+        lab.passed('browser intercepted VM create keeps Core placement warning through its task-route hashchange and clears it only after the task is terminal')
         # Simulated VM on the real host: the toolbar power group, its confirmation dialog and the
         # rejected/accepted request paths are exercised without a guest. Labeled simulation.
         fixture_vm = {'id': 'fixture-vm', 'pool_id': pool_id, 'host_id': host_id, 'name': 'Toolbar fixture', 'operation_id': '',
@@ -310,6 +353,12 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
             hosts = route.fetch().json()
             for h in hosts:
                 h['capabilities'] = sorted(set(h.get('capabilities') or []) | {'vm-power-v1', 'vm-power-queue-v1'})
+                # This block is a simulated power UI against a fixture VM. Keep the real
+                # host's inventory, but do not inherit a transient stale/reconnect window
+                # left by earlier controller restart or cert-rotation steps in this lab.
+                if h.get('id') == host_id:
+                    h['connection'] = 'fresh'
+                    h['revoked'] = False
             route.fulfill(json=hosts)
         page.route('**/api/v1/hosts', with_power)
         power_requests = []
@@ -528,6 +577,51 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
             capture(tab_name.lower() + '-360')
         tabs.get_by_role('button', name='General', exact=True).click()
         assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), '360px page overflow'
+
+        # U7/U10: Core owns CIDR validation; the UI only projects the refusal. Keep this
+        # browser-only fixture at the API boundary: no host configuration is submitted or changed.
+        network_route = '**/api/v1/hosts/*/network'
+        network_spec = {'interfaces': [
+            {'name': 'ens3', 'mac': '52:54:00:12:34:56', 'mode': 'static', 'address': '192.0.2.20/24', 'gateway': '192.0.2.1', 'management': True},
+            {'name': 'ens4', 'mac': '52:54:00:12:34:57', 'mode': 'disabled'},
+        ], 'dns': ['192.0.2.53']}
+        network_nics = [
+            {'name': 'ens3', 'mac': '52:54:00:12:34:56', 'kind': 'physical', 'addresses': ['192.0.2.10/24'], 'state': 'up'},
+            {'name': 'ens4', 'mac': '52:54:00:12:34:57', 'kind': 'physical', 'addresses': [], 'state': 'up'},
+        ]
+        network_cidr_error = 'interface ens3 needs a usable IPv4 address in CIDR form, for example 192.0.2.10/24'
+
+        def network_view(state, record):
+            return {'host_id': host_id, 'hostname': 'browser-host', 'connection': 'fresh', 'supported': True,
+                    'state': state, 'management_network': record, 'nics': network_nics, 'check': None}
+
+        def network_fixture(route):
+            if route.request.method == 'POST':
+                route.fulfill(status=400, json={'error': network_cidr_error})
+                return
+            route.fulfill(json=network_view('none', None))
+
+        page.route(network_route, network_fixture)
+        tabs.get_by_role('button', name='Networking', exact=True).click()
+        page.locator('#mode-ens3').select_option('static')
+        page.locator('#address-ens3').fill('192.0.2.999/24')
+        page.get_by_role('button', name='Stage this configuration').click()
+        expect(page.get_by_role('alert')).to_contain_text('interface ens3 needs a usable IPv4 address in CIDR form')
+        assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), '360px management-network validation overflow'
+        capture('management-network-validation-360')
+        page.unroute(network_route)
+
+        rolled_back = network_view('rolled-back', {'revision': 4, 'stage': 'rolled-back', 'operation_id': 'browser-rollback',
+            'spec': network_spec, 'requested_rollback': True, 'last_error': 'rolled back at operator request'})
+        page.route(network_route, lambda route: route.fulfill(json=rolled_back))
+        tabs.get_by_role('button', name='General', exact=True).click()
+        tabs.get_by_role('button', name='Networking', exact=True).click()
+        expect(page.get_by_role('status')).to_contain_text('because you asked it to')
+        assert not page.get_by_text('Host check management-network', exact=False).count()
+        assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), '360px requested management-network rollback overflow'
+        capture('management-network-rollback-360')
+        page.unroute(network_route)
+
         page.keyboard.press('Control+Home')
         page.get_by_role('link', name='Skip to content').focus()
         page.keyboard.press('Enter')

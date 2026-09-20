@@ -726,3 +726,57 @@ func TestVerifyRemoteMountReportsUnmountedParent(t *testing.T) {
 		t.Fatalf("unmounted path error = %v", err)
 	}
 }
+
+// S7-2: a repository whose backing filesystem was swapped out of band leaves every client
+// with a stale NFS handle while the generated mount unit is still active, so recheck could
+// only report "storage mountpoint is unavailable" for ever and recovery needed an
+// out-of-band umount on every host. Recheck now cycles the unit, but only when nothing on
+// this host is using the repository.
+func TestRecheckRepairsAStaleRemoteMountOnlyWhenNothingUsesIt(t *testing.T) {
+	repo := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: "host-1", Name: "shared", Generation: 1,
+		Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/exports"}}}
+	unitRoot := t.TempDir()
+	setForTest(t, &storageUnitRoot, unitRoot)
+	_, unitPath := remoteUnitPath(repo)
+	if err := os.WriteFile(unitPath, []byte(nexMountMarker+"[Mount]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	setForTest(t, &storageMountStale, func(string) bool { return true })
+	var ran [][]string
+	setForTest(t, &nativeRun, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		ran = append(ran, append([]string{name}, args...))
+		return nil, nil
+	})
+	js := []managedJournal{{Command: protocol.Command{OperationID: "reg", Kind: "storage-register", Storage: &repo}, Result: protocol.Result{OperationID: "reg", Status: "succeeded"}}}
+	if err := repairStaleRemoteMount(context.Background(), js, repo); err != nil {
+		t.Fatalf("repair of an unused stale mount: %v", err)
+	}
+	if len(ran) != 1 || ran[0][1] != "restart" {
+		t.Fatalf("recheck did not cycle the mount unit: %v", ran)
+	}
+	// A VM disk on the repository: nothing automatic, and the refusal names the dependency.
+	vm := managedTestVM()
+	vm.Disks = []protocol.VMDisk{{StorageID: repo.ID, Name: "system", SizeGiB: 1, Bus: "virtio", BootOrder: 1}}
+	js = append(js, managedJournal{Command: protocol.Command{OperationID: "vm", Kind: "vm-create", VM: &vm}, Result: protocol.Result{OperationID: "vm", Status: "succeeded"}})
+	ran = nil
+	err := repairStaleRemoteMount(context.Background(), js, repo)
+	if err == nil || !strings.Contains(err.Error(), "VM "+vm.ID) || !strings.Contains(err.Error(), "stale file handle") {
+		t.Fatalf("repair with a VM on the repository = %v", err)
+	}
+	if len(ran) != 0 {
+		t.Fatalf("a repository in use was remounted anyway: %v", ran)
+	}
+	// A mount that is not stale is never touched, and neither is an administrator's unit.
+	ran = nil
+	setForTest(t, &storageMountStale, func(string) bool { return false })
+	if err := repairStaleRemoteMount(context.Background(), js[:1], repo); err != nil || len(ran) != 0 {
+		t.Fatalf("a healthy mount was repaired: %v %v", err, ran)
+	}
+	setForTest(t, &storageMountStale, func(string) bool { return true })
+	if err := os.WriteFile(unitPath, []byte("[Mount]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := repairStaleRemoteMount(context.Background(), js[:1], repo); err != nil || len(ran) != 0 {
+		t.Fatalf("an administrator's mount unit was restarted: %v %v", err, ran)
+	}
+}

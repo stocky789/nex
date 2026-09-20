@@ -51,39 +51,50 @@ func VerifyStorageClusterFence(ctx context.Context, stateDir string, c protocol.
 		proof.Status, proof.Error = "failed", "configured fence target was refused"
 		return proof, err
 	}
-	proof.TargetID = node.Fence.TargetID
 	proof.ConfigGeneration = c.Generation
 	proof.ConfigDigest = protocol.StorageClusterFenceConfigDigest(c)
-	if node.Fence.Kind == protocol.FenceSCSIPR {
-		proof.Status, proof.Error = "failed", "SCSI persistent-reservation fencing is unsupported"
-		return proof, errors.New(proof.Error)
+	// A configured storage cluster node must be found powered on first: that is what
+	// distinguishes a fence device that actually controls this node from one reporting
+	// "off" for a target that was never there.
+	err = verifyFence(ctx, stateDir, node.Fence, &proof, true)
+	return proof, err
+}
+
+// verifyFence is the one native fencing discipline, shared by clustered storage and by a
+// pool promotion. It refuses every profile that cannot independently prove target identity
+// and exclusion, performs the power-off, and then confirms the power-off by a separate
+// observation. It never accepts a caller-supplied result, and its caller must persist the
+// proof it fills in before acting on it.
+func verifyFence(ctx context.Context, stateDir string, f protocol.StorageClusterFence, proof *protocol.StorageClusterFenceStatus, requirePoweredOn bool) error {
+	proof.TargetID = f.TargetID
+	// One predicate decides which profiles this build can ever prove anything with, so a
+	// host cannot record a profile that would silently never work, and a restarted master
+	// can ask the same question about itself without running a fence.
+	if err := PoolFenceUsable(&f); err != nil {
+		proof.Status, proof.Error = "failed", err.Error()
+		return err
 	}
-	if node.Fence.Kind == protocol.FenceRedfish || node.Fence.Kind == protocol.FenceIPMI {
-		proof.Status, proof.Error = "failed", "BMC fencing identity verification is not implemented"
-		return proof, errors.New(proof.Error)
-	}
-	if node.Fence.Kind == protocol.FenceVirsh && !uuidPattern.MatchString(node.Fence.TargetID) {
-		proof.Status, proof.Error = "failed", "virsh fencing needs an immutable domain UUID target"
-		return proof, errors.New(proof.Error)
-	}
-	if node.Fence.Kind == protocol.FenceVirsh && !virshTargetIdentity(ctx, stateDir, node.Fence) {
+	if f.Kind == protocol.FenceVirsh && !virshTargetIdentity(ctx, stateDir, f) {
 		proof.Status, proof.Error = "failed", "virsh target identity was not independently confirmed"
-		return proof, errors.New(proof.Error)
+		return errors.New(proof.Error)
 	}
-	if err := fenceTargetOn(ctx, stateDir, node.Fence); err != nil {
-		proof.Status, proof.Error = "failed", "configured target was not confirmed powered on"
-		return proof, errors.New(proof.Error)
+	if requirePoweredOn {
+		if err := fenceTargetOn(ctx, stateDir, f); err != nil {
+			proof.Status, proof.Error = "failed", "configured target was not confirmed powered on"
+			return errors.New(proof.Error)
+		}
 	}
-	if err := fenceTargetOff(ctx, stateDir, node.Fence); err != nil {
+	if err := fenceTargetOff(ctx, stateDir, f); err != nil {
 		proof.Status, proof.Error = "failed", "native fence action did not complete"
-		return proof, errors.New(proof.Error)
+		return errors.New(proof.Error)
 	}
-	if err := fenceTargetExcluded(ctx, stateDir, node.Fence); err != nil {
+	if err := fenceTargetExcluded(ctx, stateDir, f); err != nil {
 		proof.Status, proof.Error = "uncertain", "target exclusion was not independently confirmed"
-		return proof, errors.New(proof.Error)
+		return errors.New(proof.Error)
 	}
 	proof.Status, proof.ExclusionVerified, proof.ObservedAt = "passed", true, storageFenceNow().UTC()
-	return proof, nil
+	proof.Error = ""
+	return nil
 }
 
 func fenceTargetOn(ctx context.Context, stateDir string, f protocol.StorageClusterFence) error {

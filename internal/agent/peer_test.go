@@ -9,8 +9,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"nex.local/nex/internal/protocol"
 )
 
 func peerStore(t *testing.T, host, pool string) *Store {
@@ -116,6 +121,62 @@ func TestPoolPeerJoinRecoversLostResponse(t *testing.T) {
 	body, _ := io.ReadAll(response.Body)
 	if response.StatusCode != http.StatusOK || string(body) != "ok" {
 		t.Fatalf("authenticated peer = %d %q", response.StatusCode, body)
+	}
+}
+
+// An ejected row is historical membership, not a permanent ban on the host identity. Once
+// that Core has become the master of its own pool, a new invitation must replace the old
+// certificate with a ready row instead of making the host unrejoinable.
+func TestEjectedMemberCanRejoinWithANewCertificate(t *testing.T) {
+	master := peerStore(t, "master-1", "pool-1")
+	if err := EnsurePoolMembership(master); err != nil {
+		t.Fatal(err)
+	}
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(master)
+	if err == nil {
+		state.Membership.Generation++
+		for i := range state.Membership.Members {
+			state.Membership.Members[i].Generation = state.Membership.Generation
+		}
+		state.Membership.Members = append(state.Membership.Members, protocol.PoolMember{HostID: "member-1", CertificateSHA256: strings.Repeat("a", 64), Generation: state.Membership.Generation, Status: "ejected"})
+		err = savePoolPeer(master, state)
+	}
+	poolPeerMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := peerStore(t, "member-1", "new-pool")
+	if err := EnsurePoolMembership(member); err != nil {
+		t.Fatal(err)
+	}
+	invitation, err := CreatePoolJoinInvitation(master, "https://master.example.test", member.State.HostID)
+	if err != nil {
+		t.Fatalf("invitation for ejected member: %v", err)
+	}
+	csr, err := PoolJoinCSR(member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	offer, err := decodePeerOffer(invitation.Invitation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = acceptPeerJoin(master, peerJoinRequest{Offer: offer.Token, HostID: member.State.HostID, CSRPEM: csr}); err != nil {
+		t.Fatalf("rejoin after eject: %v", err)
+	}
+	state, err = loadPoolPeer(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var matches []protocol.PoolMember
+	for _, candidate := range state.Membership.Members {
+		if candidate.HostID == member.State.HostID {
+			matches = append(matches, candidate)
+		}
+	}
+	if len(matches) != 1 || matches[0].Status != "ready" || matches[0].CertificateSHA256 == strings.Repeat("a", 64) {
+		t.Fatalf("rejoined membership row = %#v", matches)
 	}
 }
 
@@ -335,6 +396,10 @@ func TestStorageClusterMemberVerifyPathsAcceptOnlyCurrentMaster(t *testing.T) {
 
 func TestPoolRehomeResumes(t *testing.T) {
 	s := peerStore(t, "member-1", "old-pool")
+	vm := poolVMTestSpec("11111111-1111-4111-8111-111111111111", s.State.HostID)
+	if err := savePoolVMs(s, poolVMState{VMs: map[string]poolVMRecord{vm.ID: {PoolID: "old-pool", VMID: vm.ID, HostID: s.State.HostID, Spec: *vm}}, Inventory: map[string]poolVMInventory{s.State.HostID: {HostID: s.State.HostID, Generation: 1, VMs: []protocol.VMCreateSpec{*vm}}}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := savePoolPeer(s, poolPeerState{PendingRehome: &poolRehome{PoolID: "new-pool", PoolName: "New Pool"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -347,6 +412,117 @@ func TestPoolRehomeResumes(t *testing.T) {
 	state, err := loadPoolPeer(s)
 	if err != nil || state.PendingRehome != nil {
 		t.Fatalf("pending rehome = %#v, %v", state.PendingRehome, err)
+	}
+	vms, err := loadPoolVMs(s)
+	if err != nil || len(vms.VMs) != 0 || len(vms.Inventory) != 0 {
+		t.Fatalf("former pool VM authority survived rehome: %#v, %v", vms, err)
+	}
+}
+
+// A deleted VM can leave an old solo pool's owner projection behind.  Joining another
+// pool must discard that projection before it can be copied into a signed replica and
+// later adopted by a promoted member.
+func TestPoolRehomeDoesNotResurrectDeletedSoloVMOnPromotion(t *testing.T) {
+	const vmID = "11111111-1111-4111-8111-111111111111"
+	master, member := peerStore(t, "master-1", "pool-1"), peerStore(t, "member-1", "solo-1")
+	for _, store := range []*Store{master, member} {
+		if err := EnsurePoolMembership(store); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(member.dir, "managed-vms"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	stale := *poolVMTestSpec(vmID, member.State.HostID)
+	stale.PoolID, stale.Revision = member.State.PoolID, 1
+	writeManagedJournal(t, filepath.Join(member.dir, "managed-vms"), "create", protocol.Command{OperationID: "create", Kind: "vm-create", VM: &stale})
+	writeManagedJournal(t, filepath.Join(member.dir, "managed-vms"), "delete", protocol.Command{OperationID: "delete", Kind: "vm-delete", Delete: &protocol.VMDeleteRequest{VMID: stale.ID, PoolID: stale.PoolID, HostID: stale.HostID}})
+	if err := savePoolVMs(member, poolVMState{VMs: map[string]poolVMRecord{vmID: {PoolID: stale.PoolID, VMID: vmID, HostID: member.State.HostID, State: "stopped", Epoch: 2, Spec: stale}}, Inventory: map[string]poolVMInventory{member.State.HostID: {HostID: member.State.HostID, Generation: 1, Deleted: []string{vmID}}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	csr, err := PoolJoinCSR(member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = CreatePoolJoinOffer(master, "https://master.example.test", member.State.HostID, csr); err != nil {
+		t.Fatal(err)
+	}
+	config, err := PoolPeerTLSConfig(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	masterServer := httptest.NewUnstartedServer(PoolPeerHandler(master))
+	masterServer.TLS = config
+	masterServer.StartTLS()
+	t.Cleanup(masterServer.Close)
+	ca, offer, err := CreatePoolJoinOffer(master, masterServer.URL, member.State.HostID, csr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = JoinPoolPeer(context.Background(), member, masterServer.URL, ca, offer); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := loadPoolVMs(member); err != nil || len(got.VMs) != 0 || len(got.Inventory) != 0 {
+		t.Fatalf("solo VM authority survived join: %#v, %v", got, err)
+	}
+	// The completed rehome is safe to repeat after a lost caller response.
+	if err = ResumePoolRehome(context.Background(), member); err != nil {
+		t.Fatalf("resumed join = %v", err)
+	}
+
+	serveMemberPeer(t, master, member)
+	setMemberPeerOrigin(t, master, master.State.HostID, masterServer.URL)
+	destination := labOwnedVM(vmID, master.State.HostID)
+	writePoolVMRecord(t, master, destination)
+	writeLabFenceCredential(t, master, labFenceProfile().CredentialRef, labFenceIdentity)
+	if result := ExecutePoolFenceProfile(master, fenceProfileCommand("fence-profile", master.State.HostID, master.State.HostID, labFenceProfile())); result.Status != "succeeded" {
+		t.Fatalf("fence profile = %#v", result)
+	}
+	if err = PushPoolAuthorityReplicas(context.Background(), master, 10*time.Second); err != nil {
+		t.Fatalf("signed replica = %v", err)
+	}
+	if replica := storedReplica(t, member); replica == nil || !strings.Contains(string(replica.Replica.VMs), vmID) || strings.Contains(string(replica.Replica.VMs), `"host_id":"member-1"`) {
+		t.Fatalf("replica did not preserve only destination authority: %#v", replica)
+	}
+
+	masterServer.Close() // The promotion preflight must treat the old master as fenced off.
+	fakeFence(t, observedPowerOff(0))
+	if result := ExecutePoolPromotion(context.Background(), member, promoteCommand("rehome-promotion", member.State.HostID)); result.Status != "succeeded" {
+		t.Fatalf("promotion = %#v", result)
+	}
+	adopted := poolVMRecords(t, member)
+	gotJSON, _ := json.Marshal(adopted[vmID])
+	wantJSON, _ := json.Marshal(destination)
+	if len(adopted) != 1 || string(gotJSON) != string(wantJSON) {
+		t.Fatalf("promotion resurrected solo authority instead of destination authority: %#v", adopted)
+	}
+}
+
+func TestPoolRehomeCancellationKeepsMarkerForRetry(t *testing.T) {
+	s := peerStore(t, "member-1", "old-pool")
+	if err := savePoolPeer(s, poolPeerState{PendingRehome: &poolRehome{PoolID: "new-pool", PoolName: "New Pool"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(poolVMFile(s), []byte("not JSON"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := ResumePoolRehome(ctx, s); err != context.Canceled {
+		t.Fatalf("cancelled rehome = %v, want context cancellation", err)
+	}
+	if state := peerState(t, s); state.PendingRehome == nil {
+		t.Fatal("failed rehome cleared its retry marker")
+	}
+	if err := savePoolVMs(s, poolVMState{VMs: map[string]poolVMRecord{}, Inventory: map[string]poolVMInventory{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ResumePoolRehome(context.Background(), s); err != nil {
+		t.Fatalf("rehome retry = %v", err)
+	}
+	if state := peerState(t, s); state.PendingRehome != nil {
+		t.Fatalf("rehome marker after successful retry = %#v", state.PendingRehome)
 	}
 }
 

@@ -83,32 +83,37 @@
       ]
     },
     {
-      status: "testing",
+      status: "shipped",
       title: "More than one host, and shared storage",
       summary:
-        "A pool that spans hosts, with storage they can all reach and honest placement rules.",
+        "A pool that spans hosts, with storage they can all reach and honest placement rules. Phase 4 closed 2026-09-20 for disposable virtual-lab scope; permanent physical, five-host and package-install limits remain documented.",
       done: [
         "Joining another host to an existing pool as a member under its master; the master keeps the membership, and a join with a lost reply is safe to retry",
         "Storage repositories owned by Nex Core: local directories, existing OpenZFS datasets and single-host iSCSI LUNs stay with the host that owns them, while NFS and SMB3 storage is shared across the pool",
         "Registering shared NFS or SMB3 storage once at pool level, with access, write permission, QEMU access and disk locking verified separately on every member before a VM there can use it",
         "Choosing which host a new VM is placed on, with only the storage, networks and ISOs that host has validated on offer",
         "A fixed CPU definition discovered from every current pool member and saved with each VM, with manual CPU choices still available — shipped in 0.3.1; native runtime and simulated browser checks passed, physical mixed-host testing and live migration remain open",
-        "VMs on several hosts writing to the same NFS or SMB3 storage at once, with disk locks refusing a second writer of the same disk — passed in bounded three-host lab tests with no injected faults"
+        "VMs on several hosts writing to the same NFS or SMB3 storage at once, with disk locks refusing a second writer of the same disk — passed in bounded three-host lab tests with no injected faults",
+        "Joining a host to a pool from Nex Controller — reviewed G1 evidence covers repeated join/eject lifecycle, missing-uplink failure, autonomous recovery and cleanup (disposable lab, 2026-09-20)",
+        "After join, members pull the master's pool-wide guest VLANs and ISO library entries, materialize them locally and report per-host status — bounded missing-uplink recovery evidence",
+        "Changing the pool master and ejecting a member, including one that cannot be reached — scoped native and browser evidence; identities preserved",
+        "Every member keeps a signed, versioned copy of the master's pool records — reviewed lifecycle evidence",
+        "Manual master recovery through fence-verified promotion — scoped disposable-lab evidence; OD-6 strict unreachable-member rule confirmed",
+        "Restricted hosts: boot-time refusal, autostart suppression, rejoin and post-clear start/stop — reviewed S6-14 evidence",
+        "Remote management-network edits with staged apply and rollback — reviewed G3 and S3 subset evidence",
+        "Maintenance mode: enter, stop, refused start and exit — reviewed G2 browser evidence",
+        "Phase 4 gate closed for disposable virtual-lab scope on 2026-09-20"
       ],
       open: [
-        "A Controller screen for joining a host to a pool; today the join runs through each host's local interface",
-        "Implemented in development: after join, members pull the master's pool-wide guest VLANs and ISO library entries that live on shared storage, materialize them locally and report per-host status — unit and peer checks passed; a full two-host native walkthrough remains open",
-        "Changing which host is the master, and ejecting a member — one authority handover design with its own safety checks",
-        "Every member keeps a signed, versioned copy of the master's pool records, so a surviving member can become master without losing VM ownership, membership or storage settings",
-        "Manual master recovery first: select a surviving member, verify the old master is fenced, and preserve the same pool, VM and repository identities",
-        "The old master automatically rejoins as a member only after authority and VM ownership are reconciled; stale starts and duplicate writers stay blocked",
-        "Automatic master succession later: requires a quorum majority and verified fencing; it is separate from VM restart and return policies",
-        "Master approval of VM placement: implemented for development; native multi-host fault and recovery acceptance remains open",
-        "Clustered iSCSI storage shared by several hosts with fencing: built for development and not yet for real use",
-        "ZFS provisioning from selected disks, on one host or locally on every pool host: in development; external image delivery and master-change acceptance remain open",
-        "Fault testing that proves a host which stopped reporting never leads to a second writer: failed fencing, network partitions, lost quorum, larger pools, long-running load and physical storage",
-        "Editing a host's own management networking remotely, with staged apply and automatic rollback if management access is lost — guest VLAN copy-on-join is separate and covered by unit and peer checks; its native two-host walkthrough remains open",
-        "Maintenance mode, which blocks new placements and reports what is still running on the host"
+        "Physical/BMC fencing and five-host scale — not claimed for disposable virtual-lab acceptance",
+        "Package-installed libvirt hook and AppArmor enforcement — lab overlay only so far",
+        "Authentic owner-conflict S6-12/16 fixture — unavailable; contradictory-owner subcase not exercised",
+        "Broader duplicate-writer, workload-continuity and fault-matrix evidence — permanent limits for this lab class",
+        "Automatic master succession: requires quorum majority and verified fencing; separate from VM restart policies",
+        "Master-owned VM placement: native multi-host fault and recovery acceptance remains open",
+        "Clustered iSCSI storage shared by several hosts with fencing: built for development, not yet for real use",
+        "ZFS provisioning from selected disks: in development; external image delivery remains open",
+        "G2 maintenance reboot/autostart walkthrough and remaining browser coverage for transfer/recovery views"
       ]
     },
     {

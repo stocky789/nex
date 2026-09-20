@@ -52,7 +52,7 @@ func WritePoolVMStartPermitAdmission(stateDir, poolID, hostID, vmID string, epoc
 	if err := os.Chmod(dir, 0700); err != nil {
 		return err
 	}
-	bootID, err := localBootID()
+	bootID, err := readKernelBootID()
 	if err != nil {
 		return err
 	}
@@ -76,13 +76,7 @@ func WritePoolVMStartPermitAdmission(stateDir, poolID, hostID, vmID string, epoc
 	return atomicWrite(poolVMStartPermitPath(stateDir, vmID), b)
 }
 
-func localBootID() (string, error) {
-	b, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
-	if err != nil || !uuidPattern.MatchString(strings.TrimSpace(string(b))) {
-		return "", errors.New("local boot identity is unavailable")
-	}
-	return strings.TrimSpace(string(b)), nil
-}
+var poolHostBootID = readKernelBootID
 func RemovePoolVMStartPermit(stateDir, vmID string) error {
 	if !uuidPattern.MatchString(vmID) {
 		return errors.New("invalid pool VM identity")
@@ -110,7 +104,7 @@ func consumePoolVMStartPermit(stateDir, vmID string) error {
 		return errors.New("managed shared VM startup lacks a Core execution permit")
 	}
 	var p poolVMStartPermit
-	bootID, bootErr := localBootID()
+	bootID, bootErr := readKernelBootID()
 	if json.Unmarshal(b, &p) != nil || p.PoolID == "" || p.HostID == "" || p.VMID != vmID || p.Epoch == 0 || len(p.Permit) != 64 || bootErr != nil || p.BootID != bootID {
 		return errors.New("managed shared VM execution permit is invalid")
 	}
@@ -121,6 +115,170 @@ func consumePoolVMStartPermit(stateDir, vmID string) error {
 	var admission poolVMStartPermit
 	if json.Unmarshal(current, &admission) != nil || admission.PoolID != p.PoolID || admission.HostID != p.HostID || admission.VMID != p.VMID || admission.Epoch != p.Epoch || admission.BootID != p.BootID {
 		return errors.New("managed shared VM execution permit is stale")
+	}
+	return nil
+}
+
+const poolStateJSONLimit = 1 << 22
+const poolReplicaFileName = "pool-replica.json"
+
+type poolReplicaRecord struct {
+	Replica  protocol.PoolAuthorityReplica `json:"replica"`
+	Verified bool                          `json:"verified"`
+}
+
+func readPoolStateFile(stateDir, name string) ([]byte, error) {
+	b, err := os.ReadFile(filepath.Join(stateDir, name))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, os.ErrNotExist
+	}
+	if err != nil || len(b) > poolStateJSONLimit {
+		return nil, errors.New("unreadable")
+	}
+	return b, nil
+}
+
+// poolHostRestricted reads this Core's own durable pool authority state and refuses a
+// managed VM start while this host is restricted. It is deliberately a read of the
+// one record that decides it, not a copy kept for this hook: a mirror could be stale in
+// exactly the direction that starts a second writer. A record that cannot be read at all
+// fails closed; a host that is in no pool has no record and is unaffected.
+func poolHostRestricted(stateDir string) error {
+	unreadable := errors.New("managed VM startup cannot read this host's pool authority record")
+	b, err := readPoolStateFile(stateDir, "pool-peer.json")
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return unreadable
+	}
+	var state struct {
+		Membership    protocol.PoolMembership
+		Restricted    *struct{ Reason string }
+		SelfFence     *struct{}
+		BootAuthority *struct {
+			PoolID string
+			HostID string
+			BootID string
+		}
+	}
+	if json.Unmarshal(b, &state) != nil {
+		return unreadable
+	}
+	if state.Restricted != nil {
+		reason := strings.TrimSpace(state.Restricted.Reason)
+		if len(reason) > 200 || strings.ContainsAny(reason, "\r\n\x00") {
+			reason = ""
+		}
+		if reason == "" {
+			reason = "this host cannot establish its pool's current authority"
+		}
+		return errors.New("managed VM startup is refused while this host is restricted: " + reason)
+	}
+	// A host with no durable pool membership is outside pool authority. A current member
+	// is not its master's authority writer, so existing member and single-host behavior is
+	// unchanged. The only boot race is a self-master another member could have fenced.
+	if state.Membership.PoolID == "" {
+		return nil
+	}
+	if state.Membership.Valid() != nil {
+		return unreadable
+	}
+	var identity struct {
+		HostID string `json:"host_id"`
+	}
+	identityBytes, identityErr := readPoolStateFile(stateDir, "state.json")
+	if identityErr != nil || json.Unmarshal(identityBytes, &identity) != nil || identity.HostID == "" {
+		return unreadable
+	}
+	if state.Membership.MasterHostID != identity.HostID {
+		return nil
+	}
+	readyPeer := false
+	var self *protocol.PoolMember
+	for i := range state.Membership.Members {
+		member := &state.Membership.Members[i]
+		if member.HostID == identity.HostID {
+			self = member
+		} else if member.Status == "ready" {
+			readyPeer = true
+		}
+	}
+	if !readyPeer || (state.SelfFence == nil && (self == nil || PoolFenceUsable(self.Fence) != nil)) {
+		return nil
+	}
+	bootID, bootErr := poolHostBootID()
+	if bootErr != nil || state.BootAuthority == nil || state.BootAuthority.PoolID != state.Membership.PoolID || state.BootAuthority.HostID != identity.HostID || state.BootAuthority.BootID != bootID {
+		return errors.New("managed VM startup is refused until this boot confirms its pool authority")
+	}
+	return nil
+}
+
+// poolHostDrainMembership answers with the freshest membership this host can read for a
+// maintenance check. On the master that is its own pool-peer.json record. On a member it is
+// the verified authority replica when one is present: the member's own membership copy is
+// written at join and never again, so the drain flag in it is stale.
+func poolHostDrainMembership(stateDir, hostID string, own protocol.PoolMembership) protocol.PoolMembership {
+	if own.MasterHostID == hostID {
+		return own
+	}
+	b, err := readPoolStateFile(stateDir, poolReplicaFileName)
+	if errors.Is(err, os.ErrNotExist) || err != nil {
+		return own
+	}
+	var record poolReplicaRecord
+	if json.Unmarshal(b, &record) != nil || !record.Verified {
+		return own
+	}
+	replica := record.Replica.Membership
+	if replica.PoolID != own.PoolID || replica.MasterHostID != own.MasterHostID || replica.Valid() != nil {
+		return own
+	}
+	return replica
+}
+
+// poolHostDrained refuses a managed guest's start while this host's pool record has it in
+// maintenance. It is the last gate a libvirt autostart or a direct virsh start passes, and it
+// is the only one that runs when libvirtd starts a domain before Core's agent does.
+//
+// It reads this host's identity and membership from pool-peer.json. On the pool master —
+// including every single-host pool — that membership is authoritative. On a member it also
+// reads pool-replica.json when a verified replica matches the member's pool identity, because
+// the member's own membership copy is written at join and never again. A host that is in no
+// pool is unaffected.
+func poolHostDrained(stateDir string) error {
+	unreadable := errors.New("managed VM startup cannot read this host's pool membership record")
+	var identity struct {
+		HostID string `json:"host_id"`
+	}
+	b, err := readPoolStateFile(stateDir, "state.json")
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || json.Unmarshal(b, &identity) != nil {
+		return unreadable
+	}
+	if identity.HostID == "" {
+		return nil
+	}
+	b, err = readPoolStateFile(stateDir, "pool-peer.json")
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return unreadable
+	}
+	var state struct {
+		Membership protocol.PoolMembership
+	}
+	if json.Unmarshal(b, &state) != nil || state.Membership.Valid() != nil {
+		return unreadable
+	}
+	membership := poolHostDrainMembership(stateDir, identity.HostID, state.Membership)
+	for _, member := range membership.Members {
+		if member.HostID == identity.HostID && member.Maintenance {
+			return errors.New("managed VM startup is refused while this host is in maintenance mode; take it out of maintenance before starting VMs on it")
+		}
 	}
 	return nil
 }
@@ -136,6 +294,17 @@ func StorageGuard(ctx context.Context, stateDir string, input io.Reader) error {
 	var domain domainXML
 	if err := xml.Unmarshal(b, &domain); err != nil || domain.XMLName.Local != "domain" {
 		return errors.New("invalid storage startup domain XML")
+	}
+	// A drained or restricted host starts no managed guest, whatever asked for it. Both
+	// gates run before repository work: local-storage guests never reach the shared-storage
+	// permit gate below, and they are exactly the ones libvirt brings back after a reboot.
+	if hasManagedDisk(domain) {
+		if err := poolHostDrained(stateDir); err != nil {
+			return err
+		}
+		if err := poolHostRestricted(stateDir); err != nil {
+			return err
+		}
 	}
 	js, err := NewManaged(filepath.Join(stateDir, "managed-vms")).journals()
 	if err != nil {
@@ -157,6 +326,8 @@ func StorageGuard(ctx context.Context, stateDir string, input io.Reader) error {
 		return err
 	}
 	if shared && hasManagedDisk(domain) {
+		// Shared storage also needs a one-use execution permit after its repository
+		// checks have passed. Local managed guests do not consume a shared permit.
 		if err := consumePoolVMStartPermit(stateDir, domain.UUID); err != nil {
 			return err
 		}

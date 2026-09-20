@@ -11,14 +11,9 @@
     "docs/changes/2026-09-19-version-0.3.6.json"
   ],
   "guide": {
-    "impact": "updated",
-    "pages": [
-      "docs/guide/publish-a-release.md",
-      "docs/guide/software-updates.md",
-      "docs/guide/install-nex-core.md",
-      "docs/guide/remove-pool-network-or-iso.md"
-    ],
-    "reason": "Current working version references advance from 0.3.5 to 0.3.6 so operators and maintainers read the same number the Release workflow will stamp."
+    "impact": "none",
+    "pages": [],
+    "reason": "Merged into a branch already at 0.4.0; those guide version labels were not changed in this merge commit."
   },
   "api": {
     "impact": "none",
@@ -33,10 +28,8 @@
     "reason": "Version metadata adds no durable product state."
   },
   "verification": {
-    "method": "python3 scripts/release-version.py --current --format both returned 0.3.6 0.3.6; generated notes contain the forge ZFS release fix; all release-version tests, worktree documentation gate and privacy check passed. No 0.3.6 build, tag or publication is claimed until the next Release run.",
+    "method": "Retained as historical record from main; merge into 0.4.0 verified via worktree documentation gate on the receiving branch.",
     "evidence": [
-      "scripts/release-version.py",
-      "tests/test_release_version.py",
       "CHANGELOG.md"
     ]
   }

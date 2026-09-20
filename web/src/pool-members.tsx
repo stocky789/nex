@@ -1,0 +1,593 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { heldRequestID } from "./managed";
+import { EjectDialog, MasterChangeDialog, MemberActions, ResumeDialog, TransferStrip, authorityText, behindText, hostName, transferInProgress, transferResumePrompt, type Authority, type LastTransfer, type Transfer } from "./pool-authority";
+import {
+  FenceProfileDialog, PromotionActions, PromotionDialog, PromotionStrip, RestrictedNote,
+  promotionInProgress, type FenceCredentialInput, type FenceProfileInput, type LastPromotion,
+  type MemberFence, type Promotion, type PromotionVerdict, type Restricted,
+} from "./pool-promotion";
+
+type API = <T>(path: string, method?: string, body?: unknown, progress?: (loaded: number, total: number) => void, register?: (xhr: XMLHttpRequest) => void, signal?: AbortSignal) => Promise<T>;
+type Connection = "fresh" | "stale" | "unknown" | "revoked";
+type Check = { name: string; status: "healthy" | "failed" | "unknown"; detail?: string };
+type Access = { healthy: number; pending: number; failed: number; stale: number };
+type Failure = { kind: string; id: string; name: string; error: string };
+export type JoinStatus = { operation_id?: string; stage: string; status: "pending" | "succeeded" | "failed" | "needs_attention"; error?: string; observed_at?: string };
+export type MemberOperation = { operation_id: string; action?: string; status: string; error?: string; conflict?: boolean };
+export type Guests = { known: boolean; total: number; running: number; names?: string[] };
+export type ReplicaState = "current" | "behind" | "unverified" | "refused" | "awaiting" | "unsupported" | "unknown";
+export type Replica = { generation: number; digest?: string; verified: boolean; received_at?: string; acknowledged_generation: number; acknowledged_at?: string; error?: string; state: ReplicaState };
+export type Member = { host_id: string; name: string; role: "master" | "member"; status: string; error?: string; peer_origin?: string; connection: Connection; checks?: Check[]; access?: Access; failures?: Failure[]; join?: JoinStatus | null; maintenance?: boolean | null; maintenance_since?: string; guests?: Guests; last_maintenance?: MemberOperation | null; replica?: Replica | null; transfer?: Transfer | null; transfer_supported?: boolean; fence?: MemberFence | null; restricted?: Restricted | null };
+export type Report = { pool_id: string; pool_name: string; master_host_id: string; master_connection: Connection; master_seen_at?: string; generation: number; authoritative: boolean; maintenance_supported?: boolean; replica_supported?: boolean; transfer_supported?: boolean; authority?: Authority | null; transfer?: Transfer | null; last_transfer?: LastTransfer | null; master_conflict?: string[]; promotion?: Promotion | null; last_promotion?: LastPromotion | null; members?: Member[] };
+type CandidateRow = { check: string; subject: string; result: "compatible" | "will_not_converge" | "refuses_join"; detail?: string };
+export type Candidate = { host_id: string; name: string; connection: Connection; eligible: boolean; rows?: CandidateRow[] };
+
+const checkNames: Record<string, string> = {
+  "pool-storage-reconciliation": "Storage",
+  "pool-network-reconciliation": "Networks",
+  "pool-media-reconciliation": "ISO library",
+  "pool-authority-replica": "Authority copy",
+  "pool-promotion": "Promotion",
+  "pool-restricted": "Restricted",
+  "pool-authority-transfer": "Master change",
+};
+// Text carries the state; the badge colour only repeats it.
+const replicaStates: Record<ReplicaState, { label: string; badge: string }> = {
+  current: { label: "current", badge: "ok" },
+  behind: { label: "behind", badge: "warning" },
+  unverified: { label: "unverified", badge: "unverified" },
+  refused: { label: "refused", badge: "failed" },
+  awaiting: { label: "awaiting first copy", badge: "unknown" },
+  unsupported: { label: "not supported — upgrade", badge: "warning" },
+  unknown: { label: "unknown", badge: "unknown" },
+};
+// PoolJoinStatus.stage is the step still to perform, so it reads as what happens next.
+const stageNames: Record<string, string> = {
+  precheck: "checking this host",
+  csr: "requesting its pool certificate",
+  joined: "joining the pool",
+  rehomed: "moving its records to the pool master",
+  advertised: "publishing its address to the master",
+  ready: "finishing the join",
+};
+const resultNames: Record<CandidateRow["result"], string> = { compatible: "compatible", will_not_converge: "will not converge", refuses_join: "refuses join" };
+// Text carries the verdict; the badge colour only repeats it.
+const resultBadges: Record<CandidateRow["result"], string> = { compatible: "ok", will_not_converge: "warning", refuses_join: "failed" };
+
+// The health checks are each host's own report and stay readable while the master is gone —
+// choosing a promotion candidate depends on them. Access is the master's observation of its
+// members, so it is unknown without a fresh master rather than repeated from the last mirror.
+export function convergenceSummary(member: Member, authoritative: boolean) {
+  const counted = (label: string, n?: number) => n ? `${n} ${label}` : "";
+  const checks = member.checks || [];
+  const access = member.access;
+  const checkText = checks.length
+    ? [counted("healthy", checks.filter(c => c.status === "healthy").length), counted("failed", checks.filter(c => c.status === "failed").length), counted("unknown", checks.filter(c => c.status !== "healthy" && c.status !== "failed").length)].filter(Boolean).join(", ")
+    : "not reported";
+  if (!authoritative) return `Checks ${checkText} · Access unknown`;
+  const accessText = access
+    ? [counted("healthy", access.healthy), counted("pending", access.pending), counted("failed", access.failed), counted("stale", access.stale)].filter(Boolean).join(", ") || "none registered"
+    : "not reported";
+  return `Checks ${checkText} · Access ${accessText}`;
+}
+
+// Progress is the host's own reported stage, never a spinner: a Controller that is not watching
+// changes nothing, and a stalled join must read as stalled instead of as activity.
+export function joinProgressText(join?: JoinStatus | null) {
+  if (!join) return "";
+  const step = stageNames[join.stage] || join.stage;
+  if (join.status === "succeeded") return "Join complete.";
+  if (join.status === "failed") return `Join failed before ${step}. ${join.error || "Core reported no message."}`;
+  if (join.status === "needs_attention") return `Needs attention: ${join.error || "Core reported no message."} This host is already a member; Core retries ${step} on its own.`;
+  return `Joining · next step: ${step}.`;
+}
+
+// Core refuses anything but a bare https origin, so say so here instead of spending a round trip
+// on a 400. A trailing slash is the same origin and is normalized rather than refused.
+export function peerOriginOf(value: string) {
+  let url: URL;
+  try { url = new URL(value.trim()); } catch { return { origin: "", error: "Enter an https address, for example https://192.0.2.12:9444." }; }
+  if (url.protocol !== "https:") return { origin: "", error: "The address must use https." };
+  if (url.username || url.password || url.search || url.hash || (url.pathname !== "" && url.pathname !== "/")) return { origin: "", error: "Enter the address only, with no path, query string or credentials." };
+  return { origin: url.origin, error: "" };
+}
+
+export function membershipVersionReady(report: Pick<Report, "authoritative" | "generation"> | null) {
+  return Boolean(report?.authoritative && report.generation > 0);
+}
+
+// The master's own peer address, as the master itself records it. A master of a single-host pool
+// has never had one, so the first join must collect it; afterwards it is shown, not re-asked.
+export function masterOriginOf(report: Report | null) {
+  return (report?.members || []).find(member => member.host_id === report?.master_host_id)?.peer_origin || "";
+}
+
+// Maintenance is the master's durable flag. The GET sends null for it whenever the master is not
+// fresh, and this never turns an unknown into "available": a host that might be drained must not
+// look like a placement target.
+export function maintenanceText(member: Member, authoritative: boolean) {
+  if (!authoritative || member.maintenance === null || member.maintenance === undefined) return { label: "unknown", badge: "unknown" };
+  return member.maintenance ? { label: "in maintenance", badge: "warning" } : { label: "available", badge: "ok" };
+}
+
+// The guest list comes from that host's own report. A host that is not reporting has no guest
+// list on the wire, so it reads as unknown rather than as an empty host.
+export function guestsText(member: Member) {
+  const guests = member.guests;
+  if (!guests || !guests.known) return "Guests unknown: this host is not reporting.";
+  if (!guests.total) return "No guests on this host.";
+  const names = (guests.names || []).join(", ");
+  return `${guests.total} guest${guests.total === 1 ? "" : "s"} · ${guests.running} running${names ? ` · ${names}` : ""}`;
+}
+
+export function maintenanceInFlight(op?: MemberOperation | null) {
+  return Boolean(op) && !["succeeded", "failed", "needs_attention"].includes(op!.status);
+}
+
+// The asynchronous 409: Core refused because the membership moved under the request. There is
+// nothing to retry blindly, so say what to do instead of offering the same button again.
+export function maintenanceResultText(op?: MemberOperation | null) {
+  if (!op) return "";
+  if (op.conflict) return `${op.error || "Nex Core refused this change."} The pool changed since you loaded it — reload.`;
+  if (op.status === "failed") return `Maintenance change failed: ${op.error || "Nex Core reported no message."}`;
+  if (op.status === "needs_attention") return `Needs attention: ${op.error || "Nex Core reported no message."}`;
+  if (op.status === "succeeded") return "";
+  return "Maintenance change submitted. The pool master records it; this shows its own report.";
+}
+
+// What a member holds is that member's own fresh report, so it is shown whatever the pool
+// master is doing: with the master gone it is the evidence a promotion candidate is chosen on.
+// The Controller limits the state itself — current and behind compare against a number only
+// the master reports, so without a fresh master they are never claimed.
+export function replicaText(member: Member) {
+  if (!member.replica) return replicaStates.unknown;
+  return replicaStates[member.replica.state] || replicaStates.unknown;
+}
+
+// One word cannot say which of the two reports is the older one, so the numbers are shown whenever
+// they disagree. Both are host reports; the Controller compares nothing of its own.
+export function replicaGenerations(replica?: Replica | null) {
+  if (!replica || replica.generation === replica.acknowledged_generation) return "";
+  return `This host reports copy ${replica.generation}; the pool master last saw it acknowledge ${replica.acknowledged_generation}. ${replica.generation > replica.acknowledged_generation
+    ? "The master's record of this host is the older of the two."
+    : "This host has not caught up with what the pool master recorded."}`;
+}
+
+// The acknowledgement is the master's observation, so it disappears with the master; what the
+// member says it received is its own report and stays.
+export function replicaTimes(replica?: Replica | null, authoritative = true) {
+  if (!replica) return "";
+  return [replica.received_at ? `Received ${replica.received_at}` : "", authoritative && replica.acknowledged_at ? `Acknowledged ${replica.acknowledged_at}` : ""].filter(Boolean).join(" · ");
+}
+
+// When a host was last heard from, said both ways: an interval an operator reads at a glance,
+// and the exact instant the hosts and the audit trail use. `Intl.RelativeTimeFormat` does the
+// wording; nothing here rounds a timestamp into a claim about what the host is doing.
+export function seenAgo(when: string, now = Date.now()) {
+  const at = Date.parse(when);
+  if (!Number.isFinite(at)) return "";
+  const seconds = Math.round((at - now) / 1000);
+  const format = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  for (const [unit, size] of [["day", 86400], ["hour", 3600], ["minute", 60]] as const) {
+    if (Math.abs(seconds) >= size) return format.format(Math.round(seconds / size), unit);
+  }
+  return format.format(seconds, "second");
+}
+
+// When the pool master is gone the Hosts view is the recovery view: one plain sentence about
+// what is unknown, and nothing that reads an absent report as a dead host. The Controller
+// reports when the master last reached it, so the banner says since when instead of only that
+// it has stopped; a master that has never reported says exactly that.
+export function recoveryText(report: Report, now = Date.now()) {
+  const seen = report.master_seen_at
+    ? `last reported to this Controller ${seenAgo(report.master_seen_at, now)}, at ${report.master_seen_at}`
+    : "has never reported to this Controller";
+  return `The pool master ${hostName(report, report.master_host_id)} ${seen}; it is ${report.master_connection}. Its state is unknown — this does not mean its VMs have stopped.`;
+}
+
+export function MembersTable({ report, onMaintenance, busyHost, onMasterChange, onEject, onPromote, onFenceProfile, blockedReason }: {
+  report: Report; onMaintenance?: (member: Member) => void; busyHost?: string;
+  onMasterChange?: (member: Member) => void; onEject?: (member: Member) => void;
+  onPromote?: (member: Member) => void; onFenceProfile?: (member: Member) => void; blockedReason?: string;
+}) {
+  const authoritative = report.authoritative;
+  const supported = Boolean(report.maintenance_supported);
+  // An explicit false means no member can hold a copy at all: drop the column and say it once.
+  const replicas = report.replica_supported !== false;
+  const members = report.members || [];
+  if (!members.length) return <p className="empty">The pool master reports no hosts yet. A host that has just enrolled appears here once its master reports the membership.</p>;
+  return <><div className="table-scroll"><table>
+    <thead><tr><th>Host</th><th>Role</th><th>Connection</th><th>Membership</th><th>Maintenance</th>{replicas && <th>Authority copy</th>}<th>Convergence</th></tr></thead>
+    <tbody>{members.map(member => {
+      // The join stage and the connection are this host's own report, so they survive a
+      // master that is gone; the membership status and every observation of it do not.
+      const progress = joinProgressText(member.join);
+      const failures = authoritative ? member.failures || [] : [];
+      const drain = maintenanceText(member, authoritative);
+      const outcome = authoritative ? maintenanceResultText(member.last_maintenance) : "";
+      return <tr key={member.host_id} data-host-id={member.host_id}>
+        <td>
+          <a href={`#/hosts/${encodeURIComponent(member.host_id)}`}>{member.name || member.host_id}</a>
+          {member.peer_origin && <small className="mono">{member.peer_origin}</small>}
+          {onMasterChange && onEject && <MemberActions report={report} member={member} onMasterChange={() => onMasterChange(member)} onEject={() => onEject(member)}
+            blockedReason={blockedReason}
+            extra={<PromotionActions report={report} member={member} authoritative={authoritative}
+              onPromote={onPromote && (() => onPromote(member))} onFenceProfile={onFenceProfile && (() => onFenceProfile(member))} />} />}
+        </td>
+        <td><span className="badge">{member.role === "master" ? "Pool master" : "Member"}</span></td>
+        <td><span className={`badge ${member.connection}`}>{member.connection}</span></td>
+        <td>
+          <span className={`badge ${authoritative ? member.status : "unknown"}`}>{authoritative ? member.status || "unknown" : "unknown"}</span>
+          {authoritative && member.error && <small className="task-error">{member.error}</small>}
+          {progress && <small>{progress}</small>}
+          <RestrictedNote report={report} member={member} />
+        </td>
+        <td className="pool-maintenance-cell">
+          <span className={`badge ${drain.badge}`}>{drain.label}</span>
+          {authoritative && member.maintenance && member.maintenance_since && <small>Since {member.maintenance_since}</small>}
+          <small>{guestsText(member)}</small>
+          {outcome && <small className={member.last_maintenance?.status === "failed" ? "task-error" : undefined} role={member.last_maintenance?.conflict ? "alert" : undefined}>{outcome}</small>}
+          {onMaintenance && (supported
+            ? <button type="button" aria-describedby={blockedReason ? "pool-actions-blocked" : undefined} disabled={!authoritative || Boolean(blockedReason) || busyHost === member.host_id || maintenanceInFlight(member.last_maintenance)} onClick={() => onMaintenance(member)}>{member.maintenance ? "Exit maintenance" : "Enter maintenance"}</button>
+            : <small>Maintenance mode needs pool-maintenance-v1 on the pool master; upgrade the pool master.</small>)}
+        </td>
+        {replicas && <td className="pool-replica-cell">
+          {member.role === "master" ? <small>Holds the pool authority; there is nothing to copy to it.</small> : <>
+            <span className={`badge ${replicaText(member).badge}`}>{replicaText(member).label}</span>
+            {member.replica && <>
+              {behindText(member, report) && <small>{behindText(member, report)}</small>}
+              {authoritative && replicaGenerations(member.replica) && <small>{replicaGenerations(member.replica)}</small>}
+              {member.replica.error && <small className="task-error">{member.replica.error}</small>}
+              {replicaTimes(member.replica, authoritative) && <small>{replicaTimes(member.replica, authoritative)}</small>}
+            </>}
+          </>}
+        </td>}
+        <td>
+          <small>{convergenceSummary(member, authoritative)}</small>
+          {/* The checks are the host's own report and stay readable without a fresh master.
+              pool-restricted is left out here: its reason is rendered in full on the
+              Membership cell and repeating Core's sentence twice per row helps nobody. */}
+          {(member.checks || []).filter(check => check.status !== "healthy" && check.name !== "pool-restricted").map(check => <small key={check.name} className={check.status === "failed" ? "task-error" : undefined}>{checkNames[check.name] || check.name}: {check.status}{check.detail ? ` · ${check.detail}` : ""}</small>)}
+          {failures.map(failure => <small key={`${failure.kind}:${failure.id}`} className="task-error">{failure.kind} {failure.name || failure.id}: {failure.error}</small>)}
+        </td>
+      </tr>;
+    })}</tbody>
+  </table></div>
+  {replicas
+    ? <p className="help">{authorityText(report)} Each member keeps a signed, read-only copy of the pool's records so the pool can be recovered if its master is lost; it is never used while the master is healthy.</p>
+    : <p className="help">The pool master does not support authority copies, so no member holds one. Upgrade the pool master to give the pool a copy of its records that survives losing the master.</p>}
+  </>;
+}
+
+export function AddHostDialog({ candidates, loading, error, busy, submitError, masterOrigin, onConfirm, onClose, onRetryCandidates }: {
+  candidates: Candidate[]; loading: boolean; error: string; busy: boolean; submitError: string; masterOrigin: string;
+  onConfirm: (hostID: string, peerOrigin: string, masterURL: string) => void; onClose: () => void; onRetryCandidates: () => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const [hostID, setHostID] = useState("");
+  const [origin, setOrigin] = useState("");
+  const [master, setMaster] = useState("");
+  const [showOriginError, setShowOriginError] = useState(false);
+  useEffect(() => { if (!dialog.current?.open) dialog.current?.showModal(); heading.current?.focus(); }, []);
+  const selected = candidates.find(candidate => candidate.host_id === hostID);
+  const peer = peerOriginOf(origin);
+  // The master's own address is a membership record: once the master has one it is shown and never
+  // re-sent, and the first join is the one that must supply it.
+  const masterPeer = masterOrigin ? { origin: "", error: "" } : peerOriginOf(master);
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setShowOriginError(true);
+    if (!selected || !selected.eligible || peer.error || masterPeer.error) return;
+    onConfirm(selected.host_id, peer.origin, masterPeer.origin);
+  }
+  return <dialog ref={dialog} className="confirm-dialog pool-join-dialog" aria-labelledby="add-host-title"
+    onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}
+    onClose={() => { if (busy) dialog.current?.showModal(); else onClose(); }}>
+    <div className="section-heading"><h2 id="add-host-title" ref={heading} tabIndex={-1}>Add host to pool</h2><button type="button" disabled={busy} onClick={onClose}>Close</button></div>
+    {submitError && <p className="alert" role="alert">{submitError}</p>}
+    {error && <p className="alert" role="alert">{error} <button type="button" onClick={onRetryCandidates}>Retry</button></p>}
+    <form onSubmit={submit}>
+      <fieldset disabled={busy}>
+        <legend>Host to add</legend>
+        {loading && !candidates.length ? <p role="status">Asking the hosts for their current state…</p>
+          : !candidates.length ? <p className="empty">No other host at this site is the master of its own single-host pool, so there is nothing to add.</p>
+            : <ul className="pool-candidates">{candidates.map(candidate => {
+              const refusals = (candidate.rows || []).filter(row => row.result === "refuses_join");
+              return <li key={candidate.host_id}>
+                <label><input type="radio" name="join-candidate" value={candidate.host_id} disabled={!candidate.eligible} checked={hostID === candidate.host_id} onChange={() => setHostID(candidate.host_id)} /> <strong>{candidate.name || candidate.host_id}</strong> · {candidate.connection}{candidate.eligible ? "" : " · cannot join"}</label>
+                {refusals.map((row, index) => <small key={`${row.check}-${index}`} className="task-error">{resultNames.refuses_join}: {row.subject || row.check} · {row.detail || "Nex Core refuses this host."}</small>)}
+              </li>;
+            })}</ul>}
+      </fieldset>
+      {selected && <div className="table-scroll"><table>
+        <caption>Compatibility preview for {selected.name || selected.host_id}. Nex Core checks this again and decides.</caption>
+        <thead><tr><th>Check</th><th>Detail</th><th>Result</th></tr></thead>
+        <tbody>{(selected.rows || []).map((row, index) => <tr key={`${row.check}-${index}`}>
+          <td>{row.check}</td>
+          <td>{row.subject}{row.detail ? <small>{row.detail}</small> : null}</td>
+          <td><span className={`badge ${resultBadges[row.result]}`}>{resultNames[row.result]}</span></td>
+        </tr>)}</tbody>
+      </table></div>}
+      {selected && (selected.rows || []).some(row => row.result === "will_not_converge") && <p className="warning">Some pool settings will not converge on this host. It can still join; the settings that cannot be applied are reported against it afterwards.</p>}
+      <fieldset disabled={busy}>
+        <legend>Address of the joining host</legend>
+        <label htmlFor="peer-origin">Peer address</label>
+        <input id="peer-origin" required inputMode="url" autoComplete="off" placeholder="https://192.0.2.12:9444" aria-describedby="peer-origin-help" value={origin} onChange={event => { setOrigin(event.target.value); setShowOriginError(false); }} />
+        <p className="help" id="peer-origin-help">The https address the pool master uses to reach this host, with its port and no path. The master connects to the host at this address, so it must be reachable from the master, not only from this browser.</p>
+        {showOriginError && peer.error && <p className="alert" role="alert">{peer.error}</p>}
+      </fieldset>
+      <fieldset disabled={busy}>
+        <legend>Address of the pool master</legend>
+        <label htmlFor="master-url">Pool master peer address</label>
+        <input id="master-url" required={!masterOrigin} readOnly={Boolean(masterOrigin)} inputMode="url" autoComplete="off" placeholder="https://192.0.2.11:9444" aria-describedby="master-url-help" value={masterOrigin || master} onChange={event => { setMaster(event.target.value); setShowOriginError(false); }} />
+        <p className="help" id="master-url-help">The address other hosts in the pool use to reach the pool master's peer port, for example https://192.0.2.11:9444.{masterOrigin ? " The master already has this address on record, so it is not asked for again." : ""}</p>
+        {showOriginError && masterPeer.error && <p className="alert" role="alert">{masterPeer.error}</p>}
+      </fieldset>
+      <div className="actions">
+        <button type="button" disabled={busy} onClick={onClose}>Cancel</button>
+        <button className="primary" disabled={busy || !selected?.eligible || !origin.trim() || (!masterOrigin && !master.trim())}>{busy ? "Submitting…" : "Add host to pool"}</button>
+      </div>
+    </form>
+  </dialog>;
+}
+
+// Maintenance has no typed confirmation in the contract (Core accepts none); what the operator
+// must see before agreeing is the guests that stay running and the plain limits of the flag.
+export function MaintenanceDialog({ member, busy, submitError, submitReady, onConfirm, onClose }: {
+  member: Member; busy: boolean; submitError: string; submitReady: boolean; onConfirm: () => void; onClose: () => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { if (!dialog.current?.open) dialog.current?.showModal(); heading.current?.focus(); }, []);
+  const entering = !member.maintenance;
+  const name = member.name || member.host_id;
+  const guests = member.guests;
+  return <dialog ref={dialog} className="confirm-dialog pool-maintenance-dialog" aria-labelledby="maintenance-title"
+    onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}
+    onClose={() => { if (busy) dialog.current?.showModal(); else onClose(); }}>
+    <div className="section-heading"><h2 id="maintenance-title" ref={heading} tabIndex={-1}>{entering ? `Put ${name} into maintenance` : `Take ${name} out of maintenance`}</h2><button type="button" disabled={busy} onClick={onClose}>Close</button></div>
+    {entering ? <>
+      <p>Maintenance mode stops the pool master placing new virtual machines on this host and refuses starting a virtual machine here.</p>
+      <p className="warning">It does <strong>not</strong> stop, shut down or move any guest that is running now, and it never blocks stopping or shutting one down. A placement the master already accepted finishes. Move or stop the guests below yourself before you work on the host.</p>
+    </> : <p>The pool master will place and start virtual machines on this host again. Nothing else changes.</p>}
+    <p className={guests && guests.known ? undefined : "warning"}>{guestsText(member)}</p>
+    {guests && guests.known && (guests.names || []).length > 0 && <ul className="pool-guests">{(guests.names || []).map(guest => <li key={guest}>{guest}</li>)}</ul>}
+    {submitError && <p className="alert" role="alert">{submitError}</p>}
+    <div className="actions">
+      <button type="button" disabled={busy} onClick={onClose}>Cancel</button>
+      <button type="button" className="primary" disabled={busy || !submitReady} onClick={onConfirm}>{busy ? "Submitting…" : entering ? "Enter maintenance" : "Exit maintenance"}</button>
+    </div>
+  </dialog>;
+}
+
+export function PoolMembers({ poolID, api, unavailable }: { poolID: string; api: API; unavailable: boolean }) {
+  const [report, setReport] = useState<Report | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [open, setOpen] = useState(false);
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [candidatesLoading, setCandidatesLoading] = useState(false);
+  const [candidatesError, setCandidatesError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const [notice, setNotice] = useState("");
+  const held = useRef({ id: "", signature: "" });
+  const [drainTarget, setDrainTarget] = useState<Member | null>(null);
+  const [drainBusy, setDrainBusy] = useState(false);
+  const [drainError, setDrainError] = useState("");
+  const heldDrain = useRef({ id: "", signature: "" });
+  const [promoteTarget, setPromoteTarget] = useState<Member | null>(null);
+  const [ejectTarget, setEjectTarget] = useState<Member | null>(null);
+  const [transferBusy, setTransferBusy] = useState(false);
+  const [transferError, setTransferError] = useState("");
+  const [cancelBusy, setCancelBusy] = useState(false);
+  const [cancelError, setCancelError] = useState("");
+  const [resumeOpen, setResumeOpen] = useState(false);
+  const heldTransfer = useRef({ id: "", signature: "" });
+  const heldCancel = useRef({ id: "", signature: "" });
+  const [promotionTarget, setPromotionTarget] = useState<Member | null>(null);
+  const [verdict, setVerdict] = useState<PromotionVerdict | null>(null);
+  const [verdictBusy, setVerdictBusy] = useState(false);
+  const [verdictError, setVerdictError] = useState("");
+  const [promotionBusy, setPromotionBusy] = useState(false);
+  const [promotionError, setPromotionError] = useState("");
+  const heldPromotion = useRef({ id: "", signature: "" });
+  const [fenceTarget, setFenceTarget] = useState<Member | null>(null);
+  const [fenceBusy, setFenceBusy] = useState(false);
+  const [fenceError, setFenceError] = useState("");
+  const heldFence = useRef({ id: "", signature: "" });
+  async function refresh() {
+    setLoading(true); setError("");
+    try { setReport(await api<Report>(`pools/${encodeURIComponent(poolID)}/members`)); }
+    catch (e) { setError((e as Error).message); }
+    finally { setLoading(false); }
+  }
+  async function loadCandidates() {
+    setCandidatesLoading(true); setCandidatesError("");
+    try { setCandidates((await api<{ candidates?: Candidate[] }>(`pools/${encodeURIComponent(poolID)}/join-candidates`)).candidates || []); }
+    catch (e) { setCandidatesError((e as Error).message); }
+    finally { setCandidatesLoading(false); }
+  }
+  useEffect(() => { void refresh(); }, [poolID]);
+  // A join is a durable Core operation; this only re-reads the host-reported stage while one is
+  // running, and stops as soon as no member reports a join in progress.
+  const joining = (report?.members || []).some(member => member.join?.status === "pending" || maintenanceInFlight(member.last_maintenance));
+  // A transfer is a durable Core operation too: while one is running this re-reads what the
+  // participants report, and every action that would write pool authority is refused meanwhile.
+  const transferring = transferInProgress(report?.transfer) || (report?.members || []).some(member => transferInProgress(member.transfer));
+  const blockedReason = transferring
+    ? "A master change or eject is running on this pool. The pool master refuses every other pool authority change until it completes; retry when it does."
+    : "";
+  // A promotion is durable on the candidate too, and it is exactly the case where the master
+  // reports nothing, so the poll follows the candidate's own report instead.
+  const promoting = Boolean(report) && promotionInProgress(report!);
+  useEffect(() => {
+    if ((!joining && !transferring && !promoting) || unavailable) return;
+    const timer = window.setInterval(() => void refresh(), 10_000);
+    return () => window.clearInterval(timer);
+  }, [joining, transferring, promoting, unavailable, poolID]);
+  async function confirm(hostID: string, peerOrigin: string, masterURL: string) {
+    setBusy(true); setSubmitError("");
+    const request_id = heldRequestID(held.current, `${poolID}\n${hostID}\n${peerOrigin}\n${masterURL}`);
+    try {
+      await api(`pools/${encodeURIComponent(poolID)}/members`, "POST", masterURL ? { request_id, host_id: hostID, peer_origin: peerOrigin, master_url: masterURL } : { request_id, host_id: hostID, peer_origin: peerOrigin });
+      setOpen(false);
+      setNotice("Nex Core accepted the request. The joining host performs the join itself and reports its progress below; closing this page does not stop it.");
+      await refresh();
+    } catch (e) {
+      // The same request_id is kept, so pressing the button again replays this request instead of
+      // asking for a second join.
+      setSubmitError(`${(e as Error).message} Submitting again repeats the same request; it never starts a second join.`);
+    } finally { setBusy(false); }
+  }
+  // The membership generation the operator is looking at. Core refuses the command if the master
+  // has moved on, so the reload is forced rather than the change landing on a different pool.
+  async function setMaintenance(member: Member) {
+    const enabled = !member.maintenance;
+    setDrainBusy(true); setDrainError("");
+    const request_id = heldRequestID(heldDrain.current, `${poolID}\n${member.host_id}\n${enabled}`);
+    try {
+      await api(`pools/${encodeURIComponent(poolID)}/members/${encodeURIComponent(member.host_id)}/maintenance`, "POST", { request_id, enabled, expected_version: report?.generation || 0 });
+      setDrainTarget(null);
+      setNotice(enabled
+        ? "Nex Core accepted the request. The pool master records maintenance; guests already running on the host are untouched."
+        : "Nex Core accepted the request. The pool master will place and start virtual machines on this host again.");
+      await refresh();
+    } catch (e) {
+      setDrainError(`${(e as Error).message} Submitting again repeats the same request; it never records a second change.`);
+    } finally { setDrainBusy(false); }
+  }
+  // A master change and an eject are one durable command to the pool master, with the loaded
+  // membership generation so the change cannot land on a pool that moved underneath it.
+  async function changeMaster(member: Member, confirmation: string) {
+    setTransferBusy(true); setTransferError("");
+    const request_id = heldRequestID(heldTransfer.current, `${poolID}\nmaster-change\n${member.host_id}\n${confirmation}`);
+    try {
+      await api(`pools/${encodeURIComponent(poolID)}/master`, "POST", { request_id, host_id: member.host_id, expected_version: report?.generation || 0, confirmation });
+      setPromoteTarget(null);
+      setNotice("Nex Core accepted the request. The pool master runs the change itself and every host reports its own part; closing this page does not stop it.");
+      await refresh();
+    } catch (e) {
+      setTransferError(`${(e as Error).message} Submitting again repeats the same request; it never starts a second master change.`);
+    } finally { setTransferBusy(false); }
+  }
+  async function eject(member: Member, confirmation: string) {
+    setTransferBusy(true); setTransferError("");
+    const request_id = heldRequestID(heldTransfer.current, `${poolID}\neject\n${member.host_id}\n${confirmation}`);
+    try {
+      await api(`pools/${encodeURIComponent(poolID)}/members/${encodeURIComponent(member.host_id)}`, "DELETE", { request_id, expected_version: report?.generation || 0, confirmation });
+      setEjectTarget(null);
+      setNotice("Nex Core accepted the request. The pool master decides whether the host can leave; if it still owns pool records or a storage reservation, Core's refusal appears under Pool master change.");
+      await refresh();
+    } catch (e) {
+      setTransferError(`${(e as Error).message} Submitting again repeats the same request; it never starts a second eject.`);
+    } finally { setTransferBusy(false); }
+  }
+  // One route for both: the plain cancel, and the fence-backed resume Core asks for when the
+  // hand-off target has not answered. The resume carries the operator's separate power-off
+  // acknowledgement and the exact host Core named, so it is a different request identity.
+  async function cancelTransfer(fenceTargetID?: string) {
+    const target = report?.transfer?.target_host_id || "";
+    setCancelBusy(true); setCancelError("");
+    const request_id = heldRequestID(heldCancel.current, `${poolID}\ntransfer-cancel\n${target}\n${fenceTargetID || ""}`);
+    try {
+      await api(`pools/${encodeURIComponent(poolID)}/master/cancel`, "POST", fenceTargetID
+        ? { request_id, host_id: target, expected_version: report?.generation || 0, fence_confirmed: true, fence_host_ids: [fenceTargetID] }
+        : { request_id, host_id: target, expected_version: report?.generation || 0 });
+      setResumeOpen(false);
+      setNotice(fenceTargetID
+        ? "Nex Core accepted the request. It powers that host off and verifies it before it resumes this pool's authority; if the host answers first, Core cancels the master change with that answer instead."
+        : "Nex Core accepted the cancel. If the new master has already taken the pool authority, Core refuses it and the change goes forward.");
+      await refresh();
+    } catch (e) {
+      setCancelError(`${(e as Error).message} Submitting again repeats the same request.`);
+    } finally { setCancelBusy(false); }
+  }
+  // The preflight stores, journals and changes nothing on any host, so it is safe to repeat.
+  // Its refusals — including the 504 when the candidate has not answered yet — are shown in
+  // Core's own words, because they are the reasons the promotion is stopped.
+  async function preflight(member: Member) {
+    setVerdictBusy(true); setVerdictError("");
+    try {
+      const answer = await api<{ promotion?: PromotionVerdict }>(`pools/${encodeURIComponent(poolID)}/master/promote/preflight`, "POST", { host_id: member.host_id });
+      setVerdict(answer.promotion || null);
+    } catch (e) {
+      setVerdictError((e as Error).message);
+    } finally { setVerdictBusy(false); }
+  }
+  // One durable command to the candidate, which performs the promotion itself. The typed pool
+  // name and the power-off acknowledgement are both preconditions; Nex Core proves everything
+  // again and produces the fence proof itself.
+  // `fence_host_ids` is Core's own list from the verdict the operator confirmed, sent back
+  // unchanged. Core computes it again when the promotion runs and refuses a list that no
+  // longer matches, so a host is never powered off without having been named here first.
+  async function promote(member: Member, confirmation: string, fenceHostIDs: string[]) {
+    setPromotionBusy(true); setPromotionError("");
+    const request_id = heldRequestID(heldPromotion.current, `${poolID}\npromote\n${member.host_id}\n${confirmation}\n${fenceHostIDs.join(",")}`);
+    try {
+      await api(`pools/${encodeURIComponent(poolID)}/master/promote`, "POST", { request_id, host_id: member.host_id, confirmation, fence_confirmed: true, fence_host_ids: fenceHostIDs });
+      setPromotionTarget(null);
+      setNotice("Nex Core accepted the request. The candidate runs the promotion itself and reports its own stage; closing this page does not stop it.");
+      await refresh();
+    } catch (e) {
+      setPromotionError(`${(e as Error).message} Submitting again repeats the same request; it never starts a second promotion.`);
+    } finally { setPromotionBusy(false); }
+  }
+  // The fence device is a field of the membership the pool master owns, so this one goes to
+  // the master. The credential travels in its own field and is never stored by this
+  // Controller; a null profile clears the record.
+  async function setFenceProfile(member: Member, fence: FenceProfileInput | null, credential?: FenceCredentialInput) {
+    setFenceBusy(true); setFenceError("");
+    const request_id = heldRequestID(heldFence.current, `${poolID}\nfence-profile\n${member.host_id}\n${JSON.stringify(fence)}`);
+    try {
+      await api(`pools/${encodeURIComponent(poolID)}/members/${encodeURIComponent(member.host_id)}/fence-profile`, "POST", credential ? { request_id, fence, credential } : { request_id, fence });
+      setFenceTarget(null);
+      setNotice(fence
+        ? "Nex Core accepted the request. The pool master records the fence device and every member receives it with its copy of the pool records; if this host's Nex Core cannot verify that kind of device it refuses it and says so on this page."
+        : "Nex Core accepted the request. The pool master is clearing the fence device for this host.");
+      await refresh();
+    } catch (e) {
+      setFenceError(`${(e as Error).message} Submitting again repeats the same request; it never records a second change.`);
+    } finally { setFenceBusy(false); }
+  }
+  const authoritative = Boolean(report?.authoritative);
+  return <section className="panel pool-members" aria-label="Pool hosts">
+    <div className="section-heading"><h2>Hosts</h2><span className="muted">{report ? `${(report.members || []).length} reported${authoritative ? "" : " · not current"}` : loading ? "Loading…" : "Unavailable"}</span></div>
+    <div className="managed-actions actions fold-actions">
+      <button type="button" disabled={loading || unavailable} onClick={() => void refresh()}>{loading ? "Refreshing…" : "Refresh"}</button>
+      <button type="button" aria-describedby={blockedReason ? "pool-actions-blocked" : undefined} disabled={unavailable || !report || Boolean(blockedReason)} onClick={() => { setSubmitError(""); setNotice(""); setOpen(true); void loadCandidates(); }}>Add host to pool</button>
+    </div>
+    {blockedReason && <p className="warning" id="pool-actions-blocked" role="status">{blockedReason}</p>}
+    {notice && <p className="notice" role="status">{notice}</p>}
+    {error ? <p className="alert" role="alert">The pool master could not be asked for its membership: {error}</p>
+      : report && !authoritative ? <div className="warning pool-recovery" role="status">
+        <p>{recoveryText(report)}</p>
+        <p>What the pool master keeps — each host's membership, its maintenance flag, its fence device and everything the master observed — is shown as unknown below. What each host reports about itself is still its own, and is shown.</p>
+        <p>If the pool master is gone for good, a surviving member that holds a copy of the pool records it has verified can be promoted from its row.</p>
+      </div>
+        : null}
+    {report && <TransferStrip report={report} onCancel={() => void cancelTransfer()} cancelBusy={cancelBusy} cancelError={cancelError}
+      onResume={unavailable ? undefined : () => { setCancelError(""); setNotice(""); setResumeOpen(true); }} />}
+    {report && <PromotionStrip report={report} />}
+    {report ? <MembersTable report={report} busyHost={drainTarget?.host_id} blockedReason={blockedReason}
+      onMaintenance={unavailable ? undefined : member => { setDrainError(""); setNotice(""); setDrainTarget(member); }}
+      onMasterChange={unavailable ? undefined : member => { setTransferError(""); setNotice(""); setPromoteTarget(member); }}
+      onEject={unavailable ? undefined : member => { setTransferError(""); setNotice(""); setEjectTarget(member); }}
+      onPromote={unavailable ? undefined : member => { setPromotionError(""); setVerdictError(""); setVerdict(null); setNotice(""); setPromotionTarget(member); void preflight(member); }}
+      onFenceProfile={unavailable ? undefined : member => { setFenceError(""); setNotice(""); setFenceTarget(member); }} /> : loading ? <p className="empty" role="status">Asking the pool master for its membership…</p> : <p className="empty">The pool master has not reported a membership.</p>}
+    {drainTarget && <MaintenanceDialog member={drainTarget} busy={drainBusy} submitError={drainError} submitReady={membershipVersionReady(report)} onConfirm={() => void setMaintenance(drainTarget)} onClose={() => { if (!drainBusy) setDrainTarget(null); }} />}
+    {report && promoteTarget && <MasterChangeDialog report={report} member={promoteTarget} busy={transferBusy} submitError={transferError} submitReady={membershipVersionReady(report)} onConfirm={confirmation => void changeMaster(promoteTarget, confirmation)} onClose={() => { if (!transferBusy) setPromoteTarget(null); }} />}
+    {report && ejectTarget && <EjectDialog report={report} member={ejectTarget} busy={transferBusy} submitError={transferError} submitReady={membershipVersionReady(report)} onConfirm={confirmation => void eject(ejectTarget, confirmation)} onClose={() => { if (!transferBusy) setEjectTarget(null); }} />}
+    {report && promotionTarget && <PromotionDialog report={report} member={promotionTarget} verdict={verdict} verdictBusy={verdictBusy} verdictError={verdictError}
+      onPreflight={() => void preflight(promotionTarget)} busy={promotionBusy} submitError={promotionError}
+      onConfirm={(confirmation, fenceHostIDs) => void promote(promotionTarget, confirmation, fenceHostIDs)} onClose={() => { if (!promotionBusy) { setPromotionTarget(null); setVerdict(null); } }} />}
+    {report && resumeOpen && transferResumePrompt(report) && <ResumeDialog report={report} prompt={transferResumePrompt(report)} busy={cancelBusy} submitError={cancelError} submitReady={membershipVersionReady(report)}
+      onConfirm={targetHostID => void cancelTransfer(targetHostID)} onClose={() => { if (!cancelBusy) setResumeOpen(false); }} />}
+    {report && fenceTarget && <FenceProfileDialog report={report} member={fenceTarget} busy={fenceBusy} submitError={fenceError}
+      onConfirm={(fence, credential) => void setFenceProfile(fenceTarget, fence, credential)}
+      onClear={() => void setFenceProfile(fenceTarget, null)} onClose={() => { if (!fenceBusy) setFenceTarget(null); }} />}
+    {open && <AddHostDialog candidates={candidates} loading={candidatesLoading} error={candidatesError} busy={busy} submitError={submitError} masterOrigin={masterOriginOf(report)} onConfirm={confirm} onClose={() => { if (!busy) setOpen(false); }} onRetryCandidates={() => void loadCandidates()} />}
+  </section>;
+}

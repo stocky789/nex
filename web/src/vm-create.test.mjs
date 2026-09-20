@@ -19,7 +19,7 @@ const stubbed = code
   .replace('from "./managed"', 'from "data:text/javascript,"')
   .replace('from "./storage"', 'from "data:text/javascript,export const storageUsable=()=>true;"');
 writeFileSync(file, stubbed);
-const { recommendedCPU, availableBaseline, baselineUnavailable, fixedCPU, selectCPU, cpuSelectionIssue, restoredNICs, autoDiskName, topologyIssue, vmNameIssue, bootKeys, renumber, defaultTPM, defaultDriversMedia, nextDriversMedia, effectiveBoot, secureBootText, tpmText, driversDriveReady } = await import(`file://${file}`);
+const { recommendedCPU, availableBaseline, baselineUnavailable, fixedCPU, selectCPU, cpuSelectionIssue, restoredNICs, autoDiskName, topologyIssue, vmNameIssue, bootKeys, renumber, defaultTPM, defaultDriversMedia, nextDriversMedia, effectiveBoot, secureBootText, tpmText, driversDriveReady, placementBlocker } = await import(`file://${file}`);
 
 // BUG-0196: Windows 11 refuses to install without a TPM 2.0, so a Windows guest is drafted with
 // one and every other guest is not. The wizard applies this to a new draft and whenever the
@@ -68,6 +68,12 @@ assert.equal(tpmText({ tpm: "none" }), "None");
 // The second CD drive exists only on a host whose Core defines it; an older Core would ignore
 // the driver ISO and leave the operator believing a disc is attached.
 const driversHost = { id: "host-1", connection: "fresh", revoked: false, capabilities: ["managed-vm-v1", "vm-media-v1", "vm-media-drivers-drive-v1"] };
+// U6: an authoritative pool-members response, rather than the host inventory, decides whether
+// a fresh managed host can receive a new VM. Unknown is deliberately not treated as available.
+assert.match(placementBlocker(driversHost), /Checking the pool master's maintenance report/);
+assert.match(placementBlocker(driversHost, { maintenance: true }), /in maintenance/);
+assert.equal(placementBlocker(driversHost, { maintenance: false }), "");
+assert.match(placementBlocker(driversHost, { reason: "maintenance state is unknown" }), /unknown/);
 assert.equal(driversDriveReady(driversHost), true);
 assert.equal(driversDriveReady({ ...driversHost, capabilities: ["managed-vm-v1", "vm-media-v1"] }), false);
 assert.equal(driversDriveReady({ ...driversHost, connection: "stale" }), false);

@@ -1,0 +1,31 @@
+{
+  "summary": "Keep the phase1 browser power-toolbar fixture host connection fresh so Shut down is not greyed out after earlier reconnect noise.",
+  "paths": [
+    "tests/integration/phase1_browser.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Browser fixture only; operator UI behavior unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Test fixture route only; no Controller/Core contract change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "CI browser flake fix only.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable product state changed."
+  },
+  "verification": {
+    "method": "Gitea run 4189 failed expecting Shut down enabled while title said freshly connected host required. Fixture now forces connection=fresh for the power route. Hosted rerun after push.",
+    "evidence": [
+      "tests/integration/phase1_browser.py"
+    ]
+  }
+}

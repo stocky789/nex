@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"nex.local/nex/internal/protocol"
+	"nex.local/nex/internal/vmhost"
 )
 
 func writeAppliedPoolNetwork(t *testing.T, s *Store, network protocol.NetworkRegistration) {
@@ -135,8 +136,8 @@ func TestPoolConvergeChecksSurfaceMemberFailures(t *testing.T) {
 	master, member := peerStore(t, "master-1", "pool-1"), peerStore(t, "member-1", "other-pool")
 	joinPeerMember(t, master, member)
 	ClearPoolConvergeStatusForTest(member)
-	if checks := PoolConvergeChecks(master); len(checks) != 0 {
-		t.Fatalf("master reported member converge checks: %#v", checks)
+	if checks := PoolConvergeChecks(master); len(checks) != 2 || checks[0].Status != "healthy" || checks[1].Status != "healthy" {
+		t.Fatalf("master converge clear checks: %#v", checks)
 	}
 	checks := PoolConvergeChecks(member)
 	if len(checks) != 2 || checks[0].Status != "unknown" || checks[1].Status != "unknown" {
@@ -151,6 +152,20 @@ func TestPoolConvergeChecksSurfaceMemberFailures(t *testing.T) {
 	if checks[1].Status != "healthy" || checks[1].Error != "" {
 		t.Fatalf("media converge check = %#v", checks[1])
 	}
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(member)
+	if err == nil {
+		state.Membership.MasterHostID = member.State.HostID
+		err = savePoolPeer(member, state)
+	}
+	poolPeerMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks = PoolConvergeChecks(member)
+	if len(checks) != 2 || checks[0].Status != "healthy" || checks[1].Status != "healthy" || checks[0].Freshness != "fresh" || checks[1].Freshness != "fresh" {
+		t.Fatalf("new master converge clears = %#v", checks)
+	}
 }
 
 // A journal entry records what this host was asked to apply, not what is on the host now.
@@ -164,6 +179,206 @@ func TestPoolNetworkConvergeObservesTheBridgeOnAJournalMatch(t *testing.T) {
 	writeAppliedPoolNetwork(t, member, vlan)
 	if err := applyPoolNetworkNative(context.Background(), member, vlan); err == nil {
 		t.Fatal("converge reported a guest bridge that is not present on this host")
+	}
+}
+
+// poolJournalEntries counts the managed journal files a store holds. A member converge pass
+// runs every probe tick, so how many entries a persistently failing resource mints per day is
+// the safety property here: the engine refuses every managed operation past 10000 entries.
+func poolJournalEntries(t *testing.T, s *Store) int {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(s.dir, "managed-vms"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, e := range entries {
+		// The engine keeps its lock file in the same directory.
+		if filepath.Ext(e.Name()) == ".json" {
+			n++
+		}
+	}
+	return n
+}
+
+// usePoolNetworkSysfs points the apply precheck at scratch sysfs and procfs roots.
+func usePoolNetworkSysfs(t *testing.T) string {
+	t.Helper()
+	sys, proc := t.TempDir()+"/", t.TempDir()+"/"
+	t.Cleanup(vmhost.NetworkSysfsRootsForTests(sys, proc))
+	return sys
+}
+
+func qaPoolVLAN(s *Store) protocol.NetworkRegistration {
+	return protocol.NetworkRegistration{
+		ID: "vlan-100", PoolID: s.State.PoolID, HostID: s.State.HostID, Name: "Servers",
+		Kind: "vlan", Source: protocol.GuestBridge("nexqa", 100), Uplink: "nexqa", VLAN: 100, Generation: 1,
+	}
+}
+
+// A member whose pool VLAN apply was refused by a host precondition — the uplink NIC does not
+// exist yet — used to journal the refusal under an operation ID pinned to the UTC clock hour,
+// so every later tick replayed that stored failure and the member only retried for real when
+// the hour changed: anywhere from seconds to 60 minutes after the operator fixed the uplink.
+// A precondition is re-evaluated on every tick and journals nothing, so the retry is immediate.
+func TestPoolNetworkApplyRefusalJournalsNothingAndRetriesWhenTheCauseIsFixed(t *testing.T) {
+	member := peerStore(t, "member-1", "pool-1")
+	sys := usePoolNetworkSysfs(t)
+	vlan := qaPoolVLAN(member)
+	for pass := 0; pass < 3; pass++ {
+		err := applyPoolNetworkNative(context.Background(), member, vlan)
+		var refusal poolConvergeRefusal
+		if !errors.As(err, &refusal) || !strings.Contains(err.Error(), "nexqa") {
+			t.Fatalf("pass %d apply error = %v", pass, err)
+		}
+		if n := poolJournalEntries(t, member); n != 0 {
+			t.Fatalf("pass %d: a persistently refused apply journalled %d entries", pass, n)
+		}
+	}
+	// The operator creates the uplink. The very next pass must attempt the apply for real,
+	// in the same clock hour, rather than replaying the stored failure.
+	if err := os.MkdirAll(sys+vlan.Uplink, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyPoolNetworkNative(context.Background(), member, vlan); err == nil {
+		t.Fatal("apply succeeded although this host has no such uplink")
+	}
+	if n := poolJournalEntries(t, member); n != 1 {
+		t.Fatalf("member did not retry on the next tick after the cause was fixed: %d journal entries", n)
+	}
+}
+
+// The bound the hour-pinned operation ID buys: a failure the precheck cannot see coming still
+// journals at most one entry per UTC hour, so a member that never converges writes at most 24
+// entries per resource per day and cannot reach the engine's 10000-entry cap by itself.
+func TestPoolNetworkUnexpectedFailureJournalsAtMostOncePerHour(t *testing.T) {
+	member := peerStore(t, "member-1", "pool-1")
+	sys := usePoolNetworkSysfs(t)
+	vlan := qaPoolVLAN(member)
+	// The precheck passes; the native apply still fails, because the real host has no such NIC.
+	if err := os.MkdirAll(sys+vlan.Uplink, 0700); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC)
+	previous := poolConvergeNow
+	t.Cleanup(func() { poolConvergeNow = previous })
+	for tick := time.Duration(0); tick < 24*time.Hour; tick += time.Minute {
+		poolConvergeNow = func() time.Time { return base.Add(tick) }
+		if err := applyPoolNetworkNative(context.Background(), member, vlan); err == nil {
+			t.Fatalf("apply succeeded at %v", tick)
+		}
+	}
+	if n := poolJournalEntries(t, member); n > 24 {
+		t.Fatalf("a day of failing converge passes journalled %d entries", n)
+	}
+}
+
+// A replayed journal failure is not an observation. Re-posting it with this pass's clock made
+// the master's member_access row look like a fresh observation of a condition nobody checked.
+func TestPoolNetworkReplayedFailureKeepsTheMastersObservation(t *testing.T) {
+	master, member := peerStore(t, "master-1", "pool-1"), peerStore(t, "member-1", "other-pool")
+	joinPeerMember(t, master, member)
+	ClearPoolNetworkAccessForTest(master)
+	vlan := protocol.NetworkRegistration{
+		ID: "vlan-100", PoolID: "pool-1", HostID: master.State.HostID, Name: "Servers",
+		Kind: "vlan", Source: protocol.GuestBridge("nex1", 100), Uplink: "nex1", VLAN: 100, Generation: 1,
+	}
+	writeAppliedPoolNetwork(t, master, vlan)
+	config, err := PoolPeerTLSConfig(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(PoolPeerHandler(master))
+	server.TLS = config
+	server.StartTLS()
+	t.Cleanup(server.Close)
+
+	previous := applyPoolNetwork
+	t.Cleanup(func() { applyPoolNetwork = previous })
+	applyPoolNetwork = func(context.Context, *Store, protocol.NetworkRegistration) error {
+		return poolConvergeRefusalf("uplink nex1 does not exist on this host")
+	}
+	if err = reconcilePoolNetworksFromMaster(context.Background(), member, time.Second); err == nil {
+		t.Fatal("reconcile reported success for a refused apply")
+	}
+	reported := PoolNetworkMemberAccess(master, []protocol.NetworkRegistration{vlan})
+	if len(reported[0].MemberAccess) != 1 || reported[0].MemberAccess[0].Error == "" {
+		t.Fatalf("freshly refused apply was not reported: %#v", reported[0].MemberAccess)
+	}
+	firstSeen := reported[0].MemberAccess[0].ObservedAt
+	if time.Since(firstSeen) > time.Minute {
+		t.Fatalf("a freshly evaluated refusal carried an old observation time: %v", firstSeen)
+	}
+
+	replayedAt := time.Now().UTC().Add(-42 * time.Minute)
+	applyPoolNetwork = func(context.Context, *Store, protocol.NetworkRegistration) error {
+		return poolReplayedFailure{at: replayedAt, detail: "uplink nex1 does not exist on this host"}
+	}
+	time.Sleep(time.Millisecond)
+	if err = reconcilePoolNetworksFromMaster(context.Background(), member, time.Second); err == nil {
+		t.Fatal("reconcile reported success for a replayed failure")
+	}
+	reported = PoolNetworkMemberAccess(master, []protocol.NetworkRegistration{vlan})
+	if len(reported[0].MemberAccess) != 1 || !reported[0].MemberAccess[0].ObservedAt.Equal(firstSeen) {
+		t.Fatalf("a replayed journal failure was re-stamped as a new observation: %#v", reported[0].MemberAccess)
+	}
+}
+
+// The precheck must refuse exactly the host preconditions the native apply refuses, and must
+// never approve on a condition it cannot see: it only ever returns a refusal or nil.
+func TestPoolNetworkApplyPrecheckRefusals(t *testing.T) {
+	sys := usePoolNetworkSysfs(t)
+	vlan := protocol.NetworkRegistration{
+		ID: "vlan-100", PoolID: "pool-1", Kind: "vlan",
+		Source: protocol.GuestBridge("nexqa", 100), Uplink: "nexqa", VLAN: 100, Generation: 1,
+	}
+	mk := func(parts ...string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(append([]string{sys}, parts...)...), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := poolNetworkApplyRefusal(protocol.NetworkRegistration{ID: "x", Kind: "vlan", Uplink: "nexqa"}); err == nil {
+		t.Fatal("precheck accepted an invalid VLAN registration")
+	}
+	if err := poolNetworkApplyRefusal(vlan); err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("missing uplink = %v", err)
+	}
+	mk("nexqa", "bridge")
+	if err := poolNetworkApplyRefusal(vlan); err == nil || !strings.Contains(err.Error(), "physical NIC or bond") {
+		t.Fatalf("bridge uplink = %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(sys, "nexqa", "bridge")); err != nil {
+		t.Fatal(err)
+	}
+	mk("bond9", "bonding")
+	if err := os.Symlink(filepath.Join(sys, "bond9"), filepath.Join(sys, "nexqa", "master")); err != nil {
+		t.Fatal(err)
+	}
+	if err := poolNetworkApplyRefusal(vlan); err == nil || !strings.Contains(err.Error(), "member of bond") {
+		t.Fatalf("bond member uplink = %v", err)
+	}
+	if err := os.Remove(filepath.Join(sys, "nexqa", "master")); err != nil {
+		t.Fatal(err)
+	}
+	mk("nexqa.100")
+	mk("someone-else")
+	if err := os.Symlink(filepath.Join(sys, "someone-else"), filepath.Join(sys, "nexqa.100", "master")); err != nil {
+		t.Fatal(err)
+	}
+	if err := poolNetworkApplyRefusal(vlan); err == nil || !strings.Contains(err.Error(), "already used by") {
+		t.Fatalf("claimed VLAN device = %v", err)
+	}
+	if err := os.Remove(filepath.Join(sys, "nexqa.100", "master")); err != nil {
+		t.Fatal(err)
+	}
+	mk(vlan.Source)
+	if err := poolNetworkApplyRefusal(vlan); err == nil || !strings.Contains(err.Error(), "not a bridge") {
+		t.Fatalf("bridge name taken = %v", err)
+	}
+	mk(vlan.Source, "bridge")
+	if err := poolNetworkApplyRefusal(vlan); err != nil {
+		t.Fatalf("precheck refused a host that satisfies every visible precondition: %v", err)
 	}
 }
 

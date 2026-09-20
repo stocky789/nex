@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Catch a missing runtime artifact before either runner starts browser QA."""
 from pathlib import Path
+import json
 import subprocess
 import tempfile
 import textwrap
@@ -37,8 +38,15 @@ class BrowserArtifactTests(unittest.TestCase):
                 workflow = (ROOT / provider / 'workflows/phase1.yml').read_text()
                 self.assertIn('run: go test -race -timeout 20m ./...', workflow)
 
-    def test_phase1_runs_independent_lanes_in_parallel(self):
-        """Serial phase1 hid storage UI failures behind ~15 minutes of unrelated work."""
+    def test_phase1_keeps_separate_lanes_with_runner_safe_stagger(self):
+        """Separate jobs still surface storage UI failures; needs caps Docker load.
+
+        A single serial job hid late UI failures behind ~15 minutes of unrelated work.
+        Five fully parallel containers on the shared Gitea act_runner then wedged Docker
+        cleanup (run 4168). Keep named lanes, stagger to two concurrent containers, run
+        the browser lane alone first so Go race cannot starve stalled-probe heartbeats
+        (run 4171).
+        """
         required = (
             'go:',
             'contracts:',
@@ -48,6 +56,9 @@ class BrowserArtifactTests(unittest.TestCase):
             'phase1:',
             'iso_url_browser.py',
             'storage_repositories_browser.py',
+            'needs: [controller-browser]',
+            'needs: [go]',
+            'needs: [web]',
         )
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
@@ -58,7 +69,13 @@ class BrowserArtifactTests(unittest.TestCase):
                 gallery = workflow.index('website_controller_captures.py')
                 self.assertLess(smoke, gallery, 'storage UI smoke must run before gallery in the browser lane')
                 self.assertIn('cancel-in-progress: true', workflow)
-                # The runner cannot unshare or bind-mount, so a host lane only ever skipped.
+                self.assertIn('group: nex-controller-foundation', workflow)
+                # Browser lane must be first and must not wait on Go.
+                browser_job = workflow.index('\n  controller-browser:')
+                go_job = workflow.index('\n  go:')
+                self.assertLess(browser_job, go_job)
+                browser_block = workflow[browser_job:go_job]
+                self.assertNotIn('needs:', browser_block)
                 self.assertNotIn('  host:', workflow)
                 self.assertNotIn('schedule:', workflow)
 
@@ -75,18 +92,46 @@ class ReleaseDeployCredentialTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / 'github_output'
             output.touch()
-            env = {'PATH': '/usr/bin:/bin', 'GITHUB_OUTPUT': str(output)}
+            env = {
+                'PATH': '/usr/bin:/bin',
+                'GITHUB_OUTPUT': str(output),
+            }
             env.update(secrets)
-            done = subprocess.run(['sh', '-c', credentials_script(provider)],
-                                  capture_output=True, text=True, env=env)
+            done = subprocess.run(
+                ['sh', '-c', credentials_script(provider)],
+                capture_output=True, text=True, env=env, cwd=ROOT)
             return done, output.read_text()
 
+    def _with_manifest(self, version, components):
+        dist = ROOT / 'dist'
+        dist.mkdir(exist_ok=True)
+        path = dist / f'nex-core-{version}-compliance-manifest.json'
+        path.write_text(json.dumps({"version": version, "components": components}) + '\n')
+        self.addCleanup(path.unlink, missing_ok=True)
+        return path
+
     def test_every_secret_present_enables_publishing(self):
+        version = '0.0.0-ci-clear'
+        self._with_manifest(version, [])
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
-                done, output = self.run_step(provider, {name: 'value' for name in DEPLOY_SECRETS})
+                secrets = {name: 'value' for name in DEPLOY_SECRETS}
+                secrets['NEX_VERSION'] = version
+                done, output = self.run_step(provider, secrets)
                 self.assertEqual(done.returncode, 0, done.stderr)
                 self.assertIn('enabled=true', output)
+
+    def test_zfs_manifest_skips_public_website_when_secrets_are_set(self):
+        version = '0.0.0-ci-zfs'
+        self._with_manifest(version, [{"package": "zfs-dkms"}])
+        for provider in PROVIDERS:
+            with self.subTest(provider=provider):
+                secrets = {name: 'value' for name in DEPLOY_SECRETS}
+                secrets['NEX_VERSION'] = version
+                done, output = self.run_step(provider, secrets)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertIn('enabled=false', output)
+                self.assertIn('ZFS-enabled ISO', done.stdout)
 
     def test_no_secrets_skips_quietly_for_a_fork(self):
         for provider in PROVIDERS:
@@ -116,3 +161,4 @@ class ReleaseDeployCredentialTests(unittest.TestCase):
                 self.assertLess(text.index('- name: Create or replace the release'),
                                 text.index('- name: Check for deploy credentials'),
                                 'tagging happens first, which is why a silent skip is invisible')
+                self.assertIn('NEX_VERSION: ${{ steps.version.outputs.version }}', text)

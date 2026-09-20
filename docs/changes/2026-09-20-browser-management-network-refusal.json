@@ -1,0 +1,33 @@
+{
+  "summary": "Fix the Phase 1 browser fixture so a staged management-network CIDR refusal is returned on POST and projected as an alert. API impact: none.",
+  "paths": [
+    "tests/integration/phase1_browser.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Test-only fixture; operator workflows and guide copy are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller or Core contract changed; the browser route now returns the existing Core refusal text on POST.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "CI browser coverage only.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state is added or changed."
+  },
+  "verification": {
+    "method": "Inspected the failing controller-browser job: Stage with 192.0.2.999/24 left the form filled and found no role=alert because the route fulfilled POST like a successful GET. Confirmed host-network.tsx leaves CIDR validation to Core and surfaces submitError from a non-OK POST. Updated the fixture to return 400 with Core's CIDR sentence on POST.",
+    "evidence": [
+      "tests/integration/phase1_browser.py",
+      "web/src/host-network.tsx",
+      "web/src/host-network.test.mjs"
+    ]
+  }
+}

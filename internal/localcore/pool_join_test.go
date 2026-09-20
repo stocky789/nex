@@ -7,7 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"encoding/json"
+
 	"nex.local/nex/internal/agent"
+	"nex.local/nex/internal/protocol"
 )
 
 func poolTestStore(t *testing.T, dir, host, pool string) *agent.Store {
@@ -76,5 +79,42 @@ func TestJoinPoolAcceptsRealOneUseOffer(t *testing.T) {
 	}
 	if joined.store.State.PoolID != "pool-1" || joined.store.State.HostID != "member-1" {
 		t.Fatalf("joined state = %#v", joined.store.State)
+	}
+}
+
+// The host-local pool view is what a recovery procedure reads when no Controller answers.
+func TestLocalPoolViewRequiresSessionAndReportsMembership(t *testing.T) {
+	s, cfg := testService(t)
+	member := poolTestStore(t, cfg.AgentStateDir, "member-1", "member-pool")
+	if err := agent.EnsurePoolMembership(member); err != nil {
+		t.Fatal(err)
+	}
+	if err := member.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if w := callLocal(s, "GET", "/api/local/v1/pool", nil, "", "", "https://core.test"); w.Code != 401 {
+		t.Fatalf("unauthenticated pool view = %d %s", w.Code, w.Body)
+	}
+	cookie, csrf := loginLocal(t, s)
+	w := callLocal(s, "GET", "/api/local/v1/pool", nil, cookie, csrf, "https://core.test")
+	if w.Code != 200 {
+		t.Fatalf("pool view = %d %s", w.Code, w.Body)
+	}
+	var view struct {
+		PoolID       string                   `json:"pool_id"`
+		PoolName     string                   `json:"pool_name"`
+		Role         string                   `json:"role"`
+		MasterHostID string                   `json:"master_host_id"`
+		Members      []protocol.PoolMember    `json:"members"`
+		Join         *protocol.PoolJoinStatus `json:"join"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.PoolID != "member-pool" || view.Role != "master" || view.MasterHostID != "member-1" || len(view.Members) != 1 || view.Members[0].HostID != "member-1" {
+		t.Fatalf("pool view = %+v", view)
+	}
+	if view.Join != nil {
+		t.Fatalf("unstarted join reported: %+v", view.Join)
 	}
 }

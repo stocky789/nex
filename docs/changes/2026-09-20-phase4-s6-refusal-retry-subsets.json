@@ -1,0 +1,34 @@
+{
+  "summary": "Record reviewed S6 lower-candidate refusal and failed-fence retry subsets without closing manual recovery. API impact: existing contract.",
+  "paths": [
+    "docs/qa/2026-09-19-phase4-native-acceptance.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This records acceptance evidence and limits only; promotion workflows did not change.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Existing promotion, preflight, fence and local join-offer operations were exercised without a contract change.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The S6 subsets do not complete Phase 4 or the manual-recovery gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Core owns authority replicas, promotion transfer, fence proof, membership, restriction and pending VM-update state.",
+    "record": "Existing Core pool-peer authority replica, transfer, fence-proof and membership records plus the master pool-vms pending-update record remain authoritative and are reported to a replacement Controller through inventory."
+  },
+  "verification": {
+    "method": "S6-9 records a lower signed authority candidate refused before activation because a reachable member held newer authority, then ordinary signed convergence after old-master restoration. S6-6 records reachable-master preflight refusal with unchanged durable promotion state. S6-5/S6-10 records a candidate-only fence fault with no activation/repoint, then the same operation's fresh bound fence result, promotion/repoint, and returned former-master authority-write refusal while restricted. S6-15 records ordinary former-master rejoin with restriction clear, verified current replica and accepted empty-VM inventory. S6-12 records a debugger-held durable pending update, matching signed candidate replica, per-VM preflight block while the owner is off, and same-operation recovery to revision one before fixture deletion. No workload-continuity, ownership-conflict resolution or full S6 claim is made.",
+    "evidence": [
+      "docs/qa/2026-09-19-phase4-native-acceptance.md"
+    ]
+  }
+}

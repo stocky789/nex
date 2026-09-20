@@ -49,6 +49,25 @@ Limits in this build:
    characters) and select **Rename network**. **Cancel** or `Escape` closes without sending
    anything; the button stays disabled while the name is unchanged or invalid.
 
+### Discard a registration the pool master refused
+
+A pool VLAN network or a storage repository the pool master **refused** to register was never
+created on any host. It is only Nex Controller's record of the request, so it is not removed — it is
+**discarded**, exactly as a failed ISO import already was.
+
+1. Open the pool's **Networking** view (for a network) or **Storage** view (for a repository) and
+   find the row whose task shows **failed**.
+2. Its only action is **Discard failed registration**. Rename, Remove, Recheck, Update and Detach
+   are not offered on a failed row, because there is nothing on a host to act on.
+3. Confirm. Nex Controller deletes only its own record of the failed request and asks no host to do
+   anything; the task and the audit history are kept.
+
+If a host has since reported that registration as applied, the discard is refused with *a host
+reports this registration as applied, so it is not a failed request record; remove it on the host
+instead of discarding it* — and the row stays. That is the guard that stops a discard deleting a
+live pool resource's row. A repository a host does hold is removed with **Detach**, never with a
+discard.
+
 ### Remove a pool VLAN network
 
 1. Open the pool's **Networking** view and select **Remove** on the pool VLAN row.
@@ -67,7 +86,8 @@ Limits in this build:
 1. Open the pool's **ISO library** view.
 2. On a row whose transfer task shows `succeeded`, select **Remove ISO**. (A **failed** import is
    only a Controller request record; it keeps the separate **Discard failed import** action, which
-   asks no host to do anything.)
+   asks no host to do anything — the same model a refused network or storage registration now
+   follows, see [Discard a registration the pool master refused](#discard-a-registration-the-pool-master-refused).)
 3. The dialog **Remove ISO `<name>`?** states that the pool master deletes this ISO file from its
    storage, that Nex Core refuses while the ISO is in any VM's CD drive, running or stopped, and
    that **no VM disk is touched**. Type the ISO name into **ISO name**, then select **Remove ISO**.

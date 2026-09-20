@@ -6,12 +6,221 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.3.6` →
-> Debian `0.3.6`).
+> development software. Builds use the newest numbered changelog heading (`0.4.0` →
+> Debian `0.4.0`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.0] — 2026-09-20
+
+> **Development working-tree record, not a published release.** Phase 4 multi-host pools are
+> accepted for disposable virtual-lab scope (2026-09-20); OD-6 strict unreachable-member rule
+> confirmed. Physical/BMC, five-host, package-install and authentic owner-conflict limits remain
+> outside this acceptance.
+
+### Minor Feature
+
+- Add a host to a pool from Nex Controller: the pool's new **Hosts** tab shows the membership the
+  pool master reports and offers **Add host to pool** with a compatibility preview. The joining
+  host performs the join itself and reports its own progress, so closing the browser or losing
+  Controller does not interrupt or undo it. The host-local procedure remains available for
+  recovery.
+- Change which host is a pool's master, and eject a host from a pool, from the pool's **Hosts**
+  tab. Both are typed confirmations and both are run by the hosts themselves: the pool, its
+  networks, its storage, its ISO library and its virtual machines keep their identities and their
+  names, virtual machines that are running keep running, and closing the browser or losing
+  Controller entirely does not interrupt or undo the change. While a master change runs, other pool
+  changes are refused with a message asking you to retry rather than queued, and the change can be
+  cancelled until the authority has actually been handed over. A host that is not reachable can
+  still be ejected; it finds out when it returns and becomes the master of its own new single-host
+  pool, keeping its identity, its local storage and its local virtual machines. There is still no
+  automatic succession: a master change needs the current pool master to be working.
+- Put a pool host into maintenance from the pool's **Hosts** tab: the pool master then places no
+  new virtual machine on that host and refuses starting one there. Guests that are already running
+  are untouched, and stopping or shutting one down is never blocked. The pool master records the
+  flag, so it survives a Controller restart and does not need the drained host to be reachable.
+- Each pool member now keeps a signed, verified copy of the pool master's own records, and the
+  **Hosts** tab shows whether that copy is current. Members never act on the copy by themselves;
+  it is what the host you choose activates during a master change or a promotion, and it exists so
+  the pool's records remain recoverable.
+- Promote a surviving member to pool master when the pool master is **lost**. You choose the host
+  and Nex Core proves the whole thing itself: it checks its copy of the pool records, checks that
+  no other host holds a newer one, checks that every virtual machine is recorded the same way by
+  the host that owns it, then powers the lost master off through a **fence device** you recorded
+  earlier and verifies that it is off before it takes over. You see exactly what blocks before you
+  confirm, and you confirm by typing the pool name and acknowledging the power-off separately.
+  Limits, stated plainly: a fence device must be recorded **while the pool master still works**;
+  only a `virsh` fence device can be recorded in this development build, so only a disposable laboratory pool
+  can be promoted this way; there is still **no automatic succession**, and there is no force,
+  override or "declare this host lost" anywhere, because none of them would be evidence. Every
+  ready member of a pool with fence devices can power off the hosts those devices name — the same
+  trust the pool's certificate authority already places in a member — so admit only hosts you trust.
+- A host that cannot prove it holds its pool's current authority now says so and refuses to act:
+  a restarted pool master that might have been fenced, and a returning old master that was, both
+  show as **Restricted** and start nothing and change nothing about the pool until they have
+  reconciled. Stopping a virtual machine, its console, local recovery access and the host's own
+  reporting keep working, and the refusal holds with no Nex Controller connected. A virtual machine
+  a returning host still defines that the pool now records elsewhere is kept, never started twice
+  and never deleted.
+- Change a host's management network from its **Networking** tab: stage the new addressing, review
+  it against what the host reports now, apply it by typing the host's name, and confirm it once the
+  host is back. The host owns the whole change — if it is not confirmed within the rollback window
+  you chose, or if it reboots first, the host restores its previous configuration by itself, with
+  no Controller involved. Renaming interfaces and editing guest networking are not part of this;
+  running virtual machines are not affected.
+- Record a **fence device** for a host in a pool, from the pool's **Hosts** tab, so a surviving
+  member can be promoted if that host is ever lost. The credentials are handed to Nex Core once,
+  over an encrypted delivery, and are never stored by Nex Controller.
+
+### Miscellaneous
+
+- Phase 4 multi-host pools accepted for disposable virtual-lab scope; OD-6 strict
+  unreachable-member rule confirmed.
+- Manual starts on a host in maintenance are refused on every pool host, including members.
+
+### Bug Fixes
+
+- Controller foundation CI no longer starts five heavy jobs at once on the shared Gitea
+  runner, which had been killing runs mid-check and falsely failing Installer after a clean
+  pass when Docker cleanup timed out.
+- Controller foundation CI runs the browser lane alone before Go race, so stalled-probe
+  heartbeats are not starved on the shared runner.
+- Storage registration clears the password field as soon as credentials are handed off, so a
+  slow reload cannot leave the secret in the open form (BUG-0397).
+- Host ISO availability checks no longer treat a brief reconnect as missing transfer success
+  during Controller foundation CI (BUG-0398).
+- Controller foundation CI no longer runs push and pull-request labs at once on the
+  shared runner, and certificate-rotation reporting gets a longer wait under load (BUG-0399).
+- Release credential checks no longer crash on an unset version when only deploy secrets are
+  under test; ZFS-enabled builds still publish to the private forge and stay off the public
+  download page.
+- Cross-site pool join refusal and management-network cancel wording stay aligned with the
+  live handlers in the API contract checks.
+- Virtual machines on a pool master's local storage now start themselves again after the master
+  reboots. Previously the request was made too early in the boot, while the host was still
+  confirming it is the pool master, and nothing tried again (BUG-0392).
+- Putting a host into maintenance now succeeds when that host is switched off or unreachable,
+  instead of finishing as *needs attention*. The drain is recorded by the pool master either way,
+  and the host picks it up when it returns (BUG-0393).
+- A host put into maintenance is replicated to members straight away, and a member's libvirt
+  start hook also reads that replica, so a drained host cannot start guests from a stale local
+  membership copy (BUG-0387).
+- Authority replica pushes no longer skip a member just because a GET looked healthy; only a
+  prior successful POST ack short-circuits a re-push (BUG-0388).
+- A join invitation that expired only by a small Controller clock skew is still collected;
+  Nex Core remains the authority for the real deadline (BUG-0389).
+- A returned pool master that cannot reach a ready peer now names that peer in its restriction,
+  and can clear only when a fresh fence proof already excludes that peer — silence still never
+  counts as agreement (BUG-0390).
+- A master-change activation that fails after VM ownership was adopted rolls that adoption back,
+  so a host is not left with half-applied authority (BUG-0391).
+- A master change or eject now freezes pool authority as soon as the transfer is recorded, so
+  other pool changes cannot slip in before the freeze finishes (BUG-0382).
+- Add-host preview no longer blocks a host just because an earlier VM create or storage
+  registration failed, and joining across sites is refused (BUG-0383, BUG-0384).
+- A failed pool promotion only asks to “resolve and check again” when the refusal is a real
+  conflict, not for every failure (BUG-0385).
+- Maintenance, master-change and eject actions wait for a fresh membership generation before
+  submit, and a restricted-host banner refreshes while it is still shown (BUG-0386).
+- A pool network or storage registration the pool master refused can now be discarded. Previously
+  it stayed in the list for ever with no action that could clear it, and a refused storage
+  registration could not even be addressed (BUG-0325).
+- Creating a virtual machine on a host whose access to a required shared repository, network or
+  ISO the pool master last reported as failed or stale now returns a warning with the accepted
+  request, and the task carries it while it waits. Nothing is refused and the pool master still
+  decides; the warning only tells a request aimed at a problem apart from one that is merely slow,
+  and it clears by itself (BUG-0326).
+- **Roll back now** on an applied management network change now actually rolls it back. It used to
+  submit a step Nex Core refused, so the only way out was to wait for the rollback deadline. A
+  rollback you asked for is reported as such and no longer raises a failing health check
+  (BUG-0327).
+- A pool member whose VLAN failed to apply now re-checks the cause on every pass instead of only
+  when the clock hour changed, so fixing the uplink converges within seconds rather than within an
+  hour; and it no longer re-reports an old failure as if it had just been observed (BUG-0328).
+- Adding a pool member to a replacement Nex Controller before its pool master has reported it now
+  reads as the wait it is, with a one-click retry, instead of an error that looked like a broken
+  host (BUG-0329).
+- A clustered-storage request whose client disconnects is no longer answered as a success
+  (BUG-0330).
+- Cancelling an eject is now refused once the membership change is already written, and the eject
+  completes instead of stopping half way. Nex Core reports whether a change can still be cancelled
+  rather than leaving that to be guessed (BUG-0331).
+- Fence devices now reach the host that would use them, so a promotion can actually fence
+  (BUG-0332).
+- **Found by independent review of this development work and fixed:**
+  two surviving hosts that could not see each other could both be promoted, leaving one pool with
+  two masters. A promotion now refuses while a ready host is unreachable unless that host is
+  powered off by the same promotion, and the confirmation names every host that will be powered
+  off — not only the old pool master (BUG-0333).
+- A promotion could have powered off a pool master that was reachable and perfectly healthy, and
+  two hosts could run promotions of the same pool at once. Both are refused (BUG-0333).
+- The pool's virtual machine ownership records could still change while a master change was in
+  progress, so the records handed over were not the ones that had been agreed. They are now
+  deferred and settled afterwards (BUG-0334).
+- A master change handed to a host that then died left the pool permanently without a master. The
+  outgoing master can now resume, by powering that host off with your explicit confirmation
+  (BUG-0335).
+- A pool member could take over the pool in Nex Controller's view simply by claiming to be its
+  master, and separately, connecting a member to a replacement Controller before its master could
+  leave that pool stuck for ever. Both are fixed, and either connection order now works
+  (BUG-0336, BUG-0339).
+- A join invitation could outlive its fifteen minutes in the Controller database after a restart,
+  and an expired one could be re-sent empty. The window is now swept once a minute, and an
+  invitation nobody collected ends the task with a message instead (BUG-0337, BUG-0338).
+- A host's own management network rollback no longer depends on the clock. A host cut off by its
+  own change usually loses its time source with it, which is exactly when the rollback has to
+  fire; it now measures the window from its own boot instead (BUG-0340).
+- Applying or rolling back a management network change no longer takes the management bridge down
+  and back up, which used to cut off every virtual machine attached to it until its domain was
+  restarted. The bridge is reconfigured in place (BUG-0341).
+- A management network change could be kept on evidence that never crossed it — a connection from
+  the host to itself, or a report that left over a different network card. Only traffic that
+  actually terminates on the management bridge now counts (BUG-0342).
+- A management network rollback that started and could not finish now reports a failure, a spec
+  that names an interface the host does not have is refused before anything is staged, and
+  re-staging the same change with different settings is refused instead of silently replaying the
+  old one (BUG-0343, BUG-0344, BUG-0345).
+- **Maintenance mode now does its job for the commonest kind of guest.** Starting a virtual
+  machine on a drained host's own local storage was not blocked at all, nor was resuming a
+  suspended one. Both are refused now, on local and shared storage alike and whether or not the
+  pool master is reachable, and a drained host no longer lets guests start themselves after a
+  reboot (BUG-0346, BUG-0347).
+- A join could report **failed** while the pool master already held the host as a ready member,
+  which left no way to recover. Only the stages before the master can have admitted the host now
+  report a failure (BUG-0348).
+- The host-local join path no longer discards a join Nex Controller started, and the invitation is
+  cleared from the joining host once it has been redeemed (BUG-0349, BUG-0350).
+- A clustered-storage change is now refused while a pool master change is in progress, with the
+  same retry message every other pool change gives (BUG-0351).
+- A cancellation Nex Core actually carried out is now shown as the success it is, rather than as a
+  failed master change, and each member's fence device line says whether its credentials have been
+  replicated (BUG-0352).
+- Nex Core's services now restart automatically after any exit, not only after a failure, so a
+  management network rollback is not left unarmed by a crash (BUG-0353).
+- A removed ISO no longer blocks detaching its repository, and a repository already detached from
+  Nex no longer blocks joining a pool (BUG-0354, BUG-0355).
+- An ejected host now releases pool resources in dependency order and resumes a blocked leave by
+  itself once its named local dependency is cleared; it keeps its local VMs and never changes their
+  networking to force the leave through (BUG-0356).
+- Joining a pool now rehomes all copies of a member's retained local storage and media records, so
+  local storage remains usable after a join (BUG-0357).
+- An ejected membership row no longer prevents shared VM ownership from settling (BUG-0358).
+- An ejected host can rejoin its former pool, and a verified local-only VM stays with that host's
+  new pool; stale inventory still blocks ejecting when Core cannot prove shared VM safety
+  (BUG-0363, BUG-0365).
+- A VM deleted before an eject remains deleted when that host rejoins its former pool, and the old
+  pool removes its stale ownership record (BUG-0368).
+- A host rejoining its former pool can safely converge its existing shared networks, repositories
+  and ISO records without manually removing and re-adding them (BUG-0369).
+- The VM creation form now waits for the pool master's maintenance report before offering a host
+  as a placement target (BUG-0370).
+- The management-network form no longer creates horizontal overflow at a narrow viewport, while
+  keeping its hidden field labels available to assistive technology (BUG-0371).
+- A restricted host now refuses direct libvirt starts of managed local-storage VMs as well as
+  API-initiated starts; independent appliance domains and shared-storage permit handling are
+  unchanged (BUG-0374).
 
 ## [0.3.6] — 2026-09-19
 

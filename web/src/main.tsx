@@ -12,6 +12,9 @@ import { HostISOs, ManagedVMs, VMDetails, VMPower, VMDelete, powerActions, power
 import { Console } from "./console";
 import { Stats, RealtimeStats } from "./stats";
 import { Icon } from "./icons";
+import { PoolMembers } from "./pool-members";
+import { HostRestrictedBanner } from "./pool-promotion";
+import { HostNetwork } from "./host-network";
 
 type Site = { id: string; name: string };
 type Pool = Site & { site_id: string; master_host_id: string };
@@ -313,7 +316,8 @@ function App() {
   const [notice, setNoticeText] = useState("");
   // A notice about a queued task keeps that task's id, so it clears once the task leaves queued/dispatched.
   const [noticeOp, setNoticeOp] = useState("");
-  const setNotice = (text: string, operationID = "") => { setNoticeText(text); setNoticeOp(operationID); };
+  const noticeRoute = useRef("");
+  const setNotice = (text: string, operationID = "") => { noticeRoute.current = text ? (location.hash.slice(1) || "/") : ""; setNoticeText(text); setNoticeOp(operationID); };
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [search, setSearch] = useState("");
@@ -346,6 +350,9 @@ function App() {
     host_id: string;
     pool_id: string;
   } | null>(null);
+  // A retryable enrollment conflict is a wait, not a failure: the entries stay so a retry is one
+  // click, and the host's own words stay available in a fold.
+  const [hostRetry, setHostRetry] = useState<{ message: string; hostError: string } | null>(null);
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const [updateNote, setUpdateNote] = useState("");
   const [updatePhase, setUpdatePhase] = useState<"idle" | "checking" | "applying" | "done" | "error">("idle");
@@ -444,12 +451,18 @@ function App() {
     if (!response.ok) {
       let message = `Request failed (${response.status}).`;
       let hostID: string | undefined;
+      // A refusal the caller can present as a wait rather than a failure, with the host's own
+      // words kept for diagnosis (currently the add-host "pool identity is held" conflict).
+      let retryable = false;
+      let hostError: string | undefined;
       try {
         const failure = await response.json();
         message = failure.error || message;
         hostID = failure.host_id || undefined;
+        retryable = failure.retryable === true;
+        hostError = failure.host_error || undefined;
       } catch {}
-      throw Object.assign(new Error(message), { status: response.status, host_id: hostID });
+      throw Object.assign(new Error(message), { status: response.status, host_id: hostID, retryable, host_error: hostError });
     }
     const result =
       response.status === 204 ? (undefined as T) : await response.json();
@@ -697,14 +710,15 @@ function App() {
   }, [vmMenu]);
   useEffect(() => {
     const change = () => {
-      setRoute(location.hash.slice(1) || "/");
+      const nextRoute = location.hash.slice(1) || "/";
+      setRoute(nextRoute);
       setSearch("");
       setResourceSearch("");
       setTab(pendingNewVM.current ? "Virtual machines" : "General");
       pendingNewVM.current = false;
       setForm(null);
       setToken(null);
-      setNotice("");
+      if (noticeRoute.current !== nextRoute) setNotice("");
       setMediaNote("");
       setMediaChange(null);
       setActionError("");
@@ -748,6 +762,7 @@ function App() {
     setHostControllerURL(location.origin);
     setHostProbe(null);
     setHostAdded(null);
+    setHostRetry(null);
   }
   function open(next: typeof form) {
     if (busy) return;
@@ -1039,7 +1054,7 @@ function App() {
             </div>
           </div>
           {kind !== "tasks" && kind !== "updates" && !invalid && <nav className="detail-tabs" aria-label="Resource views">
-            {(vm ? ["General", "Stats", "Console", "Activity"] : host ? ["General", "Stats", "Console", "Networking", "Storage", "Activity"] : pool ? ["General", "Virtual machines", "Storage", "Networking", "ISO library", "Activity"] : ["General", "Activity"]).map((name) =>
+            {(vm ? ["General", "Stats", "Console", "Activity"] : host ? ["General", "Stats", "Console", "Networking", "Storage", "Activity"] : pool ? ["General", "Hosts", "Virtual machines", "Storage", "Networking", "ISO library", "Activity"] : ["General", "Activity"]).map((name) =>
               <button key={name} aria-current={tab === name ? "page" : undefined} onClick={() => { setTab(name); setNotice(""); }}>{name}</button>
             )}
           </nav>}
@@ -1191,12 +1206,24 @@ function App() {
                       <p className="help">
                         Confirm this is the intended host before continuing.
                       </p>
+                      {hostRetry && (
+                        <div className="warning" role="status">
+                          <p>{hostRetry.message}</p>
+                          {hostRetry.hostError && (
+                            <details>
+                              <summary>What the host reported</summary>
+                              <p className="mono">{hostRetry.hostError}</p>
+                            </details>
+                          )}
+                        </div>
+                      )}
                       <div className="actions">
                         <button
                           className="primary"
                           disabled={busy}
                           onClick={() =>
                             void action(async () => {
+                              setHostRetry(null);
                               const added = await api<{
                                 host_id: string;
                                 pool_id: string;
@@ -1206,11 +1233,18 @@ function App() {
                                 root_password: hostPassword,
                                 controller_url: hostControllerURL,
                                 ...(host ? { host_id: host.id } : {}),
-                              }).catch((e: Error & { status?: number; host_id?: string }) => {
+                              }).catch((e: Error & { status?: number; host_id?: string; retryable?: boolean; host_error?: string }) => {
+                                // Not a failure: the pool master has not reported this member yet.
+                                // Keep the confirmed probe and password so retrying is one click.
+                                if (e.status === 409 && e.retryable) {
+                                  setHostRetry({ message: sentence(e.message.charAt(0).toUpperCase() + e.message.slice(1)), hostError: e.host_error || "" });
+                                  return null;
+                                }
                                 if (e.status === 409 && e.host_id)
                                   throw new Error(`${sentence(e.message.charAt(0).toUpperCase() + e.message.slice(1))} Host ${e.host_id} still trusts a Controller at this address. Use Re-enroll host on that host, or check the Controller address.`);
                                 throw e;
                               });
+                              if (!added) return;
                               setHostPassword("");
                               setHostAdded(added);
                               await reload();
@@ -1408,12 +1442,14 @@ function App() {
             />
           ) : (
             <>
-              {pool && !host && !vm && <ManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} poolName={pool.name} masterHostID={pool.master_host_id} tab={tab} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={setTab} unavailable={Boolean(error)} uploading={upload?.state === "uploading"} startIsoUpload={startIsoUpload} createVM={createVM} onCreateVMShown={() => setCreateVM(false)} />}
+              {pool && !host && !vm && <ManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} poolName={pool.name} masterHostID={pool.master_host_id} tab={tab} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={setTab} unavailable={Boolean(error)} uploading={upload?.state === "uploading"} startIsoUpload={startIsoUpload} createVM={createVM} onCreateVMShown={() => setCreateVM(false)} onNotice={setNotice} />}
+              {pool && !host && !vm && tab === "Hosts" && <PoolMembers key={pool.id} poolID={pool.id} api={api} unavailable={Boolean(error)} />}
               {vm && tab === "General" && <VMDetails vm={vm} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} api={api} reload={reload} busy={busy} unavailable={Boolean(error)} onNotice={setNotice} installMedia={{ busy: mediaBusy, note: vmMediaNote(vm), onEject: () => void changeVMMedia(vm.id, "eject", "install") }} />}
               {vm && tab === "Console" && <>{startError && <p className="alert" role="alert">{startError}</p>}<div className="vm-console-panel" key={vm.id}><Console key={vm.id} name={vm.name} guest={vm.guest} popout={`#/console/${vm.id}`} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={() => openConsole(vm.id)} media={vmMediaControls(vm)} power={vmPowerControls(vm)} /><RealtimeStats kind="vm" id={vm.id} api={api} /></div></>}
               {vm && tab === "Stats" && <Stats key={vm.id} kind="vm" id={vm.id} api={api} />}
               {host && !vm && tab === "Stats" && <Stats key={host.id} kind="host" id={host.id} api={api} />}
               {host && !vm && tab === "Console" && <Console key={host.id} name={host.hostname || host.id} popout={`#/host-console/${host.id}`} disabled={hostConsoleBlocker(host)} open={() => openHostConsole(host.id)} />}
+              {host && !vm && tab === "Networking" && <HostNetwork key={host.id} hostID={host.id} api={api} unavailable={Boolean(error)} />}
               <div hidden={Boolean(vm) || tab === "Activity" || tab === "Console" || tab === "Stats" || Boolean(pool && !host && tab !== "General")}>
               {!host && (
                 <div className="metrics">
@@ -1517,6 +1553,7 @@ function App() {
               )}
               {host ? (
                 <>
+                  {tab !== "Console" && host.pool_id && <HostRestrictedBanner key={host.id} poolID={host.pool_id} hostID={host.id} api={api} />}
                   {tab !== "Console" && <HostDetails host={host} master={pool?.master_host_id === host.id} tab={tab} />}
                   {tab === "Storage" && <HostISOs host={host} media={data.media} storage={data.storage} unavailable={Boolean(error)} />}
                 </>

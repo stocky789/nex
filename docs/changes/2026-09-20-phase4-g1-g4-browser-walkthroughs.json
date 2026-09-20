@@ -1,0 +1,44 @@
+{
+  "summary": "Record bounded G1 UI/native convergence and missing-uplink recovery, corrected same-host G2 maintenance, and G4 typed-eject browser walkthroughs. API impact: existing contract.",
+  "paths": [
+    "docs/API.md",
+    "docs/guide/manage-controller.md",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/host-maintenance-mode.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/qa/2026-09-19-phase4-native-acceptance.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The guide verification sections record bounded G1 UI/native recovery, G2 and G4 browser scopes, and correct stale availability statements for the current Controller-driven workflows.",
+    "pages": [
+      "docs/guide/manage-controller.md",
+      "docs/guide/join-a-pool.md",
+      "docs/guide/host-maintenance-mode.md",
+      "docs/guide/pool-authority-and-recovery.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The walkthroughs and reference correction cover existing join, membership, maintenance, VM-power, placement and eject operations without changing a route or wire field.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The reviewed normal workflows do not complete Phase 4 or manual recovery.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Core owns membership, replica, transfer, maintenance and solo-pool state shown by Controller.",
+    "record": "Existing Core pool-peer membership, replica, transfer and maintenance records remain authoritative and are reported to a replacement Controller through inventory."
+  },
+  "verification": {
+    "method": "G1 retained 1280 px and 360 px captures and raw requests bind a bootstrap join plus two typed eject/join cycles to accepted operations and terminal success. Each reviewed completed cycle returns the host ready/fresh with a verified current replica and all seven checks healthy; NFS, ISO and direct native VLAN bridge/child/port/owned-stanza evidence converge. An earlier interrupted second-cycle attempt stopped before eject and is historical, not evidence. A separate reviewed native run binds a typed UI join to later missing-uplink reconciliation failure, autonomous recovery after the uplink returns without another join, direct bridge/VLAN child/port/stanza evidence and terminal cleanup that removes those resources while retaining original uplinks. Its first continuation failed only from a bridge-port-directory harness assertion; the corrected native capture is supplemental, not a rerun. Earlier separate 1280 px/360 px captures visibly show the selected member's missing-uplink will-not-converge warning; later screenshots do not and are not used for that assertion. G1 hardware coverage remains open. G4 evidence shows typed UI eject, terminal success and the ejected host's local solo-pool state. Corrected G2 evidence uses a VM on the maintained host: it remains running on entry, is stopped, receives a terminal Core maintenance refusal on UI Start, is disabled as a placement option with its displayed reason, then starts and stops normally after exit. Earlier wrong-target G2 evidence is historical only.",
+    "evidence": [
+      "docs/qa/2026-09-19-phase4-native-acceptance.md"
+    ]
+  }
+}

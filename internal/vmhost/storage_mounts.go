@@ -709,6 +709,44 @@ func detachRemote(ctx context.Context, s protocol.StorageRegistration) error {
 	return err
 }
 
+// storageMountStale reports the one mount failure Core can repair by itself. It is a seam so
+// the decision either side of it is testable without an NFS server.
+var storageMountStale = func(path string) bool {
+	_, err := os.Stat(path)
+	return errors.Is(err, syscall.ESTALE)
+}
+
+// repairStaleRemoteMount recovers a repository whose backing filesystem was replaced out of
+// band: every client is left holding a stale NFS file handle, which no amount of re-reading
+// fixes while the mount unit is still active, so a recheck could only report the mountpoint
+// unavailable for ever. Cycling the generated unit re-resolves the handle.
+//
+// It is attempted only when nothing durable on this host uses the repository, so a VM disk or
+// an imported ISO is never pulled out from under a guest; when something does, the dependency
+// is named and the operator decides. Nothing else is repaired: any other cause leaves the
+// mount exactly as it was and the ordinary verification reports it.
+func repairStaleRemoteMount(ctx context.Context, js []managedJournal, s protocol.StorageRegistration) error {
+	if k := s.StorageKind(); k != protocol.StorageKindNFS && k != protocol.StorageKindSMB {
+		return nil
+	}
+	if !storageMountStale(remoteMountPath(s)) {
+		return nil
+	}
+	if deps := storageDependencies(js, s.ID); len(deps) > 0 {
+		return errors.New("storage has a stale file handle from a change on the file server and cannot be remounted while used by " + strings.Join(deps, ", ") + "; stop them and recheck again")
+	}
+	unit, unitPath := remoteUnitPath(s)
+	if b, err := os.ReadFile(unitPath); err != nil || !strings.HasPrefix(string(b), nexMountMarker) {
+		return nil
+	}
+	work, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if _, err := nativeRun(work, "systemctl", "restart", unit); err != nil {
+		return errors.New("storage has a stale file handle from a change on the file server and the mount could not be restarted; check the file server, then recheck again")
+	}
+	return nil
+}
+
 // startRemoteMount starts the existing, unchanged Nex NFS/SMB mount unit only when systemd
 // reports it inactive or failed. It never restarts, rewrites, reloads, enables or reads
 // credentials; the read-only verification that follows decides whether the repository is usable.

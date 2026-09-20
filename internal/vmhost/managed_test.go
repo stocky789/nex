@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -2252,5 +2253,207 @@ func TestLibvirtCPUCheckNoneAccepted(t *testing.T) {
 	omit := strings.Replace(string(wanted), ` check="none"`, "", 1)
 	if err = validateManagedDefinition([]byte(wanted), []byte(omit)); err != nil {
 		t.Fatalf("check=none against omitted check rejected: %v", err)
+	}
+}
+
+func TestEjectCleanupReapplyConsumesOnlyTheMarkedRemoval(t *testing.T) {
+	remove := func(resource, id string, generation uint64, marked bool) managedJournal {
+		j := managedJournal{Command: protocol.Command{OperationID: resource + "-remove-" + strconv.FormatUint(generation, 10), Kind: resource + "-remove", ResourceLifecycle: &protocol.ResourceLifecycleRequest{Resource: resource, Action: "remove", ResourceID: id, PoolID: "pool-1", HostID: "host-1", ExpectedGeneration: generation}}, Result: protocol.Result{Status: "succeeded"}}
+		if resource == "storage" {
+			j.Command.Kind = "storage-detach"
+			j.Command.ResourceLifecycle = nil
+			j.Command.StorageLifecycle = &protocol.StorageLifecycleRequest{Action: "detach", RepositoryID: id, PoolID: "pool-1", HostID: "host-1", ExpectedGeneration: generation}
+		}
+		if marked {
+			j.EjectCleanup = &ejectCleanup{PoolID: "pool-1", HostID: "host-1", Resource: resource, ResourceID: id, MembershipGeneration: 4}
+		}
+		return j
+	}
+	register := func(resource, id string, generation uint64, status string) managedJournal {
+		j := managedJournal{Result: protocol.Result{Status: status}, EjectCleanupReapply: &ejectCleanupReapply{RemovalOperationID: resource + "-remove-1", MembershipGeneration: 6}}
+		switch resource {
+		case "network":
+			j.Command = protocol.Command{OperationID: "network-apply", Kind: "network-register", Network: &protocol.NetworkRegistration{ID: id, PoolID: "pool-1", HostID: "host-1", Kind: "vlan", Generation: generation}}
+		case "storage":
+			j.Command = protocol.Command{OperationID: "storage-apply", Kind: "storage-register", Storage: &protocol.StorageRegistration{ID: id, PoolID: "pool-1", HostID: "host-1", Generation: generation}}
+		case "media":
+			j.Command = protocol.Command{OperationID: "media-apply", Kind: "iso-import", Media: &protocol.Media{ID: id, PoolID: "pool-1", HostID: "host-1", Generation: generation, StorageID: "repo", SizeBytes: 40000, SHA256: strings.Repeat("a", 64)}}
+		}
+		return j
+	}
+	for _, resource := range []string{"network", "storage", "media"} {
+		id := resource + "-1"
+		for _, desiredGeneration := range []uint64{1, 2} { // unchanged master N, then N+1 while away
+			js := []managedJournal{remove(resource, id, 1, true), register(resource, id, desiredGeneration, "succeeded")}
+			var tombstoned bool
+			switch resource {
+			case "network":
+				_, tombstoned = networkTombstones(js)[id]
+				if got := protocol.NetworkGeneration(networkProjection(js)[id]); got != desiredGeneration {
+					t.Fatalf("%s reapply generation = %d, want %d", resource, got, desiredGeneration)
+				}
+			case "storage":
+				_, tombstoned = storageTombstones(js)[id]
+				if got := storageProjection(js)[id].Generation; got != desiredGeneration {
+					t.Fatalf("%s reapply generation = %d, want %d", resource, got, desiredGeneration)
+				}
+			case "media":
+				_, tombstoned = mediaTombstones(js)[id]
+				if got := protocol.MediaGeneration(appliedMediaProjection(js)[0]); got != desiredGeneration {
+					t.Fatalf("%s reapply generation = %d, want %d", resource, got, desiredGeneration)
+				}
+			}
+			if tombstoned {
+				t.Fatalf("%s marked cleanup still tombstoned after succeeded reapply", resource)
+			}
+		}
+		js := []managedJournal{remove(resource, id, 1, true), register(resource, id, 1, "succeeded")}
+		candidate := register(resource, id, 1, "pending").Command
+		if _, err := eligibleEjectCleanup([]managedJournal{remove(resource, id, 1, true), register(resource, id, 1, "pending")}, candidate, "pool-1", "host-1", 6); err != nil {
+			t.Fatalf("%s crash retry grant = %v", resource, err)
+		}
+		if _, err := eligibleEjectCleanup([]managedJournal{remove(resource, id, 1, true), register(resource, id, 1, "failed")}, candidate, "pool-1", "host-1", 6); err != nil {
+			t.Fatalf("%s failed reapply retry grant = %v", resource, err)
+		}
+		if _, err := eligibleEjectCleanup(js, candidate, "pool-1", "host-1", 4); err == nil {
+			t.Fatalf("%s accepted stale membership", resource)
+		}
+		changed := candidate
+		switch resource {
+		case "network":
+			changed.Network.PoolID = "other-pool"
+		case "storage":
+			changed.Storage.HostID = "other-host"
+		case "media":
+			changed.Media.PoolID = "other-pool"
+		}
+		if _, err := eligibleEjectCleanup(js, changed, "pool-1", "host-1", 6); err == nil {
+			t.Fatalf("%s accepted changed pool or host identity", resource)
+		}
+		if _, err := eligibleEjectCleanup(append(js, remove(resource, id, 2, false)), register(resource, id, 2, "succeeded").Command, "pool-1", "host-1", 7); err == nil {
+			t.Fatalf("%s bypassed later deliberate removal", resource)
+		}
+	}
+}
+
+func TestEjectCleanupReapplyDoesNotReplayEarlierCleanupOperation(t *testing.T) {
+	state := t.TempDir()
+	e := NewManaged(state)
+	network := protocol.NetworkRegistration{ID: "net-1", PoolID: "pool-1", HostID: "host-1", Kind: "vlan", Source: "nexqav100", Uplink: "nexqa", VLAN: 100, Generation: 1}
+	firstRemoval := managedJournal{
+		Command:      protocol.Command{OperationID: "leave-4", Kind: "network-remove", ResourceLifecycle: &protocol.ResourceLifecycleRequest{Resource: "network", Action: "remove", ResourceID: network.ID, PoolID: network.PoolID, HostID: network.HostID, ExpectedGeneration: network.Generation}},
+		Result:       protocol.Result{OperationID: "leave-4", Status: "succeeded"},
+		EjectCleanup: &ejectCleanup{PoolID: network.PoolID, HostID: network.HostID, Resource: "network", ResourceID: network.ID, MembershipGeneration: 4},
+	}
+	// This is the completed registration from the first rejoin. The second signed eject
+	// keeps the master network generation and caller operation unchanged.
+	prior := managedJournal{Command: protocol.Command{OperationID: "network-apply", Kind: "network-register", Network: &network}, Result: protocol.Result{OperationID: "network-apply", Status: "succeeded"}, EjectCleanupReapply: &ejectCleanupReapply{RemovalOperationID: firstRemoval.Command.OperationID, MembershipGeneration: 5}}
+	secondRemoval := managedJournal{
+		Command:      protocol.Command{OperationID: "leave-6", Kind: "network-remove", ResourceLifecycle: &protocol.ResourceLifecycleRequest{Resource: "network", Action: "remove", ResourceID: network.ID, PoolID: network.PoolID, HostID: network.HostID, ExpectedGeneration: network.Generation}},
+		Result:       protocol.Result{OperationID: "leave-6", Status: "succeeded"},
+		EjectCleanup: &ejectCleanup{PoolID: network.PoolID, HostID: network.HostID, Resource: "network", ResourceID: network.ID, MembershipGeneration: 6},
+	}
+	for _, j := range []managedJournal{firstRemoval, prior, secondRemoval} {
+		if err := e.save(j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := e.ExecuteEjectCleanupReapply(context.Background(), prior.Command, network.PoolID, network.HostID, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OperationID == prior.Command.OperationID {
+		t.Fatalf("reapply reused prior operation ID %q", result.OperationID)
+	}
+	// nexqa intentionally does not exist. Reaching native validation therefore fails;
+	// a returned success here would prove the old receipt was replayed instead.
+	if result.Status == "succeeded" || !strings.Contains(result.Error, "uplink nexqa does not exist") {
+		t.Fatalf("reapply replayed prior success instead of attempting native apply: %#v", result)
+	}
+	js, err := e.journals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, j := range js {
+		if j.Command.OperationID == result.OperationID {
+			found = true
+			if j.EjectCleanupReapply == nil || j.EjectCleanupReapply.RemovalOperationID != secondRemoval.Command.OperationID {
+				t.Fatalf("new reapply receipt = %#v", j.EjectCleanupReapply)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("native reapply attempt did not append a cleanup-bound receipt")
+	}
+	beforeRetry := len(js)
+	retry, err := e.ExecuteEjectCleanupReapply(context.Background(), prior.Command, network.PoolID, network.HostID, 7)
+	if err != nil || retry.OperationID != result.OperationID || retry.Status != result.Status || retry.Error != result.Error {
+		t.Fatalf("same cleanup retry = %#v, %v; want %#v", retry, err, result)
+	}
+	js, err = e.journals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(js) != beforeRetry {
+		t.Fatalf("same cleanup retry wrote %d entries, want %d", len(js), beforeRetry)
+	}
+
+	// Storage uses this same Engine path. Its cleanup-bound ID remains stable for the
+	// same removal but must not collide with a later storage detach, without mounting.
+	storageFirst := ejectCleanupReapplyOperation("storage-apply", "storage-leave-4")
+	storageSecond := ejectCleanupReapplyOperation("storage-apply", "storage-leave-6")
+	if storageFirst == "storage-apply" || storageSecond == storageFirst || storageSecond != ejectCleanupReapplyOperation("storage-apply", "storage-leave-6") {
+		t.Fatalf("storage cleanup-bound operation IDs are not distinct and stable: %q, %q", storageFirst, storageSecond)
+	}
+}
+
+func TestEjectCleanupReapplySelectsTheNewestMembershipCycle(t *testing.T) {
+	remove := func(operation string, membership uint64) managedJournal {
+		return managedJournal{Command: protocol.Command{OperationID: operation, Kind: "network-remove", ResourceLifecycle: &protocol.ResourceLifecycleRequest{Resource: "network", Action: "remove", ResourceID: "net-1", PoolID: "pool-1", HostID: "host-1", ExpectedGeneration: 1}}, Result: protocol.Result{Status: "succeeded"}, EjectCleanup: &ejectCleanup{PoolID: "pool-1", HostID: "host-1", Resource: "network", ResourceID: "net-1", MembershipGeneration: membership}}
+	}
+	reapply := func(removal string, membership uint64, status string) managedJournal {
+		return managedJournal{Command: protocol.Command{OperationID: "network-apply-" + removal, Kind: "network-register", Network: &protocol.NetworkRegistration{ID: "net-1", PoolID: "pool-1", HostID: "host-1", Kind: "vlan", Generation: 1}}, Result: protocol.Result{Status: status}, EjectCleanupReapply: &ejectCleanupReapply{RemovalOperationID: removal, MembershipGeneration: membership}}
+	}
+	first, second := remove("leave-4", 4), remove("leave-11", 11)
+	candidate := reapply("leave-11", 12, "pending").Command
+	js := []managedJournal{first, reapply("leave-4", 5, "succeeded"), second}
+	selected, err := eligibleEjectCleanup(js, candidate, "pool-1", "host-1", 12)
+	if err != nil || selected.Command.OperationID != "leave-11" {
+		t.Fatalf("selected cleanup = %q, %v", selected.Command.OperationID, err)
+	}
+	if _, err := eligibleEjectCleanup([]managedJournal{second, remove("leave-11-duplicate", 11)}, candidate, "pool-1", "host-1", 12); err == nil {
+		t.Fatal("equal-generation signed cleanup receipts were not rejected as ambiguous")
+	}
+	js = append(js, reapply("leave-11", 12, "succeeded"))
+	if _, tombstoned := networkTombstones(js)["net-1"]; tombstoned {
+		t.Fatal("newest cleanup remained after its succeeded reapply")
+	}
+	// Shared media adoption deliberately reuses its deterministic operation ID. A later
+	// cycle replaces the old receipt in place, so the projection must not revive the older
+	// cleanup merely because it no longer has a receipt of its own.
+	js = []managedJournal{first, second, reapply("leave-11", 12, "succeeded")}
+	if _, tombstoned := networkTombstones(js)["net-1"]; tombstoned {
+		t.Fatal("rewritten reapply receipt revived the older cleanup")
+	}
+	// A same-generation deliberate removal is not ordered by filename or operation ID;
+	// it is ambiguous and must continue to win over every automatic cleanup grant.
+	deliberate := remove("operator-remove", 0)
+	deliberate.EjectCleanup = nil
+	if _, err := eligibleEjectCleanup(append(js, deliberate), candidate, "pool-1", "host-1", 12); err == nil {
+		t.Fatal("latest deliberate tombstone was bypassed")
+	}
+	mediaRemove := func(operation string, membership uint64) managedJournal {
+		return managedJournal{Command: protocol.Command{OperationID: operation, Kind: "media-remove", ResourceLifecycle: &protocol.ResourceLifecycleRequest{Resource: "media", Action: "remove", ResourceID: "iso-1", PoolID: "pool-1", HostID: "host-1", ExpectedGeneration: 1}}, Result: protocol.Result{Status: "succeeded"}, EjectCleanup: &ejectCleanup{PoolID: "pool-1", HostID: "host-1", Resource: "media", ResourceID: "iso-1", MembershipGeneration: membership}}
+	}
+	mediaReapply := managedJournal{Command: protocol.Command{OperationID: sharedMediaAdoptionOperation("iso-1"), Kind: "iso-import", Media: &protocol.Media{ID: "iso-1", PoolID: "pool-1", HostID: "host-1", StorageID: "repo-1", SizeBytes: 40000, SHA256: strings.Repeat("a", 64), Generation: 1}}, Result: protocol.Result{Status: "succeeded"}, EjectCleanupReapply: &ejectCleanupReapply{RemovalOperationID: "media-leave-11", MembershipGeneration: 12}}
+	// AdoptSharedMedia rewrites its deterministic operation file. This is the actual
+	// post-rewrite journal shape: only the newest receipt remains beside both cleanups.
+	mediaJS := []managedJournal{mediaRemove("media-leave-4", 4), mediaRemove("media-leave-11", 11), mediaReapply}
+	if _, tombstoned := mediaTombstones(mediaJS)["iso-1"]; tombstoned {
+		t.Fatal("media receipt rewrite revived an older cleanup tombstone")
+	}
+	if media := appliedMediaProjection(mediaJS); len(media) != 1 || media[0].ID != "iso-1" {
+		t.Fatalf("media receipt rewrite projection = %#v", media)
 	}
 }

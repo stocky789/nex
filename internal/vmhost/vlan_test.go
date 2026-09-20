@@ -269,3 +269,69 @@ func TestAppliedFromJournal(t *testing.T) {
 		t.Fatalf("media %+v vm %+v", got.Media[0], got.VMs[0])
 	}
 }
+
+// The pool convergence precheck and the native apply must refuse the same host conditions
+// in the same words: they are one function, and this proves that for every condition it
+// covers. A divergence here is the D3 defect returning — a member that refuses locally with
+// a sentence the apply would never have produced, or applies something the check allowed.
+func TestCheckNetworkApplyAndTheNativeApplyRefuseAlike(t *testing.T) {
+	sys, proc := t.TempDir()+"/", t.TempDir()+"/"
+	t.Cleanup(NetworkSysfsRootsForTests(sys, proc))
+	mk := func(elem ...string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(elem...), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := func(from, to string) {
+		t.Helper()
+		if err := os.Symlink(filepath.Join(sys, to), filepath.Join(sys, from, "master")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Every uplink below is a separate scratch NIC, so one case never sets up the next.
+	mk(sys, "nexa")             // a plain NIC: only its VLAN port is in the way
+	mk(sys, "nexb", "bridge")   // a bridge offered as an uplink
+	mk(sys, "nexc")             // a bonded NIC
+	mk(sys, "bond0", "bonding") //
+	link("nexc", "bond0")       //
+	mk(sys, "nexd")             // its VLAN port belongs to another bridge
+	mk(sys, "nexd.100")         //
+	mk(sys, "otherbr")          //
+	link("nexd.100", "otherbr") //
+	mk(sys, "nexe")             // its guest bridge name is taken by a non-bridge
+	mk(sys, protocol.GuestBridge("nexe", 100))
+	mk(proc, "nexf") // a VLAN device offered as an uplink
+	mk(sys, "nexf")  //
+	mk(sys, "nexg")  // valid so far: only the registration itself is wrong
+	for _, c := range []struct {
+		name string
+		n    protocol.NetworkRegistration
+		want string
+	}{
+		{"invalid registration", vlanNet("nexg", 4095), "VLAN"},
+		{"missing uplink", vlanNet("nexz", 100), "does not exist on this host"},
+		{"bridge as uplink", vlanNet("nexb", 100), "must be a physical NIC or bond"},
+		{"VLAN device as uplink", vlanNet("nexf", 100), "must be a physical NIC or bond"},
+		{"bond member as uplink", vlanNet("nexc", 100), "is a member of bond bond0"},
+		{"VLAN port in use", vlanNet("nexd", 100), "already used by otherbr"},
+		{"bridge name is not a bridge", vlanNet("nexe", 100), "is not a bridge"},
+	} {
+		precheck := CheckNetworkApply(c.n)
+		apply := ensureGuestBridge(context.Background(), c.n, t.TempDir())
+		switch {
+		case precheck == nil || apply == nil:
+			t.Fatalf("%s: precheck = %v, native apply = %v", c.name, precheck, apply)
+		case precheck.Error() != apply.Error():
+			t.Fatalf("%s: precheck %q and native apply %q disagree", c.name, precheck, apply)
+		case !strings.Contains(precheck.Error(), c.want):
+			t.Fatalf("%s: refusal = %q, want it to name %q", c.name, precheck, c.want)
+		}
+	}
+	// The check never approves an apply on its own: a registration it passes is still
+	// subject to everything only the native apply can see.
+	mk(sys, "nexa.100")
+	if err := CheckNetworkApply(vlanNet("nexa", 100)); err != nil {
+		t.Fatalf("a registration with nothing in its way was refused: %v", err)
+	}
+}

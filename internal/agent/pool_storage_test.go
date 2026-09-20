@@ -3,9 +3,11 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -971,6 +973,19 @@ func TestMemberReconcileCheckReportsFailureThenFreshRecovery(t *testing.T) {
 	if check := PoolStorageReconcileCheck(s); check == nil || check.Status != "healthy" {
 		t.Fatalf("recovery check = %#v", check)
 	}
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(s)
+	if err == nil {
+		state.Membership.MasterHostID = s.State.HostID
+		err = savePoolPeer(s, state)
+	}
+	poolPeerMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if check := PoolStorageReconcileCheck(s); check == nil || check.Status != "healthy" || check.Freshness != "fresh" || check.ObservedAt.IsZero() || check.Error != "" {
+		t.Fatalf("new master storage reconcile clear = %#v", check)
+	}
 }
 
 func TestPoolStorageReconcileSourceKeepsLocalAndOrphanStageTags(t *testing.T) {
@@ -1001,24 +1016,29 @@ func TestPoolStorageOperationIsManagedCommandIdentifier(t *testing.T) {
 
 func TestUnusedReservationSelectionWaitsForJournalReferencesToDisappear(t *testing.T) {
 	managed := &protocol.ManagedState{Storage: []protocol.StorageRegistration{{ID: "repo-1", Kind: protocol.StorageKindNFS}}, VMs: []protocol.VMCreateSpec{{ID: "vm-1", Disks: []protocol.VMDisk{{StorageID: "repo-1"}}}}}
-	if ids, safe := poolStorageUnusedIDs(managed, []protocol.Check{{Status: "healthy"}}); !safe || len(ids) != 0 {
+	if ids, safe := poolStorageUnusedIDs(managed, []protocol.Check{{Status: "healthy"}}, nil); !safe || len(ids) != 0 {
 		t.Fatalf("live disk released reservation: %v %v", ids, safe)
 	}
 	managed.VMs[0].Disks = nil // Durable vm-update removed the last disk.
-	if ids, safe := poolStorageUnusedIDs(managed, []protocol.Check{{Status: "healthy"}}); !safe || len(ids) != 1 || ids[0] != "repo-1" {
+	if ids, safe := poolStorageUnusedIDs(managed, []protocol.Check{{Status: "healthy"}}, nil); !safe || len(ids) != 1 || ids[0] != "repo-1" {
 		t.Fatalf("removed disk did not release: %v %v", ids, safe)
 	}
 	managed.VMs = []protocol.VMCreateSpec{{ID: "vm-1", MediaID: "iso-1"}}
 	managed.Media = []protocol.Media{{ID: "iso-1", StorageID: "repo-1"}}
-	if ids, safe := poolStorageUnusedIDs(managed, []protocol.Check{{Status: "healthy"}}); !safe || len(ids) != 0 {
+	if ids, safe := poolStorageUnusedIDs(managed, []protocol.Check{{Status: "healthy"}}, func(string) bool { return true }); !safe || len(ids) != 0 {
 		t.Fatalf("attached media released reservation: %v %v", ids, safe)
 	}
 	managed.VMs[0].MediaID = "" // Durable media-eject no longer refers to the ISO.
 	managed.Media = nil
-	if ids, safe := poolStorageUnusedIDs(managed, []protocol.Check{{Status: "healthy"}}); !safe || len(ids) != 1 {
+	if ids, safe := poolStorageUnusedIDs(managed, []protocol.Check{{Status: "healthy"}}, nil); !safe || len(ids) != 1 {
 		t.Fatalf("ejected media did not release: %v %v", ids, safe)
 	}
-	if _, safe := poolStorageUnusedIDs(managed, []protocol.Check{{Status: "unknown"}}); safe {
+	managed.VMs = []protocol.VMCreateSpec{{ID: "vm-1", DriversMediaID: "iso-1"}}
+	managed.Media = []protocol.Media{{ID: "iso-1", StorageID: "repo-1"}}
+	if ids, safe := poolStorageUnusedIDs(managed, []protocol.Check{{Status: "healthy"}}, func(string) bool { return true }); !safe || len(ids) != 0 {
+		t.Fatalf("attached drivers media released reservation: %v %v", ids, safe)
+	}
+	if _, safe := poolStorageUnusedIDs(managed, []protocol.Check{{Status: "unknown"}}, nil); safe {
 		t.Fatal("unhealthy journal observation released a reservation")
 	}
 }
@@ -1099,6 +1119,27 @@ func TestPoolReservationReleaseUsesAuthenticatedPeerDelete(t *testing.T) {
 	}
 	if state.Reservations["repo-1"]["member-1"] != "" {
 		t.Fatalf("mTLS release did not remove member reservation: %#v", state.Reservations)
+	}
+	// An adopted ISO belongs to the pool's importing host, so its record on this member
+	// cannot keep the member's storage reservation forever after it has converged.
+	media := protocol.Media{ID: "shared-iso", PoolID: "pool-1", HostID: "member-1", StorageID: "repo-1", Name: "shared.iso", SizeBytes: 40000, SHA256: strings.Repeat("a", 64)}
+	digest := sha256.Sum256([]byte("pool-media\x00" + media.ID))
+	adoptionOperation := "media-" + fmt.Sprintf("%x", digest[:])[:32]
+	writeManagedJournal(t, dir, adoptionOperation, protocol.Command{OperationID: adoptionOperation, Kind: "iso-import", Media: &media})
+	if state.Reservations["repo-1"] == nil {
+		state.Reservations["repo-1"] = map[string]string{}
+	}
+	state.Reservations["repo-1"]["member-1"] = "stale-adopted-media"
+	if err = savePoolStorage(master, state); err != nil {
+		t.Fatal(err)
+	}
+	ReleaseUnusedPoolStorageReservations(context.Background(), member)
+	state, err = loadPoolStorage(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Reservations["repo-1"]["member-1"] != "" {
+		t.Fatalf("adopted ISO kept member reservation: %#v", state.Reservations)
 	}
 	membership, err := Membership(master)
 	if err != nil {
@@ -1305,21 +1346,7 @@ func TestPoolStoragePeerPeriodicHandlersUseStorageProjectionOnly(t *testing.T) {
 	response = request(http.MethodPost, poolStoragePath+storage.ID+"/access", string(accessBody), http.StatusConflict)
 	response.Body.Close()
 
-	// The projection preserves readable registrations when an unrelated journal is
-	// corrupt, as Applied did; it must not turn that VM/media failure into storage
-	// admission. The durable pool-storage file remains a separate fail-closed guard.
-	if err = os.WriteFile(filepath.Join(managedDir, "corrupt.json"), []byte("{"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	response = request(http.MethodGet, strings.TrimSuffix(poolStoragePath, "/"), "", http.StatusOK)
-	if err = json.NewDecoder(response.Body).Decode(&listed); err != nil {
-		response.Body.Close()
-		t.Fatal(err)
-	}
-	response.Body.Close()
-	if len(listed) != 1 || listed[0].ID != storage.ID {
-		t.Fatalf("corrupt unrelated journal changed peer storage list: %#v", listed)
-	}
+	// The durable pool-storage file is its own fail-closed guard.
 	access.Generation = storage.Generation
 	accessBody, err = json.Marshal(access)
 	if err != nil {
@@ -1332,6 +1359,18 @@ func TestPoolStoragePeerPeriodicHandlersUseStorageProjectionOnly(t *testing.T) {
 	response.Body.Close()
 	if got := poolStorageAccess(master)[storage.ID][member.State.HostID]; got.HostID != "" {
 		t.Fatalf("corrupt pool storage retained member access: %#v", got)
+	}
+	// Owner decision D4, 2026-09-19: an unreadable journal entry fails the repository
+	// peer list closed, as the network and ISO lists already do, because a member reads
+	// absence from this list as removal. It no longer serves a possibly short list.
+	if err = os.WriteFile(filepath.Join(managedDir, "corrupt.json"), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	response = request(http.MethodGet, strings.TrimSuffix(poolStoragePath, "/"), "", http.StatusServiceUnavailable)
+	short, err := io.ReadAll(io.LimitReader(response.Body, 1<<16))
+	response.Body.Close()
+	if err != nil || !strings.Contains(string(short), "managed journal is incomplete") {
+		t.Fatalf("incomplete journal list = %q (%v)", strings.TrimSpace(string(short)), err)
 	}
 	if _, err = os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("periodic storage peer handler observed unrelated VM: %v", err)

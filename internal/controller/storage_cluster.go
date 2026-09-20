@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"nex.local/nex/internal/protocol"
-	"strings"
 	"sync"
 	"time"
 )
@@ -196,6 +195,11 @@ func (c *Controller) relayStorageCluster(w http.ResponseWriter, r *http.Request,
 	case found := <-result:
 		write(w, http.StatusOK, found)
 	case <-r.Context().Done():
+		// Nobody is left to read this, but writing nothing makes net/http emit a bare 200,
+		// which is the one answer an abandoned request must never produce. The deferred
+		// delete above releases the broker entry, so an exact retry with the same
+		// request_id is accepted rather than refused as already active.
+		fail(w, statusClientClosedRequest, "the client disconnected before Core answered; retry with the same request_id")
 		return
 	case <-time.After(30 * time.Second):
 		write(w, http.StatusGatewayTimeout, protocol.StorageClusterResult{RequestID: request.RequestID, PoolID: request.PoolID, HostID: request.HostID, Status: "needs_attention", Error: "Core did not confirm clustered storage before the deadline", ObservedAt: time.Now().UTC()})
@@ -273,8 +277,7 @@ func (c *Controller) storageClusterCredentials(w http.ResponseWriter, r *http.Re
 		return
 	}
 	binding := clusterCredentialBinding(body)
-	ssh := body.Kind == "fence_ssh"
-	if !nameValid(body.RequestID) || !nameValid(body.ClusterRequestID) || !nameValid(body.PoolID) || !nameValid(body.TargetHostID) || !nameValid(binding) || (body.Kind != "chap" && body.Kind != "fence_bmc" && body.Kind != "fence_ssh") || len(body.Credentials.Username) > 4096 || len(body.Credentials.Secret) > 65536 || len(body.Credentials.SSHPrivateKey) > 65536 || len(body.Credentials.SSHKnownHosts) > 65536 || strings.ContainsAny(body.Credentials.Username+body.Credentials.Secret+body.Credentials.SSHPrivateKey+body.Credentials.SSHKnownHosts, "\x00\r") || (!ssh && strings.ContainsAny(body.Credentials.Username+body.Credentials.Secret, "\n")) || (ssh && (body.Credentials.Secret != "" || body.Credentials.SSHPrivateKey == "" || body.Credentials.SSHKnownHosts == "")) || (!ssh && (body.Credentials.Secret == "" || body.Credentials.SSHPrivateKey != "" || body.Credentials.SSHKnownHosts != "")) {
+	if !nameValid(body.RequestID) || !nameValid(body.ClusterRequestID) || !nameValid(body.PoolID) || !nameValid(body.TargetHostID) || !nameValid(binding) || (body.Kind != "chap" && body.Kind != "fence_bmc" && body.Kind != "fence_ssh") || !scopedCredentialValid(body.Kind, body.Credentials) {
 		fail(w, http.StatusBadRequest, "valid scoped cluster credential required")
 		return
 	}

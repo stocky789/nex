@@ -170,6 +170,7 @@ func (s *Service) Handler() http.Handler {
 	m.HandleFunc("DELETE /api/local/v1/session", s.auth(s.logout))
 	m.HandleFunc("GET /api/local/v1/host", s.auth(s.host))
 	m.HandleFunc("POST /api/local/v1/enrollment", s.auth(s.enrollment))
+	m.HandleFunc("GET /api/local/v1/pool", s.auth(s.pool))
 	m.HandleFunc("POST /api/local/v1/pool/join", s.auth(s.joinPool))
 	m.HandleFunc("POST /api/local/v1/pool/join-csr", s.auth(s.poolJoinCSR))
 	m.HandleFunc("POST /api/local/v1/pool/join-offer", s.auth(s.poolJoinOffer))

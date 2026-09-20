@@ -4,6 +4,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -235,5 +236,210 @@ func TestPoolVMInventoryRefreshesOnlyNewerPinnedMembership(t *testing.T) {
 	fresh.Members[1].CertificateSHA256 = strings.Repeat("d", 64)
 	if err := updatePoolVMMembership(s, fresh); err == nil {
 		t.Fatal("membership refresh changed the pinned local peer identity")
+	}
+}
+
+// Once any host had been ejected, no shared VM could be started again: an eject marks the
+// membership row and keeps it for ever, so a completeness rule that required every row to be
+// "ready" was never satisfiable again. The inventory-driven settle is the only path that
+// records a shared VM as stopped, so the master's record stayed "running" and every later
+// start was refused (BUG-0358). Completeness is a question about the hosts that can own or
+// run a pool VM now; an ejected host is not one of them.
+func TestPoolVMInventorySettlesWithAnEjectedMembershipRow(t *testing.T) {
+	s := peerStore(t, "master-1", "pool-1")
+	mine := poolVMTestSpec("11111111-1111-4111-8111-111111111111", "master-1")
+	theirs := poolVMTestSpec("22222222-2222-4222-8222-222222222222", "owner-1")
+	gone := poolVMTestSpec("33333333-3333-4333-8333-333333333333", "gone-1")
+	ejected := maintenanceMember("gone-1", false)
+	ejected.Status = "ejected"
+	membership := maintenanceMembership(t, s, "master-1", maintenanceMember("master-1", false), maintenanceMember("owner-1", false), ejected)
+	// Both guests were started, then stopped natively. A shared-storage stop deliberately
+	// posts nothing to the master, so this snapshot is the only path that records it.
+	if err := savePoolVMs(s, poolVMState{VMs: map[string]poolVMRecord{
+		mine.ID:   {PoolID: "pool-1", VMID: mine.ID, HostID: "master-1", State: "running", Epoch: 2, Spec: *mine},
+		theirs.ID: {PoolID: "pool-1", VMID: theirs.ID, HostID: "owner-1", State: "running", Epoch: 2, Spec: *theirs},
+	}, Inventory: map[string]poolVMInventory{
+		// The ejected host's last snapshot, left at the generation it was ejected at.
+		"gone-1": {HostID: "gone-1", Generation: 2, VMs: []protocol.VMCreateSpec{*gone}, Observed: map[string]string{gone.ID: "running"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	report := func(host string, vm *protocol.VMCreateSpec, complete bool) {
+		t.Helper()
+		inv := poolVMInventory{HostID: host, Generation: membership.Generation, VMs: []protocol.VMCreateSpec{*vm}, Observed: map[string]string{vm.ID: "shut off"}}
+		err := recordPoolVMInventory(s, membership, inv)
+		if complete && err != nil {
+			t.Fatalf("an ejected membership row blocked the %s settle: %v", host, err)
+		}
+		if !complete && !errors.Is(err, errPoolVMInventoryIncomplete) {
+			t.Fatalf("the first snapshot of a generation is not a complete picture: %v", err)
+		}
+	}
+	// The first host to report cannot settle anything: the other ready member has not been
+	// heard from at this generation yet. Only the ejected row is exempt.
+	report("master-1", mine, false)
+	report("owner-1", theirs, true)
+	report("master-1", mine, true)
+	state, err := loadPoolVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{mine.ID, theirs.ID} {
+		if got := state.VMs[id]; got.State != "stopped" || got.Epoch != 2 {
+			t.Fatalf("stopped shared VM %s was not settled: %#v", id, got)
+		}
+	}
+	if _, ok := state.VMs[gone.ID]; ok {
+		t.Fatal("an ejected host's stale snapshot seeded a pool VM owner record")
+	}
+	// The master's own guest can be started again; the member's record is back in the one
+	// state the master's start admission accepts.
+	permit, epoch := "", uint64(0)
+	if err := poolVMLocal(s, mine.ID, "start", &permit, false, nil, &epoch); err != nil {
+		t.Fatalf("start on the master after a stop: %v", err)
+	}
+	if permit == "" || epoch != 3 {
+		t.Fatalf("start admission = %q, epoch %d", permit, epoch)
+	}
+}
+
+// An ejected row cannot hold a pool VM record by construction, which is what makes it safe to
+// leave out of the completeness rule: the master refuses the eject from its own records while
+// the target still owns one, including when it could not reach that host to ask.
+func TestPoolEjectIsRefusedWhileTheTargetOwnsAPoolVM(t *testing.T) {
+	s := peerStore(t, "master-1", "pool-1")
+	vm := poolVMTestSpec("11111111-1111-4111-8111-111111111111", "owner-1")
+	membership := maintenanceMembership(t, s, "master-1", maintenanceMember("master-1", false), maintenanceMember("owner-1", false))
+	if err := savePoolVMs(s, poolVMState{VMs: map[string]poolVMRecord{
+		vm.ID: {PoolID: "pool-1", VMID: vm.ID, HostID: "owner-1", State: "running", Epoch: 1, Spec: *vm},
+	}, Inventory: map[string]poolVMInventory{"owner-1": {HostID: "owner-1", Generation: membership.Generation, VMs: []protocol.VMCreateSpec{*vm}, Storage: map[string]protocol.StorageIdentity{vm.Disks[0].StorageID: {}}, Observed: map[string]string{vm.ID: "running"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	target, _ := poolMemberByID(membership, "owner-1")
+	err := poolEjectRefusal(s, membership, target)
+	if err == nil || !strings.Contains(err.Error(), vm.ID) {
+		t.Fatalf("a host still owning a pool VM record was ejectable: %v", err)
+	}
+}
+
+func TestPoolEjectRefusesStaleTargetInventoryEvenWithoutAnOwnerRecord(t *testing.T) {
+	s := peerStore(t, "master-1", "pool-1")
+	vm := poolVMTestSpec("22222222-2222-4222-8222-222222222222", "owner-1")
+	membership := maintenanceMembership(t, s, "master-1", maintenanceMember("master-1", false), maintenanceMember("owner-1", false))
+	if err := savePoolVMs(s, poolVMState{VMs: map[string]poolVMRecord{}, Inventory: map[string]poolVMInventory{
+		"owner-1": {HostID: "owner-1", Generation: membership.Generation - 1, VMs: []protocol.VMCreateSpec{*vm}, Storage: map[string]protocol.StorageIdentity{vm.Disks[0].StorageID: {}}, Observed: map[string]string{vm.ID: "running"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	target, _ := poolMemberByID(membership, "owner-1")
+	if err := poolEjectRefusal(s, membership, target); err == nil || !strings.Contains(err.Error(), "current VM inventory") {
+		t.Fatalf("stale target inventory allowed an eject: %v", err)
+	}
+}
+
+// A host that is no longer part of the pool must stop holding the pool's resources too: its
+// snapshot is dropped when the next inventory is recorded, so pool-vms.json does not keep it
+// for ever and no later pass reads it.
+func TestPoolVMInventoryDropsSnapshotsOfNonMembers(t *testing.T) {
+	s := peerStore(t, "master-1", "pool-1")
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 12, Members: []protocol.PoolMember{
+		{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 12, Status: "ready"},
+		{HostID: "gone-1", CertificateSHA256: strings.Repeat("c", 64), Generation: 12, Status: "ejected"},
+	}}
+	if err := savePoolVMs(s, poolVMState{VMs: map[string]poolVMRecord{}, Inventory: map[string]poolVMInventory{
+		"gone-1": {HostID: "gone-1", Generation: 9},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordPoolVMInventory(s, membership, poolVMInventory{HostID: "master-1", Generation: 12}); err != nil {
+		t.Fatalf("a pool whose only other row is ejected could not record inventory: %v", err)
+	}
+	got, err := loadPoolVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got.Inventory["gone-1"]; ok {
+		t.Fatalf("an ejected host's snapshot was retained: %#v", got.Inventory)
+	}
+}
+
+// An ejected host keeps local VM definitions under its new pool, but a VM it deleted in
+// the old pool remains old-pool history. If it later rejoins that same pool, the master
+// needs the tombstone to retire any stale owner record; the deleted definition must never
+// reappear in the new pool's inventory.
+func TestPoolVMInventoryPublishesOldPoolDeleteAfterEjectAndSamePoolRejoin(t *testing.T) {
+	ctx := context.Background()
+	master := peerStore(t, "master-1", "pool-1")
+	member := peerStore(t, "member-1", "pool-1")
+	if err := EnsurePoolMembership(master); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(member.dir, "managed-vms"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	vm := poolVMTestSpec("11111111-1111-4111-8111-111111111111", member.State.HostID)
+	writeManagedJournal(t, filepath.Join(member.dir, "managed-vms"), "create", protocol.Command{OperationID: "create", Kind: "vm-create", VM: vm})
+	writeManagedJournal(t, filepath.Join(member.dir, "managed-vms"), "delete", protocol.Command{OperationID: "delete", Kind: "vm-delete", Delete: &protocol.VMDeleteRequest{VMID: vm.ID, PoolID: "pool-1", HostID: member.State.HostID}})
+	if err := vmhost.RehomeLeavingPoolScope(filepath.Join(member.dir, "managed-vms"), "own-pool", member.State.HostID); err != nil {
+		t.Fatal(err)
+	}
+	member.State.PoolID = "own-pool"
+	if err := member.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if inv, err := localPoolVMInventory(ctx, member, 1); err != nil || len(inv.VMs) != 0 || len(inv.Deleted) != 0 {
+		t.Fatalf("ejected own-pool inventory resurrected/deleted = %#v, %v", inv, err)
+	}
+	// Rejoining pool-1 rehomes no workload and leaves the old-pool delete history intact.
+	member.State.PoolID = "pool-1"
+	if err := member.Save(); err != nil {
+		t.Fatal(err)
+	}
+	membership := maintenanceMembership(t, master, master.State.HostID, maintenanceMember(master.State.HostID, false), maintenanceMember(member.State.HostID, false))
+	if err := savePoolVMs(master, poolVMState{VMs: map[string]poolVMRecord{vm.ID: {PoolID: "pool-1", VMID: vm.ID, HostID: member.State.HostID, State: "running", Epoch: 3, Spec: *vm}}, Inventory: map[string]poolVMInventory{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordPoolVMInventory(master, membership, poolVMInventory{HostID: master.State.HostID, Generation: membership.Generation}); !errors.Is(err, errPoolVMInventoryIncomplete) {
+		t.Fatalf("master snapshot = %v", err)
+	}
+	inv, err := localPoolVMInventory(ctx, member, membership.Generation)
+	if err != nil || len(inv.VMs) != 0 || len(inv.Deleted) != 1 || inv.Deleted[0] != vm.ID {
+		t.Fatalf("same-pool rejoin inventory = %#v, %v", inv, err)
+	}
+	if err = recordPoolVMInventory(master, membership, inv); err != nil {
+		t.Fatal(err)
+	}
+	state, err := loadPoolVMs(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, stale := state.VMs[vm.ID]; stale {
+		t.Fatalf("same-pool delete did not prune stale owner: %#v", state.VMs)
+	}
+}
+
+// The safety property the completeness rule exists for is unchanged: a member that can still
+// own or run a pool VM — ready, or pending or failed after having been ready — must be in the
+// picture before any owner record is settled from it. The refusal now names the host, because
+// "pool VM inventory is incomplete for current membership" alone told an operator nothing.
+func TestPoolVMInventoryStillRefusesAnIncompletePictureAndNamesTheHost(t *testing.T) {
+	s := peerStore(t, "master-1", "pool-1")
+	for _, status := range []string{"ready", "pending", "failed"} {
+		t.Run(status, func(t *testing.T) {
+			membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 12, Members: []protocol.PoolMember{
+				{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 12, Status: "ready"},
+				{HostID: "silent-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 12, Status: status},
+			}}
+			state := poolVMState{VMs: map[string]poolVMRecord{}, Inventory: map[string]poolVMInventory{
+				"master-1": {HostID: "master-1", Generation: 12},
+			}}
+			err := seedPoolVMOwners(s, membership, &state, "master-1")
+			if !errors.Is(err, errPoolVMInventoryIncomplete) {
+				t.Fatalf("a %s member that has not reported did not block the seed: %v", status, err)
+			}
+			if !strings.Contains(err.Error(), "silent-1") {
+				t.Fatalf("the refusal does not name the host it is waiting for: %v", err)
+			}
+		})
 	}
 }

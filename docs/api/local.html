@@ -9,6 +9,7 @@
 <li><a href="#localSession">GET /api/local/v1/session</a></li>
 <li><a href="#localLogout">DELETE /api/local/v1/session</a></li>
 <li><a href="#localHost">GET /api/local/v1/host</a></li>
+<li><a href="#localPool">GET /api/local/v1/pool</a></li>
 <li><a href="#joinPool">POST /api/local/v1/pool/join</a></li>
 <li><a href="#createPoolJoinCSR">POST /api/local/v1/pool/join-csr</a></li>
 <li><a href="#createPoolJoinOffer">POST /api/local/v1/pool/join-offer</a></li>
@@ -322,13 +323,70 @@
     }
   }
 }</pre></details></section>
+<section id="localPool"><h2>GET <code>/api/local/v1/pool</code></h2>
+<p>Show this Core&#x27;s own pool membership</p><p>Authenticated local session. Read-only; safe to retry. Answers which pool this host belongs to, whether it is that pool&#x27;s master or a member, the membership record it holds, and any staged join still in progress, from this host&#x27;s own Core state. It exists so a host-local recovery procedure does not have to ask the Controller which pool a host is in: it works with the Controller unreachable or replaced, and it changes nothing. Every enrolled Core is a pool master until it joins another pool, so a single-host pool reports role master with one member row for itself.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localPool&quot;,
+  &quot;summary&quot;: &quot;Show this Core&#x27;s own pool membership&quot;,
+  &quot;description&quot;: &quot;Authenticated local session. Read-only; safe to retry. Answers which pool this host belongs to, whether it is that pool&#x27;s master or a member, the membership record it holds, and any staged join still in progress, from this host&#x27;s own Core state. It exists so a host-local recovery procedure does not have to ask the Controller which pool a host is in: it works with the Controller unreachable or replaced, and it changes nothing. Every enrolled Core is a pool master until it joins another pool, so a single-host pool reports role master with one member row for itself.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;This host&#x27;s pool membership and staged-join status.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/LocalPoolView&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired local administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;This Core is not enrolled yet (\&quot;enroll this Core before reading its pool\&quot;).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;The membership record could not be read (\&quot;pool membership is unavailable\&quot;). Reported honestly as unavailable rather than as an empty pool; repair the Core state directory.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
 <section id="joinPool"><h2>POST <code>/api/local/v1/pool/join</code></h2>
-<p>Join this enrolled Core to a pool</p><p>Authenticated local root session, same HTTPS Origin and X-CSRF-Token required. This Core must already be enrolled. It validates the bare HTTPS master_url, pinned pool_ca_pem and opaque one-use offer, pauses its outbound agent, performs the Core-to-Core TLS 1.3 CSR exchange, then resumes reporting with the master-owned membership. The Controller may display/pass the offer but does not participate in peer authentication or keep membership intent. The local request body and offer are not echoed. A peer refusal, used/expired offer, identity mismatch or Core already belonging to another pool is 409 and leaves local membership unchanged; retry requires a new offer. There is no cancellation after peer acceptance: reconcile membership inventory before retrying an interrupted browser reply.</p>
+<p>Join this enrolled Core to a pool</p><p>Authenticated local root session, same HTTPS Origin and X-CSRF-Token required. This is the host-local recovery path; the ordinary workflow is the Controller&#x27;s POST /api/v1/pools/{id}/members, which needs no CSR or offer handling by the operator. This Core must already be enrolled. It runs the same join precheck the Controller command path runs (enrolled, no managed VMs, no non-local storage, currently the master of its own single-host pool), validates the bare HTTPS master_url, pinned pool_ca_pem and opaque one-use offer, pauses its outbound agent, performs the Core-to-Core TLS 1.3 CSR exchange, then resumes reporting with the master-owned membership. The Controller may display/pass the offer but does not participate in peer authentication or keep membership intent. The local request body and offer are not echoed. A refusal before the exchange, a used or expired offer, an identity mismatch or a Core already belonging to another pool is 409 and leaves local membership unchanged; retry requires a new offer. Once the peer exchange succeeds the response is 200 and reports the stage reached in join, including stage rehomed with status needs_attention when this host is a member but its local resource rehome has not finished: Core retries the remaining stages itself. A 409 therefore means the host did not join; it never means an unfinished rehome. There is no cancellation after peer acceptance: reconcile membership inventory, or read GET /api/local/v1/pool, before retrying an interrupted browser reply.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;joinPool&quot;,
   &quot;summary&quot;: &quot;Join this enrolled Core to a pool&quot;,
-  &quot;description&quot;: &quot;Authenticated local root session, same HTTPS Origin and X-CSRF-Token required. This Core must already be enrolled. It validates the bare HTTPS master_url, pinned pool_ca_pem and opaque one-use offer, pauses its outbound agent, performs the Core-to-Core TLS 1.3 CSR exchange, then resumes reporting with the master-owned membership. The Controller may display/pass the offer but does not participate in peer authentication or keep membership intent. The local request body and offer are not echoed. A peer refusal, used/expired offer, identity mismatch or Core already belonging to another pool is 409 and leaves local membership unchanged; retry requires a new offer. There is no cancellation after peer acceptance: reconcile membership inventory before retrying an interrupted browser reply.&quot;,
+  &quot;description&quot;: &quot;Authenticated local root session, same HTTPS Origin and X-CSRF-Token required. This is the host-local recovery path; the ordinary workflow is the Controller&#x27;s POST /api/v1/pools/{id}/members, which needs no CSR or offer handling by the operator. This Core must already be enrolled. It runs the same join precheck the Controller command path runs (enrolled, no managed VMs, no non-local storage, currently the master of its own single-host pool), validates the bare HTTPS master_url, pinned pool_ca_pem and opaque one-use offer, pauses its outbound agent, performs the Core-to-Core TLS 1.3 CSR exchange, then resumes reporting with the master-owned membership. The Controller may display/pass the offer but does not participate in peer authentication or keep membership intent. The local request body and offer are not echoed. A refusal before the exchange, a used or expired offer, an identity mismatch or a Core already belonging to another pool is 409 and leaves local membership unchanged; retry requires a new offer. Once the peer exchange succeeds the response is 200 and reports the stage reached in join, including stage rehomed with status needs_attention when this host is a member but its local resource rehome has not finished: Core retries the remaining stages itself. A 409 therefore means the host did not join; it never means an unfinished rehome. There is no cancellation after peer acceptance: reconcile membership inventory, or read GET /api/local/v1/pool, before retrying an interrupted browser reply.&quot;,
   &quot;security&quot;: [
     {
       &quot;LocalSession&quot;: []
@@ -2386,13 +2444,188 @@
     },
     &quot;pool_id&quot;: {
       &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;join&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolJoinStatus&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;The stage this host reached. 200 means the peer exchange succeeded and this host is a member; the stages after it are durable and retried by Core, so an unfinished rehome is reported here as stage rehomed with status needs_attention instead of a conflict that would wrongly tell the caller the join did not happen.&quot;
     }
   },
   &quot;required&quot;: [
     &quot;host_id&quot;,
-    &quot;pool_id&quot;
+    &quot;pool_id&quot;,
+    &quot;join&quot;
   ],
   &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="PoolJoinStatus"><summary>PoolJoinStatus</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Empty for a join started through this host-local route; set when a Controller pool-join command started it.&quot;
+    },
+    &quot;stage&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;precheck&quot;,
+        &quot;csr&quot;,
+        &quot;joined&quot;,
+        &quot;rehomed&quot;,
+        &quot;advertised&quot;,
+        &quot;ready&quot;
+      ],
+      &quot;description&quot;: &quot;The step still to perform; ready means every stage is done.&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;pending&quot;,
+        &quot;succeeded&quot;,
+        &quot;failed&quot;,
+        &quot;needs_attention&quot;
+      ]
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;operation_id&quot;,
+    &quot;stage&quot;,
+    &quot;status&quot;,
+    &quot;observed_at&quot;
+  ]
+}</pre></details>
+<details id="PoolMember"><summary>PoolMember</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;certificate_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;peer_origin&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;maintenance&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;maintenance_since&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;fence&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterFence&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;How this host would be excluded from the pool if it had to be fenced: the same closed typed profile clustered storage already uses, recorded in the master&#x27;s durable membership and replicated with it, so a promoted master inherits it and a fresh Controller re-adopts it. Only a virsh profile can be recorded by this build; Core refuses to record a profile it cannot verify. The credential reference it carries is never projected to a client, and neither is anything the reference names.&quot;
+    },
+    &quot;fence_credential_version&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;The master&#x27;s counter for the private fence credential material behind this host&#x27;s profile. The material itself is never in the membership; only this number is, so rotating it changes the replicated content and therefore advances the pool authority generation, while re-recording identical material moves nothing.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;certificate_sha256&quot;,
+    &quot;generation&quot;,
+    &quot;status&quot;,
+    &quot;observed_at&quot;,
+    &quot;maintenance_since&quot;
+  ],
+  &quot;description&quot;: &quot;One membership row exactly as the pool master owns it; the same record the Controller contract calls PoolMember.&quot;
+}</pre></details>
+<details id="LocalPoolView"><summary>LocalPoolView</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;role&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;master&quot;,
+        &quot;member&quot;
+      ],
+      &quot;description&quot;: &quot;master when this host is its pool&#x27;s master, including a single-host pool: that is a pool with one master and no members, never a host outside a pool.&quot;
+    },
+    &quot;master_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;members&quot;: {
+      &quot;type&quot;: &quot;array&quot;,
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolMember&quot;
+      },
+      &quot;description&quot;: &quot;This host&#x27;s own membership record: the authoritative one on a master, and the copy validated at join on a member. Empty array, never null.&quot;
+    },
+    &quot;join&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolJoinStatus&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;This host&#x27;s durable staged join, or null when none is in progress.&quot;
+    },
+    &quot;restricted&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolRestrictedStatus&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;This host&#x27;s own refusal to act on pool authority, or null when it is acting normally. It is the answer to \&quot;why does nothing start here\&quot;, which is exactly the question an operator at the host console asks when no Controller answers.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;pool_id&quot;,
+    &quot;pool_name&quot;,
+    &quot;role&quot;,
+    &quot;master_host_id&quot;,
+    &quot;members&quot;,
+    &quot;join&quot;,
+    &quot;restricted&quot;
+  ]
 }</pre></details>
 <details id="PoolJoinCSRResponse"><summary>PoolJoinCSRResponse</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -2543,5 +2776,94 @@
     &quot;status&quot;
   ],
   &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="PoolRestrictedStatus"><summary>PoolRestrictedStatus</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;unconfirmed&quot;,
+        &quot;superseded&quot;
+      ],
+      &quot;description&quot;: &quot;The structural form of reason, so no caller has to match on the sentence. unconfirmed is a master that has not re-proved its authority since it restarted; superseded is a host that found a higher authority elsewhere. Omitted by an older Core, in which case the sentence is the only signal.&quot;
+    },
+    &quot;reason&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Why this host is refusing to act on pool authority.&quot;
+    },
+    &quot;since&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;conflicts&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;VMs this host still defines that the current pool master records as running elsewhere. A conflict is never resolved by guessing.&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;reason&quot;,
+    &quot;since&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolRestrictedStatus&quot;,
+  &quot;description&quot;: &quot;A Core-enforced refusal state on a host that cannot prove it holds the pool&#x27;s current authority: while it is set the host writes no pool authority, mints no authority generation, starts no workload and autostarts nothing. Stop, power-off, console, local recovery access and reporting are untouched, and the libvirt hook refuses managed shared-VM starts by reading the host&#x27;s own durable record, so the refusal holds with no Controller connected. It is reported by the authority probe, by inventory.managed.restricted and by GET /api/local/v1/pool.&quot;
+}</pre></details>
+<details id="StorageClusterFence"><summary>StorageClusterFence</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;redfish&quot;,
+        &quot;ipmilan&quot;,
+        &quot;virsh&quot;,
+        &quot;scsi_pr&quot;
+      ]
+    },
+    &quot;endpoint&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;target_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;credential_ref&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true
+    },
+    &quot;device_path&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;virsh_uri&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;For virsh, exactly qemu:///system or qemu+ssh://&lt;ssh_login&gt;@&lt;endpoint&gt;[:&lt;ssh_port&gt;]/system. The latter must match the pinned SSH fields; it rejects passwords, query strings, fragments and every other URI path. An omitted URI port is valid only when ssh_port is 22.&quot;
+    },
+    &quot;ssh_login&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;ssh_port&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;ssh_host_key_ref&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;writeOnly&quot;: true
+    }
+  },
+  &quot;required&quot;: [
+    &quot;kind&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.StorageClusterFence&quot;,
+  &quot;description&quot;: &quot;Closed Core fence profile. credential_ref and ssh_host_key_ref are opaque names for root-only Core secrets, never secret bytes; arbitrary commands and arguments are not accepted. virsh is development-only and remains unaccepted for native production use.&quot;
 }</pre></details>
 </section></main></html>

@@ -157,6 +157,15 @@ class PublishTests(unittest.TestCase):
         self.assertFalse(release["draft"])
         self.assertIn("POST", [c[0] for c in FakeGitea.calls])
 
+    def test_unreadable_manifest_fails_closed_before_creating_a_draft(self):
+        # BUG-0314: corrupt JSON must not ship; ZFS packages alone are allowed on the forge.
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = Path(temporary) / "nex-core-1.0.0-compliance-manifest.json"
+            manifest.write_text("{not json")
+            with self.assertRaisesRegex(RuntimeError, "invalid compliance manifest"):
+                gitea.publish(self.repo, "v1.0.0", "new", "Nex Core", "", [manifest])
+        self.assertEqual(FakeGitea.calls, [])
+
     def test_dropped_upload_is_resent_whole_after_discarding_the_stale_asset(self):
         FakeGitea.drop_uploads = (1,)
         with tempfile.TemporaryDirectory() as temporary:

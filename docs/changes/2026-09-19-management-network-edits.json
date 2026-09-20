@@ -1,0 +1,79 @@
+{
+  "summary": "Staged remote management-network edits: Nex Core renders, applies, times and rolls back a host's own /etc/network/interfaces, /etc/dhcpcd.conf and /etc/resolv.conf from a durable host-side record, with one durable management-network command per step from Nex Controller, an inventory projection and health check, two Controller routes, and a Management network panel on the host's Networking tab",
+  "paths": [
+    "internal/vmhost/management_network.go",
+    "internal/vmhost/management_network_test.go",
+    "internal/protocol/hostnetwork.go",
+    "internal/protocol/hostnetwork_test.go",
+    "internal/protocol/protocol.go",
+    "internal/agent/managed.go",
+    "internal/agent/management_network_test.go",
+    "internal/agent/run.go",
+    "internal/localcore/auth.go",
+    "internal/localcore/management_network_test.go",
+    "internal/controller/hostnetwork.go",
+    "internal/controller/hostnetwork_test.go",
+    "internal/controller/hostnetwork_e2e_test.go",
+    "internal/controller/controller.go",
+    "internal/controller/managed.go",
+    "internal/controller/monitor.go",
+    "web/src/host-network.tsx",
+    "web/src/host-network.test.mjs",
+    "web/src/main.tsx",
+    "web/src/style.css",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "tests/test_api_contract.py",
+    "tests/integration/phase1_browser.py",
+    "docs/guide/change-management-network.md",
+    "docs/guide/README.md",
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "docs/plans/2026-09-19-phase4-closure.md",
+    "docs/plans/2026-09-08-nex-platform.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "New operator workflow with its own page: the staged, review, apply-with-typed-host-name, wait-for-reconnect and confirm flow with the actual UI labels; the rollback window and every case in which the host restores the previous configuration by itself (deadline passed, reboot before confirmation, failed apply); what \"Discard staged change\" does and that \"Roll back now\" does not work in this build, with the workaround; every refusal message and its meaning; what is not supported (interface renames, a host whose /etc/network/interfaces Nex did not render, /etc/resolv.conf as a symlink) and what to do instead; recovery from the host's own console when locked out, including the previous file contents held in the host's record; the absence of any effect on guest VLAN bridges and running VMs; and what happens when the Controller is lost mid-change. The guide index lists the page. The Verification section states plainly that no native host run and no browser review were executed, that the namespace test has never run, and that the Roll back now defect is open.",
+    "pages": [
+      "docs/guide/change-management-network.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "Two Controller routes (GET and POST /api/v1/hosts/{id}/network), the management-network command kind addressed to the target host, the ManagementNIC/ManagementNetworkSpec/ManagementNetworkStatus/ManagementNetworkRequest protocol types, Inventory.management_network, Command.management_network, the management-network health check and the management-network-v1 capability. Both sides, authentication, authorization, validation, the 400/404/409/500 matrix, exact-retry replay, the asynchronous failed-result texts and the single conflict-suffix mapping rule, capability gating and Controller-loss behaviour are implemented in this slice. The change_id field added by the cross-layer fix (BUG-0318) and the window_seconds status field are part of the same new contract, not a later revision of it. Three statements in the pool-join section of docs/API.md were also corrected to match the S1 Controller fixes: bare HTTPS origins now accept and normalise one trailing slash (so the two spellings are the same request for replay), the invitation scrub runs on Controller start and on all three pool-join routes (closing the previously documented residual risk), and a terse Core refusal becomes \"the pool master refused to issue a join invitation\" with an abandoned request answered 499. Amended 2026-09-19 by the closure sweep: the slice's one open defect is fixed, which changed this contract further. cancel on an applied, unconfirmed change now performs the rollback instead of being refused, ManagementNetworkStatus gains the durable requested_rollback flag so an undo the operator asked for is told apart from a failure, and the host emits no management-network health check for that case. Re-staging one change id with a different spec is refused rather than replayed, and the confirm connectivity rule is narrowed to an observation that terminated on the management bridge itself. Both sides are implemented; see BUG-0327 and docs/changes/2026-09-19-phase4-defect-fixes.json, which owns the fix's paths. Amended 2026-09-19: still this same contract. The two new record fields are host-local and are not reported, and the only wire-visible movement is refusal text - the narrowed confirmation sentence, the already-staged-with-a-different-configuration conflict, the new stage-time host refusals and the distinct failed-rollback health check message.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase 4 stays in progress and no milestone item moves to built: this slice has unit, cross-layer and contract evidence only, its namespace test has never executed, its native host and browser acceptance are outstanding and one UI defect is open. The board keeps built separate from in testing, so it still describes the project accurately.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The configuration, the staged change, the rollback deadline and the rollback itself are all the host's. Nex Controller keeps only its own operation, managed-resource and audit rows for the step it relayed; it computes no countdown, holds no copy of the spec or of the staged change's identity (it reads that back from the host's own report), and is not required for the rollback to happen.",
+    "record": "Host-scoped, not pool-scoped. The configuration is the host's own /etc/network/interfaces, /etc/dhcpcd.conf and /etc/resolv.conf, rendered as whole files by Nex Core exactly as the Nex installer writes them; /etc/systemd/network/*.link is never rewritten, so interface renames are not part of a staged change. Beside them, <state-dir>/management-network.json (default /var/lib/nex-core-agent) holds the change's operation ID, revision, stage, spec, the verbatim previous contents of those three files, the chosen window, the deadline and the applied/confirmed/connectivity timestamps, written before /etc is touched. The host projects that record into Inventory.ManagementNetwork on every report, so a fresh or rebuilt Controller reads the current configuration, the stage, the change's identity and any running rollback deadline back from that host's inventory management_network with nothing for an operator to re-enter, and the host finishes or rolls the change back with no Controller at all. Amended 2026-09-19 by the review-fix batch (docs/changes/2026-09-19-phase4-review-fixes.json): that same record now also holds boot_id (/proc/sys/kernel/random/boot_id as read at apply) and applied_uptime_ns (/proc/uptime at apply), both omitempty and both host-local. They are how the host measures its own rollback window without consulting the wall clock, which is what makes the rollback fire for a host that lost its time source with the change; neither is reported to Nex Controller, because a fresh Controller needs neither - it reads the stage, the spec, the snapshot and the operator-facing deadline as before. A record written without them falls back to the previous comparisons.",
+    "notes": "Defects found reviewing this uncommitted slice are recorded in docs/BUG_LEDGER.md as BUG-0318 (the change_id defect, fixed here) alongside BUG-0319 to BUG-0324 from the S1 Controller review. The open Roll back now defect is not in the ledger because it is not fixed; it is recorded in the plan's S3 status line, in docs/API.md and in the guide. Amended 2026-09-19: the Roll back now defect named above is fixed and is recorded as BUG-0327. Five further defects found in this slice by independent review are recorded as BUG-0340 (the wall-clock rollback), BUG-0341 (apply and rollback destroying the management bridge), BUG-0342 (confirmation accepted on an observation that never crossed the change), BUG-0343 (a failed rollback reporting no check), BUG-0344 (the spec never checked against the host) and BUG-0345 (re-staging with a different configuration). Their fixes, and the two record fields above, are covered by docs/changes/2026-09-19-phase4-review-fixes.json."
+  },
+  "verification": {
+    "method": "Go unit tests with the race detector on Nex Core and Nex Controller covering the render against the installer's rules, the 28-case validation table, the stage/apply/confirm/cancel state machine with every refusal, rollback on the deadline and after a reboot with a byte-identical restore of all three files, a rollback retried after a failing ifup, crash windows before and after the file swap, the foreign/missing/symlink/directory refusals, apply against changed files, command routing, the inventory projection and health check, the connectivity observation hooks, and the Controller's 400/404/409 matrix with exact-retry replay; internal/controller/hostnetwork_e2e_test.go additionally drives stage to apply to confirm and stage to cancel through the real Controller HTTP handlers into the real Nex Core engine on a scratch /etc with fake ifup/ifdown, which is the check that detected BUG-0318 (observed failing before the fix). UI component suite (npm run typecheck, npm test; host-network.test.mjs ok) covering the panel's states, the countdown text and the unknown state while the host is not fresh. Offline contract checks: python3 -m unittest tests.test_api_contract.HostNetworkContractTests (8 tests, OK), asserting both routes are admin- and CSRF-gated, the request/view/accepted shapes against the handler structs, every literal handler refusal against the reference, the four protocol types and both envelope fields, the wire bounds against protocol.ManagementNetworkRequest.Valid(), every Core conflict text against the documented command semantics, the conflict-suffix mapping rule, the capability and command kind, the three rollback arming points, and that change_id is taken from the host's report rather than Controller memory; python3 scripts/generate_api.py --check reports the generated reference current. Documentation gate: python3 scripts/check_docs.py --worktree. NOT executed and recorded as outstanding: TestManagementNetworkNetns has never run anywhere (it skips without ifupdown), so there is no evidence of a real ifup/ifdown bounce or a real rollback; no native host has had its management network changed through this workflow; no browser or 360 px review of the panel, the apply dialog or the live countdown; and tests/integration/host_network_browser.py is not written. One defect is open and unfixed: the UI's Roll back now control submits cancel, which Nex Core refuses on an applied change. Amended 2026-09-19: the Roll back now defect recorded as open here is fixed (BUG-0327), with a cross-layer Controller-to-Core-to-engine test observed failing first. Still not executed: TestManagementNetworkNetns has never run anywhere, so no real ifup/ifdown bounce and no real rollback have been observed, and there is still no native host run and no browser review.",
+    "evidence": [
+      "internal/vmhost/management_network_test.go",
+      "internal/agent/management_network_test.go",
+      "internal/localcore/management_network_test.go",
+      "internal/protocol/hostnetwork_test.go",
+      "internal/controller/hostnetwork_test.go",
+      "internal/controller/hostnetwork_e2e_test.go",
+      "web/src/host-network.test.mjs",
+      "tests/test_api_contract.py",
+      "docs/guide/change-management-network.md",
+      "docs/plans/2026-09-19-phase4-closure.md"
+    ]
+  }
+}

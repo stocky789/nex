@@ -1,0 +1,48 @@
+{
+  "summary": "Phase 4 S2 lab fixes: Core retries a local-storage guest's autostart once per boot after its drain and authority gates pass (BUG-0392), and a drain no longer reports needs_attention because a member was unreachable for the prompt replica push (BUG-0393). API impact: existing contract.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-20-phase4-s2-autostart-and-drain-result.json",
+    "docs/guide/host-maintenance-mode.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "internal/agent/pool_maintenance.go",
+    "internal/agent/pool_maintenance_test.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_test.go"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Both changes alter what an operator sees. A host reboot after exiting maintenance now brings local-storage autostart guests back, and clearing a restriction now starts autostart guests that are still shut off; the maintenance task now succeeds when the drained host is down, which is what the page already promised.",
+    "pages": [
+      "docs/guide/host-maintenance-mode.md",
+      "docs/guide/pool-authority-and-recovery.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No route, request shape, command kind, capability or wire field changes. Core's existing once-per-boot pool autostart attempt now also covers non-shared guests, and pool-maintenance keeps its existing statuses while no longer downgrading to needs_attention for an unreplicated authority push. Both are recorded in docs/API.md with their dates. An older Controller sees the same operations; a succeeded drain and a started guest need no new client handling.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "These close two Phase 4 S2 lab failures; the native S2 re-run and the rest of the Phase 4 acceptance gate remain open and are not claimed here.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Both behaviours read and write only Core-owned state on the host that acts. Nothing is added to the Controller, and a replacement Controller reconstructs neither.",
+    "record": "The autostart intent stays in the host's managed journal (managed-vms/*.json) and the per-boot attempt marker stays in private Core state at pool-vm-autostart-attempts/<vm>-<boot>.json, which is boot-local by design and not recovered. The drain stays in the pool master's membership record in pool-peer.json and is re-adopted by a fresh Controller from the master's reported Inventory.Managed.Membership with nothing re-entered."
+  },
+  "verification": {
+    "method": "Focused Go tests with observed negative controls, then the touched packages with and without the race detector. Negative control for BUG-0392: reverting startLocalAutostartVM to the previous `continue` made TestAutostartPassAttemptsLocalStorageGuests fail with `Core never asked libvirt to start the local-storage autostart guest: [\"list --all --uuid\" \"autostart 1111...\" \"autostart --disable 2222...\" \"domstate 1111...\"]`. Negative control for BUG-0393: restoring the needs_attention downgrade made TestMaintenanceSucceedsWhenAMemberIsUnreachableForThePush fail with `unreachable member push = {OperationID:op-1 Status:needs_attention Error:maintenance mode is recorded but has not yet been replicated to pool members}`. Restoring both fixes passed. Package results: go test -count=1 ./internal/agent (11.170s) and ./internal/vmhost (8.593s); go test -race -count=1 ./internal/agent (25.826s) and ./internal/vmhost (13.014s); go test -race -count=1 ./internal/controller (306.532s) and ./internal/protocol (1.047s). Both .github/workflows/phase1.yml and .gitea/workflows/phase1.yml already run `go test -race -timeout 20m ./...` on pushes and pull requests, so both regressions run in CI with no workflow change. NOT EXECUTED and outstanding: the native three-host S2 re-run in the disposable lab (s2-autostart and s2-core), which is the only evidence that would establish the real reboot and drain behaviour on hardware-like hosts. The autostart test drives a recording virsh stub, not libvirt, so it proves which start Core requests and not that the guest boots.",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "internal/agent/pool_vm_test.go",
+      "internal/agent/pool_maintenance_test.go"
+    ]
+  }
+}

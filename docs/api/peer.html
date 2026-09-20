@@ -8,6 +8,8 @@
 <li><a href="#peerJoin">POST /api/v1/pool/join</a></li>
 <li><a href="#peerAdvertiseOrigin">POST /api/v1/pool/advertise</a></li>
 <li><a href="#peerCheckVMPlacement">POST /api/v1/pool/placement</a></li>
+<li><a href="#peerGetPoolReplica">GET /api/v1/pool/replica</a></li>
+<li><a href="#peerPushPoolReplica">POST /api/v1/pool/replica</a></li>
 <li><a href="#peerListPoolNetworks">GET /api/v1/pool/networks</a></li>
 <li><a href="#peerGetPoolNetwork">GET /api/v1/pool/networks/{network_id}</a></li>
 <li><a href="#peerPostPoolNetworkAccess">POST /api/v1/pool/networks/{network_id}/access</a></li>
@@ -33,6 +35,8 @@
 <li><a href="#peerProvisionZFS">POST /api/v1/pool/zfs-provision</a></li>
 <li><a href="#peerObserveZFSAccess">GET /api/v1/pool/zfs-provision/{repository_id}/access</a></li>
 <li><a href="#peerZFSRepositoryLifecycle">POST /api/v1/pool/zfs-provision/lifecycle</a></li>
+<li><a href="#peerPoolTransferStep">POST /api/v1/pool/transfer</a></li>
+<li><a href="#peerGetPoolAuthority">GET /api/v1/pool/authority</a></li>
 </ul></nav>
 <section id="peerJoin"><h2>POST <code>/api/v1/pool/join</code></h2>
 <p>Redeem a pool join offer</p><p>Served by the pool master; the only peer route without a client certificate. Authority is the single-use offer created by the master Core local API: it binds pool, master host, member host ID and CSR SHA-256, and expires after 15 minutes. The master signs the CSR with the pool CA, appends the member as ready, increments the membership generation and persists before replying. A retry of the same offer, host ID and CSR after a lost response returns the same certificate and current membership; a different key or an already-admitted host is refused. The member pins the pool CA and master host ID from the offer, verifies the returned certificate against its pending key, then persists and completes a Core-owned rehome. Body at most 1 MiB.</p>
@@ -245,6 +249,131 @@
       &quot;application/json&quot;: {
         &quot;schema&quot;: {
           &quot;$ref&quot;: &quot;#/components/schemas/PoolPlacementRequest&quot;
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="peerGetPoolReplica"><h2>GET <code>/api/v1/pool/replica</code></h2>
+<p>Report what authority replica this member holds</p><p>Served by a pool member at its advertised peer origin and called only by its current pool master over pinned mutual TLS. Read-only. It is also how the master learns the member&#x27;s certified peer public key for the per-member key wrap, from the pinned TLS leaf of this call, so no public key is ever put on the wire or into the membership record. An empty object is returned when this host holds no replica. Answering also refreshes the member&#x27;s own observation window, so a member the master is polling does not report its replica as stale.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerGetPoolReplica&quot;,
+  &quot;summary&quot;: &quot;Report what authority replica this member holds&quot;,
+  &quot;description&quot;: &quot;Served by a pool member at its advertised peer origin and called only by its current pool master over pinned mutual TLS. Read-only. It is also how the master learns the member&#x27;s certified peer public key for the per-member key wrap, from the pinned TLS leaf of this call, so no public key is ever put on the wire or into the membership record. An empty object is returned when this host holds no replica. Answering also refreshes the member&#x27;s own observation window, so a member the master is polling does not report its replica as stale.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool master \u2192 pool member&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;What this member holds, or an empty object when it holds nothing.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolReplicaStatus&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or unverified client certificate, or the caller is not this host&#x27;s current pool master (\&quot;replica peer rejected\&quot;).&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Method other than GET or POST; Allow: GET, POST.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="peerPushPoolReplica"><h2>POST <code>/api/v1/pool/replica</code></h2>
+<p>Store one signed authority replica on this member</p><p>Master to member over pinned mutual TLS, bounded to 1 MiB with no trailing JSON. The member verifies that the replica names its own pool and its current master, is addressed to itself, declares every section with matching digests, and is signed by the pool CA it pinned at join; it then writes pool-replica.json atomically at mode 0600 and acknowledges. It never acts on the contents: no membership, VM, storage, network or media record on this host is read from or changed by a replica, a replica grants no execution, and no health judgement is derived from one. Idempotent: the same generation with the same content returns the same acknowledgement. A strictly lower generation is refused, and the same generation with different content is refused rather than overwriting. The wrapped pool CA key is stored sealed and is not opened by anything in this release. Pushes are driven by the master&#x27;s probe tick when its authority content digest has changed or a member is behind, so a member may lag by up to one probe interval; nothing waits on a replica.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerPushPoolReplica&quot;,
+  &quot;summary&quot;: &quot;Store one signed authority replica on this member&quot;,
+  &quot;description&quot;: &quot;Master to member over pinned mutual TLS, bounded to 1 MiB with no trailing JSON. The member verifies that the replica names its own pool and its current master, is addressed to itself, declares every section with matching digests, and is signed by the pool CA it pinned at join; it then writes pool-replica.json atomically at mode 0600 and acknowledges. It never acts on the contents: no membership, VM, storage, network or media record on this host is read from or changed by a replica, a replica grants no execution, and no health judgement is derived from one. Idempotent: the same generation with the same content returns the same acknowledgement. A strictly lower generation is refused, and the same generation with different content is refused rather than overwriting. The wrapped pool CA key is stored sealed and is not opened by anything in this release. Pushes are driven by the master&#x27;s probe tick when its authority content digest has changed or a member is behind, so a member may lag by up to one probe interval; nothing waits on a replica.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool master \u2192 pool member&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;description&quot;: &quot;JSON, at most 1 MiB.&quot;,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolAuthorityReplica&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Stored and verified; the acknowledgement carries the generation and content digest the member now holds.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolReplicaAck&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed JSON, trailing JSON, or a body over 1 MiB (\&quot;invalid pool authority replica\&quot;).&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or unverified client certificate, or the caller is not this host&#x27;s current pool master (\&quot;replica peer rejected\&quot;).&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Refused and not stored; whatever this host already held is unchanged. The bounded reason is one of \&quot;pool authority replica names another pool\&quot;, \&quot;pool authority replica is not from the current pool master\&quot;, \&quot;pool authority replica is addressed to another host\&quot;, \&quot;pool authority replica is not signed by this pool&#x27;s CA\&quot;, \&quot;pool authority replica does not declare every section\&quot;, \&quot;pool authority replica section digest does not match\&quot;, \&quot;pool authority replica generation is older than the stored replica\&quot;, \&quot;pool authority replica generation was already stored with different contents\&quot;, \&quot;pool authority replica VM ownership record is invalid\&quot;, \&quot;pool authority replica could not be stored\&quot;, \&quot;pool membership is unavailable\&quot;, \&quot;pool peer state is unavailable\&quot;, \&quot;stored pool authority replica is unavailable\&quot;, or a PoolAuthorityReplica.Valid() text.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolReplicaAck&quot;
+          }
+        }
+      }
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Method other than GET or POST; Allow: GET, POST.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
         }
       }
     }
@@ -1914,6 +2043,155 @@
     }
   }
 }</pre></details></section>
+<section id="peerPoolTransferStep"><h2>POST <code>/api/v1/pool/transfer</code></h2>
+<p>Perform one step of a pool master change or eject on this host</p><p>Pool peer to pool peer over pinned mutual TLS, bounded to 256 KiB (protocol.PoolTransferLimit) with no trailing JSON. activate, abort and leave are accepted only from this host&#x27;s current pinned pool master; repoint is accepted from any current ready member, because the host issuing it has just become the master and this host does not know that yet — which is exactly what the pool-CA signature on the notice proves. Every action is idempotent by operation_id: the same request repeated after a lost reply returns the same answer and performs the step at most once. An activation is taken only against a replica this host already holds and has verified at exactly the generation the outgoing master froze and signed away; nothing here recomputes or invents authority. A re-point is adopted only from a signed notice whose membership generation is strictly higher than this host&#x27;s.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerPoolTransferStep&quot;,
+  &quot;summary&quot;: &quot;Perform one step of a pool master change or eject on this host&quot;,
+  &quot;description&quot;: &quot;Pool peer to pool peer over pinned mutual TLS, bounded to 256 KiB (protocol.PoolTransferLimit) with no trailing JSON. activate, abort and leave are accepted only from this host&#x27;s current pinned pool master; repoint is accepted from any current ready member, because the host issuing it has just become the master and this host does not know that yet \u2014 which is exactly what the pool-CA signature on the notice proves. Every action is idempotent by operation_id: the same request repeated after a lost reply returns the same answer and performs the step at most once. An activation is taken only against a replica this host already holds and has verified at exactly the generation the outgoing master froze and signed away; nothing here recomputes or invents authority. A re-point is adopted only from a signed notice whose membership generation is strictly higher than this host&#x27;s.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolPeerCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool master \u2192 member, and new master \u2192 every other host&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;description&quot;: &quot;JSON, at most 256 KiB.&quot;,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolTransferRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;The step was performed, or had already been performed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolTransferReply&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;\&quot;invalid pool transfer request\&quot;: malformed JSON, trailing JSON, a body over 256 KiB, or a notice that fails validation.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;\&quot;pool transfer peer rejected\&quot;: missing or unverified client certificate, or a caller that is not admitted for this action.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Method other than POST; Allow: POST.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Refused, with the same reply shape plus a bounded error. Activation: \&quot;this pool master change was aborted on this host\&quot;, \&quot;this host is already the master of its pool\&quot;, \&quot;pool master change notice does not address this host\&quot;, \&quot;pool master change notice is not from the current pool master\&quot;, \&quot;pool authority notice is not signed by this pool&#x27;s CA\&quot;, \&quot;this host holds no pool authority replica to activate\&quot;, \&quot;this host&#x27;s pool authority replica is not the generation being handed over\&quot;, \&quot;this host&#x27;s pool authority replica names another pool, master or member\&quot;, \&quot;the wrapped pool CA key is unusable on this host\&quot;, \&quot;the replicated membership cannot name this host as master\&quot;, \&quot;the replicated VM ownership record is unreadable\&quot;, \&quot;this host&#x27;s VM execution state is unavailable\&quot;, \&quot;the replicated VM ownership record could not be stored\&quot;, \&quot;the pool master change could not be recorded durably\&quot;. Abort: \&quot;this host has already activated the pool authority; the master change can only go forward\&quot;, \&quot;the abort could not be recorded durably\&quot;. Re-point: \&quot;pool re-point notice does not address this host\&quot;, \&quot;pool re-point notice does not name its sender as the pool master\&quot;, \&quot;pool re-point notice is not newer than this host&#x27;s membership\&quot;, \&quot;pool re-point notice does not name this host\&quot;, \&quot;pool re-point notice carries no master peer origin\&quot;, \&quot;pool re-point notice carries an invalid master peer origin\&quot;, \&quot;the new pool master could not be recorded durably\&quot;. Leave: \&quot;pool eject notice does not address this host\&quot;, \&quot;pool eject notice is not from the current pool master\&quot;, \&quot;pool eject notice is not newer than this host&#x27;s membership\&quot;, \&quot;pool eject notice still names this host as a ready member\&quot;, \&quot;the eject could not be recorded durably\&quot;. Shared: \&quot;pool membership is unavailable\&quot;.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolTransferReply&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="peerGetPoolAuthority"><h2>GET <code>/api/v1/pool/authority</code></h2>
+<p>Probe what pool authority this host holds</p><p>Read-only. Admitted to any holder of a certificate this pool&#x27;s CA issued, including one this pool has ejected: an ejected host must be able to learn that it is no longer a member, and it can only learn that from the pool that ejected it. The caller&#x27;s own membership status is decided from the certificate the transport proved, never from a name in a body. A pool master answering a ready member that is behind also returns a pool-CA-signed re-point notice, so a host that missed a push converges from whichever host it can reach without having to trust a stale one; the probe answer alone changes nothing, only the signature at a strictly higher generation does. Optional query ?vms=1 adds this host&#x27;s own view of the VM definitions it owns, which the promotion proof of a later slice consumes. The handler also accepts POST with an identical, equally read-only answer, so a caller behind a transport that dislikes one method can use the other; nothing in Nex Core calls the POST form, so it is described here rather than documented as a separate operation.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerGetPoolAuthority&quot;,
+  &quot;summary&quot;: &quot;Probe what pool authority this host holds&quot;,
+  &quot;description&quot;: &quot;Read-only. Admitted to any holder of a certificate this pool&#x27;s CA issued, including one this pool has ejected: an ejected host must be able to learn that it is no longer a member, and it can only learn that from the pool that ejected it. The caller&#x27;s own membership status is decided from the certificate the transport proved, never from a name in a body. A pool master answering a ready member that is behind also returns a pool-CA-signed re-point notice, so a host that missed a push converges from whichever host it can reach without having to trust a stale one; the probe answer alone changes nothing, only the signature at a strictly higher generation does. Optional query ?vms=1 adds this host&#x27;s own view of the VM definitions it owns, which the promotion proof of a later slice consumes. The handler also accepts POST with an identical, equally read-only answer, so a caller behind a transport that dislikes one method can use the other; nothing in Nex Core calls the POST form, so it is described here rather than documented as a separate operation.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolPeerCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: any pool certificate holder \u2192 any pool host&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;vms&quot;,
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;required&quot;: false,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;enum&quot;: [
+          &quot;1&quot;
+        ]
+      },
+      &quot;description&quot;: &quot;Ask for this host&#x27;s own VM ownership records.&quot;
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;This host&#x27;s own authority, membership and transfer state.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolAuthorityStatus&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;\&quot;pool peer certificate is required\&quot;.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Method other than GET or POST; Allow: GET, POST.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;\&quot;pool membership is unavailable\&quot;.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
 <section id="schemas"><h2>Schemas and authentication</h2>
 <h3>securitySchemes</h3>
 <details id="PoolMemberCertificate"><summary>PoolMemberCertificate</summary><pre>{
@@ -1923,6 +2201,10 @@
 <details id="PoolMasterCertificate"><summary>PoolMasterCertificate</summary><pre>{
   &quot;type&quot;: &quot;mutualTLS&quot;,
   &quot;description&quot;: &quot;Served only by a pool member (not the master). The client certificate must chain to the pool CA, its subject CN must be the membership master host ID with ready status, and its SHA-256 must equal the master&#x27;s recorded certificate_sha256.&quot;
+}</pre></details>
+<details id="PoolPeerCertificate"><summary>PoolPeerCertificate</summary><pre>{
+  &quot;type&quot;: &quot;mutualTLS&quot;,
+  &quot;description&quot;: &quot;Served by any pool host. The client certificate must chain to this host&#x27;s pool CA. What it admits then depends on the route and the action: the read-only authority probe admits any holder of a certificate this pool&#x27;s CA issued, including one this pool has ejected, and reports the caller&#x27;s own membership status back rather than refusing it; a transfer activate, abort or leave admits only this host&#x27;s current pinned pool master; a transfer repoint admits any host whose certificate matches a ready membership row, because the sender has just become the pool master and this host does not know that yet.&quot;
 }</pre></details>
 <h3>schemas</h3>
 <details id="ClusterFencePeerRequest"><summary>ClusterFencePeerRequest</summary><pre>{
@@ -2351,7 +2633,50 @@
       &quot;type&quot;: &quot;string&quot;
     },
     &quot;peer_origin&quot;: {
-      &quot;type&quot;: &quot;string&quot;
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Bare HTTPS origin this member advertised to the master for peer traffic. Recorded from the member&#x27;s own advertisement, or, for the master&#x27;s own row, from the master_url an operator supplied with the first Controller-driven join; never inferred from Controller connectivity.&quot;
+    },
+    &quot;maintenance&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;maintenance_since&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;replica_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;The master&#x27;s observation of the authority-replica generation this member last acknowledged. Memory-only on the master and overlaid on the reported copy of the membership record: it is never written into the durable membership and is never an input to the generation equality rule. A member that has never acknowledged one is reported at 0, honestly.&quot;
+    },
+    &quot;replica_digest&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Content digest the member acknowledged, as observed by the master.&quot;
+    },
+    &quot;replica_error&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 200,
+      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member does not support pool-authority-replica-v1; upgrade it before relying on its replica\&quot;, \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;.&quot;
+    },
+    &quot;replica_observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;,
+      &quot;description&quot;: &quot;When the master made that observation. Zero when it has none.&quot;
+    },
+    &quot;fence&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterFence&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;How this host would be excluded from the pool if it had to be fenced: the same closed typed profile clustered storage already uses, recorded in the master&#x27;s durable membership and replicated with it, so a promoted master inherits it and a fresh Controller re-adopts it. Only a virsh profile can be recorded by this build; Core refuses to record a profile it cannot verify. The credential reference it carries is never projected to a client, and neither is anything the reference names.&quot;
+    },
+    &quot;fence_credential_version&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;The master&#x27;s counter for the private fence credential material behind this host&#x27;s profile. The material itself is never in the membership; only this number is, so rotating it changes the replicated content and therefore advances the pool authority generation, while re-recording identical material moves nothing.&quot;
     }
   },
   &quot;required&quot;: [
@@ -2359,7 +2684,9 @@
     &quot;certificate_sha256&quot;,
     &quot;generation&quot;,
     &quot;status&quot;,
-    &quot;observed_at&quot;
+    &quot;observed_at&quot;,
+    &quot;maintenance_since&quot;,
+    &quot;replica_observed_at&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.PoolMember&quot;
 }</pre></details>
@@ -2535,6 +2862,16 @@
     &quot;observed_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;deleted&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;VM IDs this member durably deleted: succeeded vm-delete tombstones from its own managed journal. Positive evidence of removal, which is what lets the master prune its pool-vms.json owner record for a VM; absence is never read as deletion.&quot;
     }
   },
   &quot;required&quot;: [
@@ -2546,7 +2883,7 @@
     &quot;observed_at&quot;
   ],
   &quot;x-go-type&quot;: &quot;agent.poolVMInventory&quot;,
-  &quot;description&quot;: &quot;Complete, membership-generation-bound VM inventory of the reporting member. updates carries only exact successful local managed-journal evidence for a current revision.&quot;
+  &quot;description&quot;: &quot;Complete, membership-generation-bound VM inventory of the reporting member. updates carries only exact successful local managed-journal evidence for a current revision; deleted carries this member&#x27;s own delete tombstones.&quot;
 }</pre></details>
 <details id="PoolVMInventoryReply"><summary>PoolVMInventoryReply</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -4413,5 +4750,1152 @@
     &quot;status&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.Media&quot;
+}</pre></details>
+<details id="PoolWrappedKey"><summary>PoolWrappedKey</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;The pool CA private key sealed for exactly one member of one generation: ECDH between a fresh ephemeral P-256 key and that member&#x27;s certified peer public key, HKDF-SHA256 with a context binding pool ID, member host ID and generation, then AES-256-GCM with the same context as additional data. A member stores it sealed and never opens it while it is a member; nothing in this release unwraps it. All three fields are standard base64.&quot;,
+  &quot;properties&quot;: {
+    &quot;ephemeral_public_key&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Base64 uncompressed P-256 point of the master&#x27;s per-push ephemeral key.&quot;
+    },
+    &quot;nonce&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Base64 12-byte AES-GCM nonce, fresh for every push.&quot;
+    },
+    &quot;ciphertext&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Base64 AES-256-GCM ciphertext of the pool CA private key PEM.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;ephemeral_public_key&quot;,
+    &quot;nonce&quot;,
+    &quot;ciphertext&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolWrappedKey&quot;
+}</pre></details>
+<details id="PoolReplicaSection"><summary>PoolReplicaSection</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;One declared section of an authority replica and the SHA-256 of its canonical JSON. A member recomputes every digest and refuses a replica that declares a different set, so a section cannot be dropped, reordered or replaced.&quot;,
+  &quot;properties&quot;: {
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;membership&quot;,
+        &quot;vms&quot;,
+        &quot;storage&quot;,
+        &quot;networks&quot;,
+        &quot;media&quot;,
+        &quot;storage_clusters&quot;
+      ]
+    },
+    &quot;sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Lowercase hex SHA-256 of that section&#x27;s canonical JSON.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;name&quot;,
+    &quot;sha256&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolReplicaSection&quot;
+}</pre></details>
+<details id="PoolAuthorityReplica"><summary>PoolAuthorityReplica</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;The pool master&#x27;s signed, read-only copy of its own durable pool authority, pushed to one member. It is stored by every ready member and acted on by none of them: no membership, VM, storage, network or media record on the receiving host is read from or changed by a replica, and no health judgement is derived from one. The signature is made with the pool CA key over every field but signature, so a member verifies it against the pool CA it pinned at join, long after the master that signed it is gone. Bounded to 1 MiB on the wire and on disk.&quot;,
+  &quot;properties&quot;: {
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;master_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;The master&#x27;s authority generation, which it advances only when the replicated content digest changes. Never 0 in a valid replica; generations may skip.&quot;
+    },
+    &quot;member_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128,
+      &quot;description&quot;: &quot;The one member this copy is addressed to. It is inside the signature, so a replica cannot be re-addressed in transit and a copy wrapped for one member cannot be presented to another.&quot;
+    },
+    &quot;created_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;membership&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/PoolMembership&quot;
+    },
+    &quot;vms&quot;: {
+      &quot;type&quot;: [
+        &quot;object&quot;,
+        &quot;null&quot;
+      ],
+      &quot;additionalProperties&quot;: true,
+      &quot;x-go-type-raw&quot;: &quot;json.RawMessage&quot;,
+      &quot;description&quot;: &quot;The master&#x27;s pool-vms.json owner projection, replicated as received bytes so ownership, epochs, specs and pending updates survive unchanged. Published per-host inventory snapshots are deliberately not replicated: they are observations, and a promoted master re-collects fresh ones.&quot;
+    },
+    &quot;storage&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StorageRegistration&quot;
+      },
+      &quot;description&quot;: &quot;Pool storage registrations with credential receipts stripped, exactly as the storage peer list strips them.&quot;
+    },
+    &quot;networks&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/NetworkRegistration&quot;
+      }
+    },
+    &quot;media&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/Media&quot;
+      }
+    },
+    &quot;storage_clusters&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterConfig&quot;
+      }
+    },
+    &quot;ca_key_wrapped&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolWrappedKey&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;fence_credentials&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolWrappedFenceCredential&quot;
+      },
+      &quot;description&quot;: &quot;The pool&#x27;s fence credential material, sealed for this member alone. Like ca_key_wrapped it is covered by signature and excluded from the content digest, so one generation still has one digest for every member; what makes new material advance the generation is fence_credential_version in the membership.&quot;
+    },
+    &quot;sections&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolReplicaSection&quot;
+      },
+      &quot;description&quot;: &quot;Exactly the six sections above, in order.&quot;
+    },
+    &quot;signature&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Base64 ASN.1 ECDSA P-256/SHA-256 signature by the pool CA key over the whole replica with signature empty.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;pool_id&quot;,
+    &quot;master_host_id&quot;,
+    &quot;generation&quot;,
+    &quot;member_host_id&quot;,
+    &quot;created_at&quot;,
+    &quot;membership&quot;,
+    &quot;vms&quot;,
+    &quot;storage&quot;,
+    &quot;networks&quot;,
+    &quot;media&quot;,
+    &quot;storage_clusters&quot;,
+    &quot;sections&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolAuthorityReplica&quot;
+}</pre></details>
+<details id="PoolReplicaAck"><summary>PoolReplicaAck</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;The member&#x27;s answer to one push. Re-pushing the same generation with the same content returns the same acknowledgement; a refusal carries a bounded reason and a 409, never a silent drop.&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The acknowledging member. Empty in a refusal that could not be attributed.&quot;
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;digest&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Content digest of the stored replica: identical on every member of one generation, because the per-member address, the per-push wrap, the creation time, the signature and the generation are excluded from it.&quot;
+    },
+    &quot;verified&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;True only when the replica was verified against the pool CA, its sections recomputed, and the file durably written.&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 200,
+      &quot;description&quot;: &quot;Bounded refusal reason; control characters collapse the whole message to \&quot;pool authority replica refused\&quot;.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;generation&quot;,
+    &quot;verified&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolReplicaAck&quot;
+}</pre></details>
+<details id="PoolReplicaStatus"><summary>PoolReplicaStatus</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Observed replica state, reported in a member&#x27;s inventory.managed.replica and returned by the peer GET. It is what a host holds and how fresh that observation is; the Controller mirrors it for display and stores none of it.&quot;,
+  &quot;properties&quot;: {
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;0 when this host holds no replica.&quot;
+    },
+    &quot;digest&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;master_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;signed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;,
+      &quot;description&quot;: &quot;created_at of the stored replica.&quot;
+    },
+    &quot;received_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;,
+      &quot;description&quot;: &quot;When this host stored it, from the host&#x27;s own clock, so freshness survives a restart.&quot;
+    },
+    &quot;verified&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 200,
+      &quot;description&quot;: &quot;The last refusal this host recorded, kept alongside whatever it still holds; a later accepted push clears it.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;generation&quot;,
+    &quot;signed_at&quot;,
+    &quot;received_at&quot;,
+    &quot;verified&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolReplicaStatus&quot;
+}</pre></details>
+<details id="PoolTransferStatus"><summary>PoolTransferStatus</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The Controller operation that started the transfer, or the identifier the transfer was recorded under.&quot;
+    },
+    &quot;action&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;promote or eject: Core&#x27;s own name for what this transfer does. A fence-verified promotion of a surviving member is also promote, and is told apart by role: candidate. The Controller&#x27;s requested action (master-change, eject, transfer-cancel) is reported separately in last_transfer.&quot;
+    },
+    &quot;role&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;This host&#x27;s part in the transfer: source is the pool master that started it, target is the host taking the authority, ejected is the host leaving the pool, candidate is the surviving member running a fence-verified promotion.&quot;
+    },
+    &quot;target_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The transfer&#x27;s subject: the host becoming master, or the host being ejected.&quot;
+    },
+    &quot;stage&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The stage this host has durably reached. For a master change: freeze, replicate, activate (the signed hand-off), repoint (every other host is told, in the new master&#x27;s own signed words, who the master is now). For an eject: freeze, remove (the durable membership change, after which nothing stays frozen), repoint, leave. For a promotion: preflight, fence, activate, repoint. done and aborted are terminal.&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;pending while the hosts are still running it; needs_attention means durable and still running, not an error.&quot;,
+      &quot;enum&quot;: [
+        &quot;pending&quot;,
+        &quot;succeeded&quot;,
+        &quot;failed&quot;,
+        &quot;needs_attention&quot;
+      ]
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;This host&#x27;s own last refusal or failure, bounded and sanitized.&quot;
+    },
+    &quot;authority_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;The pool authority generation this transfer is pinned to.&quot;
+    },
+    &quot;frozen&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;True while this host is refusing pool authority writes for the transfer. Running guests are unaffected and stop is never refused.&quot;
+    },
+    &quot;cancellable&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Core&#x27;s own answer to \&quot;may this still be cancelled?\&quot;, so no caller has to infer it from stage names. True only before the transfer&#x27;s first irreversible durable step: a master change until the pool-CA-signed hand-off, an eject until the membership without that member is written, and never for a promotion, which fences. It is computed from the same predicate the cancel itself is gated on, so the reported flag and the accepted cancel cannot drift. It is always present: a caller reads one field for every kind of transfer and never has to tell \&quot;not cancellable\&quot; from \&quot;not reported\&quot;.&quot;
+    },
+    &quot;handed_off&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;The outgoing master&#x27;s own durable answer to \&quot;have I signed this pool&#x27;s authority away?\&quot;, reported rather than inferred from stage names or refusal sentences. Only the source records it, so a target or ejected host always reports false. It is always present, so an older Core that omits it is distinguishable from one that reports false.&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;,
+      &quot;description&quot;: &quot;When this host wrote this report.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;operation_id&quot;,
+    &quot;action&quot;,
+    &quot;role&quot;,
+    &quot;target_host_id&quot;,
+    &quot;stage&quot;,
+    &quot;status&quot;,
+    &quot;cancellable&quot;,
+    &quot;handed_off&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolTransferStatus&quot;,
+  &quot;description&quot;: &quot;One participant&#x27;s own report of the master change or eject it is part of. Every participant reports its own; nothing merges them into a job, and a host that is not reporting says nothing rather than repeating its last stage.&quot;
+}</pre></details>
+<details id="PoolAuthorityRecord"><summary>PoolAuthorityRecord</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;The pool master&#x27;s own durable authority generation. This is the only absolute generation in the pool; nothing else derives one.&quot;
+    },
+    &quot;digest&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;SHA-256 of the authority content that generation numbered.&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;generation&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolAuthorityRecord&quot;,
+  &quot;description&quot;: &quot;Reported by the pool master alone. A Controller mirrors it to compare each member&#x27;s acknowledged replica generation against it and stores neither.&quot;
+}</pre></details>
+<details id="PoolAuthorityNotice"><summary>PoolAuthorityNotice</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;action&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;promote or eject.&quot;,
+      &quot;enum&quot;: [
+        &quot;promote&quot;,
+        &quot;eject&quot;
+      ]
+    },
+    &quot;from_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The host that issued and signed this notice.&quot;
+    },
+    &quot;to_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The host this notice addresses.&quot;
+    },
+    &quot;target_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The transfer&#x27;s subject: the promoted host, or the ejected one.&quot;
+    },
+    &quot;authority_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;The exact authority generation being handed over, or the generation the issuing master holds.&quot;
+    },
+    &quot;membership&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/PoolMembership&quot;
+    },
+    &quot;issued_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;signature&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Base64 ASN.1 ECDSA P-256/SHA-256 over the whole notice minus this field, made with the pool CA key. Every recipient verifies it against the pool CA it pinned at join, so no host takes another host&#x27;s word for who the master is.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;pool_id&quot;,
+    &quot;operation_id&quot;,
+    &quot;action&quot;,
+    &quot;from_host_id&quot;,
+    &quot;to_host_id&quot;,
+    &quot;target_host_id&quot;,
+    &quot;authority_generation&quot;,
+    &quot;membership&quot;,
+    &quot;issued_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolAuthorityNotice&quot;,
+  &quot;description&quot;: &quot;The pool-CA-signed statement that pool authority moved. Used twice in one transfer: the hand-off, signed by the outgoing master, naming the exact generation it froze and the host it handed that generation to (membership empty); and the re-point, signed by the new master with the pool CA key it now holds, carrying the new membership at a strictly higher membership generation. A notice without a signature, or at a generation that is not strictly higher, is refused.&quot;
+}</pre></details>
+<details id="PoolTransferRequest"><summary>PoolTransferRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Idempotency key: the same request repeated after a lost reply returns the same answer and performs the step at most once.&quot;
+    },
+    &quot;action&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;activate hands the authority to the addressed host; abort records that it never activated and never will for this operation; repoint moves the addressed host onto the new master; leave tells an ejected host it has left.&quot;,
+      &quot;enum&quot;: [
+        &quot;activate&quot;,
+        &quot;abort&quot;,
+        &quot;repoint&quot;,
+        &quot;leave&quot;
+      ]
+    },
+    &quot;notice&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/PoolAuthorityNotice&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;operation_id&quot;,
+    &quot;action&quot;,
+    &quot;notice&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolTransferRequest&quot;,
+  &quot;description&quot;: &quot;One step of a transfer, addressed to one peer. abort carries no meaningful notice; every other action requires one whose operation_id matches.&quot;
+}</pre></details>
+<details id="PoolTransferReply"><summary>PoolTransferReply</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The host that answered.&quot;
+    },
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;action&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;accepted&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;False on every 409 refusal.&quot;
+    },
+    &quot;activated&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;The fact an abort needs: whether this host had already adopted the authority, decided once under its own lock, so an abort and an activation can never both succeed.&quot;
+    },
+    &quot;authority_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;This host&#x27;s authority generation after the step.&quot;
+    },
+    &quot;membership_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;This host&#x27;s membership generation after the step.&quot;
+    },
+    &quot;notice&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolAuthorityNotice&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Returned with an accepted activation: the new master&#x27;s own signed re-point notice, so the outgoing master demotes itself on signed evidence rather than on its assumption that the activation worked.&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Bounded, sanitized refusal text.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;operation_id&quot;,
+    &quot;action&quot;,
+    &quot;accepted&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolTransferReply&quot;,
+  &quot;description&quot;: &quot;The addressed host&#x27;s own answer to one transfer step.&quot;
+}</pre></details>
+<details id="PoolAuthorityStatus"><summary>PoolAuthorityStatus</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The host that answered the probe.&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;role&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;This host&#x27;s own role in the pool it names.&quot;,
+      &quot;enum&quot;: [
+        &quot;master&quot;,
+        &quot;member&quot;
+      ]
+    },
+    &quot;master_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The host this host currently follows as pool master.&quot;
+    },
+    &quot;master_peer_origin&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;That master&#x27;s peer origin, so a converging host can go on to probe it.&quot;
+    },
+    &quot;authority_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;This host&#x27;s own pool authority generation; 0 on a member.&quot;
+    },
+    &quot;membership_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;The membership generation this host holds.&quot;
+    },
+    &quot;replica_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;The generation of the authority replica this host stores.&quot;
+    },
+    &quot;replica_verified&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Whether that replica was proven against the pool CA.&quot;
+    },
+    &quot;frozen&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;This host is refusing pool authority writes for a transfer.&quot;
+    },
+    &quot;handed_off&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;This host has signed its authority away and refuses every authority write for good, not only while frozen.&quot;
+    },
+    &quot;caller_status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The membership status this host holds for the calling certificate, decided from the certificate the transport proved rather than from a name in a body. Empty when it names no member at all. This is how an ejected host learns it has been ejected.&quot;,
+      &quot;enum&quot;: [
+        &quot;ready&quot;,
+        &quot;pending&quot;,
+        &quot;failed&quot;,
+        &quot;ejected&quot;,
+        &quot;&quot;
+      ]
+    },
+    &quot;transfer&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolTransferStatus&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;This host&#x27;s own part of a transfer.&quot;
+    },
+    &quot;notice&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolAuthorityNotice&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;A master answers a ready member that is behind with a signed re-point notice, so a host that missed a push converges from whichever host it can reach without having to trust a stale one. The probe answer alone changes nothing; only the signature at a strictly higher generation does.&quot;
+    },
+    &quot;restricted&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolRestrictedStatus&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;This host&#x27;s own refusal to act on pool authority, set while it cannot prove it holds the pool&#x27;s current authority. A returning fenced master answers its probes with this, which is how a member and an operator see that it came back and is refusing to start anything.&quot;
+    },
+    &quot;vms&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolVMOwnership&quot;
+      },
+      &quot;description&quot;: &quot;This host&#x27;s own view of the VM definitions it owns, answered only when the caller asks with ?vms=1. Consumed by the promotion proof of a later slice.&quot;
+    },
+    &quot;vms_reported&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Separates \&quot;this host defines no VM\&quot; from \&quot;this host could not read its own record\&quot;: an empty vms list means the first only when this is true.&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;role&quot;,
+    &quot;master_host_id&quot;,
+    &quot;authority_generation&quot;,
+    &quot;membership_generation&quot;,
+    &quot;replica_generation&quot;,
+    &quot;replica_verified&quot;,
+    &quot;frozen&quot;,
+    &quot;handed_off&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolAuthorityStatus&quot;,
+  &quot;description&quot;: &quot;The read-only authority probe every host answers to any holder of a certificate this pool&#x27;s CA issued, including one this pool has ejected. It is how a returning or restarted host discovers that it has been superseded or ejected, and how a host that missed a re-point finds the current master without trusting a stale one.&quot;
+}</pre></details>
+<details id="PoolVMOwnership"><summary>PoolVMOwnership</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The host that defines this VM, as that host itself reports it.&quot;
+    },
+    &quot;revision&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;description&quot;: &quot;The definition revision this host holds.&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;vm_id&quot;,
+    &quot;host_id&quot;,
+    &quot;revision&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolVMOwnership&quot;,
+  &quot;description&quot;: &quot;One host&#x27;s own statement about one VM it defines, answered by the authority probe only when the caller asks for it. The execution epoch is deliberately absent: it is the master&#x27;s number and a member could only repeat it back rather than confirm it. Consumed by the promotion proof of a later slice, which is not documented in this release.&quot;
+}</pre></details>
+<details id="PoolRestrictedStatus"><summary>PoolRestrictedStatus</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;unconfirmed&quot;,
+        &quot;superseded&quot;
+      ],
+      &quot;description&quot;: &quot;The structural form of reason, so no caller has to match on the sentence. unconfirmed is a master that has not re-proved its authority since it restarted; superseded is a host that found a higher authority elsewhere. Omitted by an older Core, in which case the sentence is the only signal.&quot;
+    },
+    &quot;reason&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Why this host is refusing to act on pool authority.&quot;
+    },
+    &quot;since&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;conflicts&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;VMs this host still defines that the current pool master records as running elsewhere. A conflict is never resolved by guessing.&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;reason&quot;,
+    &quot;since&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolRestrictedStatus&quot;,
+  &quot;description&quot;: &quot;A Core-enforced refusal state on a host that cannot prove it holds the pool&#x27;s current authority: while it is set the host writes no pool authority, mints no authority generation, starts no workload and autostarts nothing. Stop, power-off, console, local recovery access and reporting are untouched, and the libvirt hook refuses managed shared-VM starts by reading the host&#x27;s own durable record, so the refusal holds with no Controller connected. It is reported by the authority probe, by inventory.managed.restricted and by GET /api/local/v1/pool.&quot;
+}</pre></details>
+<details id="PoolWrappedFenceCredential"><summary>PoolWrappedFenceCredential</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The host this material fences.&quot;
+    },
+    &quot;credential_ref&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Core&#x27;s own opaque reference for the material. It names a file in the host&#x27;s state directory and is never projected to a client.&quot;
+    },
+    &quot;version&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;The master&#x27;s counter for the material, so a member can tell a re-wrap of the same material from new material. It is mirrored in PoolMember.fence_credential_version, which is what makes rotated material advance the pool authority generation.&quot;
+    },
+    &quot;wrapped&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolWrappedKey&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;The material sealed for this member alone, by the same primitive and with the same guarantees as the pool CA key, under its own context binding pool, member, generation, fenced host and reference.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;credential_ref&quot;,
+    &quot;wrapped&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolWrappedFenceCredential&quot;,
+  &quot;description&quot;: &quot;One host&#x27;s fence credential material carried to one member inside that member&#x27;s replica. The host that actually fences during a promotion is a surviving member, and it cannot be given the material after the master it must fence is gone, so the material travels sealed rather than not at all. A member stores it sealed in its 0600 replica and opens it only while it performs a promotion; the Controller never sees it, and it never reaches SQLite, the audit trail, a response or a log. Every ready member can open the material addressed to it, which is the same trust model the sealed pool CA key already carries: admit only hosts you trust with powering off a profiled host.&quot;
+}</pre></details>
+<details id="PoolPromotionCheck"><summary>PoolPromotionCheck</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;replica-integrity&quot;,
+        &quot;replica-supremacy&quot;,
+        &quot;accepted-ownership&quot;,
+        &quot;old-master-exclusion&quot;
+      ],
+      &quot;description&quot;: &quot;replica-integrity: this host holds a verified signed replica. replica-supremacy: no reachable host holds a newer pool authority. accepted-ownership: every pool VM is recorded the same way by the host that owns it. old-master-exclusion: the old pool master has been fenced and its power-off observed by Core itself.&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;passed&quot;,
+        &quot;blocked&quot;,
+        &quot;unknown&quot;
+      ],
+      &quot;description&quot;: &quot;unknown blocks a promotion exactly as blocked does. It is a different word only so an operator can tell a refusal from an outage, and it is never presented as \&quot;fine\&quot;. old-master-exclusion is normally unknown before the promotion runs, because Core fences and proves it during the promotion and never during a preflight.&quot;
+    },
+    &quot;reason&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Core&#x27;s own sentence, verbatim.&quot;
+    },
+    &quot;hosts&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;The hosts this check is about.&quot;
+    },
+    &quot;vms&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;The pool VMs this check is about.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;name&quot;,
+    &quot;status&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolPromotionCheck&quot;,
+  &quot;description&quot;: &quot;One named check of the promotion proof, computed on the candidate from its own replica and its own live probes.&quot;
+}</pre></details>
+<details id="PoolPromotionHost"><summary>PoolPromotionHost</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;reachable&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Whether the candidate reached this host over the pool network. An unreachable host is reported unreachable, never assumed stopped.&quot;
+    },
+    &quot;role&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;master or member, as that host answered.&quot;
+    },
+    &quot;authority_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;The pool authority generation that host answered with.&quot;
+    },
+    &quot;replica_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;The replica generation that host holds.&quot;
+    },
+    &quot;membership_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;The membership generation that host holds.&quot;
+    },
+    &quot;blocks&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;This host&#x27;s own answer to \&quot;does this host stop the promotion as things stand\&quot;: an unreachable member that could itself have been promoted, or a reachable one that disagrees. A blocking host that can be fenced appears in the verdict&#x27;s fence_host_ids; one that cannot is a refusal an operator must resolve another way.&quot;
+    },
+    &quot;fence_recorded&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Whether a fence profile is recorded for this host at all.&quot;
+    },
+    &quot;fence_usable&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Whether the candidate could turn that profile into a proof for this host: a profile kind this build can verify, plus a credential sealed to the candidate that it can open.&quot;
+    },
+    &quot;fence_unusable_reason&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 200,
+      &quot;description&quot;: &quot;Core&#x27;s own short sentence when it could not.&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The probe&#x27;s own bounded failure text.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;reachable&quot;,
+    &quot;blocks&quot;,
+    &quot;fence_recorded&quot;,
+    &quot;fence_usable&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolPromotionHost&quot;,
+  &quot;description&quot;: &quot;One probed host of the replica&#x27;s membership, as the promotion candidate found it, with that host&#x27;s own contribution to the verdict: whether it blocks the promotion, and whether the candidate could exclude it by a fence if it does.&quot;
+}</pre></details>
+<details id="PoolPromotionVM"><summary>PoolPromotionVM</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The host the pool authority records as this VM&#x27;s owner.&quot;
+    },
+    &quot;state&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;confirmed&quot;,
+        &quot;fenced&quot;,
+        &quot;blocked&quot;
+      ],
+      &quot;description&quot;: &quot;confirmed by its reachable owner, fenced with its owner, or blocked. A blocked VM does not block the pool&#x27;s promotion; it stays visible and unstartable until it is reconciled, and its definition is never deleted.&quot;
+    },
+    &quot;reason&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Core&#x27;s own sentence for a blocked VM.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;vm_id&quot;,
+    &quot;host_id&quot;,
+    &quot;state&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolPromotionVM&quot;,
+  &quot;description&quot;: &quot;One VM record of the replica, classified by the candidate against what the owning host itself reports.&quot;
+}</pre></details>
+<details id="PoolPromotionVerdict"><summary>PoolPromotionVerdict</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;candidate_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The surviving member this verdict is about: the host that would become master.&quot;
+    },
+    &quot;old_master_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The pool master this promotion would exclude.&quot;
+    },
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The promotion this verdict was computed for, when it belongs to one.&quot;
+    },
+    &quot;authority_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;The generation the candidate would promote from.&quot;
+    },
+    &quot;can_promote&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;True only when the whole proof holds right now, fence included. In the normal ready state it is false, because the old master has not been fenced yet: that is an honest \&quot;not proved\&quot;, not a refusal. A caller must not use it alone to decide whether to offer the promotion.&quot;
+    },
+    &quot;ready_to_fence&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;The state a caller offers the operator the promotion in: every check but the exclusion has passed, the exclusion is unknown only because no fence has been attempted, and the candidate holds a usable fence profile and an openable credential for every host in fence_host_ids. Confirming now proceeds to the fence rather than to a refusal.&quot;
+    },
+    &quot;fence_required&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Whether this promotion needs a fence proof at all.&quot;
+    },
+    &quot;fence_recorded&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Whether the old pool master has a fence profile recorded in the membership at all.&quot;
+    },
+    &quot;fence_usable&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Whether this host could turn that profile into a proof: a profile kind this build can verify, plus a credential sealed to this host that it can open. Only virsh profiles can be recorded by this build, so a physical pool reports false.&quot;
+    },
+    &quot;fence_unusable_reason&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 200,
+      &quot;description&quot;: &quot;Core&#x27;s own short single-line sentence when it could not: \&quot;no fence profile is recorded for &lt;host&gt;\&quot;, \&quot;this host holds no fence credential for &lt;host&gt;\&quot;, or vmhost.PoolFenceUsable&#x27;s own sentence such as \&quot;BMC fencing identity verification is not implemented\&quot;.&quot;
+    },
+    &quot;fence_host_ids&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Every host this promotion would power off, sorted: the old pool master, and every other host that blocks the promotion and can be excluded by a fence. It is what the operator confirms and what the promotion command carries back verbatim, so a host is never powered off without having been named to the operator first.&quot;
+    },
+    &quot;checks&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolPromotionCheck&quot;
+      },
+      &quot;description&quot;: &quot;Every named check, in Core&#x27;s order.&quot;
+    },
+    &quot;hosts&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolPromotionHost&quot;
+      },
+      &quot;description&quot;: &quot;Every host of the replica&#x27;s membership, as the candidate probed it.&quot;
+    },
+    &quot;vms&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolPromotionVM&quot;
+      },
+      &quot;description&quot;: &quot;Every pool VM of the replica, classified.&quot;
+    },
+    &quot;fence&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterFenceStatus&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;The fence proof Core produced, when one exists. Always absent from a preflight: a preflight fences nothing.&quot;
+    },
+    &quot;blocking&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Every blocking sentence, so a caller can show what must change without matching on check names. can_promote is exactly \&quot;this list is empty\&quot;.&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;,
+      &quot;description&quot;: &quot;When the candidate computed this verdict. A verdict is an observation with a lifetime, not a record: it is recomputed, never stored.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;pool_id&quot;,
+    &quot;candidate_host_id&quot;,
+    &quot;authority_generation&quot;,
+    &quot;can_promote&quot;,
+    &quot;ready_to_fence&quot;,
+    &quot;fence_required&quot;,
+    &quot;fence_recorded&quot;,
+    &quot;fence_usable&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolPromotionVerdict&quot;,
+  &quot;description&quot;: &quot;The promotion candidate Core&#x27;s whole structured answer, computed on Core from its own signed replica and its own live probes of the pool network. A preflight returns it without changing anything, so an operator sees exactly what blocks before confirming a destructive fence. Nothing in it is computed, cached or stored by the Controller.&quot;
+}</pre></details>
+<details id="PoolPromotionStatus"><summary>PoolPromotionStatus</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;stage&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The stage the candidate has durably reached: preflight, fence, activate, repoint, done or aborted.&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;pending&quot;,
+        &quot;succeeded&quot;,
+        &quot;failed&quot;,
+        &quot;needs_attention&quot;
+      ],
+      &quot;description&quot;: &quot;needs_attention means durable and still running on Core, not an error.&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The candidate&#x27;s own last refusal or failure, bounded and sanitized.&quot;
+    },
+    &quot;verdict&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolPromotionVerdict&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;The last verdict this host computed for the promotion.&quot;
+    },
+    &quot;cancellable&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Core&#x27;s own answer to \&quot;may this still be cancelled?\&quot;. A promotion fences the old master, so it is never true; it is reported rather than inferred so a caller reads one field for every kind of transfer. It is always present: a caller reads one field for every kind of transfer and never has to tell \&quot;not cancellable\&quot; from \&quot;not reported\&quot;.&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;,
+      &quot;description&quot;: &quot;When this host wrote this report.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;cancellable&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolPromotionStatus&quot;,
+  &quot;description&quot;: &quot;The promotion candidate&#x27;s own report of the fence-verified promotion it is running. Reported as inventory.managed.promotion; the Controller stores no stage, no candidate and no verdict.&quot;
+}</pre></details>
+<details id="PoolCommand"><summary>PoolCommand</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;action&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;membership&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/PoolMembership&quot;,
+      &quot;description&quot;: &quot;The full membership record for the pool actions that carry one. For join and maintenance only master_host_id is set: the master reads its own record, and a membership composed in the Controller could already be stale.&quot;
+    },
+    &quot;member_endpoint&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;expected_version&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;The membership generation the operator saw. 0 or absent means unchecked. For action maintenance it is compared against the master&#x27;s own current membership generation, not against the membership on the wire.&quot;
+    },
+    &quot;member_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128,
+      &quot;description&quot;: &quot;For action join, the joining host: it is the command&#x27;s target, and the pool-join command is the one pool command not delivered to the master. For action maintenance it names the host being drained, which is not the target: that command goes to the master, addressed by membership.master_host_id.&quot;
+    },
+    &quot;enabled&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;For action maintenance, the desired drain state of member_host_id. It is a desired state, not a transition: re-sending the state the host is already in succeeds and leaves maintenance_since unmoved.&quot;
+    },
+    &quot;master_url&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 512,
+      &quot;description&quot;: &quot;Bare HTTPS origin of the master&#x27;s pool-peer listener that the joining Core dials. Required for action join.&quot;
+    },
+    &quot;pool_ca_pem&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 16384,
+      &quot;writeOnly&quot;: true,
+      &quot;description&quot;: &quot;Master&#x27;s pool CA, pinned by the joining Core for the peer exchange. Required for action join. Never returned by any Controller read route.&quot;
+    },
+    &quot;invitation&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 8192,
+      &quot;writeOnly&quot;: true,
+      &quot;description&quot;: &quot;Single-use, 15-minute, pool- and host-bound join credential issued by the master and redeemed by the joining Core itself. Required for action join. The Controller relays it and never returns, lists, logs or audits it; the stored command row is scrubbed of this field and pool_ca_pem as soon as the operation leaves queued, and unconditionally 15 minutes after issue.&quot;
+    },
+    &quot;peer_origin&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 512,
+      &quot;description&quot;: &quot;Optional bare HTTPS origin the joining host advertises to its new master after it is admitted.&quot;
+    },
+    &quot;fence&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/StorageClusterFence&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;The power-fence profile to record for member_host_id, on action fence-profile. null clears the recorded profile. Any credential the operator supplied has already been delivered to Core over the one-time encrypted credential handoff before this command is written, and only the opaque reference Core allocated appears here.&quot;
+    },
+    &quot;fence_confirmed&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;The operator&#x27;s separate, explicit acknowledgement that promoting this candidate powers the old pool master off. It is a precondition and nothing else: Core produces and verifies the fence proof itself, no proof ever crosses this wire, and an acknowledgement is never evidence of anything.&quot;
+    },
+    &quot;fence_host_ids&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;The exact set of hosts the operator agreed to power off, as the verdict&#x27;s fence_host_ids named them. Core compares it against the set it computes again at run time and refuses the promotion if they differ, so the fence can never widen between the confirmation and the act.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;action&quot;,
+    &quot;membership&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolCommand&quot;,
+  &quot;description&quot;: &quot;membership is required for the member-join and storage-reconcile actions and is absent for join and maintenance: a joining host is not a member yet, and the master reads its own membership rather than trusting a Controller mirror. Valid() requires request_id plus, for action join, member_host_id, master_url, pool_ca_pem and invitation within the lengths above.&quot;
 }</pre></details>
 </section></main></html>

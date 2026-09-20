@@ -1,0 +1,19 @@
+{
+  "summary": "Bind Core eject-cleanup resource identities to their membership generation across repeated eject and rejoin cycles. API impact: existing contract.",
+  "paths": [
+    "internal/agent/pool_transfer.go",
+    "internal/agent/pool_transfer_test.go",
+    "internal/agent/pool_network.go",
+    "internal/agent/pool_storage.go",
+    "internal/agent/pool_media.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-20-phase4-eject-cleanup-generation-binding.json"
+  ],
+  "guide": {"impact": "none", "reason": "The existing eject and same-pool rejoin workflow is unchanged.", "pages": []},
+  "api": {"impact": "existing contract", "reason": "Core corrects private managed-journal identity binding without changing a route, schema, request or response.", "pages": ["docs/API.md"]},
+  "roadmap": {"impact": "none", "reason": "The pending correction does not complete S7 or Phase 4.", "pages": []},
+  "state": {"owner": "core", "reason": "Core owns cleanup provenance and one-use reapply consumption.", "record": "Existing managed-journal cleanup and consumption receipts bind resource identity to membership generation; Core inventory remains the replacement-Controller adoption path."},
+  "verification": {"method": "A preserved native state shows a later UI eject pending with a shared ISO after cleanup identities were reused across membership generations. The source correction is independently reviewed. Its focused failing-first two-cycle regression drives a first cleanup and reapply, then a second signed eject through ResumePoolLeave; it proves distinct durable cleanup receipts for network, storage and media, stable across retries and time changes. The preserved pending leave was resumed without repair: its original operation completed, wrote distinct current-generation cleanup receipts for all three resources, and left them absent while the ejected host became sole ready master of its new pool with runtime identity preserved. This does not establish a subsequent rejoin or resource convergence.", "evidence": ["internal/agent/pool_transfer_test.go", "docs/BUG_LEDGER.md"]}
+}

@@ -89,9 +89,18 @@ def upload(repo, release_id, asset):
 
 
 def publish(repo, tag, target, name, notes, assets):
-    # Private forge releases are internal lab delivery. Public website publishing
-    # (scripts/release-publish.py) still rejects ZFS-enabled ISOs until the
-    # external-distribution gates in docs/LICENSING.md are closed.
+    # Private forge releases are internal lab delivery (project owner, 2026-09-19).
+    # Public website publishing (scripts/release-publish.py) still rejects
+    # ZFS-enabled ISOs until the external-distribution gates in docs/LICENSING.md close.
+    # Still fail closed on an unreadable compliance manifest before creating a draft.
+    for asset in assets:
+        if asset.name.endswith("-compliance-manifest.json"):
+            try:
+                manifest = json.loads(asset.read_text())
+            except ValueError as error:
+                raise GiteaError(f"invalid compliance manifest {asset.name}: {error}") from error
+            if not isinstance(manifest, dict):
+                raise GiteaError(f"invalid compliance manifest {asset.name}: not an object")
     existing = repo.request("GET", f"/releases/tags/{tag}")
     if existing:
         repo.request("DELETE", f"/releases/{existing['id']}")

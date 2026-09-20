@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"nex.local/nex/internal/vmhost"
 	"nex.local/nex/internal/websecurity"
 	"os"
 	"os/exec"
@@ -146,6 +148,17 @@ func (s *Service) auth(next http.HandlerFunc) http.HandlerFunc {
 				s.sessions[cookie.Value] = current
 			}
 			s.mu.Unlock()
+		}
+		// A served, authenticated local API call is the second way this host observes its
+		// own reachability over a staged management network configuration, and the only one
+		// left when the Controller is unreachable. It counts only when the listening socket
+		// that accepted it holds an address of the management bridge and the caller is
+		// somewhere else: an operator at the host console on 127.0.0.1 is exactly the person
+		// who can confirm a change that reaches nobody. A no-op unless one is applied.
+		local, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+		if local != nil {
+			_ = vmhost.RecordManagementConnectivity(s.cfg.AgentStateDir, "local-api", time.Now(),
+				vmhost.ConnectionAddr(local.String()), vmhost.ConnectionAddr(r.RemoteAddr))
 		}
 		next(w, r)
 	}

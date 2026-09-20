@@ -246,6 +246,18 @@ func savePoolStorage(s *Store, state poolStorageState) error {
 	return vmhost.AtomicWrite(poolStorageFile(s), b, 0600)
 }
 
+// poolPeerStorageList is the master's durable repository set for peers. It fails closed
+// when this host cannot read its own managed journal whole, exactly as the network and ISO
+// peer lists already do: a member reads absence from these lists as removal, so a short
+// list would detach a repository that is still registered. Owner decision D4, 2026-09-19.
+func poolPeerStorageList(s *Store) ([]protocol.StorageRegistration, error) {
+	storage, checks := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).AppliedStorage()
+	if !managedVMChecksReady(checks) {
+		return nil, vmhost.ErrManagedJournalIncomplete
+	}
+	return storage, nil
+}
+
 // PoolStorageHandler runs only on the dedicated peer listener. The mTLS member identity
 // determines who receives a resource/secret; client input cannot select another member.
 func PoolStorageHandler(s *Store) http.Handler {
@@ -330,7 +342,11 @@ func PoolStorageHandler(s *Store) http.Handler {
 				http.Error(w, "invalid member access", http.StatusBadRequest)
 				return
 			}
-			storage, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).AppliedStorage()
+			storage, storageErr := poolPeerStorageList(s)
+			if storageErr != nil {
+				http.Error(w, poolJournalIncomplete, http.StatusServiceUnavailable)
+				return
+			}
 			valid := false
 			for _, entry := range storage {
 				if entry.ID == id && !entry.Tombstone && entry.Generation == access.Generation && poolStorageEligibleForMember(entry, member.HostID) {
@@ -376,7 +392,11 @@ func PoolStorageHandler(s *Store) http.Handler {
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
-			storage, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).AppliedStorage()
+			storage, storageErr := poolPeerStorageList(s)
+			if storageErr != nil {
+				http.Error(w, poolJournalIncomplete, http.StatusServiceUnavailable)
+				return
+			}
 			for _, entry := range storage {
 				if entry.ID == id && poolStorageEligibleForMember(entry, member.HostID) {
 					if strconv.FormatUint(entry.Generation, 10) != generation {
@@ -398,7 +418,11 @@ func PoolStorageHandler(s *Store) http.Handler {
 			return
 		}
 		if r.Method == http.MethodGet && r.URL.Path == strings.TrimSuffix(poolStoragePath, "/") {
-			storage, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).AppliedStorage()
+			storage, storageErr := poolPeerStorageList(s)
+			if storageErr != nil {
+				http.Error(w, poolJournalIncomplete, http.StatusServiceUnavailable)
+				return
+			}
 			out := []protocol.StorageRegistration{}
 			for _, entry := range storage {
 				if !entry.Tombstone && poolStorageEligibleForMember(entry, member.HostID) {
@@ -420,7 +444,11 @@ func PoolStorageHandler(s *Store) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		storage, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).AppliedStorage()
+		storage, storageErr := poolPeerStorageList(s)
+		if storageErr != nil {
+			http.Error(w, poolJournalIncomplete, http.StatusServiceUnavailable)
+			return
+		}
 		for _, entry := range storage {
 			if entry.ID == id && !entry.Tombstone {
 				if !poolStorageEligibleForMember(entry, member.HostID) {
@@ -549,7 +577,20 @@ func reconcilePoolStorageWithCluster(ctx context.Context, s *Store, masterURL, r
 		}
 	}
 	if !alreadyCurrent {
-		result, err := engine.Execute(executionCtx, command, nil)
+		membership, membershipErr := Membership(s)
+		if membershipErr != nil {
+			return membershipErr
+		}
+		reapply, reapplyErr := engine.EjectCleanupReapplyAvailable(command, s.State.PoolID, s.State.HostID, membership.Generation)
+		if reapplyErr != nil {
+			return poolConvergeRefusalf("pool repository %s cannot be reapplied: %s", storage.ID, reapplyErr)
+		}
+		var result protocol.Result
+		if reapply {
+			result, err = engine.ExecuteEjectCleanupReapply(executionCtx, command, s.State.PoolID, s.State.HostID, membership.Generation)
+		} else {
+			result, err = engine.Execute(executionCtx, command, nil)
+		}
 		if err != nil || result.Status != "succeeded" {
 			if err == nil {
 				err = errors.New(result.Error)
@@ -886,15 +927,16 @@ func ReleaseUnusedPoolStorageReservations(ctx context.Context, s *Store) {
 	if err != nil {
 		return
 	}
-	managed, checks := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(ctx)
-	ids, safe := poolStorageUnusedIDs(managed, checks)
+	engine := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms"))
+	managed, checks := engine.Applied(ctx)
+	ids, safe := poolStorageUnusedIDs(managed, checks, engine.MediaAdoptedHere)
 	if !safe {
 		return
 	}
 	releasePoolStorageIDs(ctx, s, master, ids, "", true)
 }
 
-func poolStorageUnusedIDs(managed *protocol.ManagedState, checks []protocol.Check) ([]string, bool) {
+func poolStorageUnusedIDs(managed *protocol.ManagedState, checks []protocol.Check, adopted func(string) bool) ([]string, bool) {
 	for _, check := range checks {
 		if check.Status != "passed" && check.Status != "healthy" {
 			return nil, false
@@ -905,15 +947,21 @@ func poolStorageUnusedIDs(managed *protocol.ManagedState, checks []protocol.Chec
 		for _, disk := range vm.Disks {
 			used[disk.StorageID] = true
 		}
-		if vm.MediaID != "" {
+		for _, mediaID := range []string{vm.MediaID, vm.DriversMediaID} {
+			if mediaID == "" {
+				continue
+			}
 			for _, media := range managed.Media {
-				if media.ID == vm.MediaID {
+				if media.ID == mediaID {
 					used[media.StorageID] = true
 				}
 			}
 		}
 	}
 	for _, media := range managed.Media {
+		if adopted != nil && adopted(media.ID) {
+			continue
+		}
 		used[media.StorageID] = true
 	}
 	ids := []string{}
@@ -1107,8 +1155,19 @@ func reconcilePoolStorageFromMaster(ctx context.Context, s *Store, perRepository
 			return result
 		}
 		if !desired[entry.ID] && protocol.IsPoolSharedStorage(entry) {
+			engine := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms"))
+			// Precheck before Execute, exactly as the network and media orphan loops do: a
+			// repository a local VM disk or an imported ISO still holds would otherwise mint
+			// a journal entry on every probe tick and reach the retained-entry cap in a day.
+			if err := engine.CheckStorageDetach(ctx, entry.ID); err != nil {
+				last = poolReconcileStage("orphan-detach", poolConvergeRefusalf("pool repository %s cannot be detached on this host: %s", entry.ID, err))
+				continue
+			}
 			work, cancel := context.WithTimeout(ctx, perRepositoryTimeout)
-			detachResult, detachErr := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Execute(work, protocol.Command{OperationID: poolStorageOperation("detach", entry.ID, entry.Generation), Kind: "storage-detach", StorageLifecycle: &protocol.StorageLifecycleRequest{Action: "detach", RepositoryID: entry.ID, PoolID: s.State.PoolID, HostID: s.State.HostID, ExpectedGeneration: entry.Generation}}, nil)
+			// Deterministic within the UTC hour: an unexpected native failure replays one
+			// stored entry instead of writing a new file on every probe tick, and retries
+			// for real next hour.
+			detachResult, detachErr := engine.Execute(work, protocol.Command{OperationID: poolConvergeOperation("storage-detach", entry.ID, entry.Generation), Kind: "storage-detach", StorageLifecycle: &protocol.StorageLifecycleRequest{Action: "detach", RepositoryID: entry.ID, PoolID: s.State.PoolID, HostID: s.State.HostID, ExpectedGeneration: entry.Generation}}, nil)
 			deadlineErr := work.Err()
 			cancel()
 			if deadlineErr != nil {
@@ -1158,8 +1217,11 @@ func recordPoolReconcile(s *Store, err error) {
 }
 func PoolStorageReconcileCheck(s *Store) *protocol.Check {
 	membership, err := Membership(s)
-	if err != nil || membership.MasterHostID == s.State.HostID {
+	if err != nil {
 		return nil
+	}
+	if membership.MasterHostID == s.State.HostID {
+		return &protocol.Check{Name: "pool-storage-reconciliation", Status: "healthy", Freshness: "fresh", ObservedAt: time.Now().UTC()}
 	}
 	poolReconcileStatus.Lock()
 	observed, ok := poolReconcileStatus.byDir[s.dir]

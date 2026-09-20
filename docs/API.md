@@ -79,11 +79,25 @@ Validation and conflicts:
   issued to hosts enrolled before host-owned identity is also accepted, because those hosts
   keep it. `pool_name` follows the name rule (nonblank, at most 200 bytes, no CR/LF/NUL) and
   defaults to the hostname. Anything else is 400.
+- A member enrolling into a pool this Controller already knows is held with
+  `409 pool identity is held; the pool master has not reported this ready member` until the pool's
+  **recorded master** has reported a membership naming that host `ready`. There are two reports that
+  lift it, because a replacement Controller may meet the hosts in either order: the recorded master
+  naming **itself** master, and — the member-first case — the host that holds the pool row naming
+  **the enrolling host** as pool master. Either way only the recorded master's own authenticated
+  report is read, and the enrolling host must still be listed `ready`. The second form is what makes
+  the documented member-first Controller replacement work: the member reconnects, creates the pool
+  row with itself recorded as master, reports the real membership, the real master then enrolls on
+  that record, and its own first report moves the pool row through the reconnect arm of the adoption
+  rule. `POST /api/v1/sites/{id}/hosts` recognises this refusal by name and answers it as a
+  retryable conflict rather than a transport failure.
 - A presented `host_id` already on record, or a `pool_id` already held by another master
   host, is 409: a token holder cannot claim an existing identity. Only a token bound to a
   revoked host (`host_id` on the token) re-issues that host, and the request must present
-  that host and its pool, or nothing (409 otherwise). Joining a second host to an existing
-  pool is not available (Phase 4).
+  that host and its pool, or nothing (409 otherwise). To join a second host to an existing pool,
+  use the Controller-driven [pool join workflow](guide/join-a-pool.md); Core performs and retains
+  membership through its existing peer contract. Native acceptance and recovery limits for this
+  development workflow remain open.
 - The same key is the same host: a request whose CSR matches an active recorded credential
   (a retry after a lost response, even with a newly minted token, as the **Add host** flow
   does) returns that credential unchanged rather than a duplicate or a refusal. The existing
@@ -122,8 +136,9 @@ receive 404 and 400 respectively.
 Core-local authenticated member join and member pull of pool-shared NFS/SMB storage,
 guest VLANs and ISO library metadata on those shared repositories are implemented;
 see [Core pool peer join](#core-pool-peer-join-and-repository-observations).
-Changing the pool master and ejecting a member remain planned, **not available**
-Phase 4 work. This slice does not establish the full multi-host phase gate.
+Changing the pool master and ejecting a member are implemented development workflows. Native
+acceptance, recovery evidence and browser walkthroughs remain open, so this slice does not
+establish the full multi-host phase gate.
 
 ## Simple host enrollment (add host by address + root password)
 
@@ -304,7 +319,12 @@ request IDs; replay the same action to reconcile its journal, and inspect fresh 
 A completed graceful shutdown request does not establish that the guest has stopped.
 
 `nex-core-local` owns the local listener and resumes the outbound enrolled agent. Do not run
-a separate agent against the same identity directory. Configure it with these command flags;
+a separate agent against the same identity directory. Its Debian package declares `Depends` on
+`ifupdown`, `bridge-utils` and `vlan` beside `iproute2`, because Nex Core executes `ifdown`/`ifup`
+directly and writes `bridge_ports`/`bridge_stp`/`bridge_fd` and `vlan-raw-device` stanzas that those
+packages' own ifupdown hooks implement; `tests/test_core_local_package.py` ties each declared
+dependency to the construct that needs it, and see [licensing](LICENSING.md) for the aggregation and
+manifest consequences. Configure it with these command flags;
 the operator setup workflow belongs in the [user guide](guide/README.md).
 
 | Flags | Contract |
@@ -691,6 +711,1338 @@ validates on the selected members. It adds no clustered-storage discovery route 
 The wire shape and capability negotiation are unchanged; older Core builds may reject
 newly supported names, so use matching Core and Controller builds for these sources.
 
+### Failed request records, placement warnings and retryable enrollment conflicts
+
+API impact: **changed contract** on the client-facing Controller API, implemented; **none** between
+Controller and Core — no command, peer route or reported field changes. These are the response
+changes from the Phase 4 defect batch; the defects themselves are `BUG-0325`, `BUG-0326`, `BUG-0329` and `BUG-0330` in
+[the bug ledger](BUG_LEDGER.md). Durable state owner: **controller**, and only within the closed
+Controller-scoped list — its own operation history and audit trail. No pool-scoped state is created,
+kept or deleted by any of it.
+
+**Discarding a registration a host refused.** A pool VLAN or storage repository registration the
+pool master rejected published nothing on any host: it is this Controller's own request history, not
+pool state, and no host holds a record a removal could be relayed to. It is therefore discarded
+locally, exactly as a failed ISO import already was.
+
+- `DELETE /api/v1/networks/{id}` on a registration whose operation `status` is `failed` and which no
+  host reports as applied takes **no body**, relays nothing, deletes only the Controller's
+  `managed_resources` row, keeps the operation and its audit history, audits `network.discard` and
+  answers `200 {"id": "<id>", "deleted": true}`. The relayed pool-VLAN removal is unchanged for a
+  registration the master reports as applied, and `PATCH /api/v1/networks/{id}` is unchanged: a
+  failed request record cannot be renamed.
+- `DELETE /api/v1/storage/{id}` is the storage twin and is **new**. Same shape, audit
+  `storage.discard`; `404 no failed storage registration with this ID; an adopted repository is
+  removed with detach` otherwise. A repository a host holds is removed with
+  `POST /api/v1/storage/{id}/detach`, which is unchanged.
+- Both refuse a row whose command a host has since reported as applied, with `409 a host reports this
+  registration as applied, so it is not a failed request record; remove it on the host instead of
+  discarding it`. That guard reads the *mirrored command's* status rather than the operation's,
+  because a failed operation's row can legitimately become the mirror of a host-reported resource.
+- `GET /api/v1/storage` and `POST /api/v1/storage`: a typed registration that has **failed** now
+  carries `id` set to the Controller's own request-row key `pending-storage-<operation_id>`
+  (previously `""`), which is the handle the discard takes. One that is still queued or dispatched
+  still answers `id: ""` — Core allocates repository IDs and the Controller never mints one — and on
+  success the row keeps Core's allocated ID exactly as before.
+- Audit gains two actions: `network.discard` and `storage.discard`, each with the discarded
+  registration's ID as `resource_id`.
+
+**Advisory placement warnings.** `POST /api/v1/vms` may answer its `202` with an optional `warnings`
+array of strings, omitted entirely when empty, and `GET /api/v1/operations` may carry the same array
+on an operation whose `kind` is `vm-create` and whose `status` is `dispatched`. One entry per
+required pool-shared repository, network or ISO whose access on the selected host this Controller's
+mirror does not currently show as current:
+`the pool master's last report does not show this host's access to <kind> <id> as current; the
+request may sit dispatched until it does`, where `<kind>` is `storage repository`, `network` or
+`ISO`. They are **advisory only**: no status changes, nothing is refused, and the pool master remains
+the placement authority — a request warned about here is often accepted once the host reports working
+access. The Controller deliberately does not veto on its mirror, which is a `-stale-after`-old copy
+of the master's observation; doing so would make it a second placement authority. Nothing is stored:
+the listing recomputes the warnings from the current mirror on every read, so they disappear by
+themselves when the master reports working access, and a stored warning would go stale in exactly the
+direction that matters.
+
+**A retryable enrollment conflict.** `POST /api/v1/sites/{id}/hosts` used to flatten every non-200,
+non-409 answer from the host's local enrollment endpoint into one `502`, including this Controller's
+own refusal relayed back by the host. Adding a pool member to a *replacement* Controller before its
+pool master has reported it is a documented, normal wait, so that one refusal is now recognised by
+name and answered as the conflict it is:
+
+```json
+{"error": "this host belongs to a pool whose master has not reported it yet; connect the pool master first, or retry once the master has reported this member — usually within one report interval",
+ "retryable": true, "host_error": "<the host's own error text>"}
+```
+
+`retryable` and `host_error` are new fields and appear only on this answer. Every other host-side
+enrollment failure keeps `502 host could not enroll with the controller at …`, including the
+enrollment endpoint's other `409`s (`host identity already enrolled`, `presented pool name does not
+match the Core-reported pool`), which are not retryable waits. The Controller does **not** wait or
+poll for the master's report inside the request: the master reports on its own schedule.
+
+**An abandoned clustered-storage request is never a success.** `GET /api/v1/storage/cluster`,
+`POST /api/v1/storage/cluster/apply` and `POST /api/v1/storage/cluster/verify-fence` answer
+`499 the client disconnected before Core answered; retry with the same request_id` when the client
+goes away while the handler waits on Core, instead of the bare `200` net/http emitted for a handler
+that wrote nothing. No client reads it; the point is that an abandoned request is never in the
+success range. The broker entry is released either way, so an exact retry with the same `request_id`
+is accepted rather than refused as already active. This matches the pool-join relay's documented
+`499`.
+
+**Verification status.** Implemented and covered by Go `-race` Controller tests, each written and
+observed failing before its fix: the network and storage discards including the applied-row refusal
+and the previously unaddressable empty ID; a create against a member whose repository access is
+stale warning without refusing, while a fresh member is not warned about; the relayed
+`pool identity is held` refusal answering `409` with the guidance, `retryable` and the preserved
+`host_error`, and a different host-side failure still answering `502`; and an abandoned
+clustered-storage request answering outside the success range while an exact retry still succeeds.
+Offline contract checks hold the routes, the schemas and the audit actions to the implementation.
+**Not executed:** no native two-host lab rerun of any of these against the fixes, and no browser
+review of the discard actions, the warning surfaces or the add-host retry banner.
+
+### Controller-driven pool join (`POST /api/v1/pools/{id}/members`)
+
+API impact: **new contract**, implemented. Three Controller routes, one Core command kind, one
+host-local read route, two report-envelope fields, one inventory field and one capability. The
+Controller makes exactly two calls and drives nothing: it asks the pool master for a single-use
+join invitation, and it hands that invitation to the joining host as one durable command. The
+joining Core performs the whole peer exchange with the master itself, over the pool mTLS peer
+listener that the host-local procedure already uses. Nothing about membership is computed,
+persisted or reconciled by the Controller; delete it and re-adopt the pool master and every
+member, name, peer origin and interrupted join comes back from the hosts.
+
+**Capability.** `pool-join-v1`, advertised in the protocol v2 capability list and absent from the
+legacy v1 list. Both the master and the joining host must advertise it; otherwise the Controller
+refuses with `409 adding a host to a pool needs pool-join-v1 on both hosts; upgrade both hosts`
+and the host-local procedure below remains the documented alternative. A Controller that predates
+this work sends no `pool_requests` and ignores `pool_results`, so an upgraded Core loses nothing;
+an upgraded Controller sends the request only to a host that reports protocol v2 with the
+capability, so an older Core is never sent a field it cannot decode.
+
+**Invitation broker (Controller → master, one report round trip).** `ReportResponse.pool_requests`
+carries `PoolRequest{request_id, pool_id, host_id, action:"invite", member_host_id, master_url}`
+to the master; the master answers on its **next** report in
+`ReportRequest.pool_results` with `PoolResult{request_id, pool_id, host_id, status, error?,
+observed_at, invitation?}`, where `invitation` is
+`{master_url, pool_ca_pem, invitation, expires_at}`. The broker holds one pending request in
+Controller memory, waits 45 seconds (comfortably more than a heartbeat), writes nothing to the
+database and keeps nothing after the exchange. Core refuses a request whose `host_id`/`pool_id`
+is not this master or whose action is not `invite`. The Controller discards a result whose pool,
+host or `request_id` does not match, or which succeeded without an unexpired invitation, and
+answers `504` with a Core-shaped `PoolResult` body rather than the usual `{"error": …}`. A report
+carrying more than 32 results is a malformed report (`400 too many pool results`).
+
+**The invitation itself.** Single use, 15 minutes, bound to the pool, the master and the joining
+host. It is the existing one-use offer record with no CSR hash: the master binds the presented CSR
+at **first redemption** and stores it with the issued certificate, so the existing replay rule is
+unchanged — the same invitation always returns the same member certificate and never admits a
+second member, a different CSR on a redeemed invitation is refused, and an expired one is refused.
+The Controller may still hand a joining host an invitation whose `expires_at` is up to two minutes
+in the past by Controller wall clock, so ordinary clock skew does not force a full re-join; Core
+remains the authority that refuses a truly expired invitation at redemption. The master also
+records the `master_url` it issued an invitation for as its own member `peer_origin` when that is
+empty, so only the first join in a pool's life needs an operator to supply an address.
+
+**Durable command (Controller → joining host).** `protocol.Command{kind:"pool-join",
+pool:{action:"join", request_id, member_host_id, master_url, pool_ca_pem, invitation,
+peer_origin?}}`, journaled by the existing managed-command admission path, terminal
+`protocol.Result`. It is the one pool command addressed to a host that is not the master.
+`PoolCommand.Valid()` requires `request_id`, `member_host_id` (≤128), `master_url` (≤512),
+`pool_ca_pem` (≤16384) and `invitation` (≤8192) for this action, with `peer_origin` optional
+(≤512) and no membership record — the target is not a member yet, and the Controller never
+composes a membership for it. The joining Core runs a durable staged join persisted beside its
+pool CA (`precheck → csr → joined → rehomed → advertised → ready`), resumes at the stage still to
+perform after a crash, reboot or Controller outage, and reports progress as
+`inventory.managed.join` = `PoolJoinStatus{operation_id, stage, status, error?, observed_at}`.
+`ready` is `succeeded`; a host that is already a member but has not finished rehoming or
+advertising reports `needs_attention` and stays a member; a precheck refusal, or an exhausted
+attempt budget at a **pre-admission** stage (`precheck`, `csr`), is `failed` rather than an endless
+retry of an expired invitation. **Only pre-admission stages can end `failed`.** The `joined` stage
+is the admission stage — the master commits the membership before its reply is delivered — so an
+exhausted budget there can mean the host is already a ready member and only the reply was lost.
+Reporting that as `failed` would leave the master saying member and the host saying not, with both
+recovery paths shut, so it is `needs_attention` and the retry continues. What makes the truth
+learnable is the redemption replay: the invitation's 15-minute TTL bounds only the **first**
+redemption, and an offer that has already issued a certificate replays past its expiry, returning
+the same certificate to the same host and public key. It admits nothing new — the CSR hash is bound
+and the member row already exists. The joining host **clears the invitation from its own durable
+record the moment the `joined` stage completes**; resuming from any later stage needs only the
+master URL and the pool CA. The Controller retains `managed.join` alongside `managed.membership` in stored
+inventory, so a replaced Controller adopts an interrupted join instead of losing it.
+
+**Client-facing routes.** All three take an administrator session; the POST additionally requires
+the same HTTPS `Origin` and `X-CSRF-Token`, like every other Controller mutation.
+
+- `POST /api/v1/pools/{id}/members` — body
+  `{request_id, host_id, peer_origin, master_url?}`. `peer_origin` and `master_url` must be bare
+  HTTPS origins (scheme, host and port only). A single trailing `/` is accepted and normalised
+  away, exactly as the host-local route accepts it; the normalised, slash-less form is what is
+  stored and forwarded, so `https://host:9444` and `https://host:9444/` are the **same** request
+  for exact-retry replay rather than a changed payload. A path, query, fragment, userinfo or a
+  non-HTTPS scheme is still `400`. `202` with `{host_id, peer_origin, operation}` — never the
+  invitation, the pool CA or the master URL. An exact retry of the same `request_id` and payload
+  returns the original operation with `200` and starts no second join; the same `request_id` with
+  any changed field, `master_url` included, is `409 request_id already used with another payload`.
+  `404` for `pool not found` / `host not found`. `409` for a host already in the pool, a master or
+  joining host that is not fresh and active, a missing capability on either side, a host that is
+  not the master of its own single-host pool, managed VMs, existing remote storage, a master with
+  no advertised peer origin and no `master_url`, an already active pool request, and for any
+  refusal the master itself decided, relayed verbatim — a `failed` result that carries no message
+  becomes `409 the pool master refused to issue a join invitation`, so a terse Core refusal is
+  never an empty body. `504` on the broker deadline, with the
+  Core-shaped body above; no command was created and retrying with the same `request_id` is safe.
+  `499` when the client disconnects while the handler is waiting on the master's answer: nothing
+  is written, the broker entry is released, no client reads the status, and the same `request_id`
+  is safe to retry.
+  `500` (`storage unavailable`, `inventory unavailable`, `pool join storage failed`) leaves the
+  same retry safe. Acceptance is not membership: poll the members route and the operation.
+- `GET /api/v1/pools/{id}/members` — projection only, zero new storage: the master's reported
+  membership, each member's connection freshness, the four convergence checks
+  (`pool-storage-reconciliation`, `pool-network-reconciliation`, `pool-media-reconciliation`,
+  `pool-authority-replica`), counts of the master's `member_access` rows that are
+  healthy/pending/failed/stale, per-member resource failures with the host-reported message, each
+  member's own reported `join`, and the maintenance and authority-replica fields described in the
+  two sections below. `authoritative` is true only while the master's connection is `fresh`; when
+  it is not, the master's *observations* — `status`, `error`, `checks`, access counts, `failures`,
+  `maintenance` and `maintenance_since` — are blank, `null` or `unknown` and must be shown as
+  unknown rather than as the last mirror. `peer_origin` is part of the master's durable membership
+  record rather than an observation of it, so it is reported either way; a quiet master does not
+  make a member's address untrue. `pending` means the member has reported no access row for that
+  resource yet; the master's own row carries no counts, because `member_access` is the master's
+  record about its members.
+- `GET /api/v1/pools/{id}/join-candidates` — the compatibility preview for the dialog, composed
+  from host-reported inventory only: connection, agent version, capabilities, existing
+  membership, managed VMs, non-local storage, NIC names against each pool VLAN uplink, and CPU
+  baseline. Each row is `compatible`, `will_not_converge` or `refuses_join`; `eligible` is false
+  if and only if some row is `refuses_join`, and `will_not_converge` rows do not block a join.
+  It is presentation, not authorization: Core decides every refusal again at submission.
+
+**What is stored, and for how long.** The operation row, the managed-resource row (payload = the
+client request verbatim, with no invitation) and one audit row (`action = pool-join`, actor = the
+administrator, resource = the join record; no secret and no detail). The stored *command* does
+carry the invitation and pool CA, because the dispatch path reads the command back out of the
+database; both fields are scrubbed as soon as the operation leaves `queued`, and unconditionally
+once the row is 15 minutes old. The scrub runs on Controller start, at the top of all three
+pool-join routes (the POST, the members GET and the join-candidates GET), from a timer armed by the
+issuing request, and — because none of those survives a restart — **from the health tick, at most
+once a minute**, so the TTL holds in a Controller that restarted inside the window and was never
+asked about pools again. That sweep timestamp is in memory only; nothing durable is added. A row
+with an unparseable `created_at` is scrubbed rather than skipped. Residual risk, stated plainly: a
+single-use, 15-minute, host- and pool-bound token sits in the Controller database for one heartbeat
+in the normal case, and for at most one minute past its TTL if the joining host never collects it.
+Redeeming it still requires the joining host's own CSR and reachability to the master, and the
+master binds that CSR on first redemption and refuses a second member.
+
+**A scrubbed invitation is never redelivered empty.** Redelivery reloads the command from
+`managed_resources`, so a scrubbed `pool-join` would otherwise be re-sent with empty `invitation`
+and `pool_ca_pem`, which the host must reject. What happens instead depends on what the row had
+already done. A row scrubbed while still **queued** was never collected, so the operation is failed
+terminally with `the join invitation expired before the host collected it; start the join again`,
+visible on `GET /api/v1/operations`. A row scrubbed after **dispatch** is simply never re-sent:
+failing it would declare a join legitimately in progress dead, and that join's own result settles
+the operation.
+
+**Interruptions.** A Controller lost between the invite and the command leaves an unredeemed
+invitation that expires in 15 minutes and no membership change. A Controller lost after the
+command changes nothing: the joining Core finishes on its own and reports on reconnect. A joining
+Core interrupted after its CSR resumes with the same CSR; after the master issued the certificate
+but before the reply landed, replaying the same invitation returns that same certificate and
+membership. A rehome that has not finished is reported as `stage:"rehomed",
+status:"needs_attention"` — the host **is** a member — and is retried by Core, never as a failure
+that would tell an operator the join did not happen.
+
+**Host-local view (`GET /api/local/v1/pool`).** Authenticated local session, read-only:
+`{pool_id, pool_name, role: master|member, master_host_id, members[], join}`. It answers which
+pool this host belongs to without a Controller, which is what a host-local recovery procedure
+needs; `409 enroll this Core before reading its pool` before enrollment and
+`503 pool membership is unavailable` when the record cannot be read, rather than an invented empty
+pool. `POST /api/local/v1/pool/join` now returns `200 {host_id, pool_id, join}` and reports the
+stage it reached; a `409` from it means the host did **not** join, and an unfinished rehome is no
+longer reported as a conflict.
+
+**Verification status.** Implemented and covered by offline contract checks
+(`tests/test_api_contract.py`) and Go unit tests for the master's invitation and CSR binding, the
+staged join and its resume from every stage, the precheck refusals, the concurrent-join race, the
+broker round trip and deadline, the `400`/`404`/`409` matrix and both projections. A native
+two-host join driven from the Controller, and a browser review of the Hosts tab, have **not** been
+executed for this contract; see [Join a pool](guide/join-a-pool.md#verification).
+
+### Host maintenance mode (POST /api/v1/pools/{id}/members/{host_id}/maintenance)
+
+API impact: **new contract**, implemented. One Controller route, one Core command kind
+(`pool-maintenance`), two membership inventory fields and one capability. Maintenance is a durable
+per-host drain flag that the **pool master** keeps inside the membership record it already owns, in
+its own `pool-peer.json`. The Controller relays one command and projects what the master reports;
+it records no drain of its own, and a fresh Controller adopts the flag from
+`inventory.managed.membership` with nothing to re-enter.
+
+**Capability.** `pool-maintenance-v1`, advertised by the master in the protocol v2 capability list
+and absent from the legacy v1 list. Only the **master** needs it, because the refusal that makes
+the flag mean anything is the master's. Without it, `maintenance_supported` is false in the members
+projection and no control may be offered; submitting anyway is
+`409 maintenance mode needs pool-maintenance-v1 on the pool master; upgrade the pool master`.
+
+**What maintenance does, and what it deliberately does not.** While the flag is set the master
+refuses, from its own record: a new VM placement onto that host, `define` and `start` admission for
+it, and autostart-by-placement, which skips the host and logs why. Every refusal carries the one
+sentence `the selected VM host is in maintenance mode; take it out of maintenance before placing or
+starting VMs on it`.
+
+The drained host refuses starts **itself**, before any master round trip, which is what makes the
+flag mean anything for the commonest shape of all — a guest on **local** storage, which needs no
+permit from the master. The check sits at the same choke point as the restriction guard: `start`,
+`wake` (an operator pressing Start on a suspended guest) and `vm-create` with `start_after_create`
+are all refused, on local and shared storage alike, whether or not the master is reachable. The host
+reads its own freshest **verified** membership copy — its own record on the master, the stored
+signed authority replica on a member — so no master round trip is involved and local-only power
+keeps working with the master down. Staleness on a member is at most one master probe interval while
+the master is reachable, and as old as the last successful replica push while it is not.
+
+Two further layers close the reboot path, which is the workflow maintenance exists for. The agent
+**suppresses libvirt's `autostart` flag** for every managed domain while the host is drained or
+restricted, and restores it on exit from the managed journal — the journal stays Nex's durable
+record of what the operator asked for, and no second "desired autostart" value is stored anywhere.
+And Core's libvirt **`StorageGuard` hook refuses a managed domain on a drained host** before any
+repository work. On the **pool master**, including every single-host pool, it reads `state.json` and
+`pool-peer.json`; on a **member** it reads the verified `pool-replica.json` membership copy the
+master pushes after a drain change, so a manual `virsh start` is refused on every pool host once
+that copy is current. The hook holds with no Controller connected and fails closed on an unreadable
+record. Autostart suppression is a separate layer that still applies while drained.
+
+`reboot` and `force-reboot` are deliberately **allowed**: both require the guest to be `running`
+there already, so they are not a new placement. It does **not** stop a running guest, block `stop`,
+`shutdown` or `force-stop`, block host-local recovery, or block the member's own convergence — an
+operator draining a host is usually about to power guests off, and drain intent is not a fence. The flag is
+deliberately **outside the membership generation equality rule**: setting it does not bump the
+generation, so draining a host cannot invalidate an in-flight placement, a published member
+inventory or a peer generation check. Enforcement for anything the master decides is on the master, so it survives a
+Controller outage or replacement unchanged; the host's own refusals above are the layer that covers
+what never reaches the master. A
+single-host pool's host **is** its master: draining it is allowed, and its own record then refuses
+placements and starts on it.
+
+**Durable command (Controller → master).** `protocol.Command{kind:"pool-maintenance",
+pool:{action:"maintenance", request_id, membership:{master_host_id}, member_host_id, enabled,
+expected_version?}}`, journaled by the existing managed-command admission path, terminal
+`protocol.Result`. It is addressed to the **master**, never to the host being drained; entering or
+leaving maintenance never contacts that host, so an unreachable member changes nothing.
+`PoolCommand.Valid()` requires only `request_id`, `membership.master_host_id` and `member_host_id`
+for this action and skips the membership rule, exactly as `join` does: the master reads its own
+record, and a membership composed in the Controller could already be stale. `enabled` is a desired
+state, not a transition, so re-sending it succeeds and leaves `maintenance_since` unmoved, which is
+what makes an exact retry after a lost reply safe.
+
+**Inventory.** `PoolMember.maintenance` (omitted when false) and `PoolMember.maintenance_since`
+(always present, zero when not drained, in the manner of `observed_at`).
+
+**Client-facing route.** Administrator session, same HTTPS `Origin` and `X-CSRF-Token`. Body
+`{request_id, enabled, expected_version?}`; unknown fields are refused. There is **no
+`confirmation` field**: draining stops nothing that is running, so there is nothing to confirm
+against, and Core accepts none. The guest list an operator should see first is returned by the
+members projection instead. `202 {host_id, enabled, operation}`; an exact retry of the same
+`request_id` and payload returns the original operation with `200`. `400 pool, host and a stable
+request_id are required`. `404 pool not found` / `host not found`. `409` for `the pool master must
+be fresh and active to record maintenance`, the missing capability above, `the pool master has not
+reported its membership; maintenance cannot be recorded yet`, `this host is not a member of the
+selected pool`, `the pool master reports membership generation <n>; reload the pool and retry`, and
+the shared `request_id already used with another payload` / `request_id already used for another
+operation`. `500 storage unavailable` / `inventory unavailable` / `maintenance storage failed`
+leaves the same `request_id` safe to retry. Audit: `action = pool-maintenance`,
+`resource_id = pool-maintenance:<member host id>:<operation id>`; nothing in the request is secret.
+
+**Asynchronous refusals are not an HTTP status.** The command is durable and asynchronous, so Core's
+own refusals can never be the status code of the submitting request. They arrive as the operation's
+`status:"failed"` with the master's text: `only the pool master records maintenance mode`, `no such
+member of this pool`, `an ejected host has no maintenance state`, `pool membership is unavailable`,
+`pool membership changed since this request was composed; review the pool and try again`,
+`maintenance command carries no maintenance request` and the `PoolCommand.Valid()` texts. Exactly
+two of those — `pool membership is unavailable` and `pool membership changed since this request was
+composed; review the pool and try again` — are the **409 class**, and the members projection marks
+them `last_maintenance.conflict = true` so the operator sees a conflict where they acted. A durable save
+that may or may not have landed is reported `needs_attention` with `maintenance mode could not be
+recorded durably`: the next inventory report states the truth and the exact retry is safe. A
+recorded change also pushes the authority replica immediately rather than waiting for the next
+probe tick, so a drained member starts refusing from its own verified copy within seconds. That
+push is best effort and is **not** the operation's result (changed 2026-09-20; it previously
+reported `needs_attention` with `maintenance mode is recorded but has not yet been replicated to
+pool members`): the drain is complete when the master's own record is saved, which is the record
+every placement, definition and start is refused by, and a member that was unreachable catches up
+from the next tick exactly as it does for every other authority write. The lag is reported per
+member in the projection's `replica` status and `connection`, not as a failed drain.
+
+**Members projection additions.** Pool level: `maintenance_supported`. Per member: `maintenance`
+(`true`/`false`, and `null` — unknown, never assumed false — whenever `authoritative` is false),
+`maintenance_since`, `guests` (`{known,total,running,names}` from that host's own reported
+`inventory.vms`, with `known:false` and empty counts whenever the host is not `fresh`, because a
+host that is not reporting has no guest list, and `names` capped at 50), and `last_maintenance`
+(the newest `pool-maintenance` operation this Controller holds for that member, with `conflict` as
+above, or `null`). `guests` and `last_maintenance` are not master observations, so they are
+reported whether or not the master is fresh.
+
+**Placement presentation.** The Controller's `placementHost` pre-check additionally refuses a
+target the master's mirrored membership reports as drained, with `409 the selected host is in
+maintenance mode; take it out of maintenance before placing or starting VMs on it`, on
+`POST /api/v1/vms`, `PUT /api/v1/vms/{id}` and `POST /api/v1/vms/{id}/media`. Only a **fresh**
+master's record is used, and this is presentation and early failure only: the Controller decides
+nothing about maintenance and Core refuses again.
+
+**Verification status.** Implemented and covered by offline contract checks
+(`tests/test_api_contract.py`) and Go `-race` unit tests for flag persistence and reload, the
+placement/define/start/autostart refusals, stop still being permitted, idempotent enable and
+disable, membership `Valid()` being unaffected, and the Controller's `409` matrix and projection. A
+scoped native/browser walkthrough entered maintenance with a running VM, refused a start and
+placement, then exited maintenance and completed normal start/stop. Its reboot/autostart case
+remains open; that is distinct from the f714 returned-master restriction boot result. These results
+do not close the Phase 4 gate; see the [current native-acceptance record](qa/2026-09-19-phase4-native-acceptance.md).
+
+### Member authority replica (peer GET|POST /api/v1/pool/replica)
+
+API impact: **new contract**, implemented. One peer route on the **member**, one signed payload,
+one inventory field on each side, four observation fields on the master's membership record, one
+health check and one capability. No Controller route and no Controller storage: the fields below
+reach an operator through the existing members projection, read out of host reports.
+
+**What it is for.** The pool master's durable authority — membership, the `pool-vms.json` owner
+projection, storage, networks, media and native storage-cluster records, plus its own CA key sealed
+per member — is copied to every ready member so that it is *recoverable* if the master is lost. It
+is **never authority**: a member stores it, reports that it holds it, and acts on none of it. No
+membership, VM, storage, network or media record on a member is read from or changed by a replica,
+a replica grants no execution, and no health judgement is derived from one — a promoted master
+re-collects fresh member observations rather than trusting replicated ones. Nothing in this release
+promotes a member or opens the sealed key *merely by holding a replica*; the separate
+[fence-verified promotion workflow](#fence-verified-manual-promotion-and-safe-rejoin-post-apiv1poolsidmasterpromote-post-apiv1poolsidmembershost_idfence-profile)
+performs those actions only after its checks pass.
+
+**Capability.** `pool-authority-replica-v1`, v2 list only, on both peers. A master with it and a
+member without it records that member at replica generation `0` with `pool member does not support
+pool-authority-replica-v1; upgrade it before relying on its replica`; the master never degrades to
+an unsigned or partial copy.
+
+**Peer route (on the member), `AuthenticatePoolMaster`, pinned mutual TLS.**
+
+- `GET /api/v1/pool/replica` → `200 PoolReplicaStatus{generation, digest?, master_host_id?,
+  signed_at, received_at, verified, error?}`, an empty object when the member holds nothing. This
+  call is also how the master learns the member's certified peer public key for the wrap, from the
+  pinned TLS leaf, so no public key is ever put on the wire or into the membership record.
+- `POST /api/v1/pool/replica`, body ≤ 1 MiB (`protocol.PoolReplicaLimit`) with no trailing JSON →
+  `200 PoolReplicaAck{host_id, generation, digest, verified}`; `409` with the same shape plus a
+  bounded `error` on refusal; `400 invalid pool authority replica`; `401 replica peer rejected`;
+  `405` with `Allow: GET, POST`. Idempotent: the same generation with the same content returns the
+  same acknowledgement.
+
+**Payload.** `protocol.PoolAuthorityReplica{pool_id, master_host_id, generation, member_host_id,
+created_at, membership, vms, storage, networks, media, storage_clusters, ca_key_wrapped?,
+sections[], signature}`. `sections[]` is exactly `membership, vms, storage, networks, media,
+storage_clusters`, in that order, each with the SHA-256 of its canonical JSON, so a truncated or
+reordered copy is refused rather than used. The signature is ECDSA P-256/SHA-256 with the **pool CA
+key** over the whole replica minus `signature`; a member verifies it against the pool CA it pinned
+at join, which keeps verification working offline and after the signing master is permanently gone.
+`member_host_id`, `created_at`, `generation` and the wrap are inside the signature, so a replica
+cannot be re-addressed, renumbered or re-wrapped in transit. `ContentDigest` deliberately excludes
+those, so it identifies the authority itself: every member of one generation reports the same
+digest, and a re-push is recognizable as identical rather than as a conflicting second copy.
+
+**Sealed CA key.** `ca_key_wrapped` is the pool CA private key wrapped for exactly one member:
+ECDH between a fresh ephemeral P-256 key and that member's certified peer public key,
+HKDF-SHA256 with the context `nex pool authority replica v1\0<pool>\0<member>\0<generation>`, then
+AES-256-GCM with the same context as additional data. Stdlib only, no new PKI. A copy wrapped for
+one member cannot be opened by another or replayed at another generation. Members store it sealed
+at mode `0600` in the already-`0700` state dir; no code path in this release unwraps it.
+
+**Durable records.** Master: `AuthorityGeneration` and `AuthorityDigest` in its existing
+`pool-peer.json`. Member: `<state-dir>/pool-replica.json`, written atomically (temp file +
+rename), holding the replica exactly as received plus its content digest, the member's own
+`received_at` and `verified`. A push interrupted mid-write leaves the previous replica intact.
+
+**Generation rules.** The master rebuilds its authority on the existing probe tick, and advances
+and persists the generation **only when the content digest changed**, before pushing; it then
+pushes to every ready member that is behind. Pushes are therefore tick-driven rather than
+synchronous with each authority write: a member may lag by up to one probe interval, which is
+harmless because nothing waits on a replica. A crash after the bump simply pushes on the next tick,
+and generations may skip. A member accepts a higher generation, re-accepts the same generation with
+identical content, refuses a lower one (`pool authority replica generation is older than the stored
+replica`) and refuses the same generation with different content (`pool authority replica
+generation was already stored with different contents`).
+
+**Refusals** are bounded to 200 characters and collapse to `pool authority replica refused` if they
+contain control characters: `pool authority replica names another pool`, `… is not from the current
+pool master`, `… is addressed to another host`, `… is not signed by this pool's CA`, `… does not
+declare every section`, `… section digest does not match`, `… VM ownership record is invalid`, `…
+could not be stored`, `pool membership is unavailable`, `pool peer state is unavailable`, `stored
+pool authority replica is unavailable`.
+
+**Reported state.** A member reports `inventory.managed.replica` = `PoolReplicaStatus`. The master
+overlays its own observations onto the reported copy of each member's membership record —
+`replica_generation`, `replica_digest`, `replica_error`, `replica_observed_at`. Those four are
+**memory-only observations**: they are never written into the durable membership file and are never
+an input to the generation equality rule, and a member that has never acknowledged anything is
+reported at `0`, honestly. Both sides also report a `pool-authority-replica` health check: on a
+member `unknown`/`unknown` while awaiting the first push, `failed` with the refusal text, and
+`unknown`/`stale` after two probe intervals (at least one minute) with no push and no master poll;
+on the master, one check covering its ready members, `unknown` until a member has acknowledged,
+`failed` with that member's refusal, and `unknown`/`stale` when an acknowledgement is old or behind
+the master's current generation.
+
+**No pool authority generation on the wire.** Nothing reports the master's own
+`AuthorityGeneration`; the only master-reported numbers are the per-member acknowledgements. The
+Controller therefore derives no absolute generation — inventing one would be Controller-computed
+state — and the members projection carries none.
+
+**Members projection additions.** Pool level: `replica_supported` (the master advertises the
+capability). Per member: `replica`, which is `null` on the master's own row and otherwise
+`{generation, digest, verified, received_at, acknowledged_generation, acknowledged_at, error,
+state}`. The first four are the member's own report, the next two are what the master last observed
+it acknowledge, and `error` is the master's reason when it has one and otherwise the member's own.
+`state` is a first-match ladder over those two reports: `unknown` when the master or this member is
+not `fresh`; `unsupported` when either lacks the capability; `refused` when either reports an
+error; `awaiting` when both generations are `0`; `unverified` when the member holds a replica it
+has not proven against the pool CA; `behind` when the two generations disagree or another `fresh`
+member of this pool is acknowledged at a strictly higher generation; `current` otherwise. Freshness
+deliberately outranks capability, because a stale host's capability list is a memory too. `behind`
+with `generation` above `acknowledged_generation` means the **master's observation** lags, not the
+member; both numbers are shown because the single word cannot say which side is stale. The peer
+comparison is the only evidence a lagging member is lagging, precisely because no absolute
+generation is reported.
+
+**What is not replicated, and why.** Published per-host inventory *snapshots* (`state.Inventory`)
+are observations, not authority, so they are excluded and a promoted master re-collects fresh ones;
+this also keeps the replica well inside the 1 MiB bound. SMB credential receipts are stripped, as
+the storage peer list already strips them, so a future promotion will hold an SMB repository record
+whose credential an operator must re-supply. Acknowledged generations are observations and stay in
+memory.
+
+**Related hygiene landed with it.** `pool-vms.json` owner records are now pruned, but only on
+positive evidence: the publishing host is the record's owner, its inventory is complete and at the
+current membership generation, it carries a succeeded `vm-delete` tombstone for that VM ID in the
+new `deleted` field of `PoolVMInventory`, the record has no pending update, and no other host's
+stored inventory still defines that VM ID. Absence is never read as deletion. The pool storage peer
+list now also fails closed with `503 pool resource list unavailable: managed journal is incomplete`
+when the managed journal is incomplete, matching networks and media, so a member never converges
+against a short list.
+
+**Verification status.** Implemented and covered by offline contract checks
+(`tests/test_api_contract.py`) and Go `-race` unit tests for the sign/verify round trip, per-member
+wrapping including wrong-member and wrong-generation failures, tamper and truncation refusals with
+the stored replica proven unchanged, the generation rules, crash-before-push generation
+persistence, idempotent re-push, lagging and unreachable members, that a replica grants no
+execution, both inventory projections, both health checks, the size bound on the wire and on disk,
+the pruning matrix and the fail-closed storage list. Scoped native evidence includes signed replica
+push, generation advance, lagging-member catch-up and re-earned observations after a master restart.
+Browser review of the replica column and stale states remains incomplete. These results do not close
+the Phase 4 gate; see the [current native-acceptance record](qa/2026-09-19-phase4-native-acceptance.md).
+
+### Planned master change and member eject (POST /api/v1/pools/{id}/master, DELETE /api/v1/pools/{id}/members/{host_id})
+
+API impact: **new contract**, implemented. Three Controller routes, one Core command kind, two peer
+routes, one signed statement, two inventory fields and one capability. The Controller relays one
+durable command to the pool's current master and stores nothing else: no stage, no timer, no
+generation, no membership, no digest. Core runs the whole transfer itself, so a Controller that is
+restarted, replaced or disconnected mid-transfer keeps nothing to recover and re-projects the
+transfer from the participants' next reports.
+
+**What it is for.** Moving the pool authority from the current pool master to a ready member of the
+same pool, and removing a member from a pool. Both keep the pool, its networks, its storage
+registrations, its ISO library, its virtual machines and their identities and names: nothing is
+recreated and nothing has to be entered again. There is **no automatic succession, no election and
+no failover** here — this is an operator action against a *cooperating* master. Promotion with an
+unreachable master is the separate [fence-verified manual promotion workflow](#fence-verified-manual-promotion-and-safe-rejoin-post-apiv1poolsidmasterpromote-post-apiv1poolsidmembershost_idfence-profile),
+not automatic succession.
+
+**Capability.** `pool-authority-transfer-v1`, v2 list only. Required on the pool master, on the
+selected host and on every ready member, because a member that cannot re-point would keep following
+a host that is no longer the pool master. A peer that answers `404`/`405` on either peer route is
+reported as `pool peer <id> does not support pool-authority-transfer-v1; upgrade it before changing
+the pool master`. The ejected host is deliberately **not** gated: it may be unreachable.
+
+**Controller routes.** Administrator session, same HTTPS Origin and `X-CSRF-Token`, `{"error": …}`
+bodies, `202` on acceptance, `200` on an exact replay of the same `request_id` and payload, `409` on
+the same `request_id` with a changed payload.
+
+- `POST /api/v1/pools/{id}/master` — `{request_id, host_id, expected_version?, confirmation}`, where
+  `confirmation` is **the pool's name** exactly as `pool_name` reports it, compared
+  case-insensitively after trimming. A master change pauses every pool authority write until it
+  completes, so the pool is typed by hand.
+- `DELETE /api/v1/pools/{id}/members/{host_id}` — `{request_id, expected_version?, confirmation}`,
+  where `confirmation` is **the ejected host's name** (`members[].name`), compared the same way.
+- `POST /api/v1/pools/{id}/master/cancel` — `{request_id, host_id, expected_version?}`, where
+  `host_id` is the transfer's target (`transfer.target_host_id`). No typed confirmation: a cancel is
+  the undo, and after the hand-off Core refuses it anyway. Two optional fields, confirmed **both or
+  neither** (`400 powering the transfer target off is confirmed with both fence_confirmed and
+  fence_host_ids naming that host once, or with neither`): `fence_confirmed` and `fence_host_ids`,
+  which must name that one target. They are the operator's explicit agreement to power the target
+  off, and Core uses them only in the one case they exist for — a handed-off target that has stopped
+  answering, where this pool's authority would otherwise stay with a dead host. Core refuses them
+  while the target is reachable (`pool peer <id> is reachable; retry the cancellation rather than
+  powering it off`). Neither field is accepted on the master-change or eject route: each route has
+  its own body struct, so a fence confirmation aimed at the wrong one is `400 invalid JSON request`.
+
+All three produce exactly one `operations` row plus one `managed_resources` replay row of kind
+`pool-transfer` addressed to the **current master**, and one audit row — `pool.master-change`,
+`pool.eject` or `pool.transfer-cancel` against the pool ID, beside the automatic `pool-transfer`
+row. Adoption of a completed master change writes `pool.master.adopt`; the new single-host pool an
+ejected host re-initializes into is recorded with `pool.create`, the same action enrollment uses.
+Nothing pool-scoped is persisted: not the generation, not the stage, not the authority, not the
+membership. Every literal refusal of every route, with its status code, is in the
+[generated reference](api/index.html).
+
+Two refusals are deliberately **not** pre-checked: an eject blocked because the host still owns pool
+VM records, and an eject blocked because it still holds a pool-shared storage reservation. Those are
+Core's decision, and they arrive asynchronously on the operation as `last_transfer` rather than as a
+Controller-invented HTTP status.
+
+**The command.** `x-commands: pool-transfer`, payload `PoolCommand{request_id, action:
+master-change|eject|transfer-cancel, membership.master_host_id, member_host_id, expected_version?}`.
+Terminal results are `succeeded`; `failed`, which is a decision and means nothing moved; and
+`needs_attention`, which is **not** an error but "durable and still running — the hosts finish it".
+
+**Peer routes.**
+
+- `POST /api/v1/pool/transfer`, body ≤ 256 KiB (`protocol.PoolTransferLimit`) with no trailing JSON.
+  `{operation_id, action: activate|abort|repoint|leave, notice}`. `activate`, `abort` and `leave`
+  are admitted only from the addressed host's current pinned pool master; `repoint` is admitted from
+  any current ready member, because the host issuing it has just become the master and the addressed
+  host does not know that yet — which is exactly what the signature proves. Every action is
+  idempotent by `operation_id`. `200 PoolTransferReply`, `409` with the same shape plus a bounded
+  `error`, `400 invalid pool transfer request`, `401 pool transfer peer rejected`, `405` with
+  `Allow: POST`.
+- `GET /api/v1/pool/authority` — the read-only authority probe, admitted to **any** holder of a
+  certificate this pool's CA issued, **including one this pool has ejected**: an ejected host must
+  be able to learn it is no longer a member, and it can only learn that from the pool that ejected
+  it. `200 PoolAuthorityStatus`, `401 pool peer certificate is required`, `409 pool membership is
+  unavailable`, `405` with `Allow: GET, POST`. The handler answers `POST` identically; nothing in
+  Nex Core calls that form. The caller's own membership status is decided from the certificate the
+  transport proved, never from a name in a body. A master answering a ready member that is behind
+  also returns a pool-CA-signed re-point notice, so a host that missed a push converges from
+  whichever host it can reach without trusting a stale one — a probe answer alone changes nothing;
+  only a signature at a strictly higher generation does. `?vms=1` adds the host's own VM ownership
+  records, which a later slice's promotion proof consumes.
+
+**The signed statement.** `protocol.PoolAuthorityNotice{pool_id, operation_id, action: promote|eject,
+from_host_id, to_host_id, target_host_id, authority_generation, membership, issued_at, signature}`,
+ECDSA P-256/SHA-256 over the whole notice minus `signature`, made with the **pool CA key**. It is
+used twice: the **hand-off**, signed by the outgoing master, naming the exact authority generation it
+froze and the host it handed that generation to; and the **re-point**, signed by the new master with
+the pool CA key it now holds, carrying the new membership at a strictly higher membership generation.
+Every host — the outgoing master included — adopts a new master only from such a notice, verified
+against the pool CA it pinned at join, and only at a strictly higher generation. No host ever takes
+another host's word for who the master is.
+
+**Why there is never a second master.** The freeze is persisted in `pool-peer.json` before anything
+else happens, and every authority write reads it inside the same lock section that performs the
+write, so after the freeze is durable no authority write can begin and any that began has finished.
+While frozen the master cannot mint a higher generation. The replica is built after the freeze, and
+the target must acknowledge **exactly** that generation, verified, before it may activate. The
+master persists `handed_off` **before** it issues the signed hand-off, and `handed_off` refuses every
+authority write for good — not only while frozen — including start permits, placement admission and
+autostart. The target activates only on that signed hand-off, only against a verified replica at
+exactly that generation, and only at generation + 1. Before the hand-off only the old master writes;
+after it, only the new one.
+
+**The abort rule.** A cancel is accepted only before the transfer's **first irreversible durable
+step**, and Core reports that answer itself as `PoolTransferStatus.cancellable` rather than leaving a
+caller to infer it from stage names. The flag is computed from the same predicate `cancelPoolTransfer`
+is gated on, so the reported flag and the accepted cancel cannot drift, and it is always present, so
+a caller never has to tell "not cancellable" from "not reported".
+
+| transfer | cancellable while | first irreversible step | refusal after it |
+|---|---|---|---|
+| master change (`role: source`) | `freeze`, `replicate`, `activate` — including the hand-off window, where it succeeds only if the target proves under its own lock that it never activated | the pool-CA-signed hand-off | `the target has already activated this pool authority; the master change can only go forward` |
+| eject (`role: source`) | `freeze`, `remove` — the stage names the step still to perform, so at `remove` nothing has been written | the membership without that member, written at the next generation | `host <id> is already removed from this pool's membership; the eject can only go forward` |
+| promotion (`role: candidate`) | never | the fence: the old pool master has been powered off | `this pool promotion has powered the old pool master off; it cannot be cancelled and can only go forward` |
+
+Before the hand-off a cancel clears the freeze and the current master stays master (`stage:
+aborted`). After an eject's membership write the cancel is refused and the eject **completes** — the
+remaining members are re-pointed and the ejected host is told to leave; the membership is never
+restored and the host is never put back in the pool. A cancelled master change records `the pool
+master change was cancelled by an operator`, a cancelled eject `the pool member eject was cancelled
+by an operator`. Nothing is ever aborted on a timeout. A refusal at the freeze marks the record
+terminal, so a refused transfer never blocks the next one.
+
+**A cancel that Core performed is a success, not a failure.** A `transfer-cancel` that did what it
+was asked returns `status: "succeeded"` with Core's sentence in `last_transfer.reason` and `error`
+empty; only a refusal is `failed` with `error`. Forward-only refusals keep `conflict: true,
+retryable: false`. A caller reads `reason` first and `error` as the fallback, so a cancellation Core
+carried out can never be rendered as a failed transfer.
+
+**Resuming a hand-off whose target died.** A master change that has already signed the hand-off
+cannot be cancelled by agreement, because the target is the only host that could agree and it is
+gone — and until something proves it is off, this pool's authority stays with it. So the source's
+last resort is the `cancel` route carrying `fence_confirmed` and `fence_host_ids: ["<target>"]`.
+Core refuses it unless **all** of: the target is probed and does not answer; the operator named
+exactly that host; this host is still the recorded master, still holds the pool CA key and is **not
+restricted**; the target has a recorded fence profile; and Core's own fence produces a verified,
+digest-bound power-off of it. It then resumes at authority generation + **2**, because a target that
+activated before it died minted exactly + 1 — so the resumed source supersedes it everywhere by the
+same strictly-higher rule every host applies, and the returning target (restricted by construction,
+since it was just fenced with its own profile) takes the superseded path and writes nothing. A host
+that was itself fenced and rebooted is restricted and is refused here, which is what stops a fenced
+host resuming over the host that fenced it. The transfer record ends `aborted` carrying `the target
+of this master change was powered off and could not take the pool's authority; this host resumed
+it`, and the cancel operation itself is `succeeded` with that sentence in `reason`.
+
+**What is frozen, and what is not.** While a transfer holds the freeze the pool master refuses every
+pool authority write — placements, VM definition and start admission, joins, maintenance changes and
+pool storage/network/media registrations — with `pool authority is frozen for a master change; retry
+when it completes`; nothing is queued behind it. Running guests are unaffected, stop, shutdown and
+force-stop are never refused, local recovery access is untouched, and pool-shared **storage
+reservation releases are deliberately never frozen**, because freezing a release could strand a
+member's stop.
+
+**What an ejected host becomes.** It re-initializes as the pool master of a **new** single-host pool
+with a new pool ID, named after its hostname, keeping its host ID, its enrollment, its local storage
+and its local virtual machines. The Controller adopts that pool from the host's own report, under
+the same site, the way enrollment records a new host's pool — but **only after the old pool's master
+has itself reported the eject**. An eject is the master's record, not the leaving host's, so while
+another host is still the recorded master of the pool being left, that master's own mirrored
+membership must exist and must no longer hold this host as a member (an eject marks the row
+`ejected`, which counts as gone). Until it says so the Controller keeps the host where the pool says
+it is; the leaver retries on every heartbeat and is adopted on the first report after the master
+publishes the eject. Without that rule any enrolled host could move itself out of its pool in the
+Controller's view simply by reporting a new single-host membership. The ejected row in the old pool is
+marked `ejected` rather than deleted — `AuthenticatePoolPeer` requires `ready`, so the certificate
+stops being admitted either way, and keeping the row is what lets the pool tell a returning host
+*why* it is refused.
+
+**Rejoining and retained records.** A succeeded `vm-delete` tombstone remains scoped to the old
+pool when an ejected host becomes a single-host pool, so a same-ID rejoin publishes the deletion
+and permits the old master to prune only its stale owner record. A live local VM remains with the
+ejected host instead. For pool networks, shared repositories and shared ISOs, a leave-created
+local removal carries Core-private, signed cleanup provenance. On a later authenticated rejoin to
+the same pool, Core may reapply the same resource ID only when the membership and resource
+generations prove it is newer; the succeeding reapply consumes that receipt. Other removals stay
+effective. This is managed-journal behavior, not a new wire field or Controller record.
+
+**Reported state.** Every participant reports `inventory.managed.transfer` = `PoolTransferStatus`
+with its own `role` (`source`, `target` or `ejected`), stage, status and error. Beside
+`cancellable` it reports `handed_off`, always present: the source's own durable answer to "have I
+signed this pool's authority away?", so a caller never infers the irreversible step from a stage
+name or a refusal sentence. Only the outgoing master records it; a target or ejected host always
+reports `false`, and an older Core that omits the field is distinguishable from one that reports
+`false`. It is projected verbatim into the pool-level `transfer` and each member row's `transfer`.
+The master
+additionally reports `inventory.managed.authority` = `PoolAuthorityRecord{generation, digest,
+observed_at}` — the only absolute pool authority generation on the wire, which the replica ladder
+below now compares against. Every participant also reports a `pool-authority-transfer` health check:
+fresh `healthy` when its readable record succeeded or no transfer is active, `failed` with Core's
+sentence when the record is `failed` or `needs_attention`, `unknown` while pending. A read failure
+produces no synthetic healthy sample. That check reaches an operator through the
+host's own reported check list, not through the pool members **Convergence** column, which shows
+only the fixed `poolConvergeChecks` set.
+
+**Members projection additions.** Pool level: `transfer_supported` (the master advertises the
+capability); `authority`, the master's own record mirrored verbatim, `null` when the master is not
+fresh or reports none; `transfer`, the master's own report, `null` on the same terms, so a stale
+master's last transfer is never shown as present truth; `last_transfer`, the newest `pool-transfer`
+operation this Controller holds for the pool, with `reason` carrying Core's sentence for a
+cancellation it performed, `conflict` marking refusals a synchronous route
+would have answered with `409` and `retryable` marking exactly one sentence, the frozen-authority
+one, which an operator retries unchanged; and `master_conflict`, whose rule is the exact complement
+of the adoption rule.
+
+**The adoption rule, and its fail-closed default.** A member's report is a payload that member fully
+controls, so a claim of mastery is adopted only against the **recorded master's own** mirrored
+membership, and the check is unconditional: with no mirrored membership at all there is no evidence
+and the claim is refused. Two arms count as evidence. The first is the master change: the claimant's
+own membership names **it** master at a *strictly higher* generation than the mirrored one. The
+second is the **reconnect**: the recorded master's own mirrored membership already names the
+claimant as pool master, in which case the two agree and the row moves at the same generation. No
+host but the recorded master can produce that pointer, so a member cannot use either arm to take a
+pool. Neither arm is a conflict.
+What is left, and all `master_conflict` lists, is two cases: an **equal-generation rival**, a host
+whose own membership names itself master at exactly the mirrored generation; and a **newer membership
+naming a third host**, a host reporting a strictly higher generation for a master that is neither
+itself nor the recorded one, which adoption cannot follow from there. A lower generation is never
+listed, so a fenced old master reporting itself master at its old generation is not a rival claim at
+all — it is projected as an ordinary member carrying its own `restricted` reason. `master_conflict`
+is normally empty; when it is not, the Controller keeps the recorded master row and shows the
+conflict rather than flapping, and acts on nothing. Per member: `transfer`, that
+host's own report, `null` whenever the host is not reporting now — a participant whose row is `null`
+while `connection` is not `fresh` is *unknown*, not finished.
+
+**Replica ladder amendment.** With the master now reporting an authority generation, the `behind`
+rule of the [member authority replica](#member-authority-replica-peer-getpost-apiv1poolreplica) gains
+an absolute reference: a member is `behind` when the two reports disagree on one generation, **or**
+the master reports an authority generation either number is below, **or** another fresh member of
+this pool is acknowledged at a strictly higher generation. The peer comparison stays, because the
+master's authority record can itself be an older report than a member's, and when `authority` is
+`null` the ladder behaves exactly as it did before.
+
+**Mirror re-key.** When the hosts report a master change — a report from the host its own membership
+names as master, on either arm of the adoption rule above — the Controller moves its
+`pools.master_host_id` row and re-keys the pool's storage,
+network and media *mirror* rows to the new master host ID, because only the recorded master refreshes
+and tombstones them. It moves no content: every field is replaced by the new master's next report.
+Two hosts claiming mastery at the same generation change nothing. A pool master that adopted an ISO
+record from shared storage rather than importing the file refuses to remove it, with a message saying
+the file stays on shared storage and must be removed from the host that imported it.
+
+**Verification status.** Implemented and covered by offline contract checks
+(`tests/test_api_contract.py`, `PoolTransferContractTests`) and Go `-race` tests that run several
+hosts in one process over the real mutual-TLS peer transport with real certificates and real
+signatures: a three-host master change with byte-identical VM identities and working placement, start
+permits, maintenance and replica flow afterwards; frozen-authority refusals including stop still
+being permitted; interruption at every stage on each side converging on exactly one master; a handed-
+over master refusing authority after a restart; an unreachable member catching up through the old
+master and then the new one; stale and unsigned re-point refusals; the full abort rule including the
+durable never-activate record; eject with re-initialization and eject refusals; ejecting an
+unreachable member and it learning on return; and concurrent authority writes during a freeze all
+refused under `-race`. Controller lab tests cover the routes, the refusal matrix, the capability
+gate, the projections, adoption of the new master and of an ejected host's new pool, and a Controller
+reopened from the same database mid-transfer. Scoped native evidence includes three-host
+activate-before-persist and target-persisted interruption recovery, plus a typed browser eject to
+the host's new solo pool. Browser review of the transfer strip, conflict banner and several
+recovery/confirmation states remains incomplete; VM-workload continuity and broader failure paths
+remain open. See the [current native-acceptance record](qa/2026-09-19-phase4-native-acceptance.md).
+
+### Fence-verified manual promotion and safe rejoin (POST /api/v1/pools/{id}/master/promote, POST /api/v1/pools/{id}/members/{host_id}/fence-profile)
+
+API impact: **new contract**, implemented. Three Controller routes, two Core command kinds, one
+brokered pool-request action, one extension of an existing peer route, six new protocol types and
+two new reported inventory fields. No new capability string: `pool-authority-transfer-v1` gates all
+of it. The Controller stores **nothing** pool-scoped here — no verdict, no fence proof, no
+restriction, no stage, no candidate, no generation — so a Controller restarted or replaced
+mid-promotion knows nothing about it until the hosts report, and then re-projects it from their
+reports.
+
+**What it is for, and what it is not.** Promoting a *surviving member* to pool master when the pool
+master is **gone**. It is not a tidier master change: Core probes the old master over the pool
+network and refuses the promotion outright when it answers and still holds this pool's authority,
+naming the [planned master change](#planned-master-change-and-member-eject-post-apiv1poolsidmaster-delete-apiv1poolsidmembershost_id)
+instead. There is **no automatic succession, no election and no quorum**: every promotion is one
+operator, one candidate, one typed pool name and one explicit power-off acknowledgement.
+
+**Owner decision OD-5, and the absence of an escape.** An opted-in pool whose master restarts while
+one other ready member is permanently dead **stays restricted**. No route, field, parameter, enum
+value or interface affordance offers "start VMs elsewhere", "force", "override", "declare host
+lost" or any timeout-based path, and **none may be added**. The recovery is to bring the dead host
+back or restore its Core state. The reasoning is in the plan; the short form is that a point-in-time
+observation that a host is off proves it is not writing *now*, does not prove it never took the
+authority, and does not survive that host powering on again — accepting it constructs two masters.
+
+**The honest hardware limit (D2).** A fence profile is the same closed typed profile clustered
+storage already uses, and `ExecutePoolFenceProfile` **refuses at record time** any profile this
+build cannot verify: `this fence profile cannot be verified by this host: BMC fencing identity
+verification is not implemented` for `redfish`/`ipmilan`, and the same shape carrying `SCSI
+persistent-reservation fencing is unsupported` for `scsi_pr`. **Only `virsh` profiles can be
+recorded, so only a disposable lab pool can be fence-promoted; a physical pool cannot be.** The
+limit is enforced at record time deliberately: a profile in a membership therefore always came from
+a build that can verify it, and any build that can verify it also applies the boot rule to it, so
+there is no version-skew window where one build promotes over a profile another build treats as
+unusable. The limit is reported structurally as `fence_recorded: false` / `fence_usable: false`
+with a `fence_unusable_reason`, not only in prose.
+
+**Where the fence credential lives, and who can open it.** The host that fences is the **candidate**,
+and it cannot be handed the material after the master it must fence is gone. So the master seals a
+copy of each profile's material **per member**, inside that member's replica, with the same
+primitive as the pool CA key under a distinct context binding pool, member, generation, fenced host
+and reference (`PoolWrappedFenceCredential`). The sealed blob is inside `SigningBytes`, so tampering
+is detected, and excluded from `ContentDigest`, so one generation still has one digest for every
+member; what makes rotated material advance the generation is `PoolMember.fence_credential_version`
+in the replicated membership. Nex Controller never sees the material: it is delivered once over the
+existing encrypted credential handoff, Core allocates its own private reference, and only that
+opaque reference is written into the command — nothing reaches SQLite, the audit trail, a response
+or a log, and `credential_ref` is never projected to a client. **A profile cannot be recorded until
+its material has been delivered to the master** (`this host holds no fence credential for <host>;
+deliver it to this host before recording the profile`), and the master keeps only a private digest
+of it in its own `pool-peer.json`.
+
+The owner-visible consequence, which belongs in the guide and not only here: **any ready member can
+open the material addressed to it, so any ready member can power off any profiled host.** It is the
+same trust model the sealed pool CA key already carries, it is inherent to fence-verified promotion,
+and it is policy rather than a lock. Admit only hosts you trust with it.
+
+**Controller routes.** Administrator session, same HTTPS `Origin` and `X-CSRF-Token`, `{"error": …}`
+bodies. Every literal refusal with its status code is in the [generated reference](api/index.html).
+
+- `POST /api/v1/pools/{id}/master/promote/preflight` — `{host_id}`. One brokered report round trip
+  to the **candidate** (`PoolRequest{action: "promotion-preflight"}`), answered on that host's next
+  report, deadline 45 s. **Nothing is stored, journalled or audited and no command is issued**, so
+  it is safe to repeat. The pool master is deliberately not required to be fresh. `200 {host_id,
+  promotion}` with the verdict mirrored verbatim; `504` carries a `PoolResult`, as the join relay
+  does; `499` keeps an abandoned relay out of the success range.
+- `POST /api/v1/pools/{id}/master/promote` — `{request_id, host_id, confirmation, fence_confirmed,
+  fence_host_ids}`. `confirmation` is the **pool's name**, compared case-insensitively after
+  trimming. `fence_confirmed` must be literally `true` and is the operator's separate
+  acknowledgement that the named hosts will be powered off — a precondition and nothing else; Core
+  produces and verifies every proof itself and an acknowledgement is never evidence.
+  `fence_host_ids` is **required and non-empty**: exactly the set a *fresh* preflight put in
+  `verdict.fence_host_ids`, each host once. The Controller computes, completes and corrects nothing
+  — it sorts the set, so the same confirmation typed in another order is a replay rather than a
+  second promotion, and forwards it verbatim. A missing, empty, blank or duplicated set is
+  `400 this promotion powers hosts off; confirm in fence_host_ids exactly the hosts the promotion
+  preflight named in verdict.fence_host_ids, each listed once`; a host this Controller mirrors in
+  *another* pool is `400 host <id> is not a host of this pool; confirm only the hosts this pool
+  reports`, while a host it has never heard of is forwarded — the mirror is not the pool's record,
+  a partitioned host may be known only to the pool, and Core recomputes the whole set at run time.
+  There is no `expected_version`: the
+  generation to check against is the dead master's, and the candidate re-proves the whole verdict
+  immediately before it activates. `202`, `200` on an exact replay, `409` on a changed payload.
+- `POST /api/v1/pools/{id}/members/{host_id}/fence-profile` — `{request_id, fence, credential?}`.
+  Relayed to the **master**, which owns the membership record the profile lives in, so this is the
+  one route here that does require a fresh master. `fence: null` clears the profile. The stored
+  replay payload is the client's profile **as sent**, without the credential and without the
+  Core-allocated reference, so an exact retry stays byte-identical. `503 Core did not acknowledge
+  fence credential delivery; retry with the same request_id` when the handoff is not acknowledged.
+
+Audit: `pool.promote` and `pool.fence-profile` against the pool ID, beside the automatic
+`pool-promote` / `pool-fence-profile` rows. **The preflight audits nothing**, because it changes
+nothing. No credential material and no `credential_ref` is ever audited.
+
+**Deliberately not pre-refused.** Everything about the old master — whether it answers, whether the
+Controller can reach it, when it was last seen — is not evidence in either direction and refuses
+nothing here. Neither does a missing or unusable fence profile, a tampered or lagging replica, a VM
+ownership conflict, or a member holding a higher authority: all of those are in the preflight
+verdict and are Core's decision at run time, arriving asynchronously on the operation and surfaced
+verbatim in `last_promotion`.
+
+**The commands.** `x-commands: pool-promote`, addressed to the **candidate** —
+`PoolCommand{request_id, action: "promote", member_host_id, fence_confirmed, fence_host_ids}` — and
+`x-commands: pool-fence-profile`, addressed to the **master** — `PoolCommand{request_id, action:
+"fence-profile", membership.master_host_id, member_host_id, fence}`. No membership travels with a
+promotion: the candidate reads the signed replica it already holds. Terminal results are
+`succeeded`; `failed`, a decision meaning nothing moved; and `needs_attention`, which is **not** an
+error but "durable and still running on Core". A cancel is never accepted for a promotion.
+
+**What Core proves before it moves anything.** Four named checks, each `passed | blocked | unknown`,
+where **`unknown` blocks exactly as `blocked` does** and is a separate word only so a refusal can be
+told from an outage:
+
+1. **`replica-integrity`** — the stored replica verifies against the pool CA this host pinned at
+   join, declares every section, names this pool and this host, and carries a pool CA key this host
+   can open. A fence never substitutes for it.
+2. **`replica-supremacy`** — every host of the replica's membership is probed. Any reachable host
+   holding a higher authority or replica generation blocks and is named as the better candidate. A
+   reachable host that reports a non-terminal promotion of its own blocks too (`pool host <ids> is
+   already performing a promotion of this pool; let it finish or cancel it before promoting another
+   host`), so two concurrent reachable candidates leave exactly one master. An **unreachable ready
+   member that is not the old master also blocks**: it holds this pool's authority replica, so it
+   could be promoted in exactly the same way, and two partitioned survivors would otherwise both
+   promote. The check reports `unknown` naming it (`pool host <ids> is unreachable and holds this
+   pool's authority replica, so it could be promoted too; it must be fenced before this host can be
+   promoted`), and passes only when this promotion has itself excluded that host by a verified,
+   promotion-bound fence proof — which is what puts the host into `fence_host_ids` and forces check
+   4 over it. A blocking host that cannot be fenced is a refusal an operator must resolve another
+   way (`this host cannot fence <host>: <reason>, so it cannot be promoted while those hosts are
+   unreachable`). **This is stricter than the original closure-plan wording.** *Decision: project
+   owner, 2026-09-20 (OD-6).* The strict rule is approved: an unreachable ready member blocks
+   promotion unless the same operation fences it; fail-closed — silence is never agreement.
+3. **`accepted-ownership`** — every VM record of the replica is classified from evidence: confirmed
+   by its reachable owner's own journal, fenced with its owner, or blocked. A reachable owner that
+   cannot read its own inventory blocks it — ambiguity blocks — which is why the probe answers
+   `vms_reported` separately from an empty `vms`.
+4. **`old-master-exclusion`** — a fence proof **Core itself produced** for **every** host in
+   `fence_host_ids`, not only the old master: an independently observed power-off of each recorded
+   profile's target, `ExclusionVerified`, digest-bound over pool, excluded host, operation and
+   generation (`PoolPromotionFenceDigest`), and at most `PoolPromotionFenceWindow` = 15 minutes old.
+   Each proof is persisted before the host is acted on and a still-fresh one is reused on a retry.
+   A returned fence agent status, a timeout, a missed heartbeat or an operator assurance cannot
+   construct one. Before a promotion runs this check is normally `unknown`: Core fences and proves
+   it during the promotion, never during a preflight. **Only `unknown` is tolerated** at the
+   preflight stage of a running promotion — "nothing fenced yet". A `blocked` exclusion is a refusal,
+   so a promotion aimed at a reachable, healthy master can never reach the fence stage. VMs owned by
+   an excluded host are classified `fenced`, and the re-point skips every fenced host.
+
+Core reports the readiness structurally so no caller infers it from check names: `can_promote` is
+true only when the whole proof holds right now, fence included — so it is **false** in the normal
+ready state — while **`ready_to_fence`** is the flag a client offers the promotion on. Beside them
+`fence_recorded`, `fence_usable` and `fence_unusable_reason` (bounded at 200 characters, single
+line) answer whether a profile exists and whether this host could turn it into a proof.
+
+**Why there is never a second master.** The candidate holds no CA key and can write no authority
+before activation. The promotion is refused if the old master answers and still holds authority, and
+if any reachable host reports a higher authority or replica generation. The whole verdict is
+re-proved immediately *before* activation, so a member that returned between the fence and the
+activation stops it. Activation adopts VM ownership first, then makes this host master at
+generation + 1 in one atomic `pool-peer.json` write; an interrupted promotion resumes at the stage
+that did not complete and is idempotent by operation ID. Every other host adopts the new master only
+from a pool-CA-signed notice at a strictly higher membership generation.
+
+**The boot rule, and `Restricted`.** A rebooted master cannot know it was fenced: the evidence lives
+only on other hosts. So, **before any start path is exposed**, a host writes
+`Restricted{kind: "unconfirmed"}` if and only if all of: it is the master of its own durable
+membership; that membership has at least one other member with status `ready`; and it is still
+fence-promotable by somebody — a usable fence profile for itself is recorded now, **or**
+`SelfFence` is still set, the durable record that a usable profile was recorded and some ready
+member may still hold a replica carrying it. `SelfFence.ClearedAt` is dropped only once every ready
+member has acknowledged a verified replica at or above that generation; acknowledgements are
+memory-only, so a restart simply re-earns them. The restriction clears only when **every** other
+ready member answers the authority probe naming this host master at no higher generation; one
+unreachable member leaves it restricted — that member is exactly the host that could have been
+promoted. A single-host pool has no such host and is never restricted, and a pool that never
+recorded a usable profile — today, every physical pool — restarts its master unrestricted.
+
+On discovering a higher authority a host demotes itself to `Restricted{kind: "superseded"}`; a
+deliberate master change is exempt, because that host knows what happened. That restriction clears
+after re-pointing, holding the new master's verified replica, having no VM the authority records
+elsewhere, and having an inventory the master accepted. A conflicting VM keeps it restricted and is
+named in `conflicts`; the local definition is fenced off, **never deleted and never started**.
+
+While restricted, Core refuses every authority write, mints no generation, refuses every non-stop
+workload start, starts nothing on autostart, and the libvirt hook refuses managed shared-VM starts
+by reading `pool-peer.json` directly — so the refusal holds with no Controller connected, and fails
+closed on an unreadable record. Stop, power-off, console, local recovery access and reporting are
+untouched, and the hook stays shared-only so local recovery access is never blocked.
+
+**Peer route extension.** `GET /api/v1/pool/authority` (unchanged auth: any holder of a certificate
+this pool's CA issued) always answers `restricted`, and with `?vms=1` additionally answers
+`vms: [PoolVMOwnership]` and `vms_reported`, which separates "this host defines no VM" from "this
+host could not read its own record". No new peer endpoint.
+
+**Reported state.** `inventory.managed.promotion` = `PoolPromotionStatus{operation_id, stage,
+status, error, verdict?, cancellable, observed_at}`, reported by the candidate; and
+`inventory.managed.restricted` = `PoolRestrictedStatus{kind, reason, since, conflicts, observed_at}`,
+reported by whichever host holds it. Health checks: `pool-restricted` — `failed` with Core's own
+sentence while restricted; when Core can read a clear durable restriction, an explicit fresh
+`healthy` sample replaces any prior failure. An unreadable peer record produces no synthetic clear;
+an earlier Controller-stored check can remain until a later fresh report replaces it.
+`pool-promotion` — a completed
+promotion or readable absence of a promotion record reports fresh `healthy`, `failed` when failed
+or `needs_attention`, `unknown` while running, and is absent only when Core cannot read its state;
+`pool-authority-transfer` follows the same rule for a completed, failed, attention-needed or
+in-progress transfer. Every one of the seven fixed checks reports a fresh `healthy` sample when
+its readable Core state is successful, cleared or no longer applicable, so a Controller replaces any
+prior failed or unknown projection. Core emits no synthetic healthy sample after a read failure;
+the existing Controller merge can retain an earlier stored check until a fresh report replaces it.
+
+**Durable schema.** `pool-peer.json` gains `Restricted{Kind, Reason, Since, Conflicts}` and a
+private `BootAuthority{PoolID, HostID, BootID}` confirmation. The latter binds a fence-exposed
+master's authority to its current boot so the local `StorageGuard` can refuse managed-VM starts
+before the agent has otherwise resumed authority work; it is not Controller input or reported
+inventory. It also gains
+`Transfer.Fences` (one proof per excluded host, each bound to pool, host, operation and generation
+and reused on retry while fresh), `Transfer.FenceAgreed` (the set the operator confirmed, re-checked
+against Core's freshly computed set at both the preflight and the fence stage), `SelfFence{ClearedAt}` and a private `FenceCredentials{Ref, Digest, Version}` map that is
+never replicated, reported or logged. `PoolMember.Fence` and `PoolMember.FenceCredentialVersion`
+live in the master's durable membership and are replicated with it, so a promoted master inherits
+every profile and a fresh Controller re-adopts them from `Inventory.Managed.Membership`. No new
+file. **The verdict is deliberately not durable**: it is an observation with a lifetime and is
+recomputed.
+
+**Members projection additions.** Pool level: `master_seen_at` (RFC3339, `""` when the master has
+never reported), projected from the `hosts` row this Controller already keeps and deliberately
+**not** gated on freshness, because a stale-master banner needs exactly "has not reported since
+`<master_seen_at>`"; `promotion`, the candidate's own reported promotion with the reporting host
+added, `null` when no fresh host of this pool reports one — the Controller records no candidate and
+shows the fresh host with the most recent report; and `last_promotion`, the newest `pool-promote`
+operation, in the same shape as `last_transfer`, with `retryable` always false because nothing about
+a promotion is retried unchanged. Per member: `transfer_supported`, that host's own advertised
+capability; `fence` = `{kind, endpoint, configured, credential_version}` from the **master's**
+membership, so `null` while the master is not fresh and never carrying `credential_ref` —
+`credential_version` is `PoolMember.fence_credential_version` mirrored verbatim, `0` when no
+material is recorded, and the number is the only signal that a rotation has actually been
+replicated; the material itself never reaches the Controller; and `restricted`, that **host's
+own** report. The `checks` array gains `pool-restricted`, `pool-promotion` and
+`pool-authority-transfer`, appended to the fixed list in fixed order — `pool-storage-reconciliation`,
+`pool-network-reconciliation`, `pool-media-reconciliation`, `pool-authority-replica`,
+`pool-restricted`, `pool-promotion`, `pool-authority-transfer` — and a readable successful,
+cleared or no-longer-applicable producer state is explicitly `healthy`. Core emits no healthy sample
+after an unreadable-record omission; the existing Controller merge retains any prior stored check
+until a fresh report replaces it.
+
+**Freshness rule, corrected.** S4 and S5 gated every per-member field on `authoritative`, which is
+right for a master-derived field and wrong for a member's own report — and wrong in exactly the
+situation this slice exists for, because choosing a candidate means reading each surviving member's
+own replica and restriction while the master is gone.
+
+| Field | Source | Shown while the master is stale? |
+|---|---|---|
+| `status`, `error`, `maintenance`, `maintenance_since`, `access`, `failures`, `fence` | the master's membership or observations | **no** — unknown, `null` or empty |
+| `peer_origin` | the master's durable membership record | yes (unchanged) |
+| `connection`, `guests`, `join`, `transfer` | the host's own report | yes (unchanged) |
+| `restricted`, `checks`, `transfer_supported` | the host's own report | **yes (new)** |
+| `replica.generation`, `digest`, `verified`, `received_at` and its own `error` | the member's own report | **yes (new)** |
+| `replica.acknowledged_generation`, `acknowledged_at` | the master's observation | no — `0`/empty |
+
+`replica.state` without a fresh master is limited to what the member alone proves — `unsupported`,
+`refused`, `unverified`, `awaiting`, otherwise `unknown`. **`current` and `behind` are never claimed
+without the master**: they compare against a number only the master reports. With a fresh master the
+S4/S5 ladder is unchanged. `authoritative: false` already tells a client the master-derived half is
+unknown, and every master-derived field is `null` or zero rather than a stale value.
+
+**Adoption of a promoted master** needs no new code: it is the rule S5 already applies. The
+Controller follows the host its own reported membership names as master at a *strictly higher*
+membership generation and re-keys the pool's mirror rows to it; a promotion advances the generation,
+so it is adopted exactly like a planned master change. The fenced old master's later reports name
+itself master at its *old*, strictly lower generation, so they change nothing and are not listed in
+`master_conflict` at all — it is projected as an ordinary member carrying its own `restricted`
+reason, which is how an operator sees that it came back and is refusing to start anything.
+
+**Verification status.** Implemented and covered by offline contract checks
+(`tests/test_api_contract.py`, `PoolPromotionContractTests`) and Go `-race` tests that run several
+hosts in one process over the real mutual-TLS peer transport with real certificates and real
+signatures — **with a test double injected where Core calls the fence**. Covered: the whole preflight
+verdict matrix (no replica, tampered replica, reachable healthy old master, a member at a higher
+generation, a disagreeing reachable owner, everything-but-the-fence passing and reported `unknown`
+rather than `passed`, no fence profile); six refusals of things that are not proof — an
+acknowledged-only fence, a stale one, and proofs bound to another operation, host, generation or
+digest; the destructive acknowledgement being mandatory; full promotions on a two-host and a
+three-host pool with byte-identical VM records and unchanged certificates, peer origins and pool ID;
+interruption at `preflight`, `fence`, `activate` and `repoint` resuming to exactly one master; the
+boot rule with and without an unreachable member and a single-host pool never restricted; a
+returning old master restricted before peer contact, refusing starts, defines, updates and authority
+numbering while allowing stops, converging on signed evidence and clearing only after reconciliation;
+an ownership conflict keeping it restricted with the VM named and the local definition intact; every
+start path refused including autostart leaving no permit; the sealed credential round trip
+master → replica → candidate asserting the exact identity bytes, refused for the wrong member, the
+wrong generation and tampered ciphertext, retired on clear and replace but never while another
+profile or a clustered-storage node still names it, and proven absent from logs, results, verdicts
+and reported status; and the restricted-master-with-a-dead-member deadlock pinned as a test, because
+it is a stated limit rather than an accident. Controller tests cover the three routes, the refusal
+matrix including accepting a promotion while the old master is perfectly fresh *to the Controller*,
+the credential never reaching the database, the audit trail or the response, the projection with a
+stale master, adoption of a promoted master and of a returning restricted one, and a Controller
+reopened from the same database mid-promotion.
+
+**A promotion fences every host that blocks it, not only the old master.** The verdict's
+`fence_host_ids` is the sorted set a promotion would power off: the old pool master, plus every
+other host that `blocks` the promotion and that the candidate could exclude by a fence — an
+unreachable member that could itself have been promoted is exactly such a host. Each probed host
+carries its own `blocks`, `fence_recorded`, `fence_usable` and `fence_unusable_reason`, so a caller
+can show precisely which hosts would be powered off and which of them cannot be. The operator
+confirms that set, the command carries it back verbatim, and Core compares it against the set it
+computes again at run time: a pool that changed since the preflight stops the promotion
+(`this promotion must power off <ids>, which is not what was confirmed; confirm the hosts this pool
+reports and try again`, or `this promotion no longer needs to power off any host; review the pool
+and try again`) rather than quietly fencing something new. A host is never powered off without
+having been named to the operator first. `ready_to_fence` is true only when the candidate holds a
+usable profile and an openable credential for **every** host in that set.
+
+Core refuses a `pool-promote` command that carries no confirmed set at all (`this promotion will
+power off other hosts; confirm the hosts this pool reports before it can run`), and re-checks the
+set both at the preflight stage and again inside the fence stage, so a pool that changed after the
+operator confirmed stops the promotion before anything is powered off.
+
+**Scoped native evidence, not phase acceptance.** Reviewed runs include a three-host promotion
+with fence exclusion and externally observed power-off, returned-master restriction/rejoin, and
+the f714 boot-window result: before authority publication, API and installed-hook starts and
+autostart were refused; after ordinary rejoin, a normal API start and stop succeeded. This does
+not prove contradictory-owner recovery, all start paths, duplicate-writer safety, physical fencing
+or permanently-dead-member recovery. The G2 maintenance walkthrough proves enter/exit and normal
+start/stop, but its reboot/autostart case remains open; it is distinct from the S6-14 restriction
+boot result. See the [current native-acceptance record](qa/2026-09-19-phase4-native-acceptance.md).
+
+### Staged management network edits (GET|POST /api/v1/hosts/{id}/network)
+
+API impact: **new contract**, implemented. Two Controller routes, one Core command kind
+(`management-network`), one inventory field, one health check and one capability. A host's own
+management addressing is the one edit that can make the host unreachable, so the whole operation
+belongs to the host: **Nex Core renders, applies, times and rolls back its own configuration**, and
+Nex Controller submits one durable step at a time and shows what the host reports. The Controller
+keeps no copy of the change, computes no countdown and is not required for the rollback to happen.
+
+**Capability.** `management-network-v1`, advertised by the target host in the protocol v2
+capability list and absent from the legacy v1 list, which also strips `management_network` from the
+report. Without it, `supported` is false in the view and submitting anyway is
+`409 staged management network edits need management-network-v1 on this host; upgrade Nex Core`.
+
+**Durable state, and where it lives.** The host writes `<state-dir>/management-network.json`: the
+operation ID of the change, its revision and stage, the spec, the verbatim previous contents of the
+three files it replaces, the chosen window, the deadline, the applied/confirmed/connectivity
+timestamps, and two host-local fields that make the rollback independent of the clock —
+`boot_id` (`/proc/sys/kernel/random/boot_id` as read at apply) and `applied_uptime_ns`
+(`/proc/uptime` at apply, nanoseconds). Both are `omitempty`, neither is reported to the Controller
+and a fresh Controller needs neither: they are how the host measures its own window. A record
+written without them behaves exactly as before. The configuration itself is the host's own `/etc/network/interfaces`,
+`/etc/dhcpcd.conf` and `/etc/resolv.conf`, rendered as whole files with MAC-bound interface names
+and a `br0` management bridge, exactly as the installer writes them. Guest VLAN bridges under
+`/etc/network/interfaces.d/` are never read, written or brought down — the rendered file keeps the
+`source` line that includes them — and `/etc/systemd/network/*.link` is never rewritten, so
+**renaming an interface is not part of a staged change**: a rename only takes effect on boot and
+could not be undone inside a rollback window. The spec names interfaces the host already has. The
+record is projected into `Inventory.management_network`, which is the whole adoption path: a fresh
+or rebuilt Controller reads the current configuration, the stage and any running deadline back from
+the host with nothing for an operator to re-enter.
+
+**Ownership proof and refusals before anything is touched.** Core refuses to overwrite a file it
+cannot prove it rendered, by exact first-line match, the same discipline the guest VLAN path uses:
+`/etc/network/interfaces` must begin with `# Nex Core: interface identity is bound by MAC in
+/etc/systemd/network.` and `/etc/dhcpcd.conf` with `# Nex Core: only management DHCP owns routes
+and DNS.`, so a freshly installed host passes with no state file at all and a hand-edited file is
+refused with `<path> was not written by Nex Core or the Nex installer; edit it from the host
+console instead`. A missing file is refused with `<path> is missing; Nex Core will not create a
+management network configuration it cannot prove it rendered`. All three targets must be **regular
+files**: `<path> is not a regular file (<mode>); replace it with a plain file before changing the
+management network`. That last rule is a real limitation on a host where `systemd-resolved` owns
+`/etc/resolv.conf` as a symlink; Nex Core's own installer writes a plain file.
+
+**The four steps.** `stage` validates the spec, renders it, snapshots the three files and writes
+the record — nothing in `/etc` changes, so a staged change costs nothing and can be replaced or
+discarded. `apply` re-checks that the files still equal the snapshot, records the `applied` stage
+**and its deadline before any file is written**, renames the three rendered files into place and
+**reconfigures `br0` in place** — never `ifdown`/`ifup`, never `brctl`, never `ip link del` and
+never `ip link set br0 down` while the bridge exists, because ifupdown's bridge hook deletes the
+bridge and guest taps enslaved to it do not come back. Apply and rollback run the same helper over
+the same parser, one reading the rendered files and the other the on-disk ones, so a rollback is
+correct even after a crash before the file swap: `ip` brings the new uplink up, adds the VLAN
+device when the spec tags it, enslaves it to `br0` and releases the old port, then sets the address,
+route, hardware address and DHCP client (`dhcpcd -k` / `dhcpcd -n`). An unchanged uplink moves no
+port at all; a guest tap is never detached. The three files are still rendered byte-for-byte, so the
+next boot is unchanged. A failed write or an `ip`/`dhcpcd` failure rolls back immediately and
+returns both errors. **Running VMs on the management bridge are, by design, no longer disturbed;
+that has not been observed on a real host.** `confirm` keeps the change, clears the deadline, increments `revision` and drops the
+snapshot. `cancel` does two different things, decided by the stage it finds. On a **staged** change it
+discards it and nothing in `/etc` was ever touched. On an **applied, unconfirmed** change it
+performs the rollback now, at the operator's request: the same `rollbackLocked` restore the
+deadline would have run, with the reason `rolled back at the operator's request` and the durable
+flag `requested_rollback` set before the restore begins, so a rollback interrupted before the
+interface came back up resumes as the same operator rollback rather than as a failure. A
+`confirmed` or already `rolled-back` change is still refused (`management network change <id> is
+<stage> and cannot be cancelled`). Stage, apply, confirm and cancel are each idempotent for the
+change they name: a repeated apply returns the original record with the original deadline, and a
+repeated cancel of an already-undone change is the conflict above.
+
+**The rollback is the host's, and it does not consult the clock.** An applied, unconfirmed change is
+restored by the host itself when the window is spent, when an operator submits `cancel` against it,
+and when the host finds that it **rebooted after the apply** — a reboot is not evidence that the new
+configuration works, and the operator's window was spent while the host was down. Neither trigger
+compares a persisted timestamp against `time.Now()`: "rebooted" is a **boot-id inequality**, and
+"window spent" is boot-relative elapsed time (`uptime - applied_uptime_ns >= window`) within the
+same boot. That is the whole point of the pair of fields above — a host cut off by its own change
+typically loses NTP with it and comes back with a wrong RTC, which is exactly when the rollback has
+to fire. `deadline` survives only as the operator-facing value, and `seconds_remaining` is computed
+the same boot-relative way so the countdown cannot disagree with the trigger; `confirm` uses the
+same helper, so a confirm can never be accepted for a change recovery is about to undo. A record
+from before these fields falls back to the previous wall-clock comparisons. `/proc/uptime` counts
+suspended time, so a suspended host spends its window and comes back rolled back — the safe
+direction, since nobody confirmed. The check runs at agent start, on every probe tick and from an
+exact in-process timer armed at apply; the durable record, not the timer, is the guarantee. The three triggers are
+told apart on the wire by one durable bit: `management_network.requested_rollback` is true only for
+the operator's own `cancel`, and the host emits **no** `management-network` health check for that
+one, because an undo the operator asked for is an outcome and not a failure. An older Core reports
+no such field, which reads as the automatic rollback it used to be. A rollback restores
+the snapshot byte for byte and only leaves the `applied` stage once the interface is actually back
+up, so an interrupted rollback is retried by the next pass instead of being forgotten — and a
+rollback that has **started and not completed** is reported: a record still at `applied` carrying an
+error emits a failed `management-network` check of its own, `restoring the previous management
+network configuration has not completed: <reason>`, which the stage alone cannot distinguish from a
+healthy applied change. Losing the Controller changes none of this.
+
+**The one honest limit on the triggers.** All three run inside the agent process, so the rollback
+needs the agent to be running. Both units are `Restart=always` (`packaging/systemd/nex-core-agent.service`,
+`packaging/core-local/nex-core-local.service`), which closes the crash, OOM-kill and clean-exit
+holes: `RecoverManagementNetwork` runs unconditionally at start, so the window is honoured late but
+honoured. A unit deliberately **stopped or masked** between apply and deadline, or a package upgrade
+that leaves it stopped, arms nothing until someone starts it again. No transient systemd timer is
+installed. `confirm` is additionally refused until the host has **observed
+its own connectivity over the new configuration**, and the observation is narrow on purpose: an
+authenticated Controller report or an authenticated host-local API call since the apply whose
+connection terminated on an address of the management bridge **itself**, with a far end that is not
+this machine. A report that arrived over a second NIC, a call from loopback and a cached browser tab
+are all paths that are not the one under test, and none of them counts: `this host has not yet been
+reached over an address of br0 itself under the new configuration; a Controller report that arrived
+over another interface, or a local API call from this machine, does not count`.
+
+**Two identities in one request.** `operation_id` is the durable command's own, unique per step,
+because it is the managed journal's replay key. `change_id` is the change Core acts on: the ID the
+host recorded when it staged it and reports back as `management_network.operation_id`.
+`ManagementNetworkRequest.Valid()` requires `change_id` for `apply`, `confirm` and `cancel` and
+refuses a `stage` that names another change. The Controller fills it from the **host's own latest
+report**, never from its own memory, so a replacement Controller resolves it identically; an
+optional `change_id` in the request body must match that report or the request is a conflict rather
+than a silent retarget.
+
+**Client-facing routes.** Administrator session; the POST also requires the same HTTPS `Origin` and
+`X-CSRF-Token`. `POST /api/v1/hosts/{id}/network` takes `{request_id, action, change_id?, spec?,
+expected_revision?, window_seconds?, confirmation?}`; unknown fields are refused. `202 {host_id,
+action, operation}`, and an exact retry of the same `request_id` and payload returns the original
+operation with `200`. `400` for `host and a stable request_id are required`, the
+`ManagementNetworkRequest` bounds, and an `apply` whose confirmation is not the host's own reported
+name (`the confirmation must be the host name "<hostname>"`, compared trimmed and
+case-insensitively here and again by the host itself). `404 host not found`. `409` for `this host
+is revoked`, the missing capability above, `the host must be freshly connected before a management
+network change is staged or applied`, `the host has not reported since the change was applied; it
+cannot be confirmed until it reaches this Controller again`, `this host reports management network
+revision <n>; reload the host network page and retry`, `this host reports no management network
+change to <action>; reload the host network page`, `this host reports management network change
+<id>, not the one you asked to <action>; it changed since you loaded it — reload the host network
+page and retry`, and the shared `request_id already used with another payload` / `request_id
+already used for another operation`. `500 storage unavailable` / `resource lookup failed` /
+`operation lookup failed` / `management network storage failed` leaves the same `request_id` safe
+to retry. **`cancel` has no freshness requirement** — it is the durable step that undoes a staged or an
+applied, unconfirmed change on a host that has gone quiet, which is exactly when an operator most
+needs it — while `confirm` requires freshness precisely because a host
+that reached this Controller again is a host whose new configuration carries traffic. Audit:
+`action = management-network`, `resource_id = management-network:<host id>:<operation id>`. The
+spec is delivery data, not a secret, and is stored in `managed_resources` like any other command.
+
+`GET /api/v1/hosts/{id}/network` returns `{host_id, hostname, connection, supported, state,
+management_network, nics, check, last_operation}`. `hostname` is the host's own reported name,
+which is the string an operator must type to apply. `state` is the record's stage, `none` when the
+host has never staged a change, and **`unknown` whenever `connection` is not `fresh`**; the record
+itself is still returned when it is stale, because a running rollback deadline must stay visible —
+losing contact during the countdown reads as *unknown, with the deadline*, never as success or
+failure. `check` is the host's `management-network` health check and is `null` when the host is not
+fresh, for the same reason; the host emits that check only as `failed`, while the record is
+`rolled-back` (carrying Core's rollback reason) or while the record is unreadable (`the management
+network record is unreadable`), so its absence means cleared. `nics` is the host's own reported
+interface inventory, which is what a spec is built from, and `[]` before a first report.
+`last_operation` is the newest `management-network` operation this Controller holds. `400 host
+required`, `404 host not found`, `500 storage unavailable` / `operation lookup failed`.
+
+**Asynchronous refusals are not an HTTP status.** Every step is a durable command, so Core's own
+refusals arrive as the operation's `status:"failed"`. The conflict class is decided by one rule and
+nothing else: the error **ends with** `management network conflict`
+(`protocol.ManagementNetworkConflict`), which the Controller marks as `last_operation.conflict`.
+Those texts are `a management network change is already applied and waiting to be confirmed or
+rolled back`, `management network revision is <n>, not <m>`, `no management network change is
+staged as <id>`, `no management network change is applied as <id>`, `management network change
+<id> is <stage>`, `management network change <id> is <stage> and cannot be cancelled`, `the
+rollback deadline for <id> has passed; the previous configuration is being restored`, `this host has not
+yet been reached over an address of <bridge> itself under the new configuration; a Controller report
+that arrived over another interface, or a local API call from this machine, does not count`,
+`management network change <id> is already staged with a different configuration` (the same change
+ID re-staged with a different spec: an exact retry replays the staged change, a different one is not
+a retry at all), and `the host network configuration changed since this edit was staged; stage it
+again`. Plain (non-conflict)
+failures include `management network command carries no request`, `management network request does
+not match its command`, `the confirmation does not name this host`, `this host cannot read its own
+name to check the confirmation`, the spec validation texts, and `rollback window must be between
+2m0s and 30m0s`.
+
+**Stage-time refusals that read the host itself.** Before a change is staged Core checks the spec
+against the machine, so an unusable spec is refused while nothing has been touched rather than
+discovered at apply:
+
+- `interface <n> does not exist on this host` and `interface <n> has hardware address <a> on this
+  host, not <b>; the spec names a different card` — every NIC in the spec is checked against
+  `/sys/class/net/<name>/address`. `br0` itself is refused as a NIC name by the validator
+  (`interface name "br0" is not a usable interface name`), because it would render two stanzas for
+  one device.
+- `interface <n> carries registered guest networks (<ports>) and cannot be disabled; remove those
+  networks first`, and `<port> is already the port of a registered guest network; the management
+  interface cannot share it` — read from the host's own `/etc/network/interfaces.d/nex-*` stanzas,
+  which are the durable record of a registered guest VLAN.
+- `<port> is already a port of bridge <b>; free it before making it the management uplink`.
+- `br0 does not record which port uplinks it, and guests are attached to it (<ports>); moving the
+  management uplink would mean rebuilding the bridge and cutting them off. Change the uplink from
+  the host console, or move those guests first` — the one case where the in-place reconfiguration
+  cannot know which port to detach.
+
+**A limit, stated rather than fixed.** A spec that simply **omits** a NIC that carries guest VLANs
+is not refused: it loses its `iface … inet manual` stanza in the render, so the raw device is
+unconfigured at the next boot. Whether an omitted NIC means "leave alone" or "disabled" is a
+product decision, not an implementation one, and is open.
+
+**The rollback window.** Chosen per staged change, default 600 seconds, bounded 120–1800 by Core;
+the wire bounds it only at 0–3600 and `0` means the default, so an out-of-range value is an
+asynchronous failure rather than a `400`. It is reported back as `window_seconds` so a staged
+change can still say how long it will give after a page reload — `deadline` and
+`seconds_remaining` exist only once the change is applied.
+
+**Verification status.** Implemented and covered by offline contract checks
+(`tests/test_api_contract.py`) and Go `-race` unit tests for the render, the validation table, the
+stage/apply/confirm/cancel state machine with every refusal, deadline and reboot rollback with a
+byte-identical restore, a rollback re-run after a failing `ifup`, crash windows before and after the
+file swap, the foreign/missing/symlink/directory refusals, apply against changed files, the command
+routing and inventory projection, the connectivity hooks, and cross-layer Controller-to-Core tests
+that drive stage → apply → confirm, stage → cancel and stage → apply → cancel through the real HTTP
+handlers into the real engine on a scratch `/etc`, with the result delivered on a later report so
+the cut connection is modelled. The namespace test that would run real `ifup`/`ifdown`
+(`TestManagementNetworkNetns`) **has never executed**: it skips without `ifupdown` installed. **No
+native host run and no browser review have been executed.** The defect recorded here in an earlier
+draft — *Roll back now* submitting a `cancel` that Core refused on an applied change — is fixed;
+see `BUG-0327` in [the bug ledger](BUG_LEDGER.md). See
+[Change a host's management network](guide/change-management-network.md#verification).
+
 ### Core pool peer join and repository observations
 
 API impact: **new host-local/Core peer contract** — on an enrolled joining Core, local
@@ -899,6 +2251,13 @@ for the active report round trip and removes it on delivery, result, cancellatio
 deadline. The Controller's 45-second HTTPS write deadline is only a delivery margin for that
 30-second ambiguous relay response; it does not extend Core work. It never persists a cluster
 configuration, job, credential, credential receipt or proof.
+
+A clustered-storage configuration is a replicated pool-authority section, so `apply` and
+`verify-fence` are authority writes and take the same guard every other registry write takes: a
+master that is frozen for a master change, has handed its authority over, or is restricted starts
+neither, and answers with the existing retryable sentence `pool authority is frozen for a master
+change; retry when it completes`. `GET /api/v1/storage/cluster` is a read and is unaffected. The
+guard is at the entry point, not at the resume, so work already in flight is never interrupted.
 
 Clustered-storage protocol v2 has an explicit Controller-first acknowledgement. A newly started,
 reconnected or replacement-enrolled Core sends a clean v2 preflight: it advertises neither the
@@ -1127,11 +2486,13 @@ this release makes no NFS HA failover promise. Preserved older records that cont
 identity are not rewritten and fail closed instead of being silently upgraded.
 
 `POST /api/v1/storage/{id}/update`, `/recheck` and `/detach` carry a stable request ID, pool,
-host and expected generation. Update changes typed configuration; recheck only observes it,
-except that recheck (and Core's one-minute periodic lane) starts an existing, unchanged Nex NFS/SMB
-mount unit when systemd reports it inactive, then verification decides health; an unmounted
+host and expected generation. Update changes typed configuration; recheck observes it, except that
+recheck (and Core's one-minute periodic lane) starts an existing, unchanged Nex NFS/SMB mount unit
+when systemd reports it inactive. Recheck also cycles a Nex-managed NFS/SMB unit when its mount
+root reports a stale file handle and no disk, retained disk or ISO depends on it; a dependency is
+named and nothing is remounted while it is in use. Verification then decides health; an unmounted
 repository reports `remote storage is not mounted`;
-detach is refused while disks, retained disks, media or active work depend on it and never
+detach is refused while disks, retained disks, unremoved media or active work depend on it and never
 deletes backing data. HTTP `202` means Core work is queued. Retry an identical request ID to
 recover an interrupted client reply; a changed replay or stale generation is `409`. For a
 `source.iscsi.mode:"clustered_gfs2"` registration, these generic lifecycle mutations are
@@ -1202,7 +2563,16 @@ body — including the member `host_id` a client first sent — replays the same
 operation; it is never treated as a changed payload. The registration also carries
 `generation` (the master-owned desired generation members reconcile against) and
 `member_access` (the master's per-member observations of the applied bridge); both are absent
-or zero on host-local registrations. Controller rejects mixed shapes (400) and uplinks the
+or zero on host-local registrations. `member_access[].observed_at` is when that member last
+**evaluated** this network on its own host, not when it last sent a row. A member re-checks every
+condition it can see without side effects — the uplink's existence and kind, whether it is a bond
+member, whether the VLAN device is already claimed, whether the bridge name is taken — on every
+pull pass, so a fix to any of those converges on the next pass and posts a fresh observation. A
+failure the precheck cannot see is retried at most once an hour, and while the member is waiting
+out that interval it leaves its previous row and `observed_at` in place rather than re-stamping a
+result it did not re-check. So a failed member row whose `observed_at` stops advancing is a known
+failure awaiting retry, not a new observation; the Controller's staleness gate requires
+`error == ""` as well as freshness, so such a row is never treated as ready either way. Controller rejects mixed shapes (400) and uplinks the
 host has not reported as a physical NIC or bond (409). A duplicate uplink/VLAN or plain registration of the same
 derived bridge on that host is queued and refused by the host as a failed task (see
 *Host-owned defaults and validation* below). The `network-register` command then creates the 802.1Q
@@ -1548,7 +2918,8 @@ MAC uniqueness and host capacity stay with their owners.
   A start of a running VM stays a no-op; a refused pool autostart is not retried in that boot.
   A created VM whose automatic start is refused stays
   defined and stopped, with `VM created but not started: <reason>` reported. Libvirt's own
-  autostart replay at host boot (non-shared VMs) is outside this check. API impact: **changed
+  autostart replay at host boot (non-shared VMs) is outside this check; Core's own once-per-boot
+  autostart attempt for such a guest issues the same start and so does apply it. API impact: **changed
   contract** — same requests and results; the available-memory refusal moved from `vm-create`
   and stopped `vm-update` to starting, with the message above (BUG-0195).
 - **`disks`.** One to eight. Each carries `storage_id`, a `name` unique within the VM
@@ -1579,12 +2950,18 @@ MAC uniqueness and host capacity stay with their owners.
   name (`^[a-z0-9][a-z0-9._-]{0,31}$`).
 - **Lifecycle.** For storage that is not pool-shared, `autostart` is the libvirt property
   (`virsh autostart`) set while the stopped guest is defined, so the host starts the VM on boot;
-  it is not a start. A pool-shared VM has libvirt autostart disabled. Instead, its serialized
-  Core worker makes at most one durable autostart attempt per VM per OS boot, recorded in the
-  private Core state before observation or admission. It can start only a currently shut-off,
+  it is not a start. A pool-shared VM has libvirt autostart disabled. In both cases Core's
+  serialized worker makes at most one durable autostart attempt per VM per OS boot, recorded in
+  the private Core state before observation or admission, and only on a host that is neither
+  drained nor restricted. A pool-shared VM can start only as a currently shut-off,
   already-recorded owner after fresh master admission, current storage/execution checks and a
-  one-use Core permit. Agent restart, a later manual stop, master outage, failed validation or a
-  failed start cannot create another attempt in that boot; this is neither HA nor failover.
+  one-use Core permit. A local-storage VM takes the same attempt with no master round trip and no
+  permit, which is what an API start of one does too; it is the retry libvirt cannot make, because
+  libvirt tries its flag once at boot, before a fence-exposed master has confirmed that boot's
+  authority, and the `StorageGuard` hook refuses it there (changed 2026-09-20: before this, such a
+  guest stayed shut off for the rest of the boot). Agent restart, a later manual stop, master
+  outage, failed validation or a failed start cannot create another attempt in that boot; this is
+  neither HA nor failover.
   `start_after_create` is
   honoured by the host inside the same creation (changed contract, 2026-09-10): after every disk
   is created and the persistent definition is verified, the creation has **succeeded** whether

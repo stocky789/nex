@@ -25,7 +25,7 @@ workflow on pushes that change `website/`; see [operate the website](operate-web
 - The exact release has completed every external-distribution requirement in
   [Nex licensing](../LICENSING.md#release-evidence), with reviewable evidence. A successful build,
   existing website content or a configured deployment secret does not satisfy this prerequisite.
-  The current working version, `0.3.6`, may publish to the private forge for internal labs.
+  The current working version, `0.4.0`, may publish to the private forge for internal labs.
   Its ZFS-enabled ISO is still refused by the public website publisher until the ZFS
   external-distribution gates are closed.
 - Maintainer access to the Nex repository on the configured Git forge. The runner needs Docker;
@@ -73,9 +73,8 @@ workflow on pushes that change `website/`; see [operate the website](operate-web
    (`0.1.6-alpha1 0.1.6~alpha1`).
 3. After the exact-artifact evidence is complete, push to `main`. Watch the **Release** workflow: it resolves the version, builds the
    appliance, both packages and the ISO, checks each artifact declares the released version,
-   then creates the forge release. A ZFS-enabled manifest still publishes on the private forge
-   for internal labs, and skips the public website download tree and APT with a warning until
-   its external-distribution gates are closed. A second push at the same version runs again and replaces the
+   then creates the release. A ZFS-enabled manifest stops at the publisher before a forge or
+   download-tree release is created until its external-distribution gates are closed. A second push at the same version runs again and replaces the
    release; a newer push cancels a release build still in progress.
    The artifact verification step prints each output's byte size so packaging growth
    is visible before publication. Transfer compression of bundled Windows media
@@ -107,12 +106,9 @@ copies the ISO, matching source bundle, and matching compliance manifest into
 `https://<site>/downloads/<Debian-version>/`, writes a SHA-256 sidecar for each, and moves
 `latest` to the newest retained release; releases beyond the newest three download directories
 are pruned. The publisher rejects a manifest unless its recorded ISO and source-bundle filename
-and SHA-256 match the files being installed. A ZFS-enabled compliance manifest skips this public
-website step with a warning after the forge release succeeds, so the public download tree and APT
-stay unchanged until the OpenZFS redistribution gates close. When public publishing runs, the
-workflow then fetches the published APT indexes, ISO checksum, source bundle, and compliance
-manifest over HTTPS and fails if any are missing or the package index does not list the released
-version.
+and SHA-256 match the files being installed. The workflow then fetches the published APT indexes,
+ISO checksum, source bundle, and compliance manifest over HTTPS and fails if any are missing or
+the package index does not list the released version.
 
 ## Troubleshooting
 
@@ -159,9 +155,6 @@ version.
   release is signed with the operator key.
 - **Deploy secrets are not set** — the workflow says so and publishes to Gitea only. Add the
   secrets and re-run, or publish to the website by hand from the release assets.
-- **ZFS-enabled ISO warning; website skipped** — expected while OpenZFS redistribution evidence
-  is open. The private forge release is the lab delivery path; the public download tree and APT
-  stay on the previous non-blocked version until those gates close.
 - **Nothing published and no error** — check the runner can reach the website host; the host
   is on a private address and the runner must be on a network with a route to it.
 - **Disk pressure on the website host** — the APT archive keeps every package version and each

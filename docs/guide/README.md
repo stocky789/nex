@@ -20,30 +20,43 @@ verification limits that apply to its workflow.
 8. [Add VM storage repositories](storage-repositories.md)
    (local directories, NFSv4, SMB3, iSCSI and OpenZFS; new ZFS provisioning is restricted
    to internal disposable labs).
-9. [Join an enrolled Nex Core to a pool](join-a-pool.md)
-   (development local-API workflow; per-host shared-storage access and guest-network/ISO
-   convergence, with native acceptance limits).
-10. [Register resources and create a virtual machine](create-virtual-machine.md)
-11. [Rename or remove a pool VLAN network or an ISO](remove-pool-network-or-iso.md)
+9. [Join a host to a pool](join-a-pool.md)
+   (add a host from the pool's Hosts tab, with the host-local procedure as the recovery path;
+   per-host shared-storage access and guest-network/ISO convergence, with native acceptance
+   limits).
+10. [Put a pool host into maintenance](host-maintenance-mode.md)
+   (stop new placements, starts and resumes on one host, including guests on its own local storage
+   and guests that would start themselves after a reboot; running guests are untouched).
+11. [Pool authority and recovery](pool-authority-and-recovery.md)
+   (read the copy of the pool master's authority each member holds; change which host is the pool
+   master; eject a host from a pool; record a fence device and promote a surviving member when the
+   pool master is lost; resume a master change whose target died; what a restricted host is and how
+   it clears. No automatic succession, a promotion may power off more than one host, and
+   fence-verified promotion needs a `virsh` fence device recorded in advance).
+12. [Change a host's management network](change-management-network.md)
+   (stage, apply and confirm a host's own addressing, with the timed rollback the host performs
+   itself; console recovery and native verification limits apply).
+13. [Register resources and create a virtual machine](create-virtual-machine.md)
+14. [Rename or remove a pool VLAN network or an ISO](remove-pool-network-or-iso.md)
    (pool-wide removal on the master with typed confirmation; members converge, and in-use
    resources are refused).
-12. [Edit a virtual machine](edit-virtual-machine.md)
+15. [Edit a virtual machine](edit-virtual-machine.md)
    (change a VM in place on its General tab; live changes where the guest can take them).
-13. [Delete a virtual machine](delete-virtual-machine.md)
+16. [Delete a virtual machine](delete-virtual-machine.md)
    (remove a stopped guest; keep or permanently delete disk files).
-14. [Control VM power](vm-power.md)
+17. [Control VM power](vm-power.md)
    (start, shut down, reboot, force stop, and the offered eject of install media after an
    install).
-15. [Open a VM or host console](vm-console.md)
+18. [Open a VM or host console](vm-console.md)
    (toolbar with send keys, display scaling and resize, clipboard, typing, screenshots,
    CD/DVD insert/eject on VMs, and a Console tab on hosts).
-16. [Install guest tools and read guest information](guest-tools.md)
+19. [Install guest tools and read guest information](guest-tools.md)
    (QEMU guest agent and spice-vdagent; OS, hostname, addresses and clipboard readiness).
-17. [Read VM and host usage history](usage-history.md)
+20. [Read VM and host usage history](usage-history.md)
    (Stats tab charts up to a year back, with Stacked, zoom and legend toggles).
-18. [Check and apply software updates](software-updates.md)
+21. [Check and apply software updates](software-updates.md)
    (Controller and host-local package updates from a configured repo).
-19. [Publish a Nex Core release](publish-a-release.md)
+22. [Publish a Nex Core release](publish-a-release.md)
    (authorized maintainers; tag-driven ISO and package build, and website publication).
 
 Each procedure states its prerequisites, expected outcome, troubleshooting, and verification

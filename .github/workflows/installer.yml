@@ -23,6 +23,9 @@ on:
     branches:
       - '**'
   pull_request:
+concurrency:
+  group: installer-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -42,6 +45,8 @@ jobs:
       # The checks below used to run inside the builder image purely to get a toolchain.
       # They read and compile source and need no privileges, so run them directly.
       - name: Install source-check dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends gcc pkg-config libglib2.0-dev python3 gzip dpkg-dev

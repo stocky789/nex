@@ -1,0 +1,50 @@
+{
+  "summary": "Refresh existing Core-owned pool checks after restriction clear, promotion success, or completed transfer. API impact: existing contract.",
+  "paths": [
+    "internal/agent/pool_promote.go",
+    "internal/agent/pool_promote_test.go",
+    "internal/agent/pool_transfer.go",
+    "internal/agent/pool_transfer_test.go",
+    "internal/agent/pool_network.go",
+    "internal/agent/pool_network_test.go",
+    "internal/agent/pool_storage.go",
+    "internal/agent/pool_storage_test.go",
+    "internal/agent/pool_media.go",
+    "internal/agent/pool_media_test.go",
+    "internal/agent/peer.go",
+    "internal/agent/peer_test.go",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-19-phase4-native-acceptance.md",
+    "docs/changes/2026-09-20-phase4-restricted-health-clear.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This corrects freshness of an existing reported observation; the operator recovery workflow did not change.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "All existing fixed host inventory and pool-members checks receive fresh healthy samples; no route or field changes.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The pending correction does not complete S6 or Phase 4.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Core owns the durable records behind the seven checks and emits their current health observations.",
+    "record": "Existing Core pool-peer restriction, promotion, transfer, authority-replica and resource records remain authoritative and are reported through inventory to a replacement Controller."
+  },
+  "verification": {
+    "method": "Read-only native diagnosis found a fresh null restriction alongside a retained failed pool-restricted check because no fresh healthy check replaced it. TestPoolRestrictedCheckPublishesFreshHealthyClear failed before the minimal healthy-check emission and now passes. The focused agent test (0.014s), go test ./internal/agent (10.693s), and go test -race ./internal/agent (23.838s) passed; independent review cleared that restriction correction. Focused failing-first coverage extends explicit healthy replacement to all seven fixed check producers, and the final whole-tree race/Python source gate passed. Retained native Controller and members captures show all seven fresh healthy replacements on a fresh current master. Contemporary API evidence is kept distinct from a later direct-shell observation rather than treated as one generation/provenance record. This is an observed producer outcome, not a Controller state repair.",
+    "evidence": [
+      "internal/agent/pool_promote_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

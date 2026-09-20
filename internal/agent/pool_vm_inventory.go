@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"reflect"
@@ -24,8 +25,12 @@ type poolVMInventory struct {
 	// Updates contains only exact, successful local managed-journal evidence
 	// for a current revision. It lets the master settle a pre-existing pending
 	// transition after a restart, never makes inventory itself authoritative.
-	Updates    map[string]vmhost.VMUpdateEvidence `json:"updates,omitempty"`
-	ObservedAt time.Time                          `json:"observed_at"`
+	Updates map[string]vmhost.VMUpdateEvidence `json:"updates,omitempty"`
+	// Deleted names the VMs this host durably deleted: succeeded vm-delete tombstones
+	// from its own journal. It is the positive evidence the master prunes owner records
+	// with; absence from VMs above is never read as a deletion.
+	Deleted    []string  `json:"deleted,omitempty"`
+	ObservedAt time.Time `json:"observed_at"`
 }
 
 type poolVMInventoryReply struct {
@@ -33,6 +38,12 @@ type poolVMInventoryReply struct {
 }
 
 var errPoolVMInventoryIncomplete = errors.New("pool VM inventory is incomplete for current membership")
+
+// errPoolVMOwnersDeferred reports that the snapshot is durable but the owner records it would
+// settle were not written, because this host's pool authority is frozen or handed over. The
+// projection is deferred, never dropped: the next publication after the transfer settles it on
+// whichever host is master then.
+var errPoolVMOwnersDeferred = errors.New("pool VM owner records are deferred while pool authority is frozen")
 var errPoolVMInventoryStale = errors.New("stale pool VM inventory")
 
 func settlePoolVMInventoryDefinition(record *poolVMRecord, owner string, observed protocol.VMCreateSpec, evidence *vmhost.VMUpdateEvidence) error {
@@ -175,7 +186,13 @@ func localPoolVMInventory(ctx context.Context, s *Store, generation uint64) (poo
 			}
 		}
 	}
-	return poolVMInventory{HostID: s.State.HostID, Generation: generation, VMs: managed.VMs, Storage: storage, Observed: observed, Updates: updates, ObservedAt: time.Now().UTC()}, nil
+	deleted := make([]string, 0, len(managed.DeletedVMs))
+	for _, tombstone := range managed.DeletedVMs {
+		if tombstone.ID != "" && tombstone.HostID == s.State.HostID && tombstone.PoolID == s.State.PoolID {
+			deleted = append(deleted, tombstone.ID)
+		}
+	}
+	return poolVMInventory{HostID: s.State.HostID, Generation: generation, VMs: managed.VMs, Storage: storage, Observed: observed, Updates: updates, Deleted: deleted, ObservedAt: time.Now().UTC()}, nil
 }
 
 func vmUsesInventorySharedStorage(vm protocol.VMCreateSpec, storage map[string]protocol.StorageIdentity) bool {
@@ -210,6 +227,33 @@ func recordPoolVMInventory(s *Store, membership protocol.PoolMembership, inv poo
 		state.Inventory = map[string]poolVMInventory{}
 	}
 	state.Inventory[inv.HostID] = inv
+	// A host that is no longer part of the pool is no longer part of its picture. Its row
+	// stays in membership for ever, so its snapshot is dropped here instead: otherwise it
+	// keeps holding pool networks and ISOs against removal, and pool-vms.json grows without
+	// bound. Dropping an observation removes no authority; owner records are untouched, and
+	// the eject that produced the row already proved the host owned none.
+	for host := range state.Inventory {
+		member, known := poolMemberByID(membership, host)
+		if !known || !poolVMInventoryMember(member) {
+			delete(state.Inventory, host)
+		}
+	}
+	// The snapshot above is an observation and is always stored; the owner records below are
+	// the replicated `vms` section, so they are an authority write and take the same guard
+	// every other authority write takes, inside the same lock section that performs it.
+	// Without this a routine inventory publication could change the content a frozen
+	// generation names, and one generation would stop identifying one authority.
+	if refusal := requirePoolAuthorityWritable(s); refusal != nil {
+		if err = savePoolVMs(s, state); err != nil {
+			return err
+		}
+		return errPoolVMOwnersDeferred
+	}
+	// Owner records are pruned from this host's own delete tombstones before the seed
+	// pass, so a deleted guest stops holding a pool fence and pool-vms.json stops growing
+	// without bound. The pool-wide network/ISO dependency check keeps reading the
+	// published inventory snapshots, which this never touches.
+	prunePoolVMOwners(&state, inv.HostID)
 	seedErr := seedPoolVMOwners(s, membership, &state, inv.HostID)
 	// A partial current-generation snapshot is durable evidence, not an execution
 	// admission.  Retain it so later ready members can complete the same generation;
@@ -219,10 +263,26 @@ func recordPoolVMInventory(s *Store, membership protocol.PoolMembership, inv poo
 	}
 	return seedErr
 }
+
+// poolVMInventoryMember reports whether a membership row can own or run a pool VM now, which
+// is what the completeness rule is a question about. Every status but "ejected" counts: a
+// pending or failed member may have been ready a moment ago and may still be running guests,
+// so a picture without it is genuinely incomplete and nothing may be concluded from it. An
+// ejected host is the one row that cannot hold a pool VM record by construction — the eject
+// is refused from the master's own records while the target owns one (poolEjectRefusal) — and
+// its row is kept for ever, so counting it made every inventory permanently incomplete and no
+// shared VM could ever be settled as stopped or started again (BUG-0358).
+func poolVMInventoryMember(member protocol.PoolMember) bool { return member.Status != "ejected" }
+
 func seedPoolVMOwners(s *Store, membership protocol.PoolMembership, state *poolVMState, observedHost string) error {
+	members := map[string]bool{}
 	for _, member := range membership.Members {
+		if !poolVMInventoryMember(member) {
+			continue
+		}
+		members[member.HostID] = true
 		if member.Status != "ready" || state.Inventory[member.HostID].Generation != membership.Generation {
-			return errPoolVMInventoryIncomplete
+			return fmt.Errorf("%w: host %s (%s) has not reported at generation %d", errPoolVMInventoryIncomplete, member.HostID, member.Status, membership.Generation)
 		}
 	}
 	masterManaged, checks := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(context.Background())
@@ -237,6 +297,9 @@ func seedPoolVMOwners(s *Store, membership protocol.PoolMembership, state *poolV
 	}
 	seen := map[string]string{}
 	for host, inv := range state.Inventory {
+		if !members[host] {
+			continue // A host that left the pool seeds nothing; its VMs left with it.
+		}
 		for _, vm := range inv.VMs {
 			if vm.ID == "" || vm.PoolID != s.State.PoolID || vm.HostID != host || protocol.ValidateVMSpec(vm) != nil {
 				return errors.New("invalid VM definition in pool inventory")

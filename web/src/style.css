@@ -424,7 +424,9 @@ progress { width: 100%; accent-color: var(--blue); }
 .fold-actions { margin: 8px 10px 0; }
 .storage-add { align-items: center; flex-wrap: wrap; }
 .storage-add small { flex-basis: 100%; }
-.zfs-dialog { width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; }
+.dialog-wide, .zfs-dialog, .pool-join-dialog, .pool-maintenance-dialog, .host-network-dialog, .pool-promotion-dialog, .pool-fence-dialog {
+  width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto;
+}
 .zfs-dialog .section-heading, .zfs-dialog .steps { margin: 0 -16px 10px; }
 .zfs-dialog .section-heading { margin-top: -14px; }
 .zfs-dialog form > label { display: grid; gap: 4px; max-width: 360px; }
@@ -441,3 +443,52 @@ progress { width: 100%; accent-color: var(--blue); }
 .zfs-layout label { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-weight: 400; }
 .zfs-existing { margin-right: auto; }
 .zfs-dialog .actions { margin-top: 12px; }
+
+/* Pool "Hosts" tab: the join dialog is as wide as its compatibility preview table. */
+.pool-join-dialog .section-heading { margin: -14px -16px 10px; }
+.pool-join-dialog form { display: grid; gap: 12px; }
+.pool-join-dialog caption { padding: 4px 8px; text-align: left; color: var(--muted); font-size: 11px; }
+.pool-candidates { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.pool-candidates label { display: block; font-weight: 400; }
+
+/* Maintenance mode (pool Hosts tab) and the host management-network panel. */
+.pool-maintenance-cell button { margin-top: 4px; }
+.pool-guests { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }
+.pool-maintenance-dialog .section-heading, .host-network-dialog .section-heading { margin: -14px -16px 10px; }
+.host-network-dialog caption, .host-network-panel caption { padding: 4px 8px; text-align: left; color: var(--muted); font-size: 11px; }
+.host-network-form { display: grid; gap: 12px; }
+.host-network-form .table-scroll { position: relative; }
+.host-network-form input:not([type="radio"]), .host-network-form select { width: 100%; min-width: 7ch; }
+.host-network-form th[scope="row"] { white-space: nowrap; text-align: left; }
+.host-network-countdown, .host-network-staged { display: grid; gap: 8px; }
+
+/* Planned master change and member eject (pool Hosts tab). Row actions are a disclosure in
+   the host cell, not extra columns: the members table is already the widest in the app. */
+.pool-row-actions > summary { margin-top: 4px; cursor: pointer; font-size: 12px; }
+.pool-row-actions > div { display: grid; gap: 4px; justify-items: start; margin-top: 4px; }
+.pool-transfer-strip { display: grid; gap: 8px; }
+.pool-transfer-participants { margin: 0; padding-left: 18px; font-size: 12px; }
+.pool-transfer-dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; }
+.pool-transfer-dialog .section-heading { margin: -14px -16px 10px; }
+.pool-transfer-dialog input { width: 100%; }
+
+/* Fence-verified manual promotion, restricted hosts and fence devices (pool Hosts tab). */
+.pool-recovery, .pool-restricted, .pool-promotion-strip, .pool-promotion-verdict { display: grid; gap: 8px; }
+.pool-restricted { justify-items: start; gap: 4px; margin-top: 4px; }
+.pool-promotion-checks, .pool-promotion-blocking { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 12px; }
+.pool-promotion-dialog .section-heading, .pool-fence-dialog .section-heading { margin: -14px -16px 10px; }
+.pool-promotion-dialog input:not([type="checkbox"]), .pool-fence-dialog input, .pool-fence-dialog textarea { width: 100%; }
+.pool-promotion-dialog label.checkbox { display: flex; gap: 8px; align-items: center; }
+.pool-fence-dialog textarea.secret { font-size: 12px; }
+.pool-fence-clear { flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+
+/* A restriction on the host's own page: the same note, given the weight of a page-level
+   warning so it is read before anything else on the host is acted on. */
+.pool-host-restricted { border-left: 3px solid var(--danger); }
+.pool-host-restricted .pool-restricted { margin-top: 0; }
+
+/* Every host a promotion powers off, listed by name where it is confirmed, and Core's prompt
+   to resume a hand-off whose target never answered. Both are destructive, so they sit apart
+   from the surrounding text rather than reading as one more paragraph. */
+.pool-promotion-fenced { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 13px; }
+.pool-transfer-resume { display: grid; gap: 8px; margin-top: 12px; border-left: 3px solid var(--danger); padding-left: 10px; }

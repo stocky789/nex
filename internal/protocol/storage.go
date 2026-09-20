@@ -398,6 +398,15 @@ func IsPoolSharedStorage(s StorageRegistration) bool {
 	return s.StorageKind() == StorageKindNFS || s.StorageKind() == StorageKindSMB || IsClusteredISCSI(s)
 }
 
+// StorageBlocksPoolJoin is the one rule both Core's join precheck and the Controller's
+// join-candidate preview apply to an applied registration, so the preview and the host
+// cannot disagree. A repository the host has detached projects as a tombstone — no kind, no
+// path, so StorageKind() is "" rather than local — and a detached repository is not existing
+// remote storage: it blocks nothing.
+func StorageBlocksPoolJoin(s StorageRegistration) bool {
+	return !s.Tombstone && s.StorageKind() != StorageKindLocal
+}
+
 func IsClusteredISCSI(s StorageRegistration) bool {
 	return s.StorageKind() == StorageKindISCSI && s.Source.ISCSI != nil && s.Source.ISCSI.Mode == "clustered_gfs2"
 }

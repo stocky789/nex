@@ -50,8 +50,8 @@ pool name — and any Controller adopts them unchanged; the Controller never cre
 pool identity. A separate code slice implements this and documents the enrollment contract in
 [docs/API.md](../API.md).
 Enrollment tokens bind to a site, not a pool. The BUG-0094 priority below brings forward
-the member-join prerequisite for storage reconciliation; changing the master and
-ejecting a member remain unavailable Phase 4 work.
+the member-join prerequisite for storage reconciliation; changing the master and ejecting a
+member are implemented in the dirty working tree but remain Phase 4 acceptance work.
 See the [pool master model decision](2026-09-09-pool-master-model.md).
 **API impact: changed contract** — enrollment tokens, agent enrollment, appliance
 bootstrap/adoption and the pool listing change; manual pool creation is removed.
@@ -689,13 +689,82 @@ record bounded checks already passed; they do not close the remaining gates abov
 
 ### 4. Multi-host pools and shared storage
 
-**Implementation status (2026-09-19):** Core-local member join, member pull of pool-shared
+**Current acceptance status (2026-09-20): closed for disposable virtual-lab scope.** S1–S6 are
+implemented in the dirty working tree. The final `f714` source validation passed `go test -race
+-count=1 -timeout 20m ./...` and the 374-test Python suite; that is source evidence, not a release.
+Reviewed native evidence includes the repeated G1 join/eject lifecycle, missing-uplink failure,
+autonomous recovery and cleanup, and S6-14 boot-time restriction, API/direct-hook/authority-offer
+refusals, autostart suppression, rejoin and post-clear normal start/stop. `BUG-0372` through
+`BUG-0381` are fixed; the newest Core uses a private boot marker. The final `f714` S6-18 strict
+harness is **partial/FAIL** because it received a different safe eject refusal for a live
+shared-storage reservation and exited before timed-suppression observation. The older scoped S6-18
+pass is separate historical evidence.
+
+Phase 4 and the initial manual-recovery gate are **closed for disposable virtual-lab scope**
+(project owner, 2026-09-20). OD-6 is **decided**: the strict unreachable-ready-member rule is the
+approved default (fence or fail-closed; silence is never agreement). Permanent limits stay open
+forever for this lab class: physical/BMC fencing, five-host scale, package-installed hook
+enforcement, authentic owner-conflict S6-12/16 fixtures, OD-5 no-escape, and remaining C-class
+matrix rows. No production-readiness or release claim follows from these results. Post-close S2
+maintenance native revalidation on Core `327b7ec9…` passed ordered prep/core/autostart/restarts/hook/hosts
+(see [native acceptance report](../qa/2026-09-19-phase4-native-acceptance.md)).
+
+**Historical implementation snapshot (2026-09-19):** Core-local member join, member pull of pool-shared
 NFS/SMB (and eligible clustered iSCSI), guest VLAN networks and ISO library metadata on those
 shared repositories are implemented. Members materialize locally and report per-host access;
-Controller mirrors observations only. Still open for this phase: Controller join UI, master
-change/eject, authority replicas, maintenance mode, staged remote **management** network edits,
-native two-host join/VLAN/media walkthrough acceptance, and the full Phase 4 gate below.
-See [join guide](../guide/join-a-pool.md) and [QA note](../qa/2026-09-19-pool-member-config-converge.md).
+Controller mirrors observations only. The Controller-driven join (“Add host to pool” on the pool's
+Hosts tab, with the master issuing a single-use invitation and the joining host running the
+exchange itself) was implemented with unit and contract tests. At that date, its native two-host
+walkthrough and browser review had not run. Also implemented in the working tree, with unit,
+Controller and contract tests and at that date no native or browser evidence: **host maintenance
+mode** (a drain flag the pool master keeps in its own membership record, refusing new placement,
+definition and start admission and autostart-by-placement on that host, blocking no running guest
+and no stop; since independent review the drained host also refuses starts, resumes and
+start-after-create **itself**, before any master round trip, so a guest on its own local storage is
+covered and the refusal holds with the master unreachable, and it suppresses libvirt's own
+autostart flag while drained so a reboot does not return its guests — `BUG-0346`, `BUG-0347`),
+the **member authority replica** (the master's signed, generation-numbered copy of its durable
+authority, stored read-only by every ready member and acted on by none), and **staged remote
+management network edits** (a host renders, applies, times and rolls back its own
+`/etc/network/interfaces`, `/etc/dhcpcd.conf` and `/etc/resolv.conf`; the Controller submits one
+durable step at a time, an unconfirmed change is restored by the host at its deadline or after a
+reboot, and interface renames and guest VLAN bridges are deliberately out of scope). Since
+independent review the host reconfigures `br0` **in place** rather than bringing it down and back
+up, which used to cut off every guest attached to the management bridge (`BUG-0341`), and both
+rollback triggers measure the window from the host's own boot rather than from the wall clock, so
+a host that comes back with a wrong RTC still rolls back (`BUG-0340`). At that date the network
+slice had no native evidence: its namespace test skips without
+`ifupdown` and has never run, so the tests show which commands the host issues and nothing about
+the kernel's reaction. Its *Roll back now* control, which submitted a step Core refused, now
+performs the rollback on an applied, unconfirmed change and reports it as an operator rollback
+rather than a failure (`BUG-0327`). Also implemented in the working tree:
+**planned master change and member eject** (one durable, resumable Core state machine on the pool
+master, a pool-CA-signed hand-off and re-point, a durable freeze that refuses every pool authority
+write while it runs without stopping or blocking a running guest, an operator cancel until the
+hand-off, an ejected host re-initializing as the master of its own new single-host pool, and a
+Controller that relays one command and keeps no stage, generation or membership of its own). At
+that date it had no native multi-host run or browser review. Also implemented in the working tree:
+**fence-verified manual promotion and safe rejoin** (an operator names one surviving member; Nex
+Core on that member proves replica integrity, replica supremacy and accepted VM ownership, produces
+its own fence proof by powering the lost master off and observing it, and only then takes the pool
+authority at generation + 1; a host that cannot prove it holds the pool's current authority
+restricts itself before any start path is exposed and rejoins automatically only after it has
+reconciled). It carries two honest limits that are part of the design and not defects: only a
+`virsh` fence profile can be recorded, so **a physical pool cannot be fence-promoted** until BMC
+identity verification is implemented; and an opted-in pool whose master restarts while one other
+ready member is permanently dead **stays restricted**, with no escape action and none to be added
+(owner decision OD-5, 2026-09-19) — the recovery is to bring that host back or restore its Core
+state. Its initial evidence was in-process multi-host Go `-race` tests, Controller tests and
+contract checks with a fence double. Later scoped native promotion observed external `virsh`
+power-off, but that does not certify physical fencing, workload continuity or duplicate-writer
+safety. Current reviewed evidence and its limits are in the
+[Phase 4 native acceptance record](../qa/2026-09-19-phase4-native-acceptance.md). **The disposable
+virtual-lab gate is passed** with documented permanent limits; physical/BMC, five-host,
+package-install and authentic owner-conflict cases are not claimed. See [join guide](../guide/join-a-pool.md),
+[maintenance guide](../guide/host-maintenance-mode.md),
+[pool authority guide](../guide/pool-authority-and-recovery.md),
+[management network guide](../guide/change-management-network.md) and
+[QA note](../qa/2026-09-19-pool-member-config-converge.md).
 
 1. Enroll a second host; join it to an existing pool as a member host under that pool's master (“Add host to pool”), provide master change and member eject through [pool authority transfer](#pool-authority-transfer-and-master-succession), and provide pool-wide inventory and explicit placement approved by the master. A join is a Core-to-Core convergence operation: the master retains the durable pool membership and every pool-wide configuration record, sends each applicable generation to the member, and retains that member's result. At minimum reconcile logical networks (including VLAN/uplink mappings), pool storage registrations and the member's real access state; materialize only configuration applicable to that member, never another host's local storage or runtime state. The Controller asks the master and displays durable per-member pending, succeeded, failed or needs-attention results; it neither stores a second desired-state copy nor runs the reconciliation. On member reconnect, reboot or interrupted join, the master resumes reconciliation from its durable record before reporting the member ready for placement on an affected resource. Require authenticated Core-to-Core calls, capability and identity checks, generation/idempotency rules, narrow member credential delivery, and safe retry/outage behavior. Until this phase every enrolled host remains the master of its own pool.
 2. Add existing NFS storage through the pool UI. Validate access, write permissions, identity, capacity, and mount health per host before marking it usable.
@@ -709,12 +778,26 @@ See [join guide](../guide/join-a-pool.md) and [QA note](../qa/2026-09-19-pool-me
 
 #### Pool authority transfer and master succession
 
-**Decision: project owner, 2026-09-14; planned, not implemented.** One design covers planned
+**Decision: project owner, 2026-09-14.** Planned master change and member eject are implemented in
+the working tree (status under *Transfer steps* below); manual promotion after permanent master
+loss and automatic succession remain planned and not implemented. *(Status superseded 2026-09-19:
+manual promotion is now implemented in the working tree too — see the note under the recovery
+decisions below. Automatic succession is still planned and not implemented, and both gates stay
+outstanding. The design decision this bullet records is unchanged.)* One design covers planned
 master change, member eject, manual promotion after permanent master loss
 ([Phase 7](#manual-recovery-after-permanent-host-loss)) and automatic succession. Phase 7 and
 [Phase 9](#9-optional-per-pool-ha) reference it; they do not redesign it.
 
-**Recovery decisions: project owner, 2026-09-19; planned, not implemented.**
+**Recovery decisions: project owner, 2026-09-19.** The decisions themselves are unchanged and are
+recorded below as the owner stated them. **Implementation status, 2026-09-19: fence-verified manual
+promotion and safe rejoin are implemented in the working tree** — the per-item status lines under
+*Member replica*, *Transfer steps* and *Restricted hosts* say what is covered and by what evidence.
+Automatic succession remains planned and not implemented. The implementation-only evidence stated
+below was superseded by scoped reviewed native results recorded in the
+[Phase 4 native acceptance record](../qa/2026-09-19-phase4-native-acceptance.md), including
+join/eject and promotion cases. Phase 4 and the initial manual-recovery gate are **closed for
+disposable virtual-lab scope** (2026-09-20); automatic succession and physical-scale gates remain
+planned/outstanding.
 
 - **Preserve the pool.** Promotion changes the master, not the pool ID. Preserve VM,
   repository and network identities, names and configuration. Do not recreate the pool or
@@ -748,6 +831,18 @@ master change, member eject, manual promotion after permanent master loss
   promoted; until then it is not an independent authority. Each Core reports its replica
   generation and freshness as observed state; Controller stores none of it. This is the
   recoverable copy required by Phase 7 item 2.
+  **Historical implementation status (2026-09-19): implemented in the working tree, native
+  acceptance outstanding.** The
+  master signs with the pool CA key, seals that key per member (ECDH from the member's certified
+  peer key, HKDF-SHA256 and AES-256-GCM, all stdlib), declares per-section digests so a truncated
+  copy is refused, and pushes on its probe tick whenever its authority content digest changed or a
+  member is behind. Members store `<state-dir>/pool-replica.json` at mode 0600 and act on nothing
+  in it; no code path in this release unwraps the sealed key. Inventory snapshots and SMB
+  credential receipts are deliberately not replicated, and no host reports the master's own
+  authority generation, so the Controller derives none. Verified by Go `-race` unit tests,
+  Controller tests and contract checks only. Later reviewed G1/S5/S6 evidence observes signed
+  replicas during scoped lifecycle cases; complete replica-push and master-restart acceptance,
+  including its remaining browser coverage, is still open.
 - **Transfer steps**, with the same authority and exclusion checks for every trigger:
   1. For a cooperating master, freeze authority writes (new placements, membership,
      storage/network and VM ownership changes); running guests continue.
@@ -763,6 +858,45 @@ master change, member eject, manual promotion after permanent master loss
      automatically rejoins only as a member after the reconciliation gates above. Eject is the
      same flow with the target staying master and the ejected host's membership removed at the
      new generation.
+  **Current status (2026-09-20): all six steps are implemented in the dirty working tree; full
+  acceptance is outstanding.** Steps 1, 2, 4, 5 and 6 cover the planned master change and the member eject for a
+  cooperating master. Step 3 and the promotion it gates are implemented too, as a candidate-driven
+  machine rather than a master-driven one: the promotion command goes to the surviving member,
+  which probes the old master itself, refuses outright if it answers and still holds the authority,
+  and otherwise produces a fence proof it made itself — an independently observed power-off of the
+  recorded profile's target, digest-bound to this pool, this excluded host, this operation and this
+  generation, at most fifteen minutes old. A returned fence agent status, a timeout, a missed
+  heartbeat or an operator assurance cannot construct one, and the whole proof is re-checked
+  immediately before activation. Scoped native promotion has observed external `virsh` power-off;
+  it does not establish physical-fence, workload-continuity or duplicate-writer safety. Two
+  deliberate differences from the wording above: step 5's membership move is carried by a small
+  pool-CA-signed re-point notice rather than a replica push, because a member cannot accept a
+  replica from a host it does not yet consider master, with the ordinary replica push following
+  immediately; and step 6 has no `demote` call — the outgoing master demotes itself on the new
+  master's signed re-point notice, returned with the accepted activation, so it acts on signed
+  evidence rather than on its own assumption. The read-only authority probe doubles as a pull-based
+  re-point offer, which is how a host that missed a push converges from whichever host it can reach
+  without trusting a stale one. The master now reports its own authority generation
+  (`managed.authority`), which is the absolute reference the member-replica ladder previously
+  lacked. Verified by in-process multi-host Go `-race` tests over the real mutual-TLS peer
+  transport, Controller lab tests, UI component tests and contract checks. Later scoped native and
+  browser evidence covers selected transfer, eject and promotion cases; the complete multi-host
+  recovery matrix remains open.
+- **Implementation note, 2026-09-19: replica supremacy was tightened after independent review, and
+  the tightening is not yet confirmed by the project owner.** The owner's recovery decisions above
+  are unchanged and are not restated here. What changed is a detail of how step 2's supremacy check
+  treats a host that does not answer. The closure plan's original wording let an unreachable host
+  pass that check and relied on step 3's fence to cover it. An independent review of the unreleased
+  work reproduced the consequence: with the master dead and the two surviving ready members
+  partitioned from each other, promoting each in turn made **both** of them master of the same pool.
+  An unreachable ready member holds the same authority replica the candidate does, so it could be
+  promoted in exactly the same way, and its silence proves nothing. The implemented rule now blocks
+  a promotion while such a member is unreachable **unless the same promotion fences it**, in which
+  case the operator is shown and must confirm every host that will be powered off, and the exclusion
+  proof covers each of them. A blocking host with no usable fence profile refuses the promotion
+  outright. This is stricter than the original wording and is **approved (OD-6, project owner,
+  2026-09-20)**: fail-closed; silence is never agreement. See
+  [the closure plan](2026-09-19-phase4-closure.md#decisions-for-the-project-owner).
 - **Future automatic succession**, deferred beyond the initial manual-promotion slice,
   elects a new master only with a strict quorum majority of current
   members (counted by the established pool quorum layer, not a Nex consensus), a verified fence
@@ -771,6 +905,23 @@ master change, member eject, manual promotion after permanent master loss
   promotion. Succession does not restart VMs; automatic restart keeps the Phase 9 HA gates.
 - **Health after promotion.** A new master re-collects fresh member access observations before
   reporting health (member access is memory-only, BUG-0158); the replica is never health evidence.
+- **Fence credentials travel sealed, and every ready member can open its own copy.** The host that
+  fences during a promotion is a surviving member, and it cannot be given the material after the
+  master it must fence is gone, so each recorded profile's material is sealed per member inside
+  that member's replica by the same primitive as the pool CA key. Nex Controller never holds it.
+  The consequence is owner-visible and is stated in the guide rather than hidden: any ready member
+  of a pool with recorded fence profiles can power off any profiled host, which is the same trust
+  the sealed pool CA key already places in a member. Admit only hosts you trust with it.
+- **Restricted hosts, and the limit that has no recovery.** A host that cannot prove it holds the
+  pool's current authority writes a durable restriction *before* any start path is exposed, refuses
+  every workload start and every authority write while keeping stop, console, local recovery and
+  reporting, and clears only on evidence. A restarted master restricts itself only when its pool
+  opted into fence-verified promotion by recording a usable profile for it. **Owner decision OD-5
+  (2026-09-19):** if such a master restarts while one other ready member is permanently dead, it
+  stays restricted. No force, override, "declare host lost" or timeout-based escape exists or may
+  be added, because none of them is evidence — an observation that a host is off does not prove it
+  never took the authority and does not survive it powering on again. The recovery is to bring the
+  dead host back or restore its Nex Core state.
 - **Placement approval is on the master.** Controller relays the operator's chosen host; the
   master Core validates and approves placement from its own records and fresh target-host
   preflight. Controller mirrors are presentation only. See
@@ -790,13 +941,12 @@ safe retries, reconnect and version compatibility on both sides when implementin
 **State owner: core** — the durable record is the member replica on each Core; a fresh Controller
 reads the active master's inventory.
 
-**Initial manual-recovery gate — outstanding (disposable lab):** planned handover on a
-healthy pool; operator-selected, fence-verified promotion in supported two- and multi-host
-pools; returning old master automatically rejoined only after reconciliation; interrupted
-transfer at each step; stale-host boot/autostart and conflicting VM ownership refused.
-Throughout, prove no duplicate writer or dual master, unchanged pool/resource identities,
-VM ownership and epochs preserved, unavailable disks reported without losing VM visibility,
-no health reported from the replica alone, and fresh Controller adoption of every pool setting.
+**Initial manual-recovery gate — closed for disposable virtual-lab scope (2026-09-20):** scoped
+reviewed evidence covers planned handover, operator-selected fence-verified promotion in two- and
+three-host disposable pools, returning-master restriction and safe rejoin, and selected interruption
+cases. Permanent limits (physical/BMC, five-host, package-install, authentic owner-conflict
+S6-12/16, OD-5 no-escape, broader duplicate-writer/workload continuity) are not claimed. See the
+[Phase 4 native acceptance record](../qa/2026-09-19-phase4-native-acceptance.md).
 
 **Future automatic-succession gate — outstanding:** master power-off on three hosts, quorum
 loss and fence failure, plus the same identity, rejoin and ownership checks above. This is

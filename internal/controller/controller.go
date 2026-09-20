@@ -32,22 +32,25 @@ type Config struct {
 	AlertDebounce time.Duration
 }
 type Controller struct {
-	db          *sql.DB
-	cfg         Config
-	mediaMu     sync.Mutex
-	mu          sync.Mutex
-	seen        map[string]time.Time
-	ca          *authority
-	lock        *os.File
-	loginGate   websecurity.LoginGate
-	observed    map[string]observationReceipt
-	credentials *credentialBroker
-	consoles    consoleHub
-	stats       statsHub // transient host stats channels
-	clusterOnce sync.Once
-	clusters    storageClusterBroker // transient storage-cluster report round-trips
-	stop        chan struct{}
-	stopped     chan struct{}
+	db           *sql.DB
+	cfg          Config
+	mediaMu      sync.Mutex
+	mu           sync.Mutex
+	seen         map[string]time.Time
+	ca           *authority
+	lock         *os.File
+	loginGate    websecurity.LoginGate
+	observed     map[string]observationReceipt
+	credentials  *credentialBroker
+	consoles     consoleHub
+	stats        statsHub // transient host stats channels
+	clusterOnce  sync.Once
+	clusters     storageClusterBroker // transient storage-cluster report round-trips
+	poolJoinOnce sync.Once
+	poolJoins    poolJoinBroker // transient pool-join invitation round-trips
+	joinScrubbed time.Time      // guarded by mu: last periodic pool-join invitation scrub
+	stop         chan struct{}
+	stopped      chan struct{}
 }
 
 func Open(cfg Config) (*Controller, error) {
@@ -196,6 +199,8 @@ func Open(cfg Config) (*Controller, error) {
 	}
 	c.cfg.Password = ""
 	success = true
+	// An invitation left in a stored command outlives the process that scheduled its scrub.
+	c.scrubPoolJoinInvitations()
 	go c.monitorHealth()
 	return c, nil
 }
@@ -276,6 +281,18 @@ func (c *Controller) Handler() http.Handler {
 	m.HandleFunc("GET /api/v1/sites", c.admin(c.sites))
 	m.HandleFunc("POST /api/v1/sites", c.admin(c.sites))
 	m.HandleFunc("GET /api/v1/pools", c.admin(c.pools))
+	m.HandleFunc("GET /api/v1/pools/{id}/members", c.admin(c.poolMembers))
+	m.HandleFunc("POST /api/v1/pools/{id}/members", c.admin(c.addPoolMember))
+	m.HandleFunc("GET /api/v1/pools/{id}/join-candidates", c.admin(c.poolJoinCandidates))
+	m.HandleFunc("POST /api/v1/pools/{id}/members/{host_id}/maintenance", c.admin(c.setPoolMaintenance))
+	m.HandleFunc("POST /api/v1/pools/{id}/master", c.admin(c.changePoolMaster))
+	m.HandleFunc("POST /api/v1/pools/{id}/master/cancel", c.admin(c.cancelPoolMasterChange))
+	m.HandleFunc("DELETE /api/v1/pools/{id}/members/{host_id}", c.admin(c.ejectPoolMember))
+	m.HandleFunc("POST /api/v1/pools/{id}/master/promote/preflight", c.admin(c.promotionPreflight))
+	m.HandleFunc("POST /api/v1/pools/{id}/master/promote", c.admin(c.promotePoolMaster))
+	m.HandleFunc("POST /api/v1/pools/{id}/members/{host_id}/fence-profile", c.admin(c.setPoolFenceProfile))
+	m.HandleFunc("GET /api/v1/hosts/{id}/network", c.admin(c.hostNetwork))
+	m.HandleFunc("POST /api/v1/hosts/{id}/network", c.admin(c.changeHostNetwork))
 	m.HandleFunc("GET /api/v1/hosts", c.admin(c.hosts))
 	m.HandleFunc("GET /api/v1/vms", c.admin(c.appliances))
 	m.HandleFunc("GET /api/v1/storage", c.admin(c.storage))
@@ -289,6 +306,7 @@ func (c *Controller) Handler() http.Handler {
 	m.HandleFunc("POST /api/v1/storage/{id}/update", c.admin(c.updateStorage))
 	m.HandleFunc("POST /api/v1/storage/{id}/recheck", c.admin(c.recheckStorage))
 	m.HandleFunc("POST /api/v1/storage/{id}/detach", c.admin(c.detachStorage))
+	m.HandleFunc("DELETE /api/v1/storage/{id}", c.admin(c.discardFailedStorage))
 	m.HandleFunc("POST /api/v1/storage/credentials", c.admin(c.storageCredentials))
 	m.HandleFunc("GET /api/v1/storage/credentials", c.admin(c.storageCredentialReceipts))
 	m.HandleFunc("GET /api/v1/storage/credentials/{request_id}", c.admin(c.storageCredentialStatus))
@@ -696,6 +714,7 @@ func (c *Controller) operation(w http.ResponseWriter, r *http.Request, user, csr
 	}
 	write(w, 202, op)
 }
+
 func (c *Controller) operations(w http.ResponseWriter, r *http.Request, user, csrf string) {
 	rows, err := c.db.Query("SELECT * FROM operations ORDER BY created_at DESC LIMIT 1000")
 	if err != nil {
