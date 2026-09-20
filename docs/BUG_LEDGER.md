@@ -5543,3 +5543,18 @@ Append resolved defects with their evidence and the approach to avoid.
   PR/push rerun is remaining evidence.
 - Avoid: Asserting ISO availability wording against a live host connection that
   earlier lab steps may have left reconnecting.
+
+## BUG-0399 — Push and PR Controller foundation labs ran together and starved cert rotation
+- Date: 2026-09-20
+- Symptom: Gitea PR run 4207 failed `rotated identity reports` while push run 4204 was
+  still in progress on the same commit. Agent had reconnected after earlier controller
+  restarts; libvirt never returned healthy within 15s.
+- Root cause: phase1 concurrency was keyed by `github.ref`, so `refs/heads/dev` and
+  `refs/pull/5/head` started two full controller-browser labs on one act_runner. Shared
+  CPU delayed post-rotation inventory past the default eventually budget.
+- Fix: One concurrency group `nex-controller-foundation` across refs (cancel in progress).
+  Raise the rotated-identity eventually timeout to 45s.
+- Regression: `tests.test_ci_security.BrowserArtifactTests` asserts the shared group in
+  both workflow copies. Hosted rerun after push is remaining evidence.
+- Avoid: Letting push and PR phase1 share a single Docker runner under different
+  concurrency keys, or keeping a 15s budget for post-rotation mTLS reporting under load.

@@ -69,6 +69,7 @@ class BrowserArtifactTests(unittest.TestCase):
                 gallery = workflow.index('website_controller_captures.py')
                 self.assertLess(smoke, gallery, 'storage UI smoke must run before gallery in the browser lane')
                 self.assertIn('cancel-in-progress: true', workflow)
+                self.assertIn('group: nex-controller-foundation', workflow)
                 # Browser lane must be first and must not wait on Go.
                 browser_job = workflow.index('\n  controller-browser:')
                 go_job = workflow.index('\n  go:')

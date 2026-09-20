@@ -91,6 +91,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   slow reload cannot leave the secret in the open form (BUG-0397).
 - Host ISO availability checks no longer treat a brief reconnect as missing transfer success
   during Controller foundation CI (BUG-0398).
+- Controller foundation CI no longer runs push and pull-request labs at once on the
+  shared runner, and certificate-rotation reporting gets a longer wait under load (BUG-0399).
 - Release credential checks no longer crash on an unset version when only deploy secrets are
   under test; ZFS-enabled builds still publish to the private forge and stay off the public
   download page.

@@ -264,7 +264,9 @@ def acceptance(lab, args):
     run(agent, 'status', '--state-dir', state_dir)
     assert state()['certificate_pem'] != old_cert and state()['host_id'] == host_id
     ap = lab.start('agent', *agent_args, env=env)
-    eventually(lambda: check_status('libvirt', 'healthy'), 'rotated identity reports')
+    # Rotation restarts the agent and re-establishes mTLS; under a shared runner
+    # the default 15s budget is not enough for healthy inventory to return.
+    eventually(lambda: check_status('libvirt', 'healthy'), 'rotated identity reports', timeout=45)
     lab.passed('certificate rotation retains host identity and authenticated reporting')
 
     if args.browser:

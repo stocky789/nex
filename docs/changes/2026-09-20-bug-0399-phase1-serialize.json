@@ -1,0 +1,37 @@
+{
+  "summary": "Serialize Controller foundation across push and PR refs on the shared runner, and allow longer for post-rotation inventory.",
+  "paths": [
+    ".github/workflows/phase1.yml",
+    ".gitea/workflows/phase1.yml",
+    "tests/integration/phase1.py",
+    "tests/test_ci_security.py",
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "CI concurrency and acceptance timing only.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core contract change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "CI reliability only.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable product state changed."
+  },
+  "verification": {
+    "method": "Unit test asserts shared concurrency group. Hosted push/PR after this change should no longer overlap two controller-browser labs.",
+    "evidence": [
+      "tests/test_ci_security.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

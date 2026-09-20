@@ -5,7 +5,9 @@ on:
       - '**'
   pull_request:
 concurrency:
-  group: phase1-${{ github.workflow }}-${{ github.ref }}
+  # One shared runner: push and PR on the same commit must not run two full
+  # controller-browser labs at once (runs 4204+4207). Serialize across refs.
+  group: nex-controller-foundation
   cancel-in-progress: true
 permissions:
   contents: read
