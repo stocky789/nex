@@ -1,0 +1,40 @@
+{
+  "summary": "Merge main into dev: keep 0.4.0 as the working version and retain the 0.3.6 private-forge ZFS release fix from main.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/guide/publish-a-release.md",
+    "docs/guide/remove-pool-network-or-iso.md",
+    "docs/plans/2026-09-09-package-updates.md",
+    "docs/changes/2026-09-19-version-0.3.6.json",
+    "docs/changes/2026-09-19-zfs-private-forge-release.json",
+    "docs/changes/2026-09-20-merge-main-into-dev.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "pages": [
+      "docs/guide/publish-a-release.md",
+      "docs/guide/remove-pool-network-or-iso.md"
+    ],
+    "reason": "Publish guide keeps 0.4.0 and private-forge vs public website wording from the merge."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Merge of release metadata and guide wording; no Controller/Core contract change."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "History merge only."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable product state."
+  },
+  "verification": {
+    "method": "Resolved conflicts favoring secrets-first deploy gate on release.yml and 0.4.0 version labels; unit tests for gitea-release, release-publish and phase1 concurrency passed.",
+    "evidence": [
+      "tests/test_gitea_release.py",
+      "tests/test_release_publish.py",
+      "CHANGELOG.md"
+    ]
+  }
+}

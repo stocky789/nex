@@ -222,6 +222,13 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   API-initiated starts; independent appliance domains and shared-storage permit handling are
   unchanged (BUG-0374).
 
+## [0.3.6] — 2026-09-19
+
+### Bug Fixes
+
+- Fixed Release builds failing after a successful ISO build when ZFS packages are present;
+  private forge releases publish again, and the public website stays blocked.
+
 ## [0.3.5] — 2026-09-19
 
 ### Minor Feature
