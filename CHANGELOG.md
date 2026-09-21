@@ -6,12 +6,25 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.1` →
-> Debian `0.4.1`).
+> development software. Builds use the newest numbered changelog heading (`0.4.2` →
+> Debian `0.4.2`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.2] — 2026-09-21
+
+> **Development working-tree record, not a published release.** Installer fix only; verified
+> with simulated disks and not yet installed on physical hardware.
+
+### Bug Fixes
+
+- Installing onto a disk that was used before, for example one member of a software RAID or LVM
+  storage from a previous hypervisor, no longer stops at the Disk step with "No root file
+  system". The installer now clears the old partitions, RAID membership and LVM from the selected
+  disk only. The other disks are not written; an array they still form is left degraded. The
+  installation log view now includes the partitioning log (BUG-0413).
 
 ## [0.4.1] — 2026-09-21
 

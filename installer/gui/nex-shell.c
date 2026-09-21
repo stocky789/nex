@@ -123,7 +123,7 @@ static void nex_view_log(GtkWidget *button, gpointer parent)
     GtkWidget *dialog, *scroll, *view, *caption;
     GtkTextBuffer *buffer;
     GString *text = g_string_new("");
-    const char *paths[] = { "/var/log/syslog", "/var/log/nex-installer-prepare.log" };
+    const char *paths[] = { "/var/log/syslog", "/var/log/partman", "/var/log/nex-installer-prepare.log" };
     unsigned int i;
     (void)button;
     for (i = 0; i < G_N_ELEMENTS(paths); i++) {

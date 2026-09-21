@@ -112,6 +112,11 @@ for entry in entries:
         assert entry == ['d-i', key, 'string', '/bin/sh /cdrom/nex/root-account.sh'], entry
     assert key not in ('preseed/run', 'auto-install/enable'), key
 assert entries.count(['d-i', 'preseed/early_command', 'string', '/bin/sh /cdrom/nex/root-account.sh']) == 1
+# BUG-0413: recheck.sh clears only the selected disk; partman's RAID removal zeroes every
+# array member, so it must never be answered for the operator.
+seed = Path('installer/gui/nex-config.c').read_text()
+assert 'partman-md/device_remove_md' not in seed, 'RAID removal would touch disks the operator did not select'
+assert '"/var/log/partman"' in Path('installer/gui/nex-shell.c').read_text(), 'View log must include the partman log'
 
 packages = Path('installer/packages.txt').read_text().split()
 assert len(packages) == len(set(packages)), 'Duplicate package'

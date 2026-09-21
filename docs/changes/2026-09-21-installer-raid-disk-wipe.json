@@ -1,0 +1,52 @@
+{
+  "summary": "Installer clears previous RAID/LVM/partition signatures from only the selected disk before partitioning, so a reused disk no longer fails with 'No root file system' (BUG-0413); View log includes /var/log/partman. Bumps the working version to 0.4.2. API impact: none.",
+  "paths": [
+    "installer/gui/recheck.sh",
+    "installer/gui/nex-shell.c",
+    "installer/check.sh",
+    "tests/integration/installer-handoff.py",
+    "docs/guide/install-nex-core.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-21-installer-raid-disk-wipe.json",
+    "CHANGELOG.md",
+    "docs/guide/software-updates.md",
+    "docs/guide/host-maintenance-mode.md",
+    "docs/guide/change-management-network.md",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/publish-a-release.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "installer/README.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The install guide now says a previously used disk is cleared (including RAID membership, with other members left unwritten and degraded), lists /var/log/partman in View log, and covers the 'No root file system' error.",
+    "pages": [
+      "docs/guide/install-nex-core.md",
+      "docs/guide/software-updates.md",
+      "docs/guide/host-maintenance-mode.md",
+      "docs/guide/change-management-network.md",
+      "docs/guide/join-a-pool.md",
+      "docs/guide/publish-a-release.md",
+      "docs/guide/pool-authority-and-recovery.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Installer-local partitioning behavior only; no Controller or Core contract is involved."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Installer defect fix within existing scope."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Adds no durable product state; the installer marker lives only in the installer's /run."
+  },
+  "verification": {
+    "method": "On 2026-09-21: python3 tests/integration/installer-handoff.py passed (4 checks, new RAID-member wipe scenario fails on the previous hook); bash installer/check.sh passed; gcc -fsyntax-only on nex-config.c passed. Simulated only: no ISO was rebuilt and no install on a physical disk with an old RAID array has been walked through yet.",
+    "evidence": [
+      "tests/integration/installer-handoff.py",
+      "installer/check.sh"
+    ]
+  }
+}

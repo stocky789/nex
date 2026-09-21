@@ -5886,3 +5886,36 @@ Append resolved defects with their evidence and the approach to avoid.
   open: on a push to `main` the Controller foundation and Release runs share that group and
   one cancels the other (runs 4255 and 4256); that needs a sequencing decision, not a
   trigger change.
+
+## BUG-0413 — A disk from a previous RAID install stopped with "No root file system"
+
+- Date: 2026-09-21
+- Symptom: On a physical server whose selected disk was one member of a four-disk software RAID
+  left by a previous hypervisor installation, the Disk step showed `No root file system is
+  defined. Please correct this from the partitioning menu.` after the operator had confirmed
+  the erase in the wizard.
+- Root cause: The wizard preseeds only automatic partitioning. partman then finds the old
+  array (and any LVM) on the disk and asks whether to remove it; when that question is not
+  answered yes, `device_remove_md`/`device_remove_lvm` return non-zero, and
+  `display.d/10initial_auto` ignores `autopartition`'s failure and exits 0. The preseeded
+  `choose_partition finish` then reports no root file system. VM checks only ever used blank disks.
+- Fix: The partman init hook `00nex-recheck` (`installer/gui/recheck.sh`), after the disk
+  identity recheck and before partman assembles arrays (`25md-devices`), stops any array that
+  holds the selected disk, zeroes the first and last MiB of each of its partitions and of the
+  whole disk, records a marker so a partman restart does not clear it again, and marks
+  partman's RAID/LVM scan as done so `25md-devices`/`26lvm-devices` do not reassemble the other
+  disks' leftover degraded array (which would also install mdadm and write its `mdadm.conf`
+  into the new host). Other member disks are not written. partman's own RAID removal is deliberately not preseeded: it zeroes
+  the superblocks of every member, which would break "Other disks are left untouched".
+  **View log** now includes `/var/log/partman`.
+- Regression: `python3 tests/integration/installer-handoff.py` — fake sysfs, file-backed
+  disks and an `mdadm` stub. With the selected disk in `md127` alongside `sdb3`, only `md127`
+  is stopped, the selected disk's partitions and table are zeroed, `sdb` is unmodified, and a
+  second run does not clear it again, and partman's scan markers are set. It fails on the old hook (`mdadm.log` never written) and
+  passes with the fix. `bash installer/check.sh` asserts that RAID removal stays unanswered and
+  that View log includes the partman log. Both run in `installer.yml` on the forge and hosted
+  copies. Run locally under the host `sh` and under the installer initrd's own busybox; no
+  VM install with a real multi-disk array or physical/iDRAC install has been exercised yet.
+  Independent review found the reassembly problem, which is fixed as above.
+- Avoid: Preseeding `partman-md/device_remove_md`: it clears RAID metadata from disks the
+  operator did not select. Treating a blank-VM-disk install as coverage for previously used disks.

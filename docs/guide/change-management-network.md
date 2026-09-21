@@ -2,7 +2,7 @@
 
 ## Status
 
-Development product 0.4.1. Change a Nex Core host's own management addressing — which interface
+Development product 0.4.2. Change a Nex Core host's own management addressing — which interface
 carries management, DHCP or a static address, an optional management VLAN tag, the default gateway
 and the DNS servers — from Nex Controller, in a staged flow with a timed rollback the **host**
 performs by itself: host detail → **Networking** tab → the **Management network** panel.

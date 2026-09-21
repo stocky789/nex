@@ -21,7 +21,7 @@ required, and the installed driver ISO is unchanged.
 
 - A locally built ISO and its matching SHA256 sidecar; see [build instructions](../../installer/README.md).
   External redistribution remains subject to the [release licensing gates](../LICENSING.md).
-  The current working `0.4.1` tree is not a released artifact; its ZFS-enabled images
+  The current working `0.4.2` tree is not a released artifact; its ZFS-enabled images
   are restricted to internal disposable labs.
 - An isolated disposable amd64 VM with at least 2 virtual CPUs, 4 GB RAM, and one blank 24 GB
   virtual disk. Do not attach real host disks or existing VM data disks.
@@ -105,6 +105,10 @@ required, and the installed driver ISO is unchanged.
    The GUI supports one writable, nonremovable whole SATA/SCSI, virtio, Xen or NVMe disk of at
    least 16 GiB (`sd…`, `vd…`, `xvd…`, `nvme…`). Installation media and partitions are not eligible.
    This path erases the selected disk and installs a whole-disk ext4 layout.
+   A disk that held a previous installation is cleared first, including its partitions, LVM
+   volumes and software RAID membership. If it was one member of a RAID array, the array is
+   stopped and only the selected disk is cleared; the other member disks are not written, and
+   the array they still form is degraded.
 7. On **Review and install**, check the host, every NIC, VLAN, and disk. Adapter names are
    bound to MAC addresses and become `nex0`, `nex1`, etc. on the installed host; the review
    shows each mapping. A tagged interface is named, for example, `nex0.100`.
@@ -125,7 +129,8 @@ required, and the installed driver ISO is unchanged.
    Packages are bundled; a mirror or working network is not required.
    The installation engine can still show error or recovery questions; do not accept an
    installation error as a completed host. On a reported failure, **View log** opens
-   the latest entries from `/var/log/syslog` and `/var/log/nex-installer-prepare.log`
+   the latest entries from `/var/log/syslog`, `/var/log/partman` and
+   `/var/log/nex-installer-prepare.log`
    (up to 128 KiB each); close it to return to the error and recovery controls.
    A missing log is reported as unavailable. Inspect diagnostics before restarting. If disk identity changes before partitioning,
    installation must stop rather than silently select another disk.
@@ -205,6 +210,8 @@ source; it may have no candidate until a compatible release is actually publishe
   adapter at all and continues offline rather than stopping. A displayed link state
   or saved address is not proof that the gateway or VLAN is reachable. Link unknown does
   not establish that the cable is unplugged; check the driver or virtual NIC attachment.
+- **No root file system:** partitioning did not create the installation layout. Open
+  **View log**, keep the `/var/log/partman` entries with the image checksum, and restart setup.
 - **No eligible disk or disk identity changed:** check the disposable disk attachment and size,
   then restart setup. Do not substitute another disk without reviewing its identity.
 - **Preparation failed:** use **Retry preparation**. If it fails again, retain the error and

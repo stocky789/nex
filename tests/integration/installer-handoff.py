@@ -37,3 +37,33 @@ with tempfile.TemporaryDirectory() as d:
  (p/'active').unlink()
  assert subprocess.run(['sh','-c',s],capture_output=True).returncode == 0
  print('PASS: direct partition hook fails closed while Nex setup is active and is a no-op when it is not')
+
+# BUG-0413: the selected disk held one member of a four-disk RAID from a previous install.
+# Only that disk is cleared (partitions and table); the array is stopped, never modified.
+with tempfile.TemporaryDirectory() as d:
+ p=Path(d); (p/'active').touch(); MiB=1024*1024
+ (p/'check').write_text('#!/bin/sh\nexit 0\n'); (p/'check').chmod(0o755)
+ (p/'bin').mkdir(); (p/'bin/mdadm').write_text(f'#!/bin/sh\necho "$@" >> {p}/mdadm.log\n'); (p/'bin/mdadm').chmod(0o755)
+ (p/'config.ini').write_text('[Host]\ndisk=/dev/sda\n')
+ (p/'mdstat').write_text('Personalities : [raid1]\nmd127 : active raid1 sdb3[1] sda3[0] sdc3[2] sdd3[3]\nmd126 : active raid1 sdb1[1] sdc1[0]\n')
+ layout={'sda':[('sda1',2048,8192),('sda3',10240,20480)],'sdb':[('sdb3',10240,20480)]}
+ for disk,parts in layout.items():
+  (p/'dev'/disk).parent.mkdir(exist_ok=True); (p/'dev'/disk).write_bytes(b'\xff'*(32*MiB))
+  (p/'sys/class/block'/disk).mkdir(parents=True); (p/'sys/class/block'/disk/'size').write_text(str(32*MiB//512))
+  for part,start,size in parts:
+   q=p/'sys/class/block'/disk/part; q.mkdir(); (q/'partition').write_text('1'); (q/'size').write_text(str(size))
+   (p/'dev'/part).write_bytes(b'\xff'*(size*512))
+ s=(Path('installer/gui/recheck.sh').read_text().replace('/run/nex-installer/',f'{p}/').replace('/usr/bin/nex-config',str(p/'check'))
+    .replace('SYS=/sys',f'SYS={p}/sys').replace('DEV=/dev',f'DEV={p}/dev').replace('MDSTAT=/proc/mdstat',f'MDSTAT={p}/mdstat').replace('PARTMAN=/var/lib/partman',f'PARTMAN={p}/partman'))
+ env=dict(os.environ,PATH=f'{p}/bin:'+os.environ['PATH'])
+ r=subprocess.run(['sh','-c',s],capture_output=True,text=True,env=env); assert r.returncode==0, r.stderr
+ assert (p/'mdadm.log').read_text()==f'--stop {p}/dev/md127\n', 'Only the array holding the selected disk is stopped'
+ assert (p/'partman/md').exists() and (p/'partman/lvm').exists(), 'partman must not reassemble the leftover array'
+ for dev in ('sda','sda1','sda3'):
+  b=(p/'dev'/dev).read_bytes(); n=min(MiB,len(b)//2)
+  assert b[:n]==bytes(n) and b[-n:]==bytes(n), f'{dev} signatures not cleared'
+ assert b'\xff' in (p/'dev/sda').read_bytes()[MiB:-MiB], 'Middle of the disk is not rewritten'
+ for dev in ('sdb','sdb3'): assert (p/'dev'/dev).read_bytes()==b'\xff'*len((p/'dev'/dev).read_bytes()), f'{dev} was modified'
+ (p/'dev/sda').write_bytes(b'\xff'*(32*MiB)); assert subprocess.run(['sh','-c',s],env=env).returncode==0
+ assert (p/'dev/sda').read_bytes()[:16]==b'\xff'*16, 'A partman restart must not clear the disk again'
+ print('PASS: partition hook clears only the selected RAID/LVM disk, once, and only stops its array')
