@@ -109,7 +109,7 @@ gboolean nex_network_validate(GKeyFile *c, GError **e)
     }
     g_hash_table_destroy(ips); g_hash_table_destroy(macs);
     g_strfreev(groups); g_strfreev(servers); g_free(management); g_free(dns);
-    return ok && found ? TRUE : fail(e, "Invalid NIC settings: check management, unique MAC/IP, IPv4 prefix, gateway and VLAN (0–4094).");
+    return ok && found ? TRUE : fail(e, "Invalid NIC settings: check management, unique MAC/IP, IPv4 prefix, gateway and VLAN (0-4094).");
 }
 static gboolean save(const char *root, const char *relative, const char *data, GError **error)
 {

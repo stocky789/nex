@@ -15,14 +15,21 @@ import re
 build = Path('installer/build.sh').read_text()
 bios = build.split("<<'BIOS'\n")[2].split('\nBIOS')[0]
 grub = build.split("<<'GRUB'\n")[1].split('\nGRUB')[0]
+
+
+def boot_entry(label):
+    """The BIOS and GRUB entries of one boot menu item."""
+    return (next(entry for entry in re.split(r'(?m)^label ', bios)[1:]
+                 if f'menu label {label}\n' in entry),
+            grub.split(f"menuentry '{label}' {{\n")[1].split('}')[0])
+
+
 # Both Nex modes boot the initrd carrying the Nex overlay, which supplies the wizard
 # and its embedded safe seed; only the cdebconf frontend differs. A mode booting the
 # untouched Debian initrd would silently install a different host.
 for label, frontend in [('GUI install - Nex Core', ''),
                         ('Minimal install - Nex Core (text)', 'newt')]:
-    b = next(entry for entry in re.split(r'(?m)^label ', bios)[1:]
-             if f'menu label {label}\n' in entry)
-    g = grub.split(f"menuentry '{label}' {{\n")[1].split('}')[0]
+    b, g = boot_entry(label)
     assert 'kernel /install.amd/vmlinuz' in b
     assert 'initrd=/install.amd/gtk/initrd.gz' in b
     assert 'linux /install.amd/vmlinuz' in g
@@ -33,12 +40,19 @@ for label, frontend in [('GUI install - Nex Core', ''),
     else:
         assert 'DEBIAN_FRONTEND=' not in b + g, 'the graphical mode selects its own frontend'
     assert 'auto=true' not in b + g
-# Serial and rescue keep the untouched Debian initrd and the shared media seed.
-assert 'preseed/file=/cdrom/preseed.cfg' in bios and 'preseed/file=/cdrom/preseed.cfg' in grub
+# Serial and rescue both boot the untouched Debian initrd, but only the serial
+# entries install: they carry the media seed. Rescue must reach a shell without
+# seeding anything, so a preseed argument there would change what it does.
+for entry in boot_entry('Install Nex Core (serial console ttyS0)'):
+    assert '/install.amd/initrd.gz' in entry and '/install.amd/gtk/initrd.gz' not in entry
+    assert 'preseed/file=/cdrom/preseed.cfg' in entry, 'the serial install needs the media seed'
+    assert 'console=ttyS0,115200n8' in entry
+for entry in boot_entry('Debian rescue mode'):
+    assert '/install.amd/initrd.gz' in entry and '/install.amd/gtk/initrd.gz' not in entry
+    assert 'preseed' not in entry, 'rescue must boot Debian unseeded'
+    assert 'rescue/enable=true' in entry
 assert 'timeout 0' in build and 'set timeout=-1' in grub
-assert 'console=ttyS0,115200n8' in bios and 'console=ttyS0,115200n8' in grub
-assert 'rescue/enable=true' in bios and 'rescue/enable=true' in grub
-print('PASS: BIOS/UEFI GUI and minimal text entries, shared preseed, serial/rescue, no timeout')
+print('PASS: BIOS/UEFI GUI and minimal text entries, serial media seed, unseeded rescue, no timeout')
 
 # Both wizards write the same handoff and nex-config remains the single validator.
 start = Path('installer/gui/start.sh').read_text()
@@ -48,10 +62,23 @@ gui = Path('installer/build-gui.sh').read_text()
 assert '/usr/lib/nex-installer/wizard-text' in start and '/usr/bin/nex-wizard' in start
 assert '"$nex_wizard"' in start, 'One setup loop must drive whichever frontend is running'
 assert 'nex-config --apply /run/nex-installer/config.ini' in start
+assert start.count('nex-config --apply') == 1, 'One apply site for both frontends'
 assert "install -m 755 installer/gui/wizard-text.sh" in gui and 'wizard-text.templates' in gui
 assert "assert (root / 'usr/lib/cdebconf/frontend/newt.so').is_file()" in gui
 assert '/run/nex-installer/config.ini' in wizard and '/usr/bin/nex-config' not in wizard, \
     'The text wizard writes the handoff; the shared setup loop applies it'
+assert '/usr/lib/nex-installer/validate-config' in wizard, \
+    'The text wizard must reject settings through nex-config, not a second validator'
+# These are printed on the raw Linux VT before bterm starts: the wizard and its
+# questions, and the rejection messages it and the shared setup loop relay from
+# nex-config. (nex-wizard.c is excluded: it only ever draws inside GTK.)
+for name in ('wizard-text.sh', 'wizard-text.templates', 'nex-network.c', 'nex-config.c'):
+    assert Path('installer/gui', name).read_text().isascii(), \
+        f'{name} must stay ASCII for the installer console'
+# BUG-0408: both frontends must enumerate adapters in the same order, or the
+# same machine gets different nex0..nexN names depending on the installer mode.
+assert 'g_ptr_array_sort(names, compare_names)' in Path('installer/gui/nex-wizard.c').read_text(), \
+    'The graphical wizard must sort /sys/class/net, like the text wizard glob'
 # The text frontend must not weaken the disk, account or network contract.
 assert 'MIN_SECTORS=33554432' in wizard
 assert 'sd*|vd*|xvd*|nvme*' in wizard

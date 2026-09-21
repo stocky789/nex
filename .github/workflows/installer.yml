@@ -51,7 +51,7 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends gcc pkg-config libglib2.0-dev python3 gzip dpkg-dev
+          sudo apt-get install --yes --no-install-recommends gcc pkg-config libglib2.0-dev python3 gzip dpkg-dev busybox
 
       - name: Check installer source contract
         run: bash installer/check.sh

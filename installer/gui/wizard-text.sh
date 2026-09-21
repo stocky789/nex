@@ -20,12 +20,24 @@ MOUNTS=$ROOT/proc/mounts
 SHARE=$ROOT/usr/share/nex-installer
 TIMEZONES=$SHARE/timezones
 PREPARE=$ROOT/usr/lib/nex-installer/prepare
+VALIDATE=$ROOT/usr/lib/nex-installer/validate-config # nex-config, validate only
 MIN_SECTORS=33554432 # 16 GiB in 512-byte sectors, the same floor nex-config enforces
-
-. "$ROOT/usr/share/debconf/confmodule"
+OFFLINE='Offline (no management network)' # the graphical wizard's wording
 
 umask 077
 mkdir -p "$STATE"
+
+# Hardware discovery is shared with the graphical wizard and is safe to repeat.
+# cdrom-detect, anna and hw-detect drive debconf themselves, so this must run
+# before a frontend exists: confmodule below re-executes this script under
+# cdebconf, and only that first pass, with no question on screen, prepares.
+if [ -z "${DEBIAN_HAS_FRONTEND-}" ] && [ ! -f "$STATE/prepared" ]; then
+    printf '%s\n' 'Detecting installation media, disks and network adapters...'
+    "$PREPARE" || true
+fi
+
+. "$ROOT/usr/share/debconf/confmodule"
+
 db_x_loadtemplatefile "$SHARE/wizard-text.templates" nex-installer
 db_capb backup
 db_settitle nex-installer/title
@@ -38,12 +50,6 @@ if [ -s "$STATE/error" ]; then
     db_go || true
 fi
 
-# Hardware discovery is shared with the graphical wizard and is safe to repeat.
-if [ ! -f "$STATE/prepared" ]; then
-    db_progress START 0 1 nex-installer/preparing
-    "$PREPARE" || true
-    db_progress STOP
-fi
 if [ ! -f "$STATE/prepared" ]; then
     db_subst nex-installer/failed detail "Hardware preparation did not finish. Details are in /var/log/nex-installer-prepare.log."
     db_fset nex-installer/failed seen false
@@ -80,7 +86,9 @@ setv() { eval "$1=\$2"; }
 # cdebconf separates Choices with commas, so a comma inside one would split it.
 nocomma() { printf '%s' "$1" | tr ',' ' '; }
 
-read_attr() { cat "$1" 2>/dev/null || true; }
+# sysfs pads serials and model names; nex-config compares stripped values, so a
+# kept space would look like the disk or adapter had been swapped.
+read_attr() { sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$1" 2>/dev/null || true; }
 
 # --------------------------------------------------------------------- discovery
 
@@ -89,9 +97,11 @@ for path in "$SYS"/class/net/*; do
     [ -e "$path/device" ] || continue
     nics="$nics ${path##*/}"
 done
+# A host with no adapter installs offline, exactly as the graphical wizard does.
 if [ -z "$nics" ]; then
-    fail_note nex-installer/failed "No network adapter was detected. Nex Core needs one management adapter."
-    exit 1
+    db_fset nex-installer/no-nic seen false
+    db_input critical nex-installer/no-nic || true
+    db_go || true
 fi
 
 # The disk holding the installation media is never an installation target.
@@ -144,11 +154,28 @@ step_hostname() {
 }
 
 step_keymap() {
-    db_set nex-installer/keymap "$(getv v_keymap)"
-    ask nex-installer/keymap || return 1
-    v_keymap=$RET
-    # Apply it now so the root password is typed on the layout just chosen.
-    ckbcomp "$v_keymap" 2>/dev/null | loadkeys - >/dev/null 2>&1 || true
+    while :; do
+        db_set nex-installer/keymap "$(getv v_keymap)"
+        ask nex-installer/keymap || return 1
+        v_keymap=$RET
+        # Apply it now so the root password is typed on the layout just chosen.
+        # The console keymaps carry no bare fr map, only the latin9 variant, and
+        # ckbcomp still exits 0 after printing its two header lines alone.
+        case $v_keymap in
+            fr) layout="fr latin9" ;;
+            *) layout=$v_keymap ;;
+        esac
+        # ckbcomp emits a UTF-8 keymap, but loadkeys parses U+201c and friends
+        # only in Unicode mode, which it otherwise takes from the console it
+        # opens; -u makes that explicit, so gb, de and es load on any console.
+        if map=$(ckbcomp $layout 2>/dev/null) &&
+            printf '%s\n' "$map" | grep -q '^keycode' &&
+            printf '%s\n' "$map" | loadkeys -u - >/dev/null 2>&1; then
+            return 0
+        fi
+        # Never let the root password be typed on a layout this console rejected.
+        fail_note nex-installer/keymap-error "The $v_keymap layout could not be applied to this console. Choose another layout."
+    done
 }
 
 step_tzarea() {
@@ -200,6 +227,7 @@ step_password() {
 }
 
 step_management() {
+    [ -z "$nics" ] && return "$SKIP"
     choices=
     for nic in $nics; do
         mac=$(read_attr "$SYS/class/net/$nic/address")
@@ -212,9 +240,10 @@ step_management() {
         entry=$(nocomma "$nic - $mac - $link")
         if [ -z "$choices" ]; then choices=$entry; else choices="$choices, $entry"; fi
     done
-    db_subst nex-installer/management choices "$choices"
+    # Offline stays last so the highlighted default is the first adapter.
+    db_subst nex-installer/management choices "$choices, $OFFLINE"
     ask nex-installer/management || return 1
-    v_management=${RET%% *}
+    if [ "$RET" = "$OFFLINE" ]; then v_management=; else v_management=${RET%% *}; fi
 }
 
 step_nic() {
@@ -223,11 +252,11 @@ step_nic() {
     mac=$(read_attr "$SYS/class/net/$nic/address")
     if [ "$nic" = "$v_management" ]; then
         choices="dhcp, static"
-        detail="$mac — management adapter: it becomes br0 and owns the default route and DNS."
+        detail="$mac - management adapter: it becomes br0 and owns the default route and DNS."
         default=dhcp
     else
         choices="disabled, dhcp, static"
-        detail="$mac — additional adapter: it is configured without a default route or DNS."
+        detail="$mac - additional adapter: it is configured without a default route or DNS."
         default=disabled
     fi
     db_subst nex-installer/mode nic "$nic"
@@ -247,9 +276,12 @@ step_nic() {
     fi
 
     db_subst nex-installer/vlan nic "$nic"
-    db_set nex-installer/vlan "$(getv "vlan_$key")"
+    # cdebconf falls back to the template default only while a question has no
+    # value at all, so prefill the untagged default rather than an empty string.
+    previous=$(getv "vlan_$key")
+    db_set nex-installer/vlan "${previous:-0}"
     ask nex-installer/vlan || return 1
-    setv "vlan_$key" "$RET"
+    setv "vlan_$key" "${RET:-0}"
 
     if [ "$mode" = static ]; then
         db_subst nex-installer/address nic "$nic"
@@ -295,19 +327,56 @@ step_erase() {
     v_disk_size=$((sectors * 512))
     v_disk_serial=$(read_attr "$SYS/class/block/$v_disk/device/serial")
     v_disk_dev=$(read_attr "$SYS/class/block/$v_disk/dev")
-    mode=$(getv "mode_$(varkey "$v_management")")
+    # A debconf substitution is one line, so every adapter is reviewed on one.
+    adapters=
+    for nic in $nics; do
+        key=$(varkey "$nic")
+        entry="$nic: $(getv "mode_$key")"
+        address=$(getv "address_$key")
+        gateway=$(getv "gateway_$key")
+        tag=$(getv "vlan_$key")
+        [ -n "$address" ] && entry="$entry $address"
+        [ -n "$gateway" ] && entry="$entry, gateway $gateway"
+        [ "${tag:-0}" = 0 ] || entry="$entry, VLAN $tag"
+        if [ -z "$adapters" ]; then adapters=$entry; else adapters="$adapters; $entry"; fi
+    done
+    if [ -n "$v_management" ]; then
+        management="$v_management ($(getv "mode_$(varkey "$v_management")"))"
+    else
+        management=Offline
+    fi
     db_subst nex-installer/erase disk "/dev/$v_disk"
     db_subst nex-installer/erase disksize "$((sectors / 2097152)) GiB ($v_disk_size bytes)"
     db_subst nex-installer/erase serial "${v_disk_serial:-not reported}"
     db_subst nex-installer/erase hostname "$v_hostname"
     db_subst nex-installer/erase timezone "$v_timezone"
     db_subst nex-installer/erase keymap "$v_keymap"
-    db_subst nex-installer/erase management "$v_management ($mode)"
+    db_subst nex-installer/erase management "$management"
+    db_subst nex-installer/erase adapters "${adapters:-none detected}"
     db_subst nex-installer/erase dns "${v_dns:-from DHCP or none}"
     # Never carry a previous confirmation forward into a changed selection.
     db_set nex-installer/erase false
     ask nex-installer/erase || return 1
     [ "$RET" = true ] || return 1
+}
+
+# The confirmed settings, validated by nex-config before any question is closed:
+# a rejection reports nex-config's own reason and returns to the answers, which
+# all stay filled in. Only a validated handoff leaves this wizard behind.
+step_validate() {
+    if ! write_config; then
+        rm -f "$STATE/config.ini.new"
+        fail_note nex-installer/failed "The installation settings could not be saved. No installation was started."
+        return 1
+    fi
+    if detail=$("$VALIDATE" "$STATE/config.ini" 2>&1 >/dev/null); then
+        return 0
+    fi
+    rm -f "$STATE/config.ini"
+    # A substitution must stay on one line; nex-config reports a single reason.
+    detail=$(printf '%s\n' "$detail" | grep -v '^[[:space:]]*$' | tail -n 1)
+    fail_note nex-installer/failed "${detail:-The installation settings were rejected. Review them and try again.}"
+    return 1
 }
 
 # ------------------------------------------------------------------------ handoff
@@ -360,7 +429,7 @@ v_disk_dev=
 
 steps="hostname keymap tzarea tzzone password management"
 for nic in $nics; do steps="$steps nic:$nic"; done
-steps="$steps dns disk erase"
+steps="$steps dns disk erase validate"
 
 set -- $steps
 total=$#
@@ -384,9 +453,4 @@ while [ "$index" -le "$total" ]; do
     fi
 done
 
-if ! write_config; then
-    rm -f "$STATE/config.ini.new"
-    fail_note nex-installer/failed "The installation settings could not be saved. No installation was started."
-    exit 1
-fi
 exit 0

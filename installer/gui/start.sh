@@ -24,8 +24,18 @@ if [ "$(debconf-get rescue/enable)" != true ]; then
             continue
         fi
         rm -rf /run/nex-installer/target
-        if ! /usr/bin/nex-config --apply /run/nex-installer/config.ini >> /var/log/nex-installer-prepare.log 2>&1; then
-            printf '%s\n' 'Configuration could not be applied. Review the settings and try again.' > /run/nex-installer/error
+        # Keep nex-config's own reason for the operator instead of a fixed
+        # string; its messages are static and name no setting value. The
+        # capture stays inside the protected run directory and still reaches
+        # the diagnostic log.
+        nex_apply_status=0
+        /usr/bin/nex-config --apply /run/nex-installer/config.ini \
+            >> /var/log/nex-installer-prepare.log 2> /run/nex-installer/apply-error || nex_apply_status=$?
+        cat /run/nex-installer/apply-error >> /var/log/nex-installer-prepare.log
+        nex_apply_detail=$(grep -v '^[[:space:]]*$' /run/nex-installer/apply-error | tail -n 1)
+        rm -f /run/nex-installer/apply-error
+        if [ "$nex_apply_status" != 0 ]; then
+            printf '%s\n' "${nex_apply_detail:-Configuration could not be applied. Review the settings and try again.}" > /run/nex-installer/error
             continue
         fi
         # Native seed import logs every input line, including password hashes.

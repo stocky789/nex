@@ -5636,3 +5636,145 @@ Append resolved defects with their evidence and the approach to avoid.
 - Avoid: Adding a dependency to `nex-core-local` without adding it to
   `installer/packages.txt`; the package is appended to the list after the closure is
   downloaded, so its own dependencies are never resolved by the ISO build.
+
+## BUG-0404 — Text wizard stored an empty VLAN, so pressing Enter produced an invalid handoff
+
+- Date: 2026-09-21
+- Symptom: In **Minimal install - Nex Core (text)**, the VLAN question appeared blank instead of
+  showing the untagged default. Accepting it with Enter wrote `vlan=` into
+  `/run/nex-installer/config.ini`, and `nex-config` then rejected the handoff, so the fastest
+  path through the wizard — answer nothing, accept every default — could not install.
+- Root cause: `step_nic` ran `db_set nex-installer/vlan "$(getv "vlan_$key")"`, which on the
+  first pass stores an empty string. cdebconf falls back to a template `Default:` only while a
+  question has no value at all, not when its value is empty, so the template's `0` was never
+  used and an empty answer was stored verbatim.
+- Fix: `installer/gui/wizard-text.sh` prefills the previous answer or `0`
+  (`db_set nex-installer/vlan "${previous:-0}"`) and stores an empty answer as `0`.
+- Regression: `python3 tests/integration/installer-text-wizard.py`, scenario
+  `default_answers`, answers every question with its prefilled value and asserts the decoded
+  handoff has `vlan:eth0 == '0'` and that the real `nex_network_validate` accepts it. CI already
+  runs this file on every push and pull request (`.github/workflows/installer.yml`, mirrored in
+  `.gitea/workflows/installer.yml`).
+- Avoid: Treating a debconf template `Default:` as a fallback for an empty stored value. Prefill
+  the value you want the operator to be able to accept.
+
+## BUG-0405 — French console layout was never applied, so the root password was typed on US
+
+- Date: 2026-09-21
+- Symptom: Choosing **French** in the text wizard left the console on the US layout. The root
+  password was therefore typed, unseen, on a different layout from the one recorded in the
+  handoff, and the installed host booted French — locking root out of its own console.
+- Root cause: `step_keymap` ran `ckbcomp "$v_keymap" | loadkeys - || true`. The installer's
+  console keymaps carry no bare `fr` map, only the `fr:latin9` variant, and `ckbcomp fr` exits
+  `0` after printing its two header lines and no key definitions, so `loadkeys` loaded an empty
+  map and the `|| true` swallowed the outcome. `us`, `gb`, `de` and `es` each produce a full map
+  under their bare names, which is why only French failed. Confirmed directly against the
+  extracted trixie graphical initrd, read-only: `ckbcomp fr` printed 0 `keycode` lines,
+  `ckbcomp fr latin9` printed 252, and `us`/`gb`/`de`/`es` printed 106/283/284/284.
+- Fix: `installer/gui/wizard-text.sh` maps `fr` to the `fr latin9` arguments (the other four keep
+  their bare names) and treats the layout as applied only when `ckbcomp` exits 0, its output
+  contains at least one line beginning with `keycode`, and `loadkeys` exits 0. Otherwise the new
+  `nex-installer/keymap-error` template is shown and the layout question is asked again, so the
+  password question is unreachable until a layout was applied — the same gate
+  `nex-wizard.c`'s `keyboard_ready` already enforced graphically. The handoff still records the
+  bare layout name. The map is loaded with `loadkeys -u`: `ckbcomp` emits UTF-8 keysyms, and
+  `loadkeys` accepts `U+201c` and friends only in Unicode mode, which it otherwise infers from
+  the console it opens. Since the gate now blocks the installation, leaving that to the console
+  mode would have refused `gb`, `de` and `es` forever on a console that is not `K_UNICODE`;
+  `kbd-mode` is absent from `install.amd/gtk/initrd.gz`, so nothing in the boot path sets that
+  mode explicitly. Measured with kbd 2.10.0 against maps captured from the initrd's own
+  `ckbcomp`: `gb`/`de`/`es` fail `loadkeys -b` (`unknown keysym
+  'left_double_quotation_mark'`) and all five layouts pass `loadkeys -u -b`.
+- Regression: `python3 tests/integration/installer-text-wizard.py`, scenarios
+  `keymap_arguments` (asserts `fr` is requested as `fr latin9`, that `loadkeys` is invoked as
+  `-u -`, and that the handoff still says
+  `keymap=fr`), `keymap_empty_map_retried` (a layout that expands to no key definitions) and
+  `keymap_load_failure_retried` (a layout `loadkeys` rejects); the last two assert the error is
+  shown, the question is asked again, and the password question comes only after it. Run by CI
+  as above.
+- Avoid: `|| true` on a step whose failure changes what the operator is about to type, and
+  trusting an exit status from a filter that can succeed while producing nothing. Check the
+  output, not just the status.
+
+## BUG-0406 — Padded sysfs values reached the handoff, so disk identity looked changed forever
+
+- Date: 2026-09-21
+- Symptom: On hardware whose sysfs serial or model is space padded — NVMe serials and many SCSI
+  models are — a text-mode installation failed its identity recheck with `Disk serial changed;
+  select the disk again.` and could not be completed, however often it was retried.
+- Root cause: `read_attr` was `cat "$1"`, so the padding was kept, and GKeyFile preserves
+  trailing spaces in a value. `nex-config` compares the handoff against a `g_strstrip()`ed read
+  of the same sysfs attribute, so the two never matched. The graphical wizard reads through
+  `read_sys()`, which strips, so only the text mode was affected.
+- Fix: `read_attr` in `installer/gui/wizard-text.sh` strips leading and trailing whitespace from
+  every sysfs value, in the one shared reader rather than at each call site, so MAC addresses and
+  models are covered as well as serials.
+- Regression: `python3 tests/integration/installer-text-wizard.py`, scenario
+  `sysfs_values_trimmed`, builds a fixture whose serial, model and MAC are padded and asserts the
+  handoff contains `disk_serial=TESTSERIAL1` and `mac=52:54:00:aa:bb:01` and that the review shows
+  the trimmed serial. Run by CI as above.
+- Avoid: Copying a sysfs attribute into a comparison key without stripping it, and fixing such a
+  value at one call site when every caller goes through one reader.
+
+## BUG-0407 — A host with no network adapter could not be installed in text mode at all
+
+- Date: 2026-09-21
+- Symptom: On a machine with no detected network adapter, the text wizard showed
+  `No network adapter was detected. Nex Core needs one management adapter.` and exited. The
+  shared setup loop in `start.sh` restarted it, so the same error reappeared indefinitely and the
+  machine could not be installed, although the graphical wizard installs such a host offline.
+- Root cause: `wizard-text.sh` treated an empty adapter list as fatal (`fail_note` then `exit 1`)
+  and offered no offline choice at the management question, so it refused an installation the
+  graphical wizard accepts. `start.sh` restarts the wizard on any non-zero exit, turning the
+  refusal into a loop.
+- Fix: The wizard shows the new `nex-installer/no-nic` note, skips the management question and
+  installs offline with an empty `management=`, matching what `nex-wizard.c`'s `collect()` writes
+  for the same choice. The management question also gained `Offline (no management network)` as
+  its last choice, so an operator with adapters can choose an offline install as well; every
+  adapter then offers `disabled`/`dhcp`/`static` and no gateway is asked, because only a
+  management adapter may carry a default route.
+- Regression: `python3 tests/integration/installer-text-wizard.py`, scenarios
+  `no_network_adapter` (fixture with no adapter: the note is shown, the management question is
+  not asked, the review reports `Offline`, the handoff matches the expected offline file and the
+  real `nex_network_validate` accepts it) and `offline_management` (adapters present, offline
+  chosen). Run by CI as above.
+- Avoid: Letting a frontend refuse an installation the other frontend accepts, and exiting
+  non-zero from a step a supervising loop will simply run again — a refusal that repeats forever
+  is worse than the refusal.
+
+## BUG-0408 — The same machine got different `nexN` adapter names in the two installer modes
+
+- Date: 2026-09-21
+- Symptom: Installing the same host graphically and in text mode could produce different
+  `nex0`..`nexN` names for the same physical adapters, so the two modes did not install the same
+  host and an operator comparing them found the names swapped.
+- Root cause: `nex-network.c` assigns `nexN` by the position of each `[NIC:*]` group in the
+  handoff. `wizard-text.sh` enumerates `/sys/class/net/*` in the shell's sorted glob order, while
+  `nex-wizard.c`'s `discover()` used `g_dir_read_name()`, which returns raw readdir order — an
+  arbitrary order that depends on the directory's on-disk layout, not on the adapter names.
+- Fix: `discover()` collects the names first and sorts them with `strcmp` before building `nics`,
+  so both frontends group the adapters in the same order.
+- Regression: `bash installer/check.sh` asserts
+  `g_ptr_array_sort(names, compare_names)` is present in `installer/gui/nex-wizard.c`, so
+  reverting to readdir order fails the job CI already runs
+  (`.github/workflows/installer.yml`, mirrored in `.gitea/workflows/installer.yml`). It is a
+  source assertion, not a behavioural one: no automated check runs the graphical wizard.
+- Avoid: Deriving a durable identity from a directory read order. If two code paths must agree on
+  an ordering, both must impose one.
+
+> BUG-0404 to BUG-0408 were found in pre-merge review of the unreleased text wizard, before any
+> ISO carrying it was built. Their regression evidence is a scripted simulation: the scenarios
+> above drive the wizard with a stand-in for cdebconf and stand-ins for `ckbcomp`, `loadkeys`,
+> `prepare` and `nex-config`, under both `/bin/sh` and `busybox ash`. Red-to-green was recorded on
+> 2026-09-21: `installer/gui/wizard-text.sh` and `installer/gui/wizard-text.templates` were
+> restored from the pre-fix commit into a scratch tree and the committed
+> `tests/integration/installer-text-wizard.py` was run against them unchanged. It exited 1 with
+> `default_answers`, `erase_summary`, `sysfs_values_trimmed`, `keymap_arguments`,
+> `keymap_empty_map_retried`, `keymap_load_failure_retried`, `rejected_settings_keep_answers`,
+> `offline_management`, `no_network_adapter`, `prepare_runs_before_frontend` and `pure_ascii`
+> failing, and only `navigation_and_handoff`, `prepare_failure_stops_setup`,
+> `abandoned_setup_leaves_no_handoff` and `templates_exist` passing; against the fixed wizard all
+> 28 scenarios pass. BUG-0408 is the exception: its check is a source assertion in
+> `installer/check.sh`, because nothing runs the graphical wizard. Booting a rebuilt ISO and
+> completing a text-mode installation, on real hardware and a real console, remains outstanding
+> evidence for all five.

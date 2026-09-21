@@ -109,12 +109,18 @@ Both frontends write the same private `/run/nex-installer/config.ini` and both a
 by the same `nex-config`, so validation, the staged `/etc`, the generated debconf answers
 and the installed host are identical. The text frontend is
 `installer/gui/wizard-text.sh` with `installer/gui/wizard-text.templates`; it asks host,
-keyboard, timezone, password, management adapter, per-adapter IPv4/VLAN, DNS, disk and the
-erase confirmation, supports **Go Back**, and never partitions or configures the running
-machine. `tests/integration/installer-text-wizard.py` drives it against a fixture machine.
+keyboard, timezone, password, management adapter (including the same offline choice), per-adapter
+IPv4/VLAN, DNS, disk and the erase confirmation, supports **Go Back**, and never partitions or
+configures the running machine. It runs the shared hardware preparation before its own question
+frontend exists, so the backend detection steps keep their own screen, and it has `nex-config`
+validate the settings before it finishes: a rejection reports `nex-config`'s own reason, removes
+the handoff and returns to the questions with every answer retained.
+`tests/integration/installer-text-wizard.py` drives it against a fixture machine.
 
 A safe seed is embedded in the initrd both wizard modes boot, avoiding the routine
-file-preseed loading screen; the serial and rescue entries keep the shared media seed.
+file-preseed loading screen. The serial entries boot the untouched Debian initrd with the
+media seed (`preseed/file=/cdrom/preseed.cfg`); the rescue entries boot it unseeded, so
+rescue reaches a shell without any installation answers preloaded.
 The pinned cdebconf frontend remains for installation progress and native backend
 errors/recovery questions. It is not the primary configuration workflow. Hardware
 preparation failures remain visible and retryable.

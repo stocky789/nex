@@ -287,11 +287,17 @@ static gboolean installation_media(const gchar *name)
     }
     g_strfreev(lines); g_free(mounts); return found;
 }
+static gint compare_names(gconstpointer a, gconstpointer b) { return strcmp(*(const gchar **)a, *(const gchar **)b); }
 static void discover(void)
 {
     GDir *dir; const gchar *name; gchar *path, *s, *group, *size, *model, *text;
+    GPtrArray *names = g_ptr_array_new_with_free_func(g_free); guint i;
     dir = g_dir_open("/sys/class/net", 0, NULL);
-    while (dir && (name = g_dir_read_name(dir))) {
+    while (dir && (name = g_dir_read_name(dir))) g_ptr_array_add(names, g_strdup(name));
+    if (dir) g_dir_close(dir);
+    g_ptr_array_sort(names, compare_names); /* same order as the text wizard's sorted glob, so nex0..nexN match in both frontends */
+    for (i = 0; i < names->len; i++) {
+        name = g_ptr_array_index(names, i);
         path = g_strdup_printf("/sys/class/net/%s/device", name);
         if (!g_file_test(path, G_FILE_TEST_EXISTS)) { g_free(path); continue; } g_free(path);
         g_ptr_array_add(nics, g_strdup(name)); append_device(nic_list, name, nics->len - 1);
@@ -302,7 +308,7 @@ static void discover(void)
         g_key_file_set_string(config, group, "address", ""); g_key_file_set_string(config, group, "gateway", "");
         g_free(group); g_free(s);
     }
-    if (dir) g_dir_close(dir);
+    g_ptr_array_free(names, TRUE);
     dir = g_dir_open("/sys/class/block", 0, NULL);
     while (dir && (name = g_dir_read_name(dir))) {
         gboolean skip;

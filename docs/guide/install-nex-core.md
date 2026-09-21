@@ -129,16 +129,29 @@ required, and the installed driver ISO is unchanged.
    (up to 128 KiB each); close it to return to the error and recovery controls.
    A missing log is reported as unavailable. Inspect diagnostics before restarting. If disk identity changes before partitioning,
    installation must stop rather than silently select another disk.
-9. For **Minimal install**, answer the same questions in a keyboard-only interface: host name,
-   keyboard layout, timezone area and timezone, root password and confirmation, management
-   adapter, then each adapter's IPv4 mode, VLAN, address and gateway, DNS servers, and the
-   installation disk. Use **Go Back** to correct an earlier answer. The last screen reviews
-   every setting, names the disk and asks whether to erase it; it defaults to no and resets
-   whenever you change the disk. The same rules apply as in the graphical wizard: at least
-   eight password characters, only writable nonremovable disks of at least 16 GiB, never the
-   installation media, and one VLAN per adapter with the gateway on the management adapter
-   only. There are no separate partitioning or GRUB questions; answering yes to the erase
-   confirmation starts the installation.
+9. For **Minimal install**, the console first reports `Detecting installation media, disks and
+   network adapters...` while the machine is examined, then the same questions are asked in a
+   keyboard-only interface: host name, keyboard layout, timezone area and timezone (no zone
+   question for UTC), root password and confirmation, management adapter, then each adapter's
+   IPv4 mode, VLAN ID, address and gateway, DNS servers, and the installation disk. Use
+   **Go Back** to correct an earlier answer. The keyboard layout is applied to the console as
+   soon as you choose it; if this console cannot load it, **Keyboard layout not applied**
+   appears and the layout question is asked again, so the root password is never typed on a
+   layout that was not applied. **VLAN ID** is prefilled with `0`, so pressing Enter leaves
+   that adapter untagged. The management adapter list names each detected adapter with its MAC
+   address and link state and ends with **Offline (no management network)**, the same choice
+   the graphical wizard offers; choosing it installs without a management network, lets every
+   adapter be disabled and asks no gateway question. A machine with no detected adapter shows
+   **No network adapter was detected**, skips the management question and installs offline.
+   The last screen reviews every setting, including an **Adapters:** line giving each adapter's
+   mode, address, gateway and VLAN, names the disk and asks whether to erase it; it defaults to
+   no and resets whenever you change the disk. The same rules apply as in the graphical wizard:
+   at least eight password characters, only writable nonremovable disks of at least 16 GiB,
+   never the installation media, and one VLAN per adapter with the gateway on the management
+   adapter only. Answering yes checks the complete settings before anything is written: if they
+   are rejected, the reason is shown, nothing is erased, and the questions return with every
+   answer still filled in, so you correct the named setting and confirm the erase again. There
+   are no separate partitioning or GRUB questions; accepted settings start the installation.
 10. In the GUI, wait for **Nex Core installation complete**, eject the ISO and choose **Restart now**
     to boot the installed disk. Apart from the installer's **Screenshot** button, **Restart now**
     is the only action on that screen: the disk has already been written, so there is nothing to
@@ -176,13 +189,20 @@ source; it may have no candidate until a compatible release is actually publishe
 - **Checksum fails:** stop and obtain or rebuild a matching ISO/sidecar pair; do not ignore it.
 - **Timezone is not listed:** choose the appropriate area first, then select a nearby city
   using the same timezone rules, or choose `UTC` if appropriate.
+- **Keyboard layout not applied:** this console could not load the layout you chose. Choose
+  another layout when the question returns. The installation is not affected, and the root
+  password is only requested once a layout has actually been applied.
 - **Host settings rejected:** check the hostname, supported timezone and keyboard. Both modes
   require at least eight password characters with identical confirmation and ask again on a
-  mismatch.
+  mismatch. In minimal installation the rejection names its own reason and nothing is erased;
+  the questions come back with your answers still filled in, so correct only the setting named
+  and confirm the erase again.
 - **Invalid NIC settings:** check for duplicate addresses, valid IPv4 prefixes, VLAN range,
   and a gateway only on the enabled management adapter. Return to each NIC and correct it.
 - **No adapters detected, No link or Link unknown:** verify the VM NIC attachment or physical driver support.
-  Install offline if appropriate, then recover from the local console. A displayed link state
+  Install offline if appropriate, then recover from the local console. Both modes offer
+  **Offline (no management network)**, and minimal installation reports a machine with no
+  adapter at all and continues offline rather than stopping. A displayed link state
   or saved address is not proof that the gateway or VLAN is reachable. Link unknown does
   not establish that the cable is unplugged; check the driver or virtual NIC attachment.
 - **No eligible disk or disk identity changed:** check the disposable disk attachment and size,
@@ -228,9 +248,14 @@ longer asks.
 
 The text wizard's question order, **Go Back** navigation, device filtering and the settings
 handoff it writes are covered by `tests/integration/installer-text-wizard.py`, which drives the
-wizard against a fixture machine and decodes the handoff the way `nex-config` reads it. That is
-a source-level check: a booted ISO installation through the text interface, and its installed
-networking, remain unverified.
+wizard against a fixture machine and decodes the handoff the way `nex-config` reads it. As of
+2026-09-21 it also covers the untagged VLAN default, the keyboard layout that cannot be applied
+and is asked again before the password, the offline choice, a machine with no adapter, the
+per-adapter review line, and a rejected settings check that keeps every answer. That is a
+simulated source-level check: the questions are answered by a script against a stand-in for the
+installer's question system, with stand-ins for the keyboard and validation tools, so real
+console rendering, real keyboard loading, real disk hardware, a booted ISO installation through
+the text interface and its installed networking all remain unverified.
 
 The [fresh local installation](../qa/fresh-install/checks.md) covers a graphical BIOS
 installation onto a blank disk through Controller deployment. Installer details are recorded in

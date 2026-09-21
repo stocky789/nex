@@ -29,6 +29,18 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   questions and produced a host with different networking. The serial console entry still
   runs Debian's questions.
 
+  It offers the same **Offline (no management network)** choice as the graphical installer, and
+  a machine with no network adapter is told so and installed offline instead of setup refusing
+  to start. The keyboard layout must actually be applied to the console before the root password
+  is requested; a layout this console cannot load is reported and asked again. The VLAN question
+  is prefilled with `0`, so pressing Enter leaves an adapter untagged. The final review lists
+  every adapter's mode, address, gateway and VLAN alongside the disk. Answering yes checks the
+  complete settings before anything is written: a rejection names its own reason, erases nothing
+  and returns to the questions with every answer still filled in. Hardware detection now runs
+  before the questions start, so the detection steps no longer interrupt a question on screen.
+  Both installers list network adapters in the same order, so a machine gets the same `nexN`
+  interface names whichever mode installs it.
+
 ### Bug Fixes
 
 - Installation no longer fails part way through with "nex-core-local : Depends: vlan but it

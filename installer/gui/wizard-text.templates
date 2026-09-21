@@ -2,10 +2,6 @@ Template: nex-installer/title
 Type: text
 Description: Nex Core setup
 
-Template: nex-installer/preparing
-Type: text
-Description: Detecting installation media, disks and network adapters...
-
 Template: nex-installer/failed
 Type: error
 Description: Setup did not finish
@@ -25,6 +21,11 @@ Choices: us, gb, de, fr, es
 Default: us
 Description: Keyboard layout:
  The layout is applied to this console immediately and installed on the host.
+
+Template: nex-installer/keymap-error
+Type: error
+Description: Keyboard layout not applied
+ ${detail}
 
 Template: nex-installer/timezone-area
 Type: select
@@ -61,6 +62,15 @@ Description: Management adapter:
  This adapter becomes the port of bridge br0 on the installed host and is the
  only interface that owns the default route and DNS. Other adapters can be
  configured without a gateway.
+ .
+ Choose Offline to install without a management network. Adapters can still be
+ configured, and networking can be set up locally after the host reboots.
+
+Template: nex-installer/no-nic
+Type: note
+Description: No network adapter was detected
+ Nex Core installs offline on this host. Configure networking locally after the
+ host reboots, or attach an adapter and start setup again.
 
 Template: nex-installer/mode
 Type: select
@@ -119,6 +129,7 @@ Description: Erase ${disk} and install Nex Core?
  Keyboard layout: ${keymap}
  .
  Management adapter: ${management}
+ Adapters: ${adapters}
  DNS servers: ${dns}
  .
  Installation disk: ${disk}
