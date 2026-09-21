@@ -5611,7 +5611,87 @@ Append resolved defects with their evidence and the approach to avoid.
 - Avoid: Pinning binary apt through an isolated sources.list without giving later
   `apt-get source` steps the matching deb-src URIs.
 
-## BUG-0403 — ISO install failed: nex-core-local depends on vlan, which the media never carried
+## BUG-0403 — docs/API.md claimed one maintenance refusal sentence where four exist
+
+- Date: 2026-09-21
+- Symptom: A native three-host lab placement onto a drained host returned
+  `409 the selected host is in maintenance mode; …`, but `docs/API.md` stated that
+  "every refusal carries the one sentence" `the selected VM host is in maintenance
+  mode; …`. A reader of the API reference could reasonably match on the documented
+  text and never see it on the commonest path.
+- Root cause: A documentation defect only. The implementation is deliberate and
+  correct: the master's authoritative refusal, the Controller's advisory
+  pre-dispatch check, the drained host's libvirt-hook refusal and the
+  autostart-skip log each name a different actor, and `docs/api/openapi.json`
+  already documents the first two together on the three VM routes, spelling out
+  that the Controller's is "presentation and early failure only" while "the
+  authoritative refusal is the master's own". `docs/API.md` prose had simply not
+  kept up with that.
+- Fix: `docs/API.md` now scopes the one sentence to refusals the master itself
+  decides and lists the other three with the actor each belongs to, plus an explicit
+  note not to collapse them.
+- Regression: `tests.test_api_contract.PoolMaintenanceContractTests`, which already
+  pins every literal against the place it is documented, still passes; it is the
+  check that would fail if any of these sentences moved.
+- Avoid: "Fixing" this by making the Controller emit the master's sentence. That was
+  tried first and reverted: it erases the advisory/authoritative distinction, breaks
+  the three openapi.json descriptions that explain it, and leaves an operator unable
+  to tell a Controller pre-check from the master's decision. Differing wording here
+  is the design, not drift.
+
+## BUG-0404 — Cluster lab guard aborted on the package set its own fixture seeds
+
+- Date: 2026-09-21
+- Symptom: `tests/integration/cluster_ha_lab.py --prepare` failed at
+  `prepare_pristine_corosync()` for the first Core host, then `cleanup()` raised
+  `refusing a reused or foreign PID` and left the remaining fixture VMs running.
+- Root cause: The guard ran `virsh` and `pcs` unconditionally and stopped
+  `nex-cluster-local.service`, none of which the same file's `seed()` installs, so
+  under `set -eu` each ended `prepare()` before any check was evaluated. It also
+  named all four units in one `systemctl stop` with corosync ahead of pacemaker;
+  systemd declares no ordering between them, so they stopped concurrently and
+  corosync went away under pacemaker, which then never finished stopping.
+- Fix: Absence guards reach a tool only behind `command -v`, because an absent tool
+  means the condition cannot be occurring; pacemaker resources fall back to the CIB
+  when `pcs` is absent, since Debian's pacemaker does not depend on
+  pacemaker-cli-utils. Units are stopped one at a time in cluster order (resource
+  manager, lock manager, messaging), each bounded by `timeout` and confirmed down
+  before the next. The existing is-active sweep still fails closed.
+- Regression: `tests.test_cluster_ha_lab.PristineCorosyncGuardTests`, six checks
+  against `pristine_corosync_command()`, which was extracted so the script's shape
+  is testable without a lab. Four of the six fail against the original command;
+  verified by running the suite against a reconstruction of it. Natively, the fixed
+  guard completed on a Core host with no nested guests and correctly refused two
+  hosts that were running guests, with `running-nested-vm`.
+- Avoid: Treating "the tool errored" as "the dangerous condition is absent", and
+  relying on systemd to order units that declare no dependency on each other.
+
+## BUG-0405 — An invalid VM definition was refused without naming the field
+
+- Date: 2026-09-21
+- Symptom: `POST /api/v1/vms` carrying `revision: 7` (creation requires 0) was
+  accepted with `202`, then failed asynchronously. On the master the operation read
+  `VM placement preflight is invalid`; when the target was a member it read
+  `pool master refused VM placement: VM placement preflight refused: selected VM
+  host refused placement observation`. Neither named the field, and the member form
+  did not even indicate that the cause was validation.
+- Root cause: `placementCommand()` returned a bool, so every validation cause
+  collapsed into one message. `PoolPlacementHandler` then answered an invalid
+  command with a plain-text `http.Error`, which the master cannot decode into
+  `poolPlacementReply.Error`, so it fell back to its generic sentence.
+- Fix: `placementCommandError()` returns the underlying
+  `vmhost.ValidateManagedCommand` error; `localPoolVMPlacement` wraps it; and every
+  refusal `PoolPlacementHandler` makes, including auth and method, is emitted in the
+  JSON shape the master already decodes.
+- Regression: `internal/agent.TestPoolPlacementRefusalNamesTheInvalidField` drives a
+  real master-to-member placement with `revision: 7` and requires the reason to
+  survive the peer hop and to name the field. Against the pre-fix handler it fails
+  with `member refusal lost its reason across the peer hop: selected VM host refused
+  placement observation`; verified by reverting.
+- Avoid: Answering a peer endpoint's error in a different content type from its
+  success, and reducing a validator that knows the cause to a boolean.
+
+## BUG-0406 — ISO install failed: nex-core-local depends on vlan, which the media never carried
 
 - Date: 2026-09-21
 - Symptom: Both installer modes failed in `in-target` package configuration with
@@ -5637,7 +5717,7 @@ Append resolved defects with their evidence and the approach to avoid.
   `installer/packages.txt`; the package is appended to the list after the closure is
   downloaded, so its own dependencies are never resolved by the ISO build.
 
-## BUG-0404 — Text wizard stored an empty VLAN, so pressing Enter produced an invalid handoff
+## BUG-0407 — Text wizard stored an empty VLAN, so pressing Enter produced an invalid handoff
 
 - Date: 2026-09-21
 - Symptom: In **Minimal install - Nex Core (text)**, the VLAN question appeared blank instead of
@@ -5658,7 +5738,7 @@ Append resolved defects with their evidence and the approach to avoid.
 - Avoid: Treating a debconf template `Default:` as a fallback for an empty stored value. Prefill
   the value you want the operator to be able to accept.
 
-## BUG-0405 — French console layout was never applied, so the root password was typed on US
+## BUG-0408 — French console layout was never applied, so the root password was typed on US
 
 - Date: 2026-09-21
 - Symptom: Choosing **French** in the text wizard left the console on the US layout. The root
@@ -5696,7 +5776,7 @@ Append resolved defects with their evidence and the approach to avoid.
   trusting an exit status from a filter that can succeed while producing nothing. Check the
   output, not just the status.
 
-## BUG-0406 — Padded sysfs values reached the handoff, so disk identity looked changed forever
+## BUG-0409 — Padded sysfs values reached the handoff, so disk identity looked changed forever
 
 - Date: 2026-09-21
 - Symptom: On hardware whose sysfs serial or model is space padded — NVMe serials and many SCSI
@@ -5716,7 +5796,7 @@ Append resolved defects with their evidence and the approach to avoid.
 - Avoid: Copying a sysfs attribute into a comparison key without stripping it, and fixing such a
   value at one call site when every caller goes through one reader.
 
-## BUG-0407 — A host with no network adapter could not be installed in text mode at all
+## BUG-0410 — A host with no network adapter could not be installed in text mode at all
 
 - Date: 2026-09-21
 - Symptom: On a machine with no detected network adapter, the text wizard showed
@@ -5742,7 +5822,7 @@ Append resolved defects with their evidence and the approach to avoid.
   non-zero from a step a supervising loop will simply run again — a refusal that repeats forever
   is worse than the refusal.
 
-## BUG-0408 — The same machine got different `nexN` adapter names in the two installer modes
+## BUG-0411 — The same machine got different `nexN` adapter names in the two installer modes
 
 - Date: 2026-09-21
 - Symptom: Installing the same host graphically and in text mode could produce different
@@ -5762,7 +5842,7 @@ Append resolved defects with their evidence and the approach to avoid.
 - Avoid: Deriving a durable identity from a directory read order. If two code paths must agree on
   an ordering, both must impose one.
 
-> BUG-0404 to BUG-0408 were found in pre-merge review of the unreleased text wizard, before any
+> BUG-0407 to BUG-0411 were found in pre-merge review of the unreleased text wizard, before any
 > ISO carrying it was built. Their regression evidence is a scripted simulation: the scenarios
 > above drive the wizard with a stand-in for cdebconf and stand-ins for `ckbcomp`, `loadkeys`,
 > `prepare` and `nex-config`, under both `/bin/sh` and `busybox ash`. Red-to-green was recorded on
@@ -5774,7 +5854,35 @@ Append resolved defects with their evidence and the approach to avoid.
 > `offline_management`, `no_network_adapter`, `prepare_runs_before_frontend` and `pure_ascii`
 > failing, and only `navigation_and_handoff`, `prepare_failure_stops_setup`,
 > `abandoned_setup_leaves_no_handoff` and `templates_exist` passing; against the fixed wizard all
-> 28 scenarios pass. BUG-0408 is the exception: its check is a source assertion in
+> 28 scenarios pass. BUG-0411 is the exception: its check is a source assertion in
 > `installer/check.sh`, because nothing runs the graphical wizard. Booting a rebuilt ISO and
 > completing a text-mode installation, on real hardware and a real console, remains outstanding
 > evidence for all five.
+
+## BUG-0412 — Every pull request commit showed cancelled Controller foundation checks
+
+- Date: 2026-09-21
+- Symptom: Each commit pushed to a pull request branch carried six failed statuses,
+  `Controller foundation / ... (push)` with "Has been cancelled", beside the passing
+  `(pull_request)` statuses of the same jobs (push run 4263 and pull request run 4267 on one
+  commit). The combined commit status was `failure`, so the pull request looked broken
+  although every job that ran had passed.
+- Root cause: `phase1.yml` ran on `push` to every branch and on `pull_request`, and both
+  events evaluate to the one `nex-shared-runner` concurrency group with
+  `cancel-in-progress: true` (BUG-0399, BUG-0400). The forge cancels earlier runs in a
+  group when a newer one arrives, and cancels waiting or blocked ones even without
+  `cancel-in-progress`, so the two runs of one commit always cancelled each other and the
+  loser reported a failed status.
+- Fix: `phase1.yml` runs on `push` to `main` only, in both workflow copies. A branch is
+  covered by its pull request run, so one commit produces one Controller foundation run.
+- Regression: `tests.test_ci_security.BrowserArtifactTests.test_phase1_runs_once_per_pull_request_commit`
+  asserts the trigger block of both copies. With `'**'` restored in one copy it fails with
+  `Lists differ: [... "'**'" ...] != [... 'main' ...]` and passes with the fix; run
+  2026-09-21 with `python3 -m unittest tests.test_ci_security` (10 tests). Forge CI runs it
+  in the Controller foundation contracts lane (`python3 -m unittest discover -s tests -p 'test_*.py'`).
+  A hosted pull request run after the push is remaining evidence.
+- Avoid: Triggering a workflow on both `push: '**'` and `pull_request` while its concurrency
+  group is shared across refs; the group serializes by cancelling, not by queueing. Still
+  open: on a push to `main` the Controller foundation and Release runs share that group and
+  one cancels the other (runs 4255 and 4256); that needs a sequencing decision, not a
+  trigger change.

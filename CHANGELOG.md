@@ -46,7 +46,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Installation no longer fails part way through with "nex-core-local : Depends: vlan but it
   is not installable". The installation media now carries the `vlan` package that Nex Core's
   tagged management networking needs, and the build refuses to produce media that is missing
-  any package Nex Core depends on (BUG-0403).
+  any package Nex Core depends on (BUG-0406).
 
 ## [0.4.0] — 2026-09-20
 

@@ -80,6 +80,16 @@ class BrowserArtifactTests(unittest.TestCase):
                 self.assertNotIn('  host:', workflow)
                 self.assertNotIn('schedule:', workflow)
 
+    def test_phase1_runs_once_per_pull_request_commit(self):
+        # BUG-0412: push and pull_request share the cancelling nex-shared-runner group,
+        # so a '**' push trigger made the two runs of one commit cancel each other.
+        for provider in PROVIDERS:
+            with self.subTest(provider=provider):
+                workflow = (ROOT / provider / 'workflows/phase1.yml').read_text()
+                triggers = workflow[workflow.index('\non:\n'):workflow.index('\nconcurrency:')]
+                uncommented = '\n'.join(line for line in triggers.splitlines() if not line.lstrip().startswith('#'))
+                self.assertEqual(uncommented.split(), 'on: push: branches: - main pull_request:'.split())
+
     def test_release_shares_the_shared_runner_concurrency_group(self):
         # Release ISO builds and Controller foundation browser labs must not
         # overlap on the single Gitea act_runner (runs 4222+4223).

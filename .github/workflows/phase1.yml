@@ -1,8 +1,11 @@
 name: Controller foundation
 on:
+  # Branch pushes are covered by their pull request run. Both events share the one
+  # cancelling group below, so a '**' push trigger made the push and pull_request
+  # runs of the same commit cancel each other and left it red (BUG-0412).
   push:
     branches:
-      - '**'
+      - main
   pull_request:
 concurrency:
   # One shared Gitea act_runner also runs Release ISO builds. Serialize every

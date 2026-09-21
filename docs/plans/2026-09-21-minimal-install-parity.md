@@ -66,7 +66,7 @@ Minimal install therefore boots the same initrd as the GUI with `DEBIAN_FRONTEND
 ## Pre-merge review round, 2026-09-21
 
 Review of the delivered text wizard found fourteen defects (four of them in the wizard's own
-behaviour, recorded as BUG-0404 to BUG-0407 in [the bug ledger](../BUG_LEDGER.md)). Fixing them
+behaviour, recorded as BUG-0407 to BUG-0410 in [the bug ledger](../BUG_LEDGER.md)). Fixing them
 settled these scope decisions; none of them changes the invariant, the API surface or where
 state lives.
 
@@ -132,7 +132,7 @@ rescue entry fails with `rescue must boot Debian unseeded`, and removing the see
 serial entry fails with `the serial install needs the media seed`; the previous unscoped
 assertion passed both mutations. The graphical wizard's sorted enumeration was checked by
 compiling it with the build's own `cc` line and comparing the comparator's order with a C-locale
-glob of the same names, and `installer/check.sh` now asserts that sort is present (BUG-0408) so a
+glob of the same names, and `installer/check.sh` now asserts that sort is present (BUG-0411) so a
 revert fails CI; `tests/integration/installer-network.c` still passes.
 
 The scenarios were also run red: with `wizard-text.sh` and `wizard-text.templates` restored from

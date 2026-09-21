@@ -75,7 +75,7 @@ assert '/usr/lib/nex-installer/validate-config' in wizard, \
 for name in ('wizard-text.sh', 'wizard-text.templates', 'nex-network.c', 'nex-config.c'):
     assert Path('installer/gui', name).read_text().isascii(), \
         f'{name} must stay ASCII for the installer console'
-# BUG-0408: both frontends must enumerate adapters in the same order, or the
+# BUG-0411: both frontends must enumerate adapters in the same order, or the
 # same machine gets different nex0..nexN names depending on the installer mode.
 assert 'g_ptr_array_sort(names, compare_names)' in Path('installer/gui/nex-wizard.c').read_text(), \
     'The graphical wizard must sort /sys/class/net, like the text wizard glob'
@@ -161,7 +161,7 @@ assert '\nin-target /bin/sh /var/cache/nex-install/configure.sh\n' in late, 'Use
 assert '\nchroot /target ' not in late, 'Raw chroot bypasses installer setup'
 post = Path('packaging/core-local/postinst').read_text()
 core_package = Path('packaging/core-local/build-inside.sh').read_text()
-# BUG-0403: the installed system resolves nex-core-local from the ISO's offline repo,
+# BUG-0406: the installed system resolves nex-core-local from the ISO's offline repo,
 # whose closure is downloaded from packages.txt alone. A dependency that nothing in that
 # list pulls in is simply absent from the media and the in-target install fails.
 core_depends_field = re.findall(r'(?m)^Depends: (.+)$', core_package)
