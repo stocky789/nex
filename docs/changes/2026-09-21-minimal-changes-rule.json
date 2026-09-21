@@ -1,0 +1,27 @@
+{
+  "summary": "Contributor contract: code changes must be as minimal as possible (smallest correct diff, fewest files, reuse first, no unrequired code) and still human-readable (plain names, straightforward flow, no terse cleverness), written the way an experienced human developer on the project would. Decision: project owner, 2026-09-21. API impact: none.",
+  "paths": [
+    "AGENTS.md",
+    "docs/changes/2026-09-21-minimal-changes-rule.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor working rule only; no operator-visible behavior changes."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Contributor instructions only; no Controller or Core contract is involved."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Working-rule clarification; no phase scope change."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation-only change with no product state."
+  },
+  "verification": {
+    "method": "Scope review of the single AGENTS.md bullet; CLAUDE.md imports AGENTS.md, so no second copy was added. python3 scripts/check_docs.py --worktree and the repository privacy test were run.",
+    "evidence": ["AGENTS.md"]
+  }
+}

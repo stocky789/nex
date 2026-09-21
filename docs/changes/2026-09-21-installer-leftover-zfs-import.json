@@ -1,0 +1,32 @@
+{
+  "summary": "Installed hosts no longer auto-import ZFS pools left on disks not selected for installation (zfs-import-scan disabled in late-install; Nex-created pools remain imported through zfs-import-cache). Install guide covers leftover ZFS pools, hardware RAID controllers and internal SD-card modules. API impact: none.",
+  "paths": [
+    "installer/late-install.sh",
+    "installer/check.sh",
+    "tests/integration/iso-smoke.py",
+    "docs/guide/install-nex-core.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-21-installer-leftover-zfs-import.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The install guide states that leftover ZFS pools on other disks are not imported and how to import one deliberately, and explains disk visibility behind hardware RAID controllers and for internal SD-card modules.",
+    "pages": ["docs/guide/install-nex-core.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Installer target configuration only; no Controller or Core contract is involved. Nex-created pools set the default cachefile and keep booting through zfs-import-cache."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Installer hardening within existing scope."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Adds no durable product state; it only leaves a Debian ZFS unit disabled on the installed host."
+  },
+  "verification": {
+    "method": "On 2026-09-21: bash installer/check.sh passed and fails with the late-install change reverted ('Leftover ZFS pools on unselected disks must not be imported at boot'); sh -n installer/late-install.sh passed. Unit behavior read from zfsutils-linux 2.3.9-0+deb13u1: zfs-import-scan runs 'zpool import -aN' whenever /etc/zfs/zpool.cache is empty, zfs-import-cache imports cached pools. iso-smoke.py gained an installed-host assertion that zfs-import-scan is disabled; no ISO was rebuilt or installed for this change.",
+    "evidence": ["installer/check.sh", "tests/integration/iso-smoke.py"]
+  }
+}

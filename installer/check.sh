@@ -127,6 +127,7 @@ assert all(p.replace('-', '').isalnum() for p in packages), 'Unexpected package 
 late = Path('installer/late-install.sh').read_text()
 assert 'Dir::Etc::sourceparts=-' in late and 'file:/var/cache/nex-install/repo' in late
 assert 'PermitRootLogin no' in late
+assert 'systemctl disable zfs-import-scan.service' in late, 'Leftover ZFS pools on unselected disks must not be imported at boot'
 assert 'systemd.ssh_auto=no' in late
 assert 'nex-core-local.service' in late
 assert 'Local alpha: no Nex Controller' not in late

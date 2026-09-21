@@ -93,6 +93,7 @@ if dpkg-query -W -f='${Status}' zfs-dkms 2>/dev/null | grep -qx 'install ok inst
     zpool version
     zfs version
     systemctl is-enabled zfs-import-cache.service
+    if systemctl is-enabled --quiet zfs-import-scan.service; then exit 1; fi
     systemctl is-active zfs-mount.service
     echo NEX_SMOKE_ZFS_PASS
 fi

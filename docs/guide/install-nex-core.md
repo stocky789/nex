@@ -109,6 +109,9 @@ required, and the installed driver ISO is unchanged.
    volumes and software RAID membership. If it was one member of a RAID array, the array is
    stopped and only the selected disk is cleared; the other member disks are not written, and
    the array they still form is degraded.
+   ZFS pools left on other disks are not imported when the installed host starts; to keep one,
+   import it deliberately on the host with `zpool import` (and `-f` if it last ran on
+   another system).
 7. On **Review and install**, check the host, every NIC, VLAN, and disk. Adapter names are
    bound to MAC addresses and become `nex0`, `nex1`, etc. on the installed host; the review
    shows each mapping. A tagged interface is named, for example, `nex0.100`.
@@ -214,6 +217,10 @@ source; it may have no candidate until a compatible release is actually publishe
   **View log**, keep the `/var/log/partman` entries with the image checksum, and restart setup.
 - **No eligible disk or disk identity changed:** check the disposable disk attachment and size,
   then restart setup. Do not substitute another disk without reviewing its identity.
+  On a server with a hardware RAID controller, only disks the controller presents are
+  visible: create a virtual disk for Nex Core, or switch the controller to HBA/non-RAID mode, in
+  its firmware setup. Internal SD-card boot modules appear as removable media and are not
+  offered; an internal boot SSD module that presents a SATA or NVMe disk is.
 - **Preparation failed:** use **Retry preparation**. If it fails again, retain the error and
   installer logs with the ISO checksum before restarting or using minimal installation.
 - **Installed network is unreachable:** use the local console to inspect `ip -br address`,

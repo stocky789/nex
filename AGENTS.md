@@ -199,8 +199,15 @@ option as approval. These instructions cannot enable a question UI the client la
   The entire future roadmap does not need to be built to complete the current phase.
 - Trace the affected flow and callers before choosing a fix. Reuse existing code, stdlib, native
   platform features, and installed dependencies before adding code or dependencies.
-- Prefer the smallest correct change. No speculative abstractions, plugin frameworks, empty scaffolding,
-  or parallel sources of truth. Never simplify away validation, accessibility, security, or data safety.
+- Keep every code change as minimal as possible: the smallest correct diff, in the fewest files,
+  reusing what exists before writing anything new. Cut code that is not required for the task.
+  Minimal must still read clearly: plain names and straightforward control flow, never
+  terseness or cleverness that makes the code harder for a person to follow. Write code the way
+  an experienced human developer on this project would: match the surrounding style, comment
+  only where the reason is not obvious, and avoid generated-looking boilerplate, restated
+  comments, or defensive code for cases that cannot happen. No speculative
+  abstractions, plugin frameworks, empty scaffolding, or parallel sources of truth. Never simplify away
+  validation, accessibility, security, or data safety.
 - Authenticate and authorize control operations and consoles at the API boundary. Validate host identity,
   scope credentials narrowly, and keep secrets out of logs, source control, images, and diagnostic bundles.
 - Disk erase, overwrite restore, VM/disk deletion, and management-network changes need explicit target

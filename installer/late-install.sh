@@ -76,6 +76,10 @@ if /usr/lib/nex/corosync-pristine; then :; fi
 # Core pool only.  Do not let package installation create a cluster or start a
 # membership/recovery service on an ordinary host.
 systemctl disable corosync.service dlm.service pacemaker.service pcsd.service pcsd-ruby.service || true
+# A fresh host has no pool cache, so the scan service would import every ZFS pool left on
+# disks the operator did not select. Pools Nex creates are cached and imported by
+# zfs-import-cache; an old pool stays untouched until an operator imports it deliberately.
+systemctl disable zfs-import-scan.service || true
 # nex-core-local's postinst diverts Debian's os-release symlink and writes the
 # Nex Core identity from its own package version; the console banners reuse it.
 . /etc/os-release

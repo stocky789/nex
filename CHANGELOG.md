@@ -25,6 +25,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   system". The installer now clears the old partitions, RAID membership and LVM from the selected
   disk only. The other disks are not written; an array they still form is left degraded. The
   installation log view now includes the partitioning log (BUG-0413).
+- A newly installed host no longer imports ZFS pools left on disks that were not selected for
+  installation. Pools Nex Core creates are imported as before; an old pool can still be
+  imported deliberately. The install guide now covers hardware RAID controllers and internal
+  SD-card boot modules.
 
 ## [0.4.1] — 2026-09-21
 
