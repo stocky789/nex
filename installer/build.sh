@@ -561,7 +561,7 @@ label graphical
 label nex
   menu label Minimal install - Nex Core (text)
   kernel /install.amd/vmlinuz
-  append initrd=/install.amd/initrd.gz preseed/file=/cdrom/preseed.cfg --- quiet
+  append initrd=/install.amd/gtk/initrd.gz DEBIAN_FRONTEND=newt --- quiet
 label serial
   menu label Install Nex Core (serial console ttyS0)
   kernel /install.amd/vmlinuz
@@ -603,8 +603,8 @@ menuentry 'GUI install - Nex Core' {
   initrd /install.amd/gtk/initrd.gz
 }
 menuentry 'Minimal install - Nex Core (text)' {
-  linux /install.amd/vmlinuz preseed/file=/cdrom/preseed.cfg --- quiet
-  initrd /install.amd/initrd.gz
+  linux /install.amd/vmlinuz DEBIAN_FRONTEND=newt --- quiet
+  initrd /install.amd/gtk/initrd.gz
 }
 menuentry 'Install Nex Core (serial console ttyS0)' {
   linux /install.amd/vmlinuz preseed/file=/cdrom/preseed.cfg console=ttyS0,115200n8 --- console=ttyS0,115200n8

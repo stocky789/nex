@@ -5610,3 +5610,29 @@ Append resolved defects with their evidence and the approach to avoid.
   rerun is remaining evidence.
 - Avoid: Pinning binary apt through an isolated sources.list without giving later
   `apt-get source` steps the matching deb-src URIs.
+
+## BUG-0403 — ISO install failed: nex-core-local depends on vlan, which the media never carried
+
+- Date: 2026-09-21
+- Symptom: Both installer modes failed in `in-target` package configuration with
+  `nex-core-local : Depends: vlan but it is not installable` and
+  `Unable to satisfy dependencies. Reached two conflicting decisions: ...
+  nex-core-local:amd64 Depends vlan / but none of the choices are installable: [no choices]`.
+- Root cause: `nex-core-local` gained `ifupdown, bridge-utils, vlan` dependencies for
+  Core-owned management networking, but `installer/packages.txt` was not updated with
+  `vlan`. The ISO's offline repository is downloaded from that list alone
+  (`nex-core-local` itself is appended only after the closure is resolved), and nothing
+  else in the list pulls `vlan` in. `late-install.sh` deliberately installs from the
+  local repository only, so the missing package is unresolvable rather than fetched.
+- Fix: Add `vlan` to `installer/packages.txt` so the offline closure carries it.
+- Regression: `installer/check.sh` now parses `nex-core-local`'s `Depends:` field and
+  asserts every entry is either in `installer/packages.txt` or in the explicit
+  base-system set. It fails with
+  `nex-core-local depends on packages the ISO repo never downloads: ['vlan']` when the
+  entry is removed and passes with it; run 2026-09-21. CI already runs
+  `bash installer/check.sh` on every push and pull request
+  (`.github/workflows/installer.yml`, mirrored in `.gitea/workflows/installer.yml`).
+  Booting a rebuilt ISO is remaining evidence.
+- Avoid: Adding a dependency to `nex-core-local` without adding it to
+  `installer/packages.txt`; the package is appended to the list after the closure is
+  downloaded, so its own dependencies are never resolved by the ISO build.

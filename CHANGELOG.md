@@ -6,12 +6,35 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.0` →
-> Debian `0.4.0`).
+> development software. Builds use the newest numbered changelog heading (`0.4.1` →
+> Debian `0.4.1`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.1] — 2026-09-21
+
+> **Development working-tree record, not a published release.** Installer work only; the
+> Phase 4 acceptance scope and limits recorded under 0.4.0 are unchanged. No 0.4.1 ISO has
+> been built or installed, so both entries below are verified at source level only.
+
+### Minor Feature
+
+- **Minimal install - Nex Core (text)** now runs the same setup as the graphical installer,
+  in a keyboard-only interface. It asks the same questions, applies the same password and
+  disk rules, offers the same Go Back navigation and the same named erase confirmation, and
+  installs the same host, including the `br0` management bridge, MAC-bound `nexN` interface
+  names and the chosen VLAN and DNS. Previously this mode ran Debian's own installation
+  questions and produced a host with different networking. The serial console entry still
+  runs Debian's questions.
+
+### Bug Fixes
+
+- Installation no longer fails part way through with "nex-core-local : Depends: vlan but it
+  is not installable". The installation media now carries the `vlan` package that Nex Core's
+  tagged management networking needs, and the build refuses to produce media that is missing
+  any package Nex Core depends on (BUG-0403).
 
 ## [0.4.0] — 2026-09-20
 

@@ -32,5 +32,6 @@ sudo
 ca-certificates
 ifupdown
 bridge-utils
+vlan
 dhcpcd-base
 genisoimage

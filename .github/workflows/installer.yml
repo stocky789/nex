@@ -61,6 +61,7 @@ jobs:
           set -eu
           python3 -m unittest discover -s tests -p 'test_iso_payload_efficiency.py' -v
           python3 tests/integration/installer-shell.py
+          python3 tests/integration/installer-text-wizard.py
           cc -Wall -Wextra -Werror tests/integration/installer-network.c installer/gui/nex-network.c $(pkg-config --cflags --libs glib-2.0) -o /tmp/nex-network-test
           /tmp/nex-network-test
           python3 tests/integration/installer-handoff.py

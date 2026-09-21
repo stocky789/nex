@@ -1,0 +1,49 @@
+{
+  "summary": "Minimal installation runs the Nex wizard in a text frontend and writes the same handoff, so both installer modes install the same host. API impact: none.",
+  "paths": [
+    "installer/gui/wizard-text.sh",
+    "installer/gui/wizard-text.templates",
+    "installer/gui/start.sh",
+    "installer/build-gui.sh",
+    "installer/build.sh",
+    "installer/check.sh",
+    "installer/late-install.sh",
+    "installer/README.md",
+    "CHANGELOG.md",
+    "tests/integration/installer-text-wizard.py",
+    ".github/workflows/installer.yml",
+    ".gitea/workflows/installer.yml",
+    "docs/guide/install-nex-core.md",
+    "docs/plans/2026-09-21-minimal-install-parity.md",
+    "docs/changes/2026-09-21-minimal-install-parity.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Minimal installation no longer asks Debian's language, networking, partitioning and GRUB questions; it asks the wizard's questions, enforces the same password and disk rules, and now creates the management bridge. The documented steps, expected result and troubleshooting had to change with it.",
+    "pages": [
+      "docs/guide/install-nex-core.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Installer frontend only. No Controller/Core route, agent command, event or stream is added or changed; the wizard handoff is a private file read by nex-config inside the same initrd, which is unchanged.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No published roadmap milestone changes: this brings an existing installer mode up to the behaviour the guide already described. The decision, rejected alternatives and held-back scope are recorded in docs/plans/2026-09-21-minimal-install-parity.md.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Installation-time configuration of the host being built. No durable Controller or pool-scoped record is created, read or changed; the installed host's own /etc files and its Core records remain the authority, exactly as with a graphical installation."
+  },
+  "verification": {
+    "method": "Established from the pinned Debian 13 installer images that install.amd/gtk/initrd.gz carries newt.so and text.so and that S62Xorg starts Xorg only for the gtk frontend, and that install.amd/initrd.gz carries no glib, which is why minimal now boots the Nex initrd with DEBIAN_FRONTEND=newt rather than bundling libraries. bash installer/check.sh, the seven existing installer regressions and the new tests/integration/installer-text-wizard.py all pass on 2026-09-21. The new check drives the wizard against a fixture machine under NEX_WIZARD_ROOT and asserts the question order, Go Back over a skipped step, that only the supported disk is offered (not the undersized, removable, read-only, partition or installation-media devices), that the erase confirmation names the disk and resets, and the exact handoff written; the handoff is then decoded with GKeyFile the way nex-config reads it, confirming the password, DNS, VLAN and disk size round-trip. Three mutations (skipping the UTC zone step, accepting removable disks, dropping the password escaping) were each caught. No ISO was built and no installation was performed: a booted minimal installation and a comparison of the installed br0, nexN names, VLAN and DNS against a graphical installation remain outstanding, and the serial entry still runs Debian's own questions.",
+    "evidence": [
+      "tests/integration/installer-text-wizard.py",
+      "installer/check.sh",
+      "docs/plans/2026-09-21-minimal-install-parity.md"
+    ]
+  }
+}

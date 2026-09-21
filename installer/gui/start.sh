@@ -1,12 +1,20 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Sourced after Xorg by /sbin/debian-installer; do not exit the parent shell.
-if [ "$DEBIAN_FRONTEND" = gtk ] && [ "$(debconf-get rescue/enable)" != true ]; then
+# Both Nex frontends produce the same /run/nex-installer/config.ini handoff, so the
+# validation, staging and seed-import steps below are shared. Only this media's
+# initrd carries the overlay, so rescue is the only mode that must be excluded.
+if [ "$(debconf-get rescue/enable)" != true ]; then
+    if [ "$DEBIAN_FRONTEND" = gtk ]; then
+        nex_wizard=/usr/bin/nex-wizard
+    else
+        nex_wizard=/usr/lib/nex-installer/wizard-text
+    fi
     nex_saved_umask=$(umask)
     umask 077
     mkdir -p /run/nex-installer
     touch /run/nex-installer/active
     while :; do
-        if ! /usr/bin/nex-wizard; then
+        if ! "$nex_wizard"; then
             printf '%s\n' 'Setup did not finish. Review the settings and try again.' > /run/nex-installer/error
             sleep 1
             continue

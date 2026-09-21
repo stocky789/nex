@@ -64,7 +64,7 @@ against current `trixie` repositories and build timestamps change. Retain the ou
 manifest and cache for each tested build. A dated repository snapshot/package lock
 and complete source bundle are required before external release.
 
-The current working version is `0.4.0`; it is not a release merely because the build
+The current working version is `0.4.1`; it is not a release merely because the build
 resolves that changelog version. The recipe now includes ZFS packages for internal QA,
 and both publication scripts reject a ZFS-containing manifest until the external
 distribution gates in [licensing](../docs/LICENSING.md) are closed.
@@ -73,9 +73,12 @@ distribution gates in [licensing](../docs/LICENSING.md) are closed.
 
 Boot the ISO with at least 2 virtual CPUs, 4 GB RAM and a blank 24 GB virtual disk.
 Use hardware acceleration/nested virtualization when testing KVM guests. Select
-**GUI install - Nex Core** for the custom Nex mouse/keyboard wizard, or
-**Minimal install - Nex Core (text)** for the simple keyboard interface. The menu
-waits for your selection in BIOS and UEFI. Serial installation uses `ttyS0` at 115200 baud.
+**GUI install - Nex Core** for the Nex mouse/keyboard wizard, or
+**Minimal install - Nex Core (text)** for the same wizard in a keyboard-only interface.
+Both entries boot the same Nex initrd; minimal adds `DEBIAN_FRONTEND=newt`, so cdebconf
+renders the questions as text and no X server is started. The menu waits for your
+selection in BIOS and UEFI. Serial installation uses `ttyS0` at 115200 baud and is the
+only mode that still runs Debian's own installation questions.
 
 The GUI runs Nex's own upfront GTK wizard: Welcome → Host → Network → Disk → Review.
 A vertical step list sits beside a white form panel, with persistent Back/primary-action
@@ -96,23 +99,30 @@ resolution changes. It offers five named keyboard layouts, area/timezone dropdow
 password visibility toggle that resets when leaving the host page. Timezone selection
 requires no typing; UTC is the default.
 
-The GUI requires an explicitly selected writable, nonremovable whole sd/vd/xvd/nvme disk of
-at least 16 GiB, plus an unchecked-by-default erase checkbox naming that disk at review
+Both modes require an explicitly selected writable, nonremovable whole sd/vd/xvd/nvme disk of
+at least 16 GiB, plus a confirmation that defaults to no and names that disk at review
 before whole-disk ext4 installation. Returning to Review resets the confirmation.
-The validation handoff rechecks disk identity before partitioning. Minimal text installation
-retains native language, account, networking, partitioning and GRUB questions. See the
+The validation handoff rechecks disk identity before partitioning. See the
 [operator procedure](../docs/guide/install-nex-core.md) for exact choices and recovery.
 
-A safe GUI seed is embedded in the initrd, avoiding the routine file-preseed loading screen;
-minimal installation keeps the shared media seed. The pinned cdebconf frontend remains for
-installation progress and native backend errors/recovery questions. It is not the primary
-GUI configuration workflow. Hardware preparation failures remain visible and retryable.
+Both frontends write the same private `/run/nex-installer/config.ini` and both are applied
+by the same `nex-config`, so validation, the staged `/etc`, the generated debconf answers
+and the installed host are identical. The text frontend is
+`installer/gui/wizard-text.sh` with `installer/gui/wizard-text.templates`; it asks host,
+keyboard, timezone, password, management adapter, per-adapter IPv4/VLAN, DNS, disk and the
+erase confirmation, supports **Go Back**, and never partitions or configures the running
+machine. `tests/integration/installer-text-wizard.py` drives it against a fixture machine.
+
+A safe seed is embedded in the initrd both wizard modes boot, avoiding the routine
+file-preseed loading screen; the serial and rescue entries keep the shared media seed.
+The pinned cdebconf frontend remains for installation progress and native backend
+errors/recovery questions. It is not the primary configuration workflow. Hardware
+preparation failures remain visible and retryable.
 
 Both modes install the same headless host with the Nex Core local HTTPS management UI
 and bundled Controller appliance. A mirror is not needed. No ordinary user account is
-created; Debian service accounts remain. GUI root
-passwords require at least eight characters and matching confirmation; minimal rejects
-blank passwords. Use root at the local console after reboot. Root SSH remains disabled,
+created; Debian service accounts remain. Root
+passwords require at least eight characters and matching confirmation in both modes. Use root at the local console after reboot. Root SSH remains disabled,
 so a fresh installation has no SSH login account. Eject the ISO after installation.
 SSH host keys are generated per installation. Open the local management URL shown at
 the console and follow the [Controller deployment procedure](../docs/guide/deploy-controller-appliance.md).
@@ -120,10 +130,10 @@ Controller deployment creates its VM and enrolls this host using Core's embedded
 the installer itself does not deploy a running Controller. Shared storage, HA and
 Container Services remain later milestones.
 
-The GUI configures the selected management adapter on `br0` for the installed host;
-it does not configure a firewall policy. Use an isolated lab network and only disposable
+Either mode configures the selected management adapter on `br0` for the installed host;
+neither configures a firewall policy. Use an isolated lab network and only disposable
 disks. If graphics fail, choose minimal installation before
-accepting disk writes. [Wizard QA](../docs/qa/iso/2026-09-08-nex-wizard.md) records actual
+accepting disk writes; it asks the same questions and installs the same host. [Wizard QA](../docs/qa/iso/2026-09-08-nex-wizard.md) records actual
 checks and limits; [installer usability QA](../docs/qa/iso/2026-09-08-installer-qol.md)
 tracks the fullscreen and input-control checks separately. Earlier custom-shell evidence
 does not verify the new workflow.
