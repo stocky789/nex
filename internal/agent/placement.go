@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -39,13 +40,34 @@ type poolPlacementReply struct {
 	Error       string                         `json:"error,omitempty"`
 }
 
+// placementCommandError names why a command cannot be a placement preflight, instead of
+// collapsing every cause into one word. BUG-0405: the blanket refusal reached an operator as
+// "VM placement preflight is invalid" on the master and, because the peer handler answered in
+// plain text, as the far vaguer "selected VM host refused placement observation" on a member —
+// neither of which said which field was wrong, nor even that the cause was validation.
+func placementCommandError(cmd protocol.Command) error {
+	if cmd.Kind != "vm-create" && cmd.Kind != "vm-update" {
+		return errors.New("placement preflight needs a vm-create or vm-update command, not " + cmd.Kind)
+	}
+	if cmd.VM == nil {
+		return errors.New("placement preflight needs a VM payload")
+	}
+	return vmhost.ValidateManagedCommand(cmd)
+}
+
 func placementCommand(cmd protocol.Command) bool {
-	return (cmd.Kind == "vm-create" || cmd.Kind == "vm-update") && cmd.VM != nil && vmhost.ValidateManagedCommand(cmd) == nil
+	return placementCommandError(cmd) == nil
 }
 
 func localPoolVMPlacement(ctx context.Context, s *Store, generation uint64, operationID string, cmd protocol.Command) (poolPlacementReply, error) {
 	membership, err := Membership(s)
-	if err != nil || membership.Generation != generation || !placementCommand(cmd) || cmd.OperationID != operationID || cmd.VM.HostID != s.State.HostID || cmd.VM.PoolID != s.State.PoolID {
+	if err != nil || membership.Generation != generation {
+		return poolPlacementReply{}, errors.New("VM placement preflight is invalid")
+	}
+	if invalid := placementCommandError(cmd); invalid != nil {
+		return poolPlacementReply{}, fmt.Errorf("VM placement preflight is invalid: %w", invalid)
+	}
+	if cmd.OperationID != operationID || cmd.VM.HostID != s.State.HostID || cmd.VM.PoolID != s.State.PoolID {
 		return poolPlacementReply{}, errors.New("VM placement preflight is invalid")
 	}
 	// This host's freshest verified copy of the master's drain intent — its own record on
@@ -76,23 +98,39 @@ func localPoolVMPlacement(ctx context.Context, s *Store, generation uint64, oper
 	return poolPlacementReply{Generation: generation, OperationID: operationID, VMID: cmd.VM.ID, VM: *cmd.VM, Storage: storage, Accepted: true, Replay: replay}, nil
 }
 
+// refusePlacement answers in the one shape the master can decode, so every refusal this
+// handler makes reaches the operator as a reason rather than as the master's fallback
+// "selected VM host refused placement observation".
+func refusePlacement(w http.ResponseWriter, status int, err error) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(poolPlacementReply{Error: placementError(err)})
+}
+
 // PoolPlacementHandler accepts only the current master and returns a fresh,
 // bounded native observation tied to the exact command and membership generation.
 func PoolPlacementHandler(s *Store) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, err := AuthenticatePoolMaster(s, r); err != nil {
-			http.Error(w, "placement peer rejected", http.StatusUnauthorized)
+			refusePlacement(w, http.StatusUnauthorized, errors.New("placement peer rejected"))
 			return
 		}
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			refusePlacement(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
 			return
 		}
 		var request poolPlacementRequest
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, poolPlacementLimit))
-		if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || !placementCommand(request.Command) {
-			http.Error(w, "invalid placement preflight", http.StatusBadRequest)
+		if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF {
+			refusePlacement(w, http.StatusBadRequest, errors.New("invalid placement preflight request body"))
+			return
+		}
+		// Answer in the same JSON shape as every other refusal. A plain-text body here left
+		// the master unable to decode a reason, so a member's validation refusal reached the
+		// operator as "selected VM host refused placement observation" (BUG-0405).
+		if invalid := placementCommandError(request.Command); invalid != nil {
+			refusePlacement(w, http.StatusBadRequest, fmt.Errorf("invalid placement preflight: %w", invalid))
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)

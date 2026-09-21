@@ -1,0 +1,40 @@
+{
+ "summary": "Correct docs/API.md's maintenance refusal wording claim (BUG-0403), repair the cluster lab's pristine-corosync guard (BUG-0404), and make invalid VM placement refusals name the field (BUG-0405). API impact: existing contract.",
+ "paths": [
+  "internal/agent/placement.go",
+  "internal/agent/placement_test.go",
+  "tests/integration/cluster_ha_lab.py",
+  "tests/test_cluster_ha_lab.py",
+  "docs/API.md",
+  "docs/BUG_LEDGER.md",
+  "docs/qa/2026-09-17-phase2-gate/checks.md",
+  "docs/changes/2026-09-21-phase4-followup-defects.json"
+ ],
+ "guide": {
+  "impact": "none",
+  "reason": "No operator workflow or step changed. docs/guide/host-maintenance-mode.md attributes its quoted sentence to the pool master, which is the actor that emits it, so it was already accurate and needed no edit; BUG-0403 corrects the API reference only."
+ },
+ "api": {
+  "impact": "existing contract",
+  "reason": "No route, payload or status code changed. BUG-0403 is a documentation correction: docs/API.md claimed a single maintenance refusal sentence, while the implementation and docs/api/openapi.json deliberately carry four, one per actor. BUG-0405 makes the existing POST /api/v1/pool/placement peer contract answer refusals in the JSON body shape the master already decodes instead of plain text, so a member's reason survives the peer hop; the shape and status codes are unchanged.",
+  "pages": [
+   "docs/API.md"
+  ]
+ },
+ "roadmap": {
+  "impact": "none",
+  "reason": "Defect fixes within implemented Phase 4 behaviour; no milestone status changed."
+ },
+ "state": {
+  "owner": "none",
+  "reason": "No durable state added or moved. The maintenance drain flag keeps its only copy in the pool master's own pool-peer.json membership record; these changes touch refusal text, error propagation and a test fixture only."
+ },
+ "verification": {
+  "method": "BUG-0403 is documentation only; tests.test_api_contract.PoolMaintenanceContractTests, which pins every refusal literal against where it is documented, passes unchanged. An earlier attempt to single-source the sentence in code was reverted after that suite showed openapi.json documents the Controller's advisory sentence and the master's authoritative one separately and on purpose. BUG-0404: tests.test_cluster_ha_lab.PristineCorosyncGuardTests, six checks against the extracted pristine_corosync_command(); four fail against a reconstruction of the original. Natively the fixed guard completed on a Core host with no nested guests and correctly refused two hosts that were running guests, with running-nested-vm. BUG-0405: internal/agent.TestPoolPlacementRefusalNamesTheInvalidField drives a real master-to-member placement with an invalid revision and requires the reason to survive the peer hop; against the pre-fix handler it fails with 'member refusal lost its reason across the peer hop'. Full go test ./internal/... and the tests/ suite were run. CI already runs both: .github/workflows/phase1.yml executes go test -race ./... and test_*.py, mirrored in .gitea/workflows/phase1.yml, so no workflow change was needed.",
+  "evidence": [
+   "docs/BUG_LEDGER.md",
+   "docs/qa/2026-09-21-phase4-gap-closure.md"
+  ],
+  "limits": "BUG-0404's native confirmation covered a three-host disposable fixture only; one host could not be re-verified because its pacemaker was left wedged by the pre-fix runs. BUG-0405 was reproduced natively before the fix but the fixed binaries were not redeployed to the lab, so its native confirmation is the Go test rather than a re-run API call. No browser walkthrough was run."
+ }
+}

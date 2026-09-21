@@ -983,9 +983,29 @@ projection and no control may be offered; submitting anyway is
 
 **What maintenance does, and what it deliberately does not.** While the flag is set the master
 refuses, from its own record: a new VM placement onto that host, `define` and `start` admission for
-it, and autostart-by-placement, which skips the host and logs why. Every refusal carries the one
-sentence `the selected VM host is in maintenance mode; take it out of maintenance before placing or
-starting VMs on it`.
+it, and autostart-by-placement, which skips the host and logs why. Every refusal **the master
+itself decides** carries the one sentence `the selected VM host is in maintenance mode; take it
+out of maintenance before placing or starting VMs on it`, whether it arrives in a command result
+or a placement preflight, so a Controller maps it without parsing several.
+
+Three other sentences exist, and each names a different actor on purpose — read the wording as
+telling an operator *who* refused:
+
+- The Controller's own pre-dispatch check on `POST /api/v1/vms`, `PUT /api/v1/vms/{id}` and
+  `POST /api/v1/vms/{id}/media` says `the selected host is in maintenance mode; take it out of
+  maintenance before placing or starting VMs on it`. It is **presentation and early failure
+  only**, made from the master's reported membership so the operator is not offered a host the
+  master will refuse; the authoritative refusal is still the master's, and it arrives as a failed
+  operation result. The two sentences are deliberately not the same text.
+- The drained host's own libvirt-hook refusal, described next, refuses a narrower action —
+  a direct start, not a placement — and says `managed VM startup is refused while this host is in
+  maintenance mode; take it out of maintenance before starting VMs on it`.
+- Autostart-by-placement logs `pool VM autostart skipped: this host is in maintenance mode`
+  rather than refusing anything.
+
+Do not collapse these into one string. A single shared sentence would make an advisory Controller
+refusal indistinguishable from the master's authoritative one, which is the distinction the
+architecture rests on.
 
 The drained host refuses starts **itself**, before any master round trip, which is what makes the
 flag mean anything for the commonest shape of all — a guest on **local** storage, which needs no

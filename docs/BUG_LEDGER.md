@@ -5610,3 +5610,83 @@ Append resolved defects with their evidence and the approach to avoid.
   rerun is remaining evidence.
 - Avoid: Pinning binary apt through an isolated sources.list without giving later
   `apt-get source` steps the matching deb-src URIs.
+
+## BUG-0403 — docs/API.md claimed one maintenance refusal sentence where four exist
+
+- Date: 2026-09-21
+- Symptom: A native three-host lab placement onto a drained host returned
+  `409 the selected host is in maintenance mode; …`, but `docs/API.md` stated that
+  "every refusal carries the one sentence" `the selected VM host is in maintenance
+  mode; …`. A reader of the API reference could reasonably match on the documented
+  text and never see it on the commonest path.
+- Root cause: A documentation defect only. The implementation is deliberate and
+  correct: the master's authoritative refusal, the Controller's advisory
+  pre-dispatch check, the drained host's libvirt-hook refusal and the
+  autostart-skip log each name a different actor, and `docs/api/openapi.json`
+  already documents the first two together on the three VM routes, spelling out
+  that the Controller's is "presentation and early failure only" while "the
+  authoritative refusal is the master's own". `docs/API.md` prose had simply not
+  kept up with that.
+- Fix: `docs/API.md` now scopes the one sentence to refusals the master itself
+  decides and lists the other three with the actor each belongs to, plus an explicit
+  note not to collapse them.
+- Regression: `tests.test_api_contract.PoolMaintenanceContractTests`, which already
+  pins every literal against the place it is documented, still passes; it is the
+  check that would fail if any of these sentences moved.
+- Avoid: "Fixing" this by making the Controller emit the master's sentence. That was
+  tried first and reverted: it erases the advisory/authoritative distinction, breaks
+  the three openapi.json descriptions that explain it, and leaves an operator unable
+  to tell a Controller pre-check from the master's decision. Differing wording here
+  is the design, not drift.
+
+## BUG-0404 — Cluster lab guard aborted on the package set its own fixture seeds
+
+- Date: 2026-09-21
+- Symptom: `tests/integration/cluster_ha_lab.py --prepare` failed at
+  `prepare_pristine_corosync()` for the first Core host, then `cleanup()` raised
+  `refusing a reused or foreign PID` and left the remaining fixture VMs running.
+- Root cause: The guard ran `virsh` and `pcs` unconditionally and stopped
+  `nex-cluster-local.service`, none of which the same file's `seed()` installs, so
+  under `set -eu` each ended `prepare()` before any check was evaluated. It also
+  named all four units in one `systemctl stop` with corosync ahead of pacemaker;
+  systemd declares no ordering between them, so they stopped concurrently and
+  corosync went away under pacemaker, which then never finished stopping.
+- Fix: Absence guards reach a tool only behind `command -v`, because an absent tool
+  means the condition cannot be occurring; pacemaker resources fall back to the CIB
+  when `pcs` is absent, since Debian's pacemaker does not depend on
+  pacemaker-cli-utils. Units are stopped one at a time in cluster order (resource
+  manager, lock manager, messaging), each bounded by `timeout` and confirmed down
+  before the next. The existing is-active sweep still fails closed.
+- Regression: `tests.test_cluster_ha_lab.PristineCorosyncGuardTests`, six checks
+  against `pristine_corosync_command()`, which was extracted so the script's shape
+  is testable without a lab. Four of the six fail against the original command;
+  verified by running the suite against a reconstruction of it. Natively, the fixed
+  guard completed on a Core host with no nested guests and correctly refused two
+  hosts that were running guests, with `running-nested-vm`.
+- Avoid: Treating "the tool errored" as "the dangerous condition is absent", and
+  relying on systemd to order units that declare no dependency on each other.
+
+## BUG-0405 — An invalid VM definition was refused without naming the field
+
+- Date: 2026-09-21
+- Symptom: `POST /api/v1/vms` carrying `revision: 7` (creation requires 0) was
+  accepted with `202`, then failed asynchronously. On the master the operation read
+  `VM placement preflight is invalid`; when the target was a member it read
+  `pool master refused VM placement: VM placement preflight refused: selected VM
+  host refused placement observation`. Neither named the field, and the member form
+  did not even indicate that the cause was validation.
+- Root cause: `placementCommand()` returned a bool, so every validation cause
+  collapsed into one message. `PoolPlacementHandler` then answered an invalid
+  command with a plain-text `http.Error`, which the master cannot decode into
+  `poolPlacementReply.Error`, so it fell back to its generic sentence.
+- Fix: `placementCommandError()` returns the underlying
+  `vmhost.ValidateManagedCommand` error; `localPoolVMPlacement` wraps it; and every
+  refusal `PoolPlacementHandler` makes, including auth and method, is emitted in the
+  JSON shape the master already decodes.
+- Regression: `internal/agent.TestPoolPlacementRefusalNamesTheInvalidField` drives a
+  real master-to-member placement with `revision: 7` and requires the reason to
+  survive the peer hop and to name the field. Against the pre-fix handler it fails
+  with `member refusal lost its reason across the peer hop: selected VM host refused
+  placement observation`; verified by reverting.
+- Avoid: Answering a peer endpoint's error in a different content type from its
+  success, and reducing a validator that knows the cause to a boolean.

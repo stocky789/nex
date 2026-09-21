@@ -201,6 +201,22 @@ in the lab cache. Other references describe raw evidence that stayed in the lab 
 | 16 | P2-4c, DOC-1 | pass | **Delete VM** and **Delete…** were disabled with a reason, and API DELETE returned 409, for running vm-b and for appliance-1. vm-b (force-stopped through the API) was deleted with disks retained through the tree menu: empty, wrong and wrong-case names were refused, and the qcow2 was kept. vm-c and vm-e were deleted with their disks from General: disk directories, vm-c's NVRAM and swtpm state were removed. After vm-b's delete the page returned to the host with the notice; the checkbox sat 11 px from its label for vm-b, vm-c and vm-e. vm-a was untouched (XML hash equal). | Host listings, captures (lab cache) |
 | COVERAGE-1 | P2-4c recovery | pass | A wipe delete of vm-d (through the API) was pending at the wiping stage when `nex-core-local` was killed (SIGKILL). After restart the entry read wiping pending, then succeeded 24 ms later. A host-side inotify poller read every write (5 events, 5 versions) and **never saw needs_attention**. The Controller operation settled succeeded; the domain and disk directory are gone (vm-d had no TPM and was never started, so it had no NVRAM or swtpm state to remove). The held (`--hold`) and cleaning-NVRAM interrupt variants were **not run**. | Journal versions and interrupt JSON (lab cache) |
 
+### Note added 2026-09-21: provenance of the row 8 domain-ID observation
+
+Row 8 states that across an ACPI reboot *"the domain ID stayed the same while the guest boot
+ID changed"*. That is the expected result for an in-guest reboot, which keeps the same QEMU
+process and libvirt domain ID, and nothing here retracts it. It is recorded only that the
+domain ID was sampled ad hoc into the lab cache: at the time no committed helper read
+`virsh domid`, so the observation cannot be re-derived from this repository. Guest boot IDs
+were and are sampled by committed code.
+
+A committed sampler now exists — `tests/integration/pool_continuity.py` reads `domid`
+alongside the QEMU pid, `/proc` start time and the guest boot ID — so later runs of this
+shape are reproducible. See
+[2026-09-21 Phase 4 gap closure](../2026-09-21-phase4-gap-closure.md), which also records
+the lab observation that `virsh domstate --reason` reads `running (booted)` both before and
+after a destroy+start, and is therefore not a continuity signal on its own.
+
 ### Gate items
 
 | Item | Status on gate5 | Notes |

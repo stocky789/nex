@@ -1,0 +1,34 @@
+{
+ "summary": "Add a tracked guest-continuity harness and record native evidence that running guests survive a planned pool master change, plus single-writer observation on shared NFS. API impact: none.",
+ "paths": [
+  "tests/integration/pool_continuity.py",
+  "tests/test_pool_continuity.py",
+  "docs/qa/2026-09-21-phase4-gap-closure.md",
+  "docs/changes/2026-09-21-phase4-gap-closure.json"
+ ],
+ "guide": {
+  "impact": "none",
+  "reason": "No operator-facing behaviour changed. The campaign exercises existing documented workflows and records evidence; the guide's pool authority and recovery page already documents the master change workflow, and its stated verification limits are addressed in the QA record rather than by changing instructions."
+ },
+ "api": {
+  "impact": "none",
+  "reason": "Test harness and QA evidence only. No Controller route, Core command kind, peer contract or schema was added or changed; the harness reads host state over SSH and the existing shared storage, and drives only already-implemented routes.",
+  "pages": []
+ },
+ "roadmap": {
+  "impact": "none",
+  "reason": "Phase 4 acceptance status is unchanged. This campaign is open and partial; it closes two named evidence gaps and explicitly does not re-accept the phase."
+ },
+ "state": {
+  "owner": "none",
+  "reason": "The harness and QA record hold no durable product state. Continuity samples are read from host /proc, libvirt and the guest's own disk, and written to an untracked evidence directory chosen by the caller."
+ },
+ "verification": {
+  "method": "Disposable three-host virtual lab plus an NFS storage node, binaries built from a clean tree at 9088abc. Ran three continuity arms in one session with one sampler: a null control, a deliberate restart through the Controller power API as the negative control, and a real planned master change. Sampled writable-open holders for each guest disk from all three hosts, and ran a cross-host lock probe with its own release-and-retry control. Ran the harness's unit checks with python3 -m unittest discover -s tests -p 'test_pool_continuity.py': 9 checks, all passing.",
+  "evidence": [
+   "docs/qa/2026-09-21-phase4-gap-closure.md",
+   "tests/test_pool_continuity.py"
+  ],
+  "limits": "No fence-verified promotion, no physical or BMC fencing, three hosts only, nex-core-local and therefore the libvirt StorageGuard hook and its AppArmor policy were not installed, single-writer sampling is point-in-time rather than a continuous trace, and no partition, interruption or ownership-conflict case was exercised."
+ }
+}
