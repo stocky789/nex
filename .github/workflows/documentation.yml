@@ -11,6 +11,7 @@ permissions:
   contents: read
 jobs:
   documentation:
+    if: github.server_url != 'https://github.com'  # github.com runs github.yml only
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

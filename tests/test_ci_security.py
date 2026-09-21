@@ -2,6 +2,7 @@
 """Catch a missing runtime artifact before either runner starts browser QA."""
 from pathlib import Path
 import json
+import re
 import subprocess
 import tempfile
 import textwrap
@@ -171,3 +172,41 @@ class ReleaseDeployCredentialTests(unittest.TestCase):
                                 text.index('- name: Check for deploy credentials'),
                                 'tagging happens first, which is why a silent skip is invisible')
                 self.assertIn('NEX_VERSION: ${{ steps.version.outputs.version }}', text)
+
+
+class GitHubMinuteBudgetTests(unittest.TestCase):
+    """Hosted github.com minutes are paid for; the forge runs the full suite for free.
+
+    The forge executes .github/workflows too (BUG-0043), so the split is made per job,
+    not per directory: every job there is skipped on github.com except the one in
+    github.yml. A new job added without that condition would silently bill Playwright,
+    race-instrumented Go tests or an ISO build to the hosted account.
+    """
+
+    SKIP = "github.server_url != 'https://github.com'"
+    ONLY = "if: github.server_url == 'https://github.com'"
+
+    def jobs(self, path):
+        """Yield (job name, job block) for each job in a workflow file."""
+        text = path.read_text()
+        body = text.split('\njobs:\n', 1)[1]
+        top = re.search(r'(?m)^[A-Za-z]', body)
+        if top:
+            body = body[:top.start()]
+        starts = [(m.start(), m.group(1)) for m in re.finditer(r'(?m)^  ([A-Za-z0-9_-]+):$', body)]
+        self.assertTrue(starts, f'{path} declares no jobs')
+        for index, (start, name) in enumerate(starts):
+            end = starts[index + 1][0] if index + 1 < len(starts) else len(body)
+            yield name, body[start:end]
+
+    def test_only_the_cheap_job_runs_on_github_com(self):
+        workflows = sorted((ROOT / '.github/workflows').glob('*.yml'))
+        self.assertGreater(len(workflows), 1)
+        self.assertIn('github.yml', [path.name for path in workflows])
+        for path in workflows:
+            for name, block in self.jobs(path):
+                with self.subTest(workflow=path.name, job=name):
+                    if path.name == 'github.yml':
+                        self.assertIn(self.ONLY, block)
+                    else:
+                        self.assertIn(self.SKIP, block)

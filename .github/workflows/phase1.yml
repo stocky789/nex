@@ -23,6 +23,7 @@ jobs:
   # Wave 2: go + web
   # Wave 3: contracts + website
   controller-browser:
+    if: github.server_url != 'https://github.com'  # github.com runs github.yml only
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -73,6 +74,7 @@ jobs:
         run: .cache/phase1-qa-venv/bin/python tests/integration/form_select_picker.py --evidence .cache/form-select-picker
 
   go:
+    if: github.server_url != 'https://github.com'  # github.com runs github.yml only
     needs: [controller-browser]
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -100,6 +102,7 @@ jobs:
           govulncheck ./...
 
   web:
+    if: github.server_url != 'https://github.com'  # github.com runs github.yml only
     needs: [controller-browser]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -122,6 +125,7 @@ jobs:
         run: npm --prefix web audit --audit-level=low
 
   contracts:
+    if: github.server_url != 'https://github.com'  # github.com runs github.yml only
     needs: [go]
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -141,6 +145,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_*.py' -v
 
   website:
+    if: github.server_url != 'https://github.com'  # github.com runs github.yml only
     needs: [web]
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -190,7 +195,8 @@ jobs:
   phase1:
     needs: [go, contracts, web, controller-browser, website]
     runs-on: ubuntu-latest
-    if: always()
+    # github.com runs github.yml only; always() keeps this gate reporting on the forge.
+    if: always() && github.server_url != 'https://github.com'
     steps:
       - name: Require every lane
         run: |

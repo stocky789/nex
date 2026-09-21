@@ -167,8 +167,8 @@ python3 scripts/check_docs.py --base <full-base-sha> --head "$(git rev-parse HEA
 changed-file coverage. Range mode requires a clean checkout at the given head; ignored build/cache
 artifacts do not block it. For a PR use its merge base; CI selects ranges automatically.
 
-`.github/workflows/` and `.gitea/workflows/` both run the checker and its tests on pushes and pull
-requests. Pushes assess the net before/after diff; PRs assess merge-base-to-head. A new non-default
+Forge CI runs the checker and its tests on every push and pull request; on github.com only
+`.github/workflows/github.yml` runs, on main pushes and pull requests. Pushes assess the net before/after diff; PRs assess merge-base-to-head. A new non-default
 branch push is compared with its merge base against the fetched default branch (a missing default
 ref fails); a first default-branch push assesses the full tree. The baseline assessment covers only
 pre-gate files.

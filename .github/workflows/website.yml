@@ -27,6 +27,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   website:
+    if: github.server_url != 'https://github.com'  # github.com runs github.yml only
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

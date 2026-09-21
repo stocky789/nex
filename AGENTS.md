@@ -267,10 +267,14 @@ option as approval. These instructions cannot enable a question UI the client la
   available. Test observable behavior and failure recovery; do not freeze known-bad prototype output.
 - For bugs, reproduce the failure and add a failing regression check before fixing the root cause where
   practical. If the check cannot reproduce it, record the limitation and the alternative evidence.
-- Every bug fix must include a regression test and ensure it runs in both GitHub Actions
-  (`.github/workflows/`) and Gitea Actions (`.gitea/workflows/`) on pushes and pull requests.
-  Reuse an existing test suite when both workflows already run it; otherwise update both workflow
-  files in the same change. The test must detect the original bug, pass with the fix, and fail CI
+- Every bug fix must include a regression test and ensure forge CI runs it on pushes and pull
+  requests. The forge executes `.github/workflows/`; keep the `.gitea/workflows/` copies in step
+  with it. Hosted github.com minutes are paid for and the forge runs the full suite for free, so
+  every job in `.github/workflows/` is skipped on github.com except the single cheap job in
+  `.github/workflows/github.yml` (Go tests without `-race`, `generate_api.py --check`, the `tests/`
+  suite and the documentation gate, on main pushes and pull requests). Decision: project owner,
+  2026-09-21. Reuse an existing test suite when a workflow already runs it; otherwise update the
+  workflow in the same change. The test must detect the original bug, pass with the fix, and fail CI
   if the bug returns. Record the test command and results in `docs/BUG_LEDGER.md`; missing runner
   or disposable-lab prerequisites leave regression coverage outstanding, not silently skipped.
 - Check relevant `docs/BUG_LEDGER.md` entries before fixing a previously affected system, if the ledger

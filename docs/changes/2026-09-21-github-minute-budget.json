@@ -1,0 +1,40 @@
+{
+  "summary": "Skip every .github/workflows job on github.com and add one cheap GitHub-only job (github.yml), so hosted minutes cover Go tests, contracts, the tests/ suite and the documentation gate while the forge keeps running the full suite unchanged. API impact: none.",
+  "paths": [
+    ".github/workflows/github.yml",
+    ".github/workflows/documentation.yml",
+    ".github/workflows/installer.yml",
+    ".github/workflows/phase1.yml",
+    ".github/workflows/release.yml",
+    ".github/workflows/website.yml",
+    "tests/test_ci_security.py",
+    "AGENTS.md",
+    "docs/DOCUMENTATION.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "CI budget only; no operator workflow, GUI, CLI or installer behavior changes.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core or client-facing contract is touched; only which runner executes existing checks.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No phase scope or build order change; the forge run remains the phase gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state is added or changed."
+  },
+  "verification": {
+    "method": "Parsed all six .github workflows and listed each job's resolved condition (js-yaml): one job per file carries the github.com skip, phase1's six lanes carry it with the aggregator keeping always(), and github.yml's job carries the inverse. Added tests.test_ci_security.GitHubMinuteBudgetTests: it passes on the tree and fails in a copied tree with one job's condition removed. Measured the cheap job's content locally: go test ./... 43s, python3 -m unittest discover -s tests -p 'test_*.py' 15s (three test_website_hosting failures are this workstation's missing nginx, which the job installs). Not verified: an actual hosted github.com run and an actual forge run; both are pending the next push.",
+    "evidence": [
+      "tests/test_ci_security.py",
+      ".github/workflows/github.yml"
+    ]
+  }
+}

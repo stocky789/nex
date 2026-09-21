@@ -32,6 +32,7 @@ permissions:
   contents: write
 jobs:
   release:
+    if: github.server_url != 'https://github.com'  # github.com runs github.yml only
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:

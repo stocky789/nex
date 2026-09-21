@@ -15,9 +15,10 @@ name: Installer
 # removed steps by giving act_runner a host label ("ubuntu-latest:host" in its
 # config.yaml) and reverting this file. See docs/BUG_LEDGER.md BUG-0043.
 #
-# KEEP THIS FILE AND .gitea/workflows/installer.yml IDENTICAL. The forge executes
-# workflows from this directory, not .gitea/workflows, so editing only the .gitea
-# copy changes nothing and the job silently keeps running the version here.
+# KEEP THIS FILE AND .gitea/workflows/installer.yml IDENTICAL apart from the
+# github.com skip below. The forge executes workflows from this directory, not
+# .gitea/workflows, so editing only the .gitea copy changes nothing and the job
+# silently keeps running the version here.
 on:
   push:
     branches:
@@ -30,6 +31,7 @@ permissions:
   contents: read
 jobs:
   installer:
+    if: github.server_url != 'https://github.com'  # github.com runs github.yml only
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
