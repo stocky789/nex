@@ -5690,3 +5690,199 @@ Append resolved defects with their evidence and the approach to avoid.
   placement observation`; verified by reverting.
 - Avoid: Answering a peer endpoint's error in a different content type from its
   success, and reducing a validator that knows the cause to a boolean.
+
+## BUG-0406 — ISO install failed: nex-core-local depends on vlan, which the media never carried
+
+- Date: 2026-09-21
+- Symptom: Both installer modes failed in `in-target` package configuration with
+  `nex-core-local : Depends: vlan but it is not installable` and
+  `Unable to satisfy dependencies. Reached two conflicting decisions: ...
+  nex-core-local:amd64 Depends vlan / but none of the choices are installable: [no choices]`.
+- Root cause: `nex-core-local` gained `ifupdown, bridge-utils, vlan` dependencies for
+  Core-owned management networking, but `installer/packages.txt` was not updated with
+  `vlan`. The ISO's offline repository is downloaded from that list alone
+  (`nex-core-local` itself is appended only after the closure is resolved), and nothing
+  else in the list pulls `vlan` in. `late-install.sh` deliberately installs from the
+  local repository only, so the missing package is unresolvable rather than fetched.
+- Fix: Add `vlan` to `installer/packages.txt` so the offline closure carries it.
+- Regression: `installer/check.sh` now parses `nex-core-local`'s `Depends:` field and
+  asserts every entry is either in `installer/packages.txt` or in the explicit
+  base-system set. It fails with
+  `nex-core-local depends on packages the ISO repo never downloads: ['vlan']` when the
+  entry is removed and passes with it; run 2026-09-21. CI already runs
+  `bash installer/check.sh` on every push and pull request
+  (`.github/workflows/installer.yml`, mirrored in `.gitea/workflows/installer.yml`).
+  Booting a rebuilt ISO is remaining evidence.
+- Avoid: Adding a dependency to `nex-core-local` without adding it to
+  `installer/packages.txt`; the package is appended to the list after the closure is
+  downloaded, so its own dependencies are never resolved by the ISO build.
+
+## BUG-0407 — Text wizard stored an empty VLAN, so pressing Enter produced an invalid handoff
+
+- Date: 2026-09-21
+- Symptom: In **Minimal install - Nex Core (text)**, the VLAN question appeared blank instead of
+  showing the untagged default. Accepting it with Enter wrote `vlan=` into
+  `/run/nex-installer/config.ini`, and `nex-config` then rejected the handoff, so the fastest
+  path through the wizard — answer nothing, accept every default — could not install.
+- Root cause: `step_nic` ran `db_set nex-installer/vlan "$(getv "vlan_$key")"`, which on the
+  first pass stores an empty string. cdebconf falls back to a template `Default:` only while a
+  question has no value at all, not when its value is empty, so the template's `0` was never
+  used and an empty answer was stored verbatim.
+- Fix: `installer/gui/wizard-text.sh` prefills the previous answer or `0`
+  (`db_set nex-installer/vlan "${previous:-0}"`) and stores an empty answer as `0`.
+- Regression: `python3 tests/integration/installer-text-wizard.py`, scenario
+  `default_answers`, answers every question with its prefilled value and asserts the decoded
+  handoff has `vlan:eth0 == '0'` and that the real `nex_network_validate` accepts it. CI already
+  runs this file on every push and pull request (`.github/workflows/installer.yml`, mirrored in
+  `.gitea/workflows/installer.yml`).
+- Avoid: Treating a debconf template `Default:` as a fallback for an empty stored value. Prefill
+  the value you want the operator to be able to accept.
+
+## BUG-0408 — French console layout was never applied, so the root password was typed on US
+
+- Date: 2026-09-21
+- Symptom: Choosing **French** in the text wizard left the console on the US layout. The root
+  password was therefore typed, unseen, on a different layout from the one recorded in the
+  handoff, and the installed host booted French — locking root out of its own console.
+- Root cause: `step_keymap` ran `ckbcomp "$v_keymap" | loadkeys - || true`. The installer's
+  console keymaps carry no bare `fr` map, only the `fr:latin9` variant, and `ckbcomp fr` exits
+  `0` after printing its two header lines and no key definitions, so `loadkeys` loaded an empty
+  map and the `|| true` swallowed the outcome. `us`, `gb`, `de` and `es` each produce a full map
+  under their bare names, which is why only French failed. Confirmed directly against the
+  extracted trixie graphical initrd, read-only: `ckbcomp fr` printed 0 `keycode` lines,
+  `ckbcomp fr latin9` printed 252, and `us`/`gb`/`de`/`es` printed 106/283/284/284.
+- Fix: `installer/gui/wizard-text.sh` maps `fr` to the `fr latin9` arguments (the other four keep
+  their bare names) and treats the layout as applied only when `ckbcomp` exits 0, its output
+  contains at least one line beginning with `keycode`, and `loadkeys` exits 0. Otherwise the new
+  `nex-installer/keymap-error` template is shown and the layout question is asked again, so the
+  password question is unreachable until a layout was applied — the same gate
+  `nex-wizard.c`'s `keyboard_ready` already enforced graphically. The handoff still records the
+  bare layout name. The map is loaded with `loadkeys -u`: `ckbcomp` emits UTF-8 keysyms, and
+  `loadkeys` accepts `U+201c` and friends only in Unicode mode, which it otherwise infers from
+  the console it opens. Since the gate now blocks the installation, leaving that to the console
+  mode would have refused `gb`, `de` and `es` forever on a console that is not `K_UNICODE`;
+  `kbd-mode` is absent from `install.amd/gtk/initrd.gz`, so nothing in the boot path sets that
+  mode explicitly. Measured with kbd 2.10.0 against maps captured from the initrd's own
+  `ckbcomp`: `gb`/`de`/`es` fail `loadkeys -b` (`unknown keysym
+  'left_double_quotation_mark'`) and all five layouts pass `loadkeys -u -b`.
+- Regression: `python3 tests/integration/installer-text-wizard.py`, scenarios
+  `keymap_arguments` (asserts `fr` is requested as `fr latin9`, that `loadkeys` is invoked as
+  `-u -`, and that the handoff still says
+  `keymap=fr`), `keymap_empty_map_retried` (a layout that expands to no key definitions) and
+  `keymap_load_failure_retried` (a layout `loadkeys` rejects); the last two assert the error is
+  shown, the question is asked again, and the password question comes only after it. Run by CI
+  as above.
+- Avoid: `|| true` on a step whose failure changes what the operator is about to type, and
+  trusting an exit status from a filter that can succeed while producing nothing. Check the
+  output, not just the status.
+
+## BUG-0409 — Padded sysfs values reached the handoff, so disk identity looked changed forever
+
+- Date: 2026-09-21
+- Symptom: On hardware whose sysfs serial or model is space padded — NVMe serials and many SCSI
+  models are — a text-mode installation failed its identity recheck with `Disk serial changed;
+  select the disk again.` and could not be completed, however often it was retried.
+- Root cause: `read_attr` was `cat "$1"`, so the padding was kept, and GKeyFile preserves
+  trailing spaces in a value. `nex-config` compares the handoff against a `g_strstrip()`ed read
+  of the same sysfs attribute, so the two never matched. The graphical wizard reads through
+  `read_sys()`, which strips, so only the text mode was affected.
+- Fix: `read_attr` in `installer/gui/wizard-text.sh` strips leading and trailing whitespace from
+  every sysfs value, in the one shared reader rather than at each call site, so MAC addresses and
+  models are covered as well as serials.
+- Regression: `python3 tests/integration/installer-text-wizard.py`, scenario
+  `sysfs_values_trimmed`, builds a fixture whose serial, model and MAC are padded and asserts the
+  handoff contains `disk_serial=TESTSERIAL1` and `mac=52:54:00:aa:bb:01` and that the review shows
+  the trimmed serial. Run by CI as above.
+- Avoid: Copying a sysfs attribute into a comparison key without stripping it, and fixing such a
+  value at one call site when every caller goes through one reader.
+
+## BUG-0410 — A host with no network adapter could not be installed in text mode at all
+
+- Date: 2026-09-21
+- Symptom: On a machine with no detected network adapter, the text wizard showed
+  `No network adapter was detected. Nex Core needs one management adapter.` and exited. The
+  shared setup loop in `start.sh` restarted it, so the same error reappeared indefinitely and the
+  machine could not be installed, although the graphical wizard installs such a host offline.
+- Root cause: `wizard-text.sh` treated an empty adapter list as fatal (`fail_note` then `exit 1`)
+  and offered no offline choice at the management question, so it refused an installation the
+  graphical wizard accepts. `start.sh` restarts the wizard on any non-zero exit, turning the
+  refusal into a loop.
+- Fix: The wizard shows the new `nex-installer/no-nic` note, skips the management question and
+  installs offline with an empty `management=`, matching what `nex-wizard.c`'s `collect()` writes
+  for the same choice. The management question also gained `Offline (no management network)` as
+  its last choice, so an operator with adapters can choose an offline install as well; every
+  adapter then offers `disabled`/`dhcp`/`static` and no gateway is asked, because only a
+  management adapter may carry a default route.
+- Regression: `python3 tests/integration/installer-text-wizard.py`, scenarios
+  `no_network_adapter` (fixture with no adapter: the note is shown, the management question is
+  not asked, the review reports `Offline`, the handoff matches the expected offline file and the
+  real `nex_network_validate` accepts it) and `offline_management` (adapters present, offline
+  chosen). Run by CI as above.
+- Avoid: Letting a frontend refuse an installation the other frontend accepts, and exiting
+  non-zero from a step a supervising loop will simply run again — a refusal that repeats forever
+  is worse than the refusal.
+
+## BUG-0411 — The same machine got different `nexN` adapter names in the two installer modes
+
+- Date: 2026-09-21
+- Symptom: Installing the same host graphically and in text mode could produce different
+  `nex0`..`nexN` names for the same physical adapters, so the two modes did not install the same
+  host and an operator comparing them found the names swapped.
+- Root cause: `nex-network.c` assigns `nexN` by the position of each `[NIC:*]` group in the
+  handoff. `wizard-text.sh` enumerates `/sys/class/net/*` in the shell's sorted glob order, while
+  `nex-wizard.c`'s `discover()` used `g_dir_read_name()`, which returns raw readdir order — an
+  arbitrary order that depends on the directory's on-disk layout, not on the adapter names.
+- Fix: `discover()` collects the names first and sorts them with `strcmp` before building `nics`,
+  so both frontends group the adapters in the same order.
+- Regression: `bash installer/check.sh` asserts
+  `g_ptr_array_sort(names, compare_names)` is present in `installer/gui/nex-wizard.c`, so
+  reverting to readdir order fails the job CI already runs
+  (`.github/workflows/installer.yml`, mirrored in `.gitea/workflows/installer.yml`). It is a
+  source assertion, not a behavioural one: no automated check runs the graphical wizard.
+- Avoid: Deriving a durable identity from a directory read order. If two code paths must agree on
+  an ordering, both must impose one.
+
+> BUG-0407 to BUG-0411 were found in pre-merge review of the unreleased text wizard, before any
+> ISO carrying it was built. Their regression evidence is a scripted simulation: the scenarios
+> above drive the wizard with a stand-in for cdebconf and stand-ins for `ckbcomp`, `loadkeys`,
+> `prepare` and `nex-config`, under both `/bin/sh` and `busybox ash`. Red-to-green was recorded on
+> 2026-09-21: `installer/gui/wizard-text.sh` and `installer/gui/wizard-text.templates` were
+> restored from the pre-fix commit into a scratch tree and the committed
+> `tests/integration/installer-text-wizard.py` was run against them unchanged. It exited 1 with
+> `default_answers`, `erase_summary`, `sysfs_values_trimmed`, `keymap_arguments`,
+> `keymap_empty_map_retried`, `keymap_load_failure_retried`, `rejected_settings_keep_answers`,
+> `offline_management`, `no_network_adapter`, `prepare_runs_before_frontend` and `pure_ascii`
+> failing, and only `navigation_and_handoff`, `prepare_failure_stops_setup`,
+> `abandoned_setup_leaves_no_handoff` and `templates_exist` passing; against the fixed wizard all
+> 28 scenarios pass. BUG-0411 is the exception: its check is a source assertion in
+> `installer/check.sh`, because nothing runs the graphical wizard. Booting a rebuilt ISO and
+> completing a text-mode installation, on real hardware and a real console, remains outstanding
+> evidence for all five.
+
+## BUG-0412 — Every pull request commit showed cancelled Controller foundation checks
+
+- Date: 2026-09-21
+- Symptom: Each commit pushed to a pull request branch carried six failed statuses,
+  `Controller foundation / ... (push)` with "Has been cancelled", beside the passing
+  `(pull_request)` statuses of the same jobs (push run 4263 and pull request run 4267 on one
+  commit). The combined commit status was `failure`, so the pull request looked broken
+  although every job that ran had passed.
+- Root cause: `phase1.yml` ran on `push` to every branch and on `pull_request`, and both
+  events evaluate to the one `nex-shared-runner` concurrency group with
+  `cancel-in-progress: true` (BUG-0399, BUG-0400). The forge cancels earlier runs in a
+  group when a newer one arrives, and cancels waiting or blocked ones even without
+  `cancel-in-progress`, so the two runs of one commit always cancelled each other and the
+  loser reported a failed status.
+- Fix: `phase1.yml` runs on `push` to `main` only, in both workflow copies. A branch is
+  covered by its pull request run, so one commit produces one Controller foundation run.
+- Regression: `tests.test_ci_security.BrowserArtifactTests.test_phase1_runs_once_per_pull_request_commit`
+  asserts the trigger block of both copies. With `'**'` restored in one copy it fails with
+  `Lists differ: [... "'**'" ...] != [... 'main' ...]` and passes with the fix; run
+  2026-09-21 with `python3 -m unittest tests.test_ci_security` (10 tests). Forge CI runs it
+  in the Controller foundation contracts lane (`python3 -m unittest discover -s tests -p 'test_*.py'`).
+  A hosted pull request run after the push is remaining evidence.
+- Avoid: Triggering a workflow on both `push: '**'` and `pull_request` while its concurrency
+  group is shared across refs; the group serializes by cancelling, not by queueing. Still
+  open: on a push to `main` the Controller foundation and Release runs share that group and
+  one cancels the other (runs 4255 and 4256); that needs a sequencing decision, not a
+  trigger change.

@@ -1,0 +1,48 @@
+{
+  "summary": "Bump the changelog-derived project version from 0.4.0 to 0.4.1 and record the installer parity feature and the missing-vlan installation fix under that heading. API impact: none.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/guide/change-management-network.md",
+    "docs/guide/host-maintenance-mode.md",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/publish-a-release.md",
+    "docs/guide/software-updates.md",
+    "docs/guide/install-nex-core.md",
+    "installer/README.md",
+    "docs/changes/2026-09-21-version-0.4.1.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Every page carrying a current-working-version label now names development product 0.4.1, so the guide does not describe a version older than the one a local build stamps.",
+    "pages": [
+      "docs/guide/change-management-network.md",
+      "docs/guide/host-maintenance-mode.md",
+      "docs/guide/join-a-pool.md",
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/guide/publish-a-release.md",
+      "docs/guide/software-updates.md",
+      "docs/guide/install-nex-core.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Version metadata only; the installer changes under this heading carry their own assessments and add no Controller/Core contract."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No phase or publication claim. 0.4.1 is a working-tree heading for installer work; the Phase 4 acceptance scope recorded under 0.4.0 is unchanged."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Version metadata adds no durable product state."
+  },
+  "verification": {
+    "method": "python3 scripts/release-version.py --current --format both returns '0.4.1 0.4.1' and python3 -m unittest tests.test_release_version passed (10 tests) on 2026-09-21. The 0.4.0 section keeps its committed Phase 4 entries and acceptance note unchanged; the two new installer entries were moved under the 0.4.1 heading and [Unreleased] is still empty. The eight current-working-version labels that read 0.4.0 were bumped together. No 0.4.1 ISO was built, tagged or published, and no installation was performed.",
+    "evidence": [
+      "scripts/release-version.py",
+      "tests/test_release_version.py",
+      "CHANGELOG.md"
+    ]
+  }
+}

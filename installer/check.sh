@@ -6,6 +6,7 @@ cd "$(dirname "$0")/.."
 bash -n installer/build.sh
 bash -n installer/build-gui.sh
 sh -n installer/late-install.sh
+sh -n installer/gui/wizard-text.sh
 sh -n installer/root-account.sh
 python3 - <<'PY'
 from pathlib import Path
@@ -14,25 +15,86 @@ import re
 build = Path('installer/build.sh').read_text()
 bios = build.split("<<'BIOS'\n")[2].split('\nBIOS')[0]
 grub = build.split("<<'GRUB'\n")[1].split('\nGRUB')[0]
-# Both firmware menus must offer the same frontend choice and shared safe policy.
-for label, directory in [('GUI install - Nex Core', 'install.amd/gtk'),
-                         ('Minimal install - Nex Core (text)', 'install.amd')]:
-    b = next(entry for entry in re.split(r'(?m)^label ', bios)[1:]
-             if f'menu label {label}\n' in entry)
-    g = grub.split(f"menuentry '{label}' {{\n")[1].split('}')[0]
+
+
+def boot_entry(label):
+    """The BIOS and GRUB entries of one boot menu item."""
+    return (next(entry for entry in re.split(r'(?m)^label ', bios)[1:]
+                 if f'menu label {label}\n' in entry),
+            grub.split(f"menuentry '{label}' {{\n")[1].split('}')[0])
+
+
+# Both Nex modes boot the initrd carrying the Nex overlay, which supplies the wizard
+# and its embedded safe seed; only the cdebconf frontend differs. A mode booting the
+# untouched Debian initrd would silently install a different host.
+for label, frontend in [('GUI install - Nex Core', ''),
+                        ('Minimal install - Nex Core (text)', 'newt')]:
+    b, g = boot_entry(label)
     assert 'kernel /install.amd/vmlinuz' in b
-    assert f'initrd=/{directory}/initrd.gz' in b
+    assert 'initrd=/install.amd/gtk/initrd.gz' in b
     assert 'linux /install.amd/vmlinuz' in g
-    assert f'initrd /{directory}/initrd.gz' in g
-    if directory.endswith('/gtk'):
-        assert 'preseed/file=' not in b + g
+    assert 'initrd /install.amd/gtk/initrd.gz' in g
+    assert 'preseed/file=' not in b + g, f'{label} uses the initrd seed, not the media file'
+    if frontend:
+        assert f'DEBIAN_FRONTEND={frontend}' in b and f'DEBIAN_FRONTEND={frontend}' in g
     else:
-        assert 'preseed/file=/cdrom/preseed.cfg' in b and 'preseed/file=/cdrom/preseed.cfg' in g
+        assert 'DEBIAN_FRONTEND=' not in b + g, 'the graphical mode selects its own frontend'
     assert 'auto=true' not in b + g
+# Serial and rescue both boot the untouched Debian initrd, but only the serial
+# entries install: they carry the media seed. Rescue must reach a shell without
+# seeding anything, so a preseed argument there would change what it does.
+for entry in boot_entry('Install Nex Core (serial console ttyS0)'):
+    assert '/install.amd/initrd.gz' in entry and '/install.amd/gtk/initrd.gz' not in entry
+    assert 'preseed/file=/cdrom/preseed.cfg' in entry, 'the serial install needs the media seed'
+    assert 'console=ttyS0,115200n8' in entry
+for entry in boot_entry('Debian rescue mode'):
+    assert '/install.amd/initrd.gz' in entry and '/install.amd/gtk/initrd.gz' not in entry
+    assert 'preseed' not in entry, 'rescue must boot Debian unseeded'
+    assert 'rescue/enable=true' in entry
 assert 'timeout 0' in build and 'set timeout=-1' in grub
-assert 'console=ttyS0,115200n8' in bios and 'console=ttyS0,115200n8' in grub
-assert 'rescue/enable=true' in bios and 'rescue/enable=true' in grub
-print('PASS: BIOS/UEFI GUI and minimal text entries, shared preseed, serial/rescue, no timeout')
+print('PASS: BIOS/UEFI GUI and minimal text entries, serial media seed, unseeded rescue, no timeout')
+
+# Both wizards write the same handoff and nex-config remains the single validator.
+start = Path('installer/gui/start.sh').read_text()
+wizard = Path('installer/gui/wizard-text.sh').read_text()
+templates = Path('installer/gui/wizard-text.templates').read_text()
+gui = Path('installer/build-gui.sh').read_text()
+assert '/usr/lib/nex-installer/wizard-text' in start and '/usr/bin/nex-wizard' in start
+assert '"$nex_wizard"' in start, 'One setup loop must drive whichever frontend is running'
+assert 'nex-config --apply /run/nex-installer/config.ini' in start
+assert start.count('nex-config --apply') == 1, 'One apply site for both frontends'
+assert "install -m 755 installer/gui/wizard-text.sh" in gui and 'wizard-text.templates' in gui
+assert "assert (root / 'usr/lib/cdebconf/frontend/newt.so').is_file()" in gui
+assert '/run/nex-installer/config.ini' in wizard and '/usr/bin/nex-config' not in wizard, \
+    'The text wizard writes the handoff; the shared setup loop applies it'
+assert '/usr/lib/nex-installer/validate-config' in wizard, \
+    'The text wizard must reject settings through nex-config, not a second validator'
+# These are printed on the raw Linux VT before bterm starts: the wizard and its
+# questions, and the rejection messages it and the shared setup loop relay from
+# nex-config. (nex-wizard.c is excluded: it only ever draws inside GTK.)
+for name in ('wizard-text.sh', 'wizard-text.templates', 'nex-network.c', 'nex-config.c'):
+    assert Path('installer/gui', name).read_text().isascii(), \
+        f'{name} must stay ASCII for the installer console'
+# BUG-0411: both frontends must enumerate adapters in the same order, or the
+# same machine gets different nex0..nexN names depending on the installer mode.
+assert 'g_ptr_array_sort(names, compare_names)' in Path('installer/gui/nex-wizard.c').read_text(), \
+    'The graphical wizard must sort /sys/class/net, like the text wizard glob'
+# The text frontend must not weaken the disk, account or network contract.
+assert 'MIN_SECTORS=33554432' in wizard
+assert 'sd*|vd*|xvd*|nvme*' in wizard
+assert '[ -e "$path/partition" ] && continue' in wizard
+assert '"$(read_attr "$path/removable")" = 0' in wizard
+assert '/cdrom' in wizard, 'Installation media is never offered as a target'
+assert 'db_set nex-installer/erase false' in wizard, 'Confirmation must not carry forward'
+assert '${#first}" -lt 8' in wizard
+for template in ('nex-installer/hostname', 'nex-installer/keymap', 'nex-installer/timezone',
+                 'nex-installer/password', 'nex-installer/management', 'nex-installer/mode',
+                 'nex-installer/vlan', 'nex-installer/address', 'nex-installer/gateway',
+                 'nex-installer/dns', 'nex-installer/disk', 'nex-installer/erase'):
+    assert f'Template: {template}\n' in templates, template
+    assert template in wizard, template
+assert 'Type: boolean' in templates.split('Template: nex-installer/erase\n')[1]
+print('PASS: one setup handoff for both installer frontends')
 
 entries = [line.split(None, 3) for line in Path('installer/preseed.cfg').read_text().splitlines()
            if line.strip() and not line.lstrip().startswith('#')]
@@ -99,6 +161,18 @@ assert '\nin-target /bin/sh /var/cache/nex-install/configure.sh\n' in late, 'Use
 assert '\nchroot /target ' not in late, 'Raw chroot bypasses installer setup'
 post = Path('packaging/core-local/postinst').read_text()
 core_package = Path('packaging/core-local/build-inside.sh').read_text()
+# BUG-0406: the installed system resolves nex-core-local from the ISO's offline repo,
+# whose closure is downloaded from packages.txt alone. A dependency that nothing in that
+# list pulls in is simply absent from the media and the in-target install fails.
+core_depends_field = re.findall(r'(?m)^Depends: (.+)$', core_package)
+assert len(core_depends_field) == 1, 'One nex-core-local control stanza expected'
+core_depends = {d.split()[0] for d in core_depends_field[0].split(',')}
+# Supplied by the Debian base system or already pulled in by a listed package's own
+# dependencies; everything else nex-core-local needs must be downloaded explicitly.
+base_system = {'init-system-helpers', 'libc6', 'python3', 'openssl', 'libpam0g',
+               'libpam-modules', 'iproute2'}
+undownloaded = sorted(core_depends - base_system - set(packages))
+assert not undownloaded, f'nex-core-local depends on packages the ISO repo never downloads: {undownloaded}'
 assert 'python3-virt-firmware' in core_package, 'nex-core-local must depend on the Secure Boot variable tool package'
 assert 'dpkg-divert --local --add --rename --divert /etc/os-release.debian /etc/os-release' in post
 assert 'ID=nex-core\nID_LIKE=debian\n' in post and "dpkg-query -W -f='${Version}' nex-core-local" in post

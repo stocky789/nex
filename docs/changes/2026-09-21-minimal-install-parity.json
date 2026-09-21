@@ -1,0 +1,54 @@
+{
+  "summary": "Minimal installation runs the Nex wizard in a text frontend and writes the same handoff, so both installer modes install the same host. Pre-merge review fixes complete the parity: the offline choice and a no-adapter host, the untagged VLAN default, a keyboard layout that must actually be applied, trimmed sysfs values, validation before the wizard finishes, hardware preparation before the question frontend, and the same adapter ordering in both frontends. API impact: none.",
+  "paths": [
+    "installer/gui/wizard-text.sh",
+    "installer/gui/wizard-text.templates",
+    "installer/gui/start.sh",
+    "installer/gui/nex-wizard.c",
+    "installer/gui/nex-network.c",
+    "installer/build-gui.sh",
+    "installer/build.sh",
+    "installer/check.sh",
+    "installer/late-install.sh",
+    "installer/README.md",
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "tests/integration/installer-text-wizard.py",
+    "tests/integration/installer-handoff.py",
+    ".github/workflows/installer.yml",
+    ".gitea/workflows/installer.yml",
+    "docs/guide/install-nex-core.md",
+    "docs/plans/2026-09-21-minimal-install-parity.md",
+    "docs/changes/2026-09-21-minimal-install-parity.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Minimal installation no longer asks Debian's language, networking, partitioning and GRUB questions; it asks the wizard's questions, enforces the same password and disk rules, and now creates the management bridge. The review fixes changed operator-visible behaviour again: the offline choice and the no-adapter note, the untagged VLAN default, a keyboard layout that is reported and asked again when it cannot be applied, the per-adapter line in the erase review, and a settings rejection that names its own reason, erases nothing and keeps every answer instead of restarting with them cleared. The documented steps, expected result, troubleshooting and verification had to change with it.",
+    "pages": [
+      "docs/guide/install-nex-core.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Installer frontend only. No Controller/Core route, agent command, event or stream is added or changed; the wizard handoff is a private file read by nex-config inside the same initrd, which is unchanged. The wizard's new validation call runs that same nex-config binary locally through its existing validate-only invocation, so no second validator and no new contract exist.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No published roadmap milestone changes: this brings an existing installer mode up to the behaviour the guide already described, and the review round fixes defects in that unreleased work. The decision, rejected alternatives, review-round scope decisions and held-back scope are recorded in docs/plans/2026-09-21-minimal-install-parity.md.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Installation-time configuration of the host being built. No durable Controller or pool-scoped record is created, read or changed; the handoff lives in tmpfs and is consumed during the installation, and the installed host's own /etc files and its Core records remain the authority, exactly as with a graphical installation."
+  },
+  "verification": {
+    "method": "Simulation and static checks only; no ISO was built and no installation was performed in this round. Established from the pinned Debian 13 installer images that install.amd/gtk/initrd.gz carries newt.so and text.so and that S62Xorg starts Xorg only for the gtk frontend, and that install.amd/initrd.gz carries no glib, which is why minimal now boots the Nex initrd with DEBIAN_FRONTEND=newt rather than bundling libraries. On 2026-09-21, python3 tests/integration/installer-text-wizard.py passed with 28 scenarios and 0 failures (13 wizard scenarios under /bin/sh and under busybox ash, plus a templates cross-check and an ASCII check), re-run with a PATH shim making 'sh' busybox ash for both lanes; busybox was added to both CI workflow copies so that second lane cannot silently skip on a runner without it. Red-to-green was recorded the same day: with installer/gui/wizard-text.sh and wizard-text.templates restored from the pre-fix commit into a scratch tree, the committed check exits 1 and fails default_answers, erase_summary, sysfs_values_trimmed, keymap_arguments, keymap_empty_map_retried, keymap_load_failure_retried, rejected_settings_keep_answers, offline_management, no_network_adapter, prepare_runs_before_frontend and pure_ascii, passing only navigation_and_handoff, prepare_failure_stops_setup, abandoned_setup_leaves_no_handoff and templates_exist. This is a scripted simulation: a stateful stand-in answers the questions in place of cdebconf, and ckbcomp, loadkeys, prepare and nex-config are stubs; the handoff is decoded and validated by the real nex-network.c compiled against GKeyFile in the four scenarios that complete a handoff worth validating (default_answers, navigation_and_handoff, offline_management, no_network_adapter), so the C validator was genuinely exercised there, while the other scenarios compare the handoff text only. Scenarios cover the question order and Go Back over a skipped step, device filtering, the untagged VLAN default (default_answers), trimmed padded sysfs serials, models and MACs (sysfs_values_trimmed), the fr latin9 keymap arguments and both keymap failure retries before the password question (keymap_arguments, keymap_empty_map_retried, keymap_load_failure_retried), the offline choice and a host with no adapter (offline_management, no_network_adapter), a rejected settings check that keeps every answer (rejected_settings_keep_answers), prepare running once before the frontend, and that an abandoned setup leaves no handoff. bash installer/check.sh passed; its two new boot-menu assertions were mutation-checked by seeding the BIOS rescue entry (fails 'rescue must boot Debian unseeded') and by removing the seed from the BIOS serial entry (fails 'the serial install needs the media seed'), both of which the previous unscoped assertion accepted, with installer/build.sh restored unmodified afterwards. installer/gui/nex-wizard.c compiles with the build's own cc line with no new warnings, tests/integration/installer-network.c passes, and its sorted enumeration was compared against a C-locale glob of the same eight names and matched exactly; installer/check.sh now asserts that sort is present (BUG-0411), so reverting it fails the job CI already runs. The console ASCII assertion was widened to installer/gui/nex-network.c and nex-config.c, whose rejection messages the text wizard and start.sh now print on the same pre-bterm console; the one non-ASCII message there, 'VLAN (0-4094)', was rewritten with an ASCII hyphen. The keymap is loaded with 'loadkeys -u' because ckbcomp emits UTF-8 keysyms: measured with kbd 2.10.0 against maps captured from the initrd's own ckbcomp, gb, de and es fail 'loadkeys -b' with \"unknown keysym 'left_double_quotation_mark'\" and all five layouts pass 'loadkeys -u -b'. tests/integration/installer-shell.py and tests/integration/installer-handoff.py pass. The initrd's own ckbcomp was run read-only and confirmed the French defect directly: 'fr' alone produces no keycode lines, 'fr latin9' produces 252. tests/integration/installer-handoff.py additionally drives start.sh with a nex-config stub that rejects once: its own reason is shown on the next wizard pass, stays in the log and leaves no capture file; the scenario fails against the previous start.sh. Untested limits: newt's real rendering of the questions and of the Adapters review line, ckbcomp and loadkeys against a real virtual console, real NVMe and SCSI hardware behind the trimmed values, the graphical wizard's discover() (only a source assertion covers its ordering; nothing runs it), loadkeys against a console that is not K_UNICODE (the mode dependency is read from loadkeys' own behaviour, not measured on a real VT), and a booted minimal installation compared against a graphical installation of the same settings. The serial entry still runs Debian's own questions.",
+    "evidence": [
+      "tests/integration/installer-text-wizard.py",
+      "installer/check.sh",
+      "docs/BUG_LEDGER.md",
+      "docs/plans/2026-09-21-minimal-install-parity.md"
+    ]
+  }
+}

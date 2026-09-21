@@ -1,0 +1,36 @@
+{
+  "summary": "Ship the vlan package on the ISO so nex-core-local's offline dependencies resolve, and gate that closure in installer/check.sh. API impact: none.",
+  "paths": [
+    "installer/packages.txt",
+    "installer/check.sh",
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-21-iso-vlan-dependency.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The documented installation steps and operator choices are unchanged; this restores the install they already describe.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Installation media package closure only. No Controller/Core route, command, event or stream is added or changed, and no caller or agent contract is touched.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "A build-input defect fix; no phase scope or ordering changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Installation media contents only. No durable Controller or pool-scoped record is created, read or changed."
+  },
+  "verification": {
+    "method": "bash installer/check.sh passed with vlan present and failed with 'nex-core-local depends on packages the ISO repo never downloads: [\\'vlan\\']' when the entry was removed, on 2026-09-21. The dependency mismatch was traced to installer/build.sh resolving the offline closure from installer/packages.txt before appending nex-core-local, and to packaging/core-local/build-inside.sh adding vlan without a matching media entry. A rebuilt ISO and a disposable-lab installation are remaining evidence; no ISO was built or installed for this change.",
+    "evidence": [
+      "installer/check.sh",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

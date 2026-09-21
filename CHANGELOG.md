@@ -6,12 +6,47 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.0` →
-> Debian `0.4.0`).
+> development software. Builds use the newest numbered changelog heading (`0.4.1` →
+> Debian `0.4.1`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.1] — 2026-09-21
+
+> **Development working-tree record, not a published release.** Installer work only; the
+> Phase 4 acceptance scope and limits recorded under 0.4.0 are unchanged. No 0.4.1 ISO has
+> been built or installed, so both entries below are verified at source level only.
+
+### Minor Feature
+
+- **Minimal install - Nex Core (text)** now runs the same setup as the graphical installer,
+  in a keyboard-only interface. It asks the same questions, applies the same password and
+  disk rules, offers the same Go Back navigation and the same named erase confirmation, and
+  installs the same host, including the `br0` management bridge, MAC-bound `nexN` interface
+  names and the chosen VLAN and DNS. Previously this mode ran Debian's own installation
+  questions and produced a host with different networking. The serial console entry still
+  runs Debian's questions.
+
+  It offers the same **Offline (no management network)** choice as the graphical installer, and
+  a machine with no network adapter is told so and installed offline instead of setup refusing
+  to start. The keyboard layout must actually be applied to the console before the root password
+  is requested; a layout this console cannot load is reported and asked again. The VLAN question
+  is prefilled with `0`, so pressing Enter leaves an adapter untagged. The final review lists
+  every adapter's mode, address, gateway and VLAN alongside the disk. Answering yes checks the
+  complete settings before anything is written: a rejection names its own reason, erases nothing
+  and returns to the questions with every answer still filled in. Hardware detection now runs
+  before the questions start, so the detection steps no longer interrupt a question on screen.
+  Both installers list network adapters in the same order, so a machine gets the same `nexN`
+  interface names whichever mode installs it.
+
+### Bug Fixes
+
+- Installation no longer fails part way through with "nex-core-local : Depends: vlan but it
+  is not installable". The installation media now carries the `vlan` package that Nex Core's
+  tagged management networking needs, and the build refuses to produce media that is missing
+  any package Nex Core depends on (BUG-0406).
 
 ## [0.4.0] — 2026-09-20
 

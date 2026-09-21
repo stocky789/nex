@@ -158,6 +158,8 @@ status = (root / 'var/lib/dpkg/status').read_text()
 package = next(p for p in status.split('\n\n') if p.startswith('Package: cdebconf-gtk-udeb\n'))
 assert '\nVersion: 0.280\n' in package + '\n', 'GTK frontend ABI changed'
 assert (root / 'usr/lib/cdebconf/frontend/gtk.so').is_file()
+# Minimal mode boots this same initrd with DEBIAN_FRONTEND=newt.
+assert (root / 'usr/lib/cdebconf/frontend/newt.so').is_file(), 'text frontend missing from the graphical initrd'
 PY
 # Add the Nex wizard before the native installation engine starts.
 overlay=$cache/overlay
@@ -171,6 +173,8 @@ cc -O2 -Wall -Wextra $(pkg-config --cflags glib-2.0) \
 ln -s /usr/bin/nex-config "$overlay/usr/lib/nex-installer/validate-config"
 install -m 755 installer/gui/recheck.sh "$overlay/usr/lib/partman/init.d/00nex-recheck"
 install -m 755 installer/gui/prepare.sh "$overlay/usr/lib/nex-installer/prepare"
+install -m 755 installer/gui/wizard-text.sh "$overlay/usr/lib/nex-installer/wizard-text"
+install -m 644 installer/gui/wizard-text.templates "$overlay/usr/share/nex-installer/wizard-text.templates"
 install -m 755 installer/gui/dhcp-preview.sh "$overlay/usr/lib/nex-installer/dhcp-preview"
 install -m 644 installer/gui/start.sh "$overlay/usr/lib/debian-installer.d/S66nex-wizard"
 # Load safe package/account defaults before the GUI; no file-preseed screen.

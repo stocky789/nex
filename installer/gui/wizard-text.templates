@@ -1,0 +1,139 @@
+Template: nex-installer/title
+Type: text
+Description: Nex Core setup
+
+Template: nex-installer/failed
+Type: error
+Description: Setup did not finish
+ ${detail}
+
+Template: nex-installer/hostname
+Type: string
+Default: nexcore
+Description: Host name or fully qualified domain name:
+ This name identifies the host in Nex Controller and in the pool it creates.
+ Use ASCII letters, digits and hyphens, for example nexcore or
+ nexcore.example.test.
+
+Template: nex-installer/keymap
+Type: select
+Choices: us, gb, de, fr, es
+Default: us
+Description: Keyboard layout:
+ The layout is applied to this console immediately and installed on the host.
+
+Template: nex-installer/keymap-error
+Type: error
+Description: Keyboard layout not applied
+ ${detail}
+
+Template: nex-installer/timezone-area
+Type: select
+Choices: ${choices}
+Default: UTC
+Description: Timezone area:
+ Choose UTC unless this host must report local time.
+
+Template: nex-installer/timezone
+Type: select
+Choices: ${choices}
+Description: Timezone:
+
+Template: nex-installer/password
+Type: password
+Description: Root password:
+ No ordinary user account is created. Use root at the local console after the
+ host reboots; root SSH login stays disabled. The password must be at least
+ 8 characters.
+
+Template: nex-installer/password-again
+Type: password
+Description: Re-enter the root password to confirm:
+
+Template: nex-installer/password-error
+Type: error
+Description: Root password rejected
+ ${detail}
+
+Template: nex-installer/management
+Type: select
+Choices: ${choices}
+Description: Management adapter:
+ This adapter becomes the port of bridge br0 on the installed host and is the
+ only interface that owns the default route and DNS. Other adapters can be
+ configured without a gateway.
+ .
+ Choose Offline to install without a management network. Adapters can still be
+ configured, and networking can be set up locally after the host reboots.
+
+Template: nex-installer/no-nic
+Type: note
+Description: No network adapter was detected
+ Nex Core installs offline on this host. Configure networking locally after the
+ host reboots, or attach an adapter and start setup again.
+
+Template: nex-installer/mode
+Type: select
+Choices: ${choices}
+Description: IPv4 configuration for ${nic}:
+ ${detail}
+
+Template: nex-installer/vlan
+Type: string
+Default: 0
+Description: VLAN ID for ${nic}:
+ Enter 0 for an untagged adapter, or 1 to 4094 for a tagged one. One VLAN per
+ adapter is supported; trunks and bonds are not part of this release.
+
+Template: nex-installer/address
+Type: string
+Description: IPv4 address and prefix length for ${nic}:
+ Use CIDR notation, for example 192.0.2.10/24.
+
+Template: nex-installer/gateway
+Type: string
+Description: Default gateway for ${nic}:
+ Must be an address inside the prefix entered above. Leave this empty to
+ install without a default route.
+
+Template: nex-installer/dns
+Type: string
+Description: DNS servers:
+ Space-separated IPv4 addresses. Leave this empty to use the servers supplied
+ by DHCP on the management adapter.
+
+Template: nex-installer/disk
+Type: select
+Choices: ${choices}
+Description: Installation disk:
+ The whole disk is erased and installed with one ext4 filesystem. Only
+ writable, nonremovable disks of at least 16 GiB that do not hold the
+ installation media are listed.
+
+Template: nex-installer/no-disk
+Type: error
+Description: No installation disk was found
+ No writable, nonremovable disk of at least 16 GiB was detected. Attach a
+ supported disk and start setup again. Installation media and removable
+ devices are never offered as targets.
+
+Template: nex-installer/erase
+Type: boolean
+Default: false
+Description: Erase ${disk} and install Nex Core?
+ Review these settings. Answering yes starts partitioning and destroys every
+ existing filesystem on ${disk}.
+ .
+ Host name: ${hostname}
+ Timezone: ${timezone}
+ Keyboard layout: ${keymap}
+ .
+ Management adapter: ${management}
+ Adapters: ${adapters}
+ DNS servers: ${dns}
+ .
+ Installation disk: ${disk}
+ Capacity: ${disksize}
+ Serial: ${serial}
+ .
+ Answer no to go back and change any of these settings.

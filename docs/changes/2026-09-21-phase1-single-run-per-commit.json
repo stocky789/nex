@@ -1,0 +1,36 @@
+{
+  "summary": "Stop the Controller foundation push and pull request runs of one commit cancelling each other (BUG-0412): phase1.yml runs on push to main only and on pull requests. API impact: none.",
+  "paths": [
+    ".gitea/workflows/phase1.yml",
+    ".github/workflows/phase1.yml",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-21-phase1-single-run-per-commit.json",
+    "tests/test_ci_security.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "CI trigger configuration only; no operator-visible behaviour, installer, CLI or configuration changes.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller, Core or client-facing contract is involved; only when a CI workflow starts.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No phase scope or acceptance gate changes. Every commit bound for main is still checked by its pull request run or by the main push run.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Workflow trigger configuration holds no product state."
+  },
+  "verification": {
+    "method": "python3 -m unittest tests.test_ci_security: 10 tests OK. Negative control: restoring the '**' push trigger in one workflow copy makes test_phase1_runs_once_per_pull_request_commit fail with a Lists differ assertion; restoring the fix passes. The cancellation rule was read from the forge's Actions concurrency source (earlier waiting or blocked runs in a group are cancelled by a newer run, running ones too when cancel-in-progress is true) and matches the observed runs: push run 4263 cancelled while pull request run 4267 of the same commit passed. NOT EXECUTED: a hosted pull request run with the new trigger; it needs a push. Not changed and still open: on main pushes Controller foundation and Release share the group and one cancels the other (runs 4255 and 4256).",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "tests/test_ci_security.py"
+    ]
+  }
+}
