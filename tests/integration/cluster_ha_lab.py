@@ -118,19 +118,50 @@ def seed(lab, name, address, public_key, packages):
     shutil.rmtree(directory)
 
 
-def prepare_pristine_corosync(lab, name):
-    """Record only the shipped Debian conffile digest before Nex owns clustering."""
-    lab = check_lab(lab)
-    assert name in CORE_NAMES, "pristine marker is only valid for a disposable Core"
-    command = (
+# Stopped in cluster order: resource manager, then lock manager, then messaging.
+PRISTINE_STOP_ORDER = ("nex-cluster-local.service", "pacemaker.service",
+                       "dlm.service", "corosync.service")
+
+
+def pristine_corosync_command():
+    """The guard script, built separately so its shape can be checked without a lab."""
+    return (
         "set -eu; "
-        "if virsh -c qemu:///system list --name | grep -q .; then echo running-nested-vm >&2; exit 1; fi; "
+        # BUG-0404: these are absence guards, so a tool or unit that is not installed means
+        # the thing being guarded against cannot be happening.  Running them unconditionally
+        # under `set -eu` aborted prepare() on the very package set seed() lays down, which
+        # carries neither libvirt nor pcs and has no nex-cluster-local.service.
+        "if command -v virsh >/dev/null 2>&1; then "
+        "if virsh -c qemu:///system list --name | grep -q .; then echo running-nested-vm >&2; exit 1; fi; fi; "
         "test -z \"$(findmnt -rn -t gfs2 -o TARGET)\"; "
+        # pcs is authoritative when present.  Debian's pacemaker package does not depend on
+        # pacemaker-cli-utils, so on this fixture no CLI exists at all; fall back to the CIB
+        # itself, where a cluster that has never been configured carries no <primitive>.
+        # Only if neither can be read while pacemaker runs is the answer unknown.
+        "if command -v pcs >/dev/null 2>&1; then "
         "pcs resource status 2>&1 | grep -qx 'NO resources configured'; "
+        "elif [ -d /var/lib/pacemaker/cib ]; then "
+        "if grep -l '<primitive' /var/lib/pacemaker/cib/cib*.raw >/dev/null 2>&1; then "
+        "echo 'pacemaker CIB already defines resources' >&2; exit 1; fi; "
+        "elif systemctl is-active --quiet pacemaker.service; then "
+        "echo 'pacemaker is running but neither pcs nor a readable CIB can rule out configured resources' >&2; exit 1; fi; "
         # Debian owns the daemon as dlm.service.  It must be disabled, not masked:
         # Pacemaker's OCF agent starts dlm_controld directly after Nex has rendered
         # the cluster, while a boot-time systemd instance races that ordering.
-        "systemctl stop nex-cluster-local.service corosync.service pacemaker.service dlm.service; "
+        # Explicit cluster shutdown order — resource manager, then lock manager, then
+        # messaging. systemd declares no ordering between these units, so naming them in one
+        # call stops them concurrently and corosync goes away under pacemaker, which then
+        # never finishes stopping. Each stop is bounded and tolerated, because a unit that
+        # is absent or does not stop in time is caught by the is-active check below, keeping
+        # this fail-closed rather than fail-slow.
+        "for unit in " + " ".join(PRISTINE_STOP_ORDER) + "; do "
+        "if systemctl list-unit-files \"$unit\" --no-legend | grep -q .; then "
+        "timeout 60 systemctl stop \"$unit\" || true; "
+        # Wait for this unit to be down before touching the next one. Each stops cleanly on
+        # its own in seconds, but tearing corosync down while pacemaker is still shutting
+        # down leaves both running, so the sequence has to be genuinely sequential.
+        "for _ in $(seq 60); do "
+        "systemctl is-active --quiet \"$unit\" || break; sleep 1; done; fi; done; "
         "sleep 1; "
         "for unit in nex-cluster-local.service corosync.service pacemaker.service dlm.service; do "
         "if systemctl is-active --quiet \"$unit\"; then echo \"$unit still active\" >&2; exit 1; fi; done; "
@@ -143,7 +174,13 @@ def prepare_pristine_corosync(lab, name):
         "install -D -m 0600 \"$source\" \"$target\"; "
         "test \"$(cat \"$target\")\" = \"$(cat \"$source\")\""
     )
-    return ssh(lab, name, command)
+
+
+def prepare_pristine_corosync(lab, name):
+    """Record only the shipped Debian conffile digest before Nex owns clustering."""
+    lab = check_lab(lab)
+    assert name in CORE_NAMES, "pristine marker is only valid for a disposable Core"
+    return ssh(lab, name, pristine_corosync_command())
 
 
 def launch(lab, name, memory_mib, vcpus, ssh_port):

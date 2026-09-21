@@ -65,6 +65,52 @@ func TestPoolPlacementPeerBindsExactReplayToCurrentMember(t *testing.T) {
 	}
 }
 
+// BUG-0405: an invalid definition was refused without saying what was wrong. On the master
+// it read "VM placement preflight is invalid"; on a member the peer handler answered in
+// plain text, so the master could not decode a reason and the operator was told only
+// "selected VM host refused placement observation" — which does not even say the cause was
+// validation. Both paths must now name the field.
+func TestPoolPlacementRefusalNamesTheInvalidField(t *testing.T) {
+	master, member, _, _ := cpuPeerPair(t)
+	member.State.PoolID = master.State.PoolID
+	membership, err := Membership(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vm := poolVMTestSpec("11111111-1111-4111-8111-111111111111", member.State.HostID)
+	vm.PoolID = master.State.PoolID
+	// Revision must be 0 at creation; Core refuses any other value. This is the exact shape
+	// that produced the unusable message in the lab.
+	vm.Revision = 7
+	command := protocol.Command{OperationID: "placement-invalid", Kind: "vm-create", VM: vm}
+
+	direct := placementCommandError(command)
+	if direct == nil {
+		t.Fatal("an invalid definition was accepted by the placement validator")
+	}
+	if strings.TrimSpace(direct.Error()) == "" {
+		t.Fatal("the placement validator gave an empty reason")
+	}
+
+	var selected protocol.PoolMember
+	for _, candidate := range membership.Members {
+		if candidate.HostID == member.State.HostID {
+			selected = candidate
+		}
+	}
+	_, err = poolVMPlacement(context.Background(), master, membership, selected, command)
+	if err == nil {
+		t.Fatal("an invalid definition was placed on a member")
+	}
+	// The whole point: the member's reason has to survive the peer hop.
+	if strings.Contains(err.Error(), "refused placement observation") {
+		t.Fatalf("member refusal lost its reason across the peer hop: %v", err)
+	}
+	if !strings.Contains(err.Error(), "revision") {
+		t.Fatalf("member refusal does not name the invalid field: %v", err)
+	}
+}
+
 func TestPoolPlacementRejectsUnauthenticatedCaller(t *testing.T) {
 	_, _, _, memberServer := cpuPeerPair(t)
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
