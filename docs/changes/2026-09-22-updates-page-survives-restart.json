@@ -1,0 +1,37 @@
+{
+  "summary": "The Controller and Core update pages keep following an update while the service they poll is stopped for the package install, instead of reporting the refused poll as a failed update. One shared follower replaces the two copied loops (BUG-0442). API impact: none.",
+  "paths": [
+    "web/src/updates.ts",
+    "web/src/updates.test.mjs",
+    "web/src/main.tsx",
+    "web/src/local.tsx",
+    "docs/guide/software-updates.md",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "docs/guide/software-updates.md explains that the page loses its connection during the install and keeps following the update.",
+    "pages": [
+      "docs/guide/software-updates.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Only the browser's handling of GET /api/v1/updates polls changed; the request, response and apply contract are unchanged."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fix within shipped behaviour."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state; the page only reads the helper's progress the host already records."
+  },
+  "verification": {
+    "method": "web/src/updates.test.mjs (npm --prefix web test) and npm --prefix web run typecheck; the old loop was shown to reject the same poll sequence in a scratch script. No live update was applied: the lab Controller VM was unreachable.",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "web/src/updates.test.mjs"
+    ]
+  }
+}

@@ -532,6 +532,7 @@ residuals: `[close record](../qa/2026-09-17-phase2-gate/CLOSED.md)`.
 2. Prove package installation and removal behavior on clean stock Debian before remastering media. Package removal must not remove guest disks.
 3. Build a Debian Installer ISO with preseed, branded boot text, Nex packages, complete offline dependencies, and firmware for the supported hardware list.
 4. Keep target-disk selection and erase confirmation interactive. Clearly separate OS installation from optional VM-data storage provisioning; do not format additional disks implicitly.
+   **Software RAID, 2026-09-22:** a mirrored system disk (md RAID1) and degraded-but-usable ZFS repositories with a disk-replace operation are proposed, with Btrfs RAID provisioning recommended against, in the [software RAID plan](2026-09-22-software-raid.md). Awaiting project-owner decisions; nothing implemented.
 5. Provide first-boot hostname, management network, controller address, and enrollment setup through a minimal local interface. Generate identity and SSH keys per installation.
 6. Preserve the Debian signed boot chain, support UEFI/Secure Boot, and publish image checksums plus package/build manifests. Add legacy BIOS only if required by the initial hardware targets.
 7. Use a signed APT repository for updates; the ISO and package install must produce the same host configuration.

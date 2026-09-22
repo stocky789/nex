@@ -6554,3 +6554,12 @@ Append resolved defects with their evidence and the approach to avoid.
 > race detector on the settled tree (`go test -count=8 -run '<name>|<name>' ./internal/agent/`, then
 > `-race -count=3`), all passing: the failures were build races between concurrent editors, not
 > defects.
+
+## BUG-0442 — The Updates page reported a failure while the service restarted mid-update
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; not exercised against a live update (see Regression).
+- Symptom: selecting **Update** on the Controller's **Updates** page ended in an error (`Failed to fetch`) part-way through, with the browser console showing `/api/v1/updates` `ERR_CONNECTION_REFUSED`. The Core local page behaves the same way.
+- Root cause: both pages polled `GET /api/v1/updates` once a second after the apply request and treated any rejected poll as the update failing. The privileged helper stops the service before `apt-get install` and starts it after, so the poll is refused for the whole install; the first refused fetch ended the loop with the browser's own error text, whatever the helper went on to report.
+- Fix: one shared `followUpdate` (`web/src/updates.ts`) replaces the two copied loops. A poll that cannot reach the service is skipped and the loop carries on; only a reported `done` or `failed` phase, an HTTP error (a response with a status) or the ten-minute bound ends it. Net −21 lines across the two pages.
+- Regression: `web/src/updates.test.mjs` — a poll sequence of two refused fetches, then `restarting`, then `done` must resolve `done`; the same sequence rejected the previous inline loop with `Failed to fetch` (checked with the old loop body in a scratch script). Also covers a reported failure, an HTTP error surfacing and the bound. Command: `npm --prefix web test` (with `npm --prefix web run typecheck`), run by both `phase1` workflow copies. Not verified against a live update: the lab Controller VM was unreachable during this fix, so the helper's actual outcome there is unknown.
+- Avoid: ending a wait for a restart on the first lost connection; keeping two copies of the same poll loop.

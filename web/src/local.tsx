@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { Console } from "./console";
+import { followUpdate, type UpdateStatus } from "./updates";
 import "./local.css";
 
 type Session = { username: string; csrf_token: string };
@@ -9,7 +10,6 @@ type Host = { hostname: string; bridge: string; storage_dir: string; defaults: {
 type VM = { id: string; name: string; state: string; blocked_reason?: string; managed: boolean; power_allowed: boolean };
 type Operation = { id: string; vm_id: string; kind: string; status: string; stage: string; error?: string; controller_url?: string; controller_cert_sha256?: string; progress?: number };
 type Draft = { name: string; hostname: string; cpus: number; memory_mib: number; disk_gib: number; network_mode: "dhcp" | "static"; address_cidr: string; gateway: string; dns: string; admin_password: string; site_name: string; bridge: string; storage_dir: string };
-type UpdateStatus = { package: string; installed_version: string; available_version?: string; update_available: boolean; repo_url: string; phase?: string; progress?: number; message?: string; error?: string };
 const initial: Draft = { name: "nex-controller", hostname: "nex-controller", cpus: 2, memory_mib: 4096, disk_gib: 32, network_mode: "dhcp", address_cidr: "", gateway: "", dns: "", admin_password: "", site_name: "Main site", bridge: "", storage_dir: "" };
 function Brand() { return <div className="identity"><span className="brand" role="img" aria-label="Nex" /><span>CORE <small>LOCAL HOST</small></span></div>; }
 function Links() { return <footer><span>Nex Core · Independent host access</span><nav aria-label="Resources"><a href="/api/docs/">API reference</a><a href="/source">Source code</a></nav></footer>; }
@@ -99,23 +99,17 @@ function App() {
     setBusy(true); setError(""); setUpdateNote(""); setUpdatePhase("applying");
     try {
       await api("updates/apply", "POST", {});
-      for (let i = 0; i < 600; i++) {
-        await new Promise(r => setTimeout(r, 1000));
-        const st = await api<UpdateStatus>("updates");
-        setUpdate(st);
-        if (st.phase === "done") {
-          setUpdateNote(st.message || "Update complete");
-          setUpdatePhase("done");
-          return;
-        }
-        if (st.phase === "failed") {
-          setUpdatePhase("error");
-          setError(st.error || st.message || "Update failed");
-          return;
-        }
+      const st = await followUpdate(api, setUpdate);
+      if (st?.phase === "done") {
+        setUpdateNote(st.message || "Update complete");
+        setUpdatePhase("done");
+      } else if (st) {
+        setUpdatePhase("error");
+        setError(st.error || st.message || "Update failed");
+      } else {
+        setUpdateNote("Still applying after 10 minutes; the result is unknown. Select Check to read the current state.");
+        setUpdatePhase("idle");
       }
-      setUpdateNote("Still applying after 10 minutes; the result is unknown. Select Check to read the current state.");
-      setUpdatePhase("idle");
     } catch (e) { setUpdatePhase("error"); setError((e as Error).message); }
     finally { setBusy(false); }
   }

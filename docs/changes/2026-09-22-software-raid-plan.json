@@ -1,0 +1,29 @@
+{
+  "summary": "Plan for software RAID: keep degraded ZFS repositories in service, replace failed pool members, and offer a mirrored system disk in the installer. Recommends against Btrfs RAID provisioning. Proposal only; nothing implemented. API impact: none for this record, the plan itself names the changed and new contracts each slice will carry.",
+  "paths": [
+    "docs/plans/2026-09-22-software-raid.md",
+    "docs/plans/2026-09-08-nex-platform.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Planning document; no operator behaviour changes until a slice is implemented."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No code or contract changes in this record; the plan records the contracts its slices will change or add."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Proposal awaiting decisions; the public roadmap gains an item only when a slice is scheduled."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation only; the plan declares core ownership for every slice."
+  },
+  "verification": {
+    "method": "python3 scripts/check_docs.py --worktree; link and scope review of the plan.",
+    "evidence": [
+      "docs/plans/2026-09-22-software-raid.md"
+    ]
+  }
+}

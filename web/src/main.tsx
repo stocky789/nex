@@ -15,6 +15,7 @@ import { Icon } from "./icons";
 import { PoolMembers } from "./pool-members";
 import { HostRestrictedBanner } from "./pool-promotion";
 import { HostNetwork } from "./host-network";
+import { followUpdate, type UpdateStatus } from "./updates";
 
 type Site = { id: string; name: string };
 type Pool = Site & { site_id: string; master_host_id: string };
@@ -67,17 +68,6 @@ type Audit = {
   resource_id: string;
   created_at: string;
   detail?: string;
-};
-type UpdateStatus = {
-  package: string;
-  installed_version: string;
-  available_version?: string;
-  update_available: boolean;
-  repo_url: string;
-  phase?: string;
-  progress?: number;
-  message?: string;
-  error?: string;
 };
 type Data = {
   sites: Site[];
@@ -1414,23 +1404,17 @@ function App() {
                   setUpdatePhase("applying");
                   try {
                     await api("updates/apply", "POST", {});
-                    for (let i = 0; i < 600; i++) {
-                      await new Promise(r => setTimeout(r, 1000));
-                      const st = await api<UpdateStatus>("updates");
-                      setUpdate(st);
-                      if (st.phase === "done") {
-                        setUpdateNote(st.message || "Update complete");
-                        setUpdatePhase("done");
-                        return;
-                      }
-                      if (st.phase === "failed") {
-                        setUpdatePhase("error");
-                        setActionError(st.error || st.message || "Update failed");
-                        return;
-                      }
+                    const st = await followUpdate(api, setUpdate);
+                    if (st?.phase === "done") {
+                      setUpdateNote(st.message || "Update complete");
+                      setUpdatePhase("done");
+                    } else if (st) {
+                      setUpdatePhase("error");
+                      setActionError(st.error || st.message || "Update failed");
+                    } else {
+                      setUpdateNote("Still applying after 10 minutes; the result is unknown. Select Check to read the current state.");
+                      setUpdatePhase("idle");
                     }
-                    setUpdateNote("Still applying after 10 minutes; the result is unknown. Select Check to read the current state.");
-                    setUpdatePhase("idle");
                   } catch (e) {
                     setUpdatePhase("error");
                     setActionError((e as Error).message);
