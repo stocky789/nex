@@ -55,6 +55,7 @@ def main():
         kvm = subprocess.run([args.docker, 'run', '--rm', '--device', '/dev/kvm', '--entrypoint', 'true', 'nex-appliance-builder'],
                              capture_output=True).returncode == 0
         accel = ['--device', '/dev/kvm', '-e', 'LIBGUESTFS_BACKEND_SETTINGS='] if kvm else []
+        print('appliance build accelerator:', 'KVM' if kvm else 'TCG (the Docker host did not lend /dev/kvm)', flush=True)
         subprocess.run([args.docker, 'run', '--rm', *accel, '-e', f'OUTPUT_UID={os.getuid()}', '-e', f'OUTPUT_GID={os.getgid()}', '-e', f'NEX_VERSION={args.version}', '-v', f'{inputs}:/input:ro', '-v', f'{output}:/output', 'nex-appliance-builder'], check=True)
     manifest = {'format_version': 1, 'version': args.version, 'architecture': 'amd64',
                 'image_sha256': digest(output / 'controller.qcow2'), 'protocol_version': 1,
