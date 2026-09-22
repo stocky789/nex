@@ -6518,6 +6518,25 @@ Append resolved defects with their evidence and the approach to avoid.
   teardown hosts reload a shrunken nodelist, which lowers expected votes under peers that are still
   feeding and is the same reset in the other direction.
 
+## BUG-0441 — The release's final reachability check failed on the site's own post-publish 503
+
+- Date: 2026-09-22
+- Symptom: Release run 4319 built, published the release, packages and website, then failed with
+  `/ returned 503` half a second after `website-ci-deploy: published`. The site answered 200 for
+  every checked path moments later and its package index listed the version.
+- Root cause: The reachability step issued one request per path with no retry, and curl treats a
+  5xx as retryable only when `--retry` is given; the website host answers 503 briefly while a
+  publish settles.
+- Fix: Both `release.yml` copies pass `--retry 10 --retry-delay 3` to the reachability `curl`
+  calls, so a transient 503 is retried for about thirty seconds while a persistent one, a 401 or
+  a missing version still fail.
+- Regression: `test_public_checks_use_headers_and_still_reject_unauthorized`
+  (`tests/test_release_reachability.py`) gained a `settling=1` case whose fixture answers the first
+  HEAD with 503; it fails on the unfixed workflow text with `/ returned 503` and passes with the
+  fix. `python3 -m unittest tests/test_release_reachability.py` → OK.
+- Avoid: Retrying inside the shell loop, which curl already does, or dropping the root path from
+  the check.
+
 > BUG-0418 to BUG-0440 were found in pre-merge review of unreleased working-tree work — the
 > automatic host fencing slices, the host hardware and sensor slices, the Stats palette change and
 > the release-publishes-website workflow change — plus one found by the independent review of

@@ -15,10 +15,17 @@ class ReleaseReachabilityTests(unittest.TestCase):
     def test_public_checks_use_headers_and_still_reject_unauthorized(self):
         requests = []
         unauthorized = missing_version = False
+        settling = 0  # HEAD responses still answered 503 right after a publish (run 4319)
 
         class Handler(BaseHTTPRequestHandler):
             def do_HEAD(self):
+                nonlocal settling
                 requests.append((self.command, self.path))
+                if settling:
+                    settling -= 1
+                    self.send_response(503)
+                    self.end_headers()
+                    return
                 self.send_response(401 if unauthorized else 200)
                 self.send_header('Content-Length', '2937505747')
                 self.end_headers()
@@ -45,13 +52,13 @@ class ReleaseReachabilityTests(unittest.TestCase):
                 workflow = (ROOT / provider / 'workflows/release.yml').read_text()
                 step = workflow.split('      - name: Confirm the release is actually reachable\n', 1)[1]
                 script = textwrap.dedent(step.split('        run: |\n', 1)[1])
-                for unauthorized, missing_version in ((False, False), (True, False), (False, True)):
-                    with self.subTest(provider=provider, unauthorized=unauthorized, missing_version=missing_version):
+                for unauthorized, missing_version, settling in ((False, False, 0), (True, False, 0), (False, True, 0), (False, False, 1)):
+                    with self.subTest(provider=provider, unauthorized=unauthorized, missing_version=missing_version, settling=settling):
                         requests.clear()
                         result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
                             env={**os.environ, 'NEX_VERSION': '0.3.4',
                                  'NEX_PUBLIC_URL': f'http://127.0.0.1:{server.server_port}'},
-                            text=True, capture_output=True, timeout=10)
+                            text=True, capture_output=True, timeout=30)
                         if unauthorized:
                             self.assertNotEqual(result.returncode, 0)
                             self.assertIn('returned 401', result.stderr)

@@ -139,6 +139,9 @@ the package index does not list the released version.
   index to verify the version. It does not download the multi-gigabyte source archive
   or establish a complete downloaded-artifact integrity check.
 
+- **The final check reports "/ returned 503"** — the site was still settling from the publish
+  a moment earlier. The check retries each request for about thirty seconds before failing; a
+  503 that outlasts that is a real outage on the website host.
 - **"CHANGELOG.md has no version headings"** — the changelog lost its `## [X.Y.Z]` headings;
   restore the newest version's section.
 - **"declares <version>, expected <version>"** — a package was built at a different version

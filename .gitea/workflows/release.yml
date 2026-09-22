@@ -302,6 +302,8 @@ jobs:
           set -euo pipefail
           # Check reachability without downloading multi-gigabyte payloads.
           # Read the small Packages index below to verify the released version.
+          # The site answers 503 for a moment while the publish it just did settles (run 4319),
+          # and curl treats 5xx as retryable only with --retry.
           for path in \
             "/" \
             "/apt/dists/nex/InRelease" \
@@ -309,9 +311,9 @@ jobs:
             "/downloads/${NEX_VERSION}/nex-core-${NEX_VERSION}-amd64.iso.sha256" \
             "/downloads/${NEX_VERSION}/nex-core-${NEX_VERSION}-source.tar.gz" \
             "/downloads/${NEX_VERSION}/nex-core-${NEX_VERSION}-compliance-manifest.json"; do
-            code=$(curl -sSI -o /dev/null -w '%{http_code}' --max-time 60 "${NEX_PUBLIC_URL}${path}")
+            code=$(curl -sSI -o /dev/null -w '%{http_code}' --max-time 60 --retry 10 --retry-delay 3 "${NEX_PUBLIC_URL}${path}")
             [ "$code" = 200 ] || { echo "$path returned $code" >&2; exit 1; }
           done
-          curl -sS --max-time 60 "${NEX_PUBLIC_URL}/apt/dists/nex/main/binary-amd64/Packages" \
+          curl -sS --max-time 60 --retry 10 --retry-delay 3 "${NEX_PUBLIC_URL}/apt/dists/nex/main/binary-amd64/Packages" \
             | grep -x "Version: ${NEX_VERSION}" > /dev/null || {
               echo "published index does not list ${NEX_VERSION}" >&2; exit 1; }

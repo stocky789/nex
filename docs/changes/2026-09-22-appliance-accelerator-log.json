@@ -1,0 +1,28 @@
+{
+  "summary": "Print whether the appliance build runs libguestfs under KVM or TCG, so a runner log shows which accelerator the Docker host lent. Follow-up to the release build cache change. API impact: none.",
+  "paths": [
+    "appliance/build.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "One diagnostic line in build output; no operator workflow changes."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Build tooling only."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone status changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No state; a log line."
+  },
+  "verification": {
+    "method": "python3 -m unittest tests/test_appliance_build.py; the line appears in the next Release run's appliance step.",
+    "evidence": [
+      "tests/test_appliance_build.py"
+    ]
+  }
+}

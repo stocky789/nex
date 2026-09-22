@@ -1,0 +1,35 @@
+{
+  "summary": "Retry the Release workflow's final reachability check for a transient 503 the website host returns while a publish settles (BUG-0441); persistent failures, 401 and a missing version still fail. API impact: none.",
+  "paths": [
+    ".gitea/workflows/release.yml",
+    ".github/workflows/release.yml",
+    "tests/test_release_reachability.py",
+    "docs/guide/publish-a-release.md",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The publish guide's troubleshooting explains the 503 case and the retry window.",
+    "pages": [
+      "docs/guide/publish-a-release.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "CI workflow only."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone status changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No state."
+  },
+  "verification": {
+    "method": "tests/test_release_reachability.py runs the workflow's step text against a fixture server that answers the first HEAD with 503; it fails without --retry and passes with it. Both workflow copies verified identical apart from the github.com skip line.",
+    "evidence": [
+      "tests/test_release_reachability.py"
+    ]
+  }
+}
