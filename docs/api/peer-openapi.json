@@ -1937,7 +1937,7 @@
             "PoolMasterCertificate": []
           }
         ],
-        "x-introduced-version": "0.4.3",
+        "x-introduced-version": "0.4.4",
         "x-audience": "Core peer: pool master to configured member",
         "requestBody": {
           "required": true,

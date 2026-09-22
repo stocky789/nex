@@ -21,7 +21,7 @@ required, and the installed driver ISO is unchanged.
 
 - A locally built ISO and its matching SHA256 sidecar; see [build instructions](../../installer/README.md).
   External redistribution remains subject to the [release licensing gates](../LICENSING.md).
-  The current working `0.4.3` tree is not a released artifact.
+  The current working `0.4.4` tree is not a released artifact.
 - An isolated disposable amd64 VM with at least 2 virtual CPUs, 4 GB RAM, and one blank 24 GB
   virtual disk. Do not attach real host disks or existing VM data disks.
 - Hardware virtualization exposed to the VM if you intend to run nested KVM guests.

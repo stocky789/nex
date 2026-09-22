@@ -1,0 +1,63 @@
+{
+  "summary": "Bump the changelog-derived project version from 0.4.3 to 0.4.4 and move the software RAID, ZFS disk replace, host Version light and staged-review fix notes into the new heading. API impact: existing contract — OpenAPI x-introduced-version and Implemented-in sentences for the three new replace operations updated to 0.4.4; hardware and fence-check operations stay at 0.4.3.",
+  "paths": [
+    "CHANGELOG.md",
+    "installer/README.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/software-updates.md",
+    "docs/guide/publish-a-release.md",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/host-maintenance-mode.md",
+    "docs/guide/change-management-network.md",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer.html"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Working-version stamps on install, updates, publish and pool guide pages move to 0.4.4; operator workflows unchanged.",
+    "pages": [
+      "docs/guide/install-nex-core.md",
+      "docs/guide/software-updates.md",
+      "docs/guide/publish-a-release.md",
+      "docs/guide/join-a-pool.md",
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/guide/host-maintenance-mode.md",
+      "docs/guide/change-management-network.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No operation behaviour change. POST /api/v1/storage/zfs/replace, POST /api/v1/hosts/{id}/system-disk and peer POST /api/v1/pool/zfs-provision/replace now declare x-introduced-version 0.4.4 and Implemented in development product 0.4.4; host hardware and fence-checks remain 0.4.3.",
+    "pages": [
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/api/index.html",
+      "docs/api/peer.html"
+    ],
+    "operations": [
+      "POST /api/v1/storage/zfs/replace",
+      "POST /api/v1/hosts/{id}/system-disk",
+      "POST /api/v1/pool/zfs-provision/replace"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Release metadata only; phase gates unchanged.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable product setting or resource is introduced."
+  },
+  "verification": {
+    "method": "python3 scripts/release-version.py --current --format both and --tag v0.4.4 both return 0.4.4; python3 -m unittest tests.test_release_version; python3 scripts/generate_api.py --check; python3 scripts/check_docs.py --worktree scoped to this change where possible.",
+    "evidence": [
+      "scripts/release-version.py",
+      "tests/test_release_version.py",
+      "CHANGELOG.md"
+    ]
+  }
+}

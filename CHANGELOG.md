@@ -6,83 +6,23 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.3` →
-> Debian `0.4.3`).
+> development software. Builds use the newest numbered changelog heading (`0.4.4` →
+> Debian `0.4.4`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
 
-## [0.4.3] — 2026-09-22
+## [0.4.4] — 2026-09-22
 
-> **Development working-tree record, not a published release.** Nothing below has been seen on a
-> physical server. The hardware panel was checked against simulated hosts only — fixture sensor
-> trees, stub inventory tools and mocked replies in a browser — and the hardware walkthrough is
-> still to come. Host fencing was settled in a nested virtual laboratory and by runnable checks
-> only: no physical management controller has been contacted, no host has been powered off, and
-> no physical watchdog has been read, armed or expired. Every timing quoted for it comes from
-> nested runs. Everything below was reviewed independently before commit; the twenty-three defects
-> that review found in the unreleased work are fixed and recorded as BUG-0418 to BUG-0440 in the
-> bug ledger rather than listed here, because no build ever carried them.
+> **Development working-tree record, not a published release.** Mirrored system-disk install,
+> system-disk and ZFS disk replace, hot spares, the host Version light, and the staged-review
+> fixes below were checked with runnable harnesses, nested labs and simulated browser review
+> where noted in the QA records. Physical multi-disk install, ESP-detached boot, and live
+> failed-member replacement on real hardware remain outstanding where those records say so.
 
 ### Minor Feature
 
-- A host's **Stats** tab now shows what the machine is and how hot it is running. A **Hardware**
-  panel above the charts lists the server and its firmware, processor, memory modules, disks, PCI
-  devices and temperature sensors; the host reads all of it fresh when the tab is opened and keeps
-  none of it, so a replacement Nex Controller shows the same thing. The disk list holds installed
-  disks only, never compressed-memory, loop or optical devices. A section the host could not
-  read says so, with its own reason, and the rest still appears.
-- A row of **gauges** shows current CPU and memory use and a dial for every temperature sensor.
-  Warm and critical are the chip's own limits, not a number chosen by Nex; a sensor that publishes
-  no limits shows a plain reading, and a reading that has stopped arriving shows a dash instead of
-  a stale number. Gauges appear on the **Last 10 minutes** range only.
-- A **Temperature** chart joins the CPU, memory, network, disk and load charts, with a year of
-  history kept by the host like the rest. A host keeps up to 24 sensors, CPU package and NVMe
-  readings ahead of individual drives, so a machine full of disks still charts its processor. A
-  sensor that stops answering shows a gap after two samples and never holds up the rest of the
-  host's usage sampling. Hosts with no sensors, which includes most virtual ones, say so rather
-  than showing an empty chart.
-- Both **Stats** tabs were restyled: a lighter page with white cards and a clearer set of chart
-  colours, shared by the charts and the new gauges; every plotted line keeps at least 3:1
-  contrast against its card. VM Stats tabs have no hardware panel or gauges, because a VM has no
-  hardware of its own.
-- **You no longer record fence devices.** Each host's own Nex Core finds its management
-  controller, creates a power-control-only account for the pool on it, pins the controller's
-  certificate and reports what it found on the host's row, where the account can also be
-  withdrawn again. Where a controller cannot be configured this way, **Set BMC access…** still
-  takes credentials you supply, and a device you record yourself always wins. A controller that
-  refuses the account is retried every five minutes, not on every pass, so its settings memory is
-  not worn down. The identities, accounts and pinned certificates are kept by the pool master, so
-  a replacement Nex Controller sees the same fencing.
-- A **Fencing** column on the pool's **Hosts** tab answers one question per host: if this host
-  were lost, could another host shut it out? Every few minutes each host signs in to every *other*
-  host's management controller and checks which machine answers — a check can never power
-  anything off. A host that could not be shut out says why, **What each host found** shows each
-  checker's own result, and the pool line reads *Fencing: ready for N of M hosts*.
-- A pool-wide **Host fencing** switch under the members table, **on** for every pool unless you
-  turn it off. Where the pool's prerequisites hold — three to five hosts, no clustered storage,
-  and a hardware watchdog on the host — Nex Core forms one cluster for the pool and arms each
-  host's watchdog, one host at a time, so a host that loses the pool's majority is reset by its
-  own hardware and its virtual machines stop. That consequence is shown beside the switch whether
-  or not you open it, and every host's row says in plain words what it is doing or what is
-  stopping it. Pools of one or two hosts, pools running clustered storage and pools larger than
-  five arm nothing and report why; two-host pools are shut out through their management
-  controllers. A host entering maintenance puts its own watchdog down before it leaves the pool's
-  cluster, and turning the switch off releases that cluster so clustered storage can be created
-  afterwards. A refused change to the switch is shown beside it, not as a failed page load.
-  Promoting a survivor after master loss now names the method it will use for each host,
-  including a lost host's own armed watchdog after its waiting period, and still refuses until
-  the evidence exists; a master that its own watchdog reset stays restricted on its next boot
-  exactly as a master shut out through its controller does.
-- **Add host to pool** no longer asks for the pool master's address. The master works out the
-  address a joining host should use from its own pool-peer listener and records it itself, so a
-  join needs only the host you are adding; an address you supply is still accepted as an
-  override.
-- The pool's **Hosts** tab was reorganised. Each row's actions — maintenance, fence device,
-  promotion, master change and eject — are in one **Actions** menu in a trailing column, the
-  master's row no longer offers actions that can never apply to it, and every column but
-  Convergence is sized to its content.
 - The Nex Core installer can put the system disk on a **Linux md RAID1 mirror**: tick two or more
   disks at install time. The host keeps running if one of those disks fails; replace the failed
   disk from the host's **Stats** tab.
@@ -198,6 +138,80 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   apt (BUG-0519).
 - Disk selection refusals use one shared 10% mirror rule sentence, and CI pins the 5% accept /
   over-10% refuse boundary for both frontends (BUG-0520, BUG-0525).
+
+## [0.4.3] — 2026-09-22
+
+> **Development working-tree record, not a published release.** Nothing below has been seen on a
+> physical server. The hardware panel was checked against simulated hosts only — fixture sensor
+> trees, stub inventory tools and mocked replies in a browser — and the hardware walkthrough is
+> still to come. Host fencing was settled in a nested virtual laboratory and by runnable checks
+> only: no physical management controller has been contacted, no host has been powered off, and
+> no physical watchdog has been read, armed or expired. Every timing quoted for it comes from
+> nested runs. Everything below was reviewed independently before commit; the twenty-three defects
+> that review found in the unreleased work are fixed and recorded as BUG-0418 to BUG-0440 in the
+> bug ledger rather than listed here, because no build ever carried them.
+
+### Minor Feature
+
+- A host's **Stats** tab now shows what the machine is and how hot it is running. A **Hardware**
+  panel above the charts lists the server and its firmware, processor, memory modules, disks, PCI
+  devices and temperature sensors; the host reads all of it fresh when the tab is opened and keeps
+  none of it, so a replacement Nex Controller shows the same thing. The disk list holds installed
+  disks only, never compressed-memory, loop or optical devices. A section the host could not
+  read says so, with its own reason, and the rest still appears.
+- A row of **gauges** shows current CPU and memory use and a dial for every temperature sensor.
+  Warm and critical are the chip's own limits, not a number chosen by Nex; a sensor that publishes
+  no limits shows a plain reading, and a reading that has stopped arriving shows a dash instead of
+  a stale number. Gauges appear on the **Last 10 minutes** range only.
+- A **Temperature** chart joins the CPU, memory, network, disk and load charts, with a year of
+  history kept by the host like the rest. A host keeps up to 24 sensors, CPU package and NVMe
+  readings ahead of individual drives, so a machine full of disks still charts its processor. A
+  sensor that stops answering shows a gap after two samples and never holds up the rest of the
+  host's usage sampling. Hosts with no sensors, which includes most virtual ones, say so rather
+  than showing an empty chart.
+- Both **Stats** tabs were restyled: a lighter page with white cards and a clearer set of chart
+  colours, shared by the charts and the new gauges; every plotted line keeps at least 3:1
+  contrast against its card. VM Stats tabs have no hardware panel or gauges, because a VM has no
+  hardware of its own.
+- **You no longer record fence devices.** Each host's own Nex Core finds its management
+  controller, creates a power-control-only account for the pool on it, pins the controller's
+  certificate and reports what it found on the host's row, where the account can also be
+  withdrawn again. Where a controller cannot be configured this way, **Set BMC access…** still
+  takes credentials you supply, and a device you record yourself always wins. A controller that
+  refuses the account is retried every five minutes, not on every pass, so its settings memory is
+  not worn down. The identities, accounts and pinned certificates are kept by the pool master, so
+  a replacement Nex Controller sees the same fencing.
+- A **Fencing** column on the pool's **Hosts** tab answers one question per host: if this host
+  were lost, could another host shut it out? Every few minutes each host signs in to every *other*
+  host's management controller and checks which machine answers — a check can never power
+  anything off. A host that could not be shut out says why, **What each host found** shows each
+  checker's own result, and the pool line reads *Fencing: ready for N of M hosts*.
+- A pool-wide **Host fencing** switch under the members table, **on** for every pool unless you
+  turn it off. Where the pool's prerequisites hold — three to five hosts, no clustered storage,
+  and a hardware watchdog on the host — Nex Core forms one cluster for the pool and arms each
+  host's watchdog, one host at a time, so a host that loses the pool's majority is reset by its
+  own hardware and its virtual machines stop. That consequence is shown beside the switch whether
+  or not you open it, and every host's row says in plain words what it is doing or what is
+  stopping it. Pools of one or two hosts, pools running clustered storage and pools larger than
+  five arm nothing and report why; two-host pools are shut out through their management
+  controllers. A host entering maintenance puts its own watchdog down before it leaves the pool's
+  cluster, and turning the switch off releases that cluster so clustered storage can be created
+  afterwards. A refused change to the switch is shown beside it, not as a failed page load.
+  Promoting a survivor after master loss now names the method it will use for each host,
+  including a lost host's own armed watchdog after its waiting period, and still refuses until
+  the evidence exists; a master that its own watchdog reset stays restricted on its next boot
+  exactly as a master shut out through its controller does.
+- **Add host to pool** no longer asks for the pool master's address. The master works out the
+  address a joining host should use from its own pool-peer listener and records it itself, so a
+  join needs only the host you are adding; an address you supply is still accepted as an
+  override.
+- The pool's **Hosts** tab was reorganised. Each row's actions — maintenance, fence device,
+  promotion, master change and eject — are in one **Actions** menu in a trailing column, the
+  master's row no longer offers actions that can never apply to it, and every column but
+  Convergence is sized to its content.
+
+### Bug Fixes
+
 - A replacement Nex Controller can now recover a pool whose master is gone for good. Previously
   the first survivor to re-enroll was recorded as the pool master, every other member's
   enrollment was held, and promoting the survivor was refused with "this host is already the pool

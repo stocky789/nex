@@ -2,7 +2,7 @@
 
 ## Status
 
-Development product 0.4.3. Maintenance mode is a drain flag the **pool master** records for one
+Development product 0.4.4. Maintenance mode is a drain flag the **pool master** records for one
 host in the pool: while it is set, the master places no new virtual machine on that host and
 refuses starting one there. Set it from Nex Controller: pool detail → **Hosts** → the host's
 **Actions** menu → **Enter maintenance**.
