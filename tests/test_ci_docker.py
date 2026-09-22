@@ -26,7 +26,9 @@ class CiDockerTests(unittest.TestCase):
                                   "-e", "A=/workspace/o/r/keep", "image")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.split("\n")[:-1], [
-            "run", "--rm", "-v", "/var/lib/docker/volumes/v/_data/.cache/x:/output",
+            "run", "-v", "nex-build-cache:/cache", "-e", "GOCACHE=/cache/go-build",
+            "-e", "npm_config_cache=/cache/npm", "-e", "NEX_DOWNLOADS=/cache/downloads",
+            "--rm", "-v", "/var/lib/docker/volumes/v/_data/.cache/x:/output",
             "-v", "/var/lib/docker/volumes/v/_data:/work:ro", "-v", "named:/data",
             "-e", "A=/workspace/o/r/keep", "image"])
 

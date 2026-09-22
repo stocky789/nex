@@ -55,13 +55,17 @@ class IsoPayloadEfficiencyTests(unittest.TestCase):
     def test_installer_uses_gzip_and_keeps_extracted_source_off_media(self):
         build = (ROOT / 'installer/build.sh').read_text()
         late = (ROOT / 'installer/late-install.sh').read_text()
-        self.assertIn('gzip -9n -c "$fetch/$iso_name"', build)
+        self.assertIn('gzip -9n -c "$fetch/$iso_name" > "$fetch/$iso_name.gz.partial"', build)
+        self.assertIn('cp "$fetch/$iso_name.gz" "$stage/nex/media/virtio-win.iso.gz"', build)
         self.assertIn('$stage/nex/media/virtio-win.iso.gz', build)
         self.assertIn('local retained_source=$cache/virtio-win-retained-source', build)
         self.assertIn('bsdtar -xf "$retained_source/source/$src_rpm"', build)
         self.assertNotIn('bsdtar -xf "$fetch/$src_rpm" -C "$third_party/source"', build)
-        self.assertIn('deb_cache=$(mktemp -d "$cache/debs.XXXXXX")', build)
-        self.assertIn('find "$deb_cache" -maxdepth 1 -type f -name', build)
+        # The closure is resolved against an empty directory but downloaded into the kept
+        # one, and only the resolved files reach the media: stale debs in the cache never do.
+        self.assertIn('--print-uris -o Dir::Cache::archives="$resolve"', build)
+        self.assertIn('-o Dir::Cache::archives="$downloads/debs" install', build)
+        self.assertIn('xargs -a "$cache/debs.list" -I{} cp "$downloads/debs/{}" "$stage/nex/repo/"', build)
         self.assertIn('gunzip -c /cdrom/nex/media/virtio-win.iso.gz > "$virtio_iso"', late)
         self.assertIn("trap 'rm -f \"$virtio_iso\"' 0 1 2 15", late)
         self.assertIn('sha256sum -c /cdrom/nex/media/virtio-win.iso.sha256', late)

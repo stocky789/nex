@@ -155,6 +155,39 @@ class SourceBundleTests(unittest.TestCase):
                 self.assertIn('nex-iso-source/provided-sources/virtio-win-retained-source/source/winfsp-master-sources.zip',
                               archive.getnames())
 
+    def test_source_cache_is_fetched_into_and_copied_from(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, tree, cache = root / 'repo', root / 'tree', root / 'cache'
+            repo.mkdir(); (tree / 'nex' / 'repo').mkdir(parents=True)
+            control = root / 'control'; (control / 'DEBIAN').mkdir(parents=True)
+            (control / 'DEBIAN' / 'control').write_text(
+                'Package: sample\nVersion: 1\nArchitecture: all\nMaintainer: test\nDescription: test\n')
+            subprocess.run(['dpkg-deb', '--build', str(control), str(repo / 'sample_1_all.deb')],
+                           check=True, stdout=subprocess.DEVNULL)
+            iso, out = root / 'base.iso', root / 'source.tar.gz'; iso.write_bytes(b'base')
+
+            def fake_fetch(sources, destination, apt_sources, batch_size=25):
+                self.assertEqual(destination, cache)
+                stale = cache / 'stale_0.orig.tar.gz'; stale.write_bytes(b'left over from an older pin')
+                for source, version in sources:
+                    tarball = cache / f'{source}_{version}.orig.tar.gz'; tarball.write_bytes(b'src')
+                    (cache / f'{source}_{version}.dsc').write_text(
+                        f'Source: {source}\nVersion: {version}\nChecksums-Sha256:\n'
+                        f' {source_bundle.digest(tarball)} 3 {tarball.name}\n')
+
+            with mock.patch.object(source_bundle, 'update_sources'), \
+                    mock.patch.object(source_bundle, 'fetch_sources', side_effect=fake_fetch):
+                source_bundle.main([
+                    '--version', '0.3.2', '--iso', str(iso), '--tree', str(tree),
+                    '--repository', str(repo), '--source-cache', str(cache), '--output', str(out),
+                ])
+            with source_bundle.tarfile.open(out) as archive:
+                names = archive.getnames()
+            self.assertIn('nex-iso-source/debian-sources/sample_1.dsc', names)
+            self.assertIn('nex-iso-source/debian-sources/sample_1.orig.tar.gz', names)
+            self.assertNotIn('nex-iso-source/debian-sources/stale_0.orig.tar.gz', names)
+
     def test_iso_build_exports_complete_release_evidence(self):
         build = (ROOT / 'installer/build.sh').read_text()
         self.assertIn('snapshot.debian.org/archive/debian/', build)

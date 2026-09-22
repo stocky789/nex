@@ -49,7 +49,13 @@ def main():
                 (inputs / 'appliance' / name).write_bytes(archive.extractfile('nex-source/appliance/' + name).read())
         (inputs / 'appliance' / 'build-inside.sh').chmod(0o755)
         subprocess.run([args.docker, 'build', '-t', 'nex-appliance-builder', str(inputs / 'appliance')], check=True)
-        subprocess.run([args.docker, 'run', '--rm', '-e', f'OUTPUT_UID={os.getuid()}', '-e', f'OUTPUT_GID={os.getgid()}', '-e', f'NEX_VERSION={args.version}', '-v', f'{inputs}:/input:ro', '-v', f'{output}:/output', 'nex-appliance-builder'], check=True)
+        # libguestfs customizes the image several times faster under KVM. The image forces
+        # TCG so a host without /dev/kvm still builds; lift that only when the daemon can
+        # lend the device, which a job container cannot tell from its own /dev.
+        kvm = subprocess.run([args.docker, 'run', '--rm', '--device', '/dev/kvm', '--entrypoint', 'true', 'nex-appliance-builder'],
+                             capture_output=True).returncode == 0
+        accel = ['--device', '/dev/kvm', '-e', 'LIBGUESTFS_BACKEND_SETTINGS='] if kvm else []
+        subprocess.run([args.docker, 'run', '--rm', *accel, '-e', f'OUTPUT_UID={os.getuid()}', '-e', f'OUTPUT_GID={os.getgid()}', '-e', f'NEX_VERSION={args.version}', '-v', f'{inputs}:/input:ro', '-v', f'{output}:/output', 'nex-appliance-builder'], check=True)
     manifest = {'format_version': 1, 'version': args.version, 'architecture': 'amd64',
                 'image_sha256': digest(output / 'controller.qcow2'), 'protocol_version': 1,
                 'format': 'qcow2', 'minimum_vcpus': 2, 'minimum_memory_mib': 4096,

@@ -77,7 +77,7 @@ ensure_perl_exact_source() {
     # indices prefer 5.40.1-6+deb13u1. apt-get source then substitutes and the
     # retained-source gate fails. Pin the exact dsc and tarballs from the
     # snapshot where 5.40.1-6 last appeared.
-    local dest=$cache/perl-exact-source
+    local dest=$downloads/perl-exact-source
     local dsc_base=https://snapshot.debian.org/archive/debian/20250729T023717Z/pool/main/p/perl
     local orig_base=https://snapshot.debian.org/archive/debian/20250119T203702Z/pool/main/p/perl
     mkdir -p "$dest"
@@ -124,7 +124,7 @@ stage_virtio_win() {
     local src_rpm=virtio-win-${version}-${release}.src.rpm
     local src_sha256=25561bba120e67bfae842429d5e25764c38e74b92f78d9ef90c20ec41d2ad75d
     local base=https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-${version}-${release}
-    local fetch=$cache/virtio-win
+    local fetch=$downloads/virtio-win
     local third_party=$stage/nex/third-party/virtio-win
     # The complete source tree is needed for the separately distributed source
     # bundle, but the installation media needs only the source RPM itself.
@@ -141,7 +141,12 @@ stage_virtio_win() {
         mv "$fetch/$src_rpm.partial" "$fetch/$src_rpm"
     fi
     printf '%s  %s\n' "$src_sha256" "$fetch/$src_rpm" | sha256sum --check
-    gzip -9n -c "$fetch/$iso_name" > "$stage/nex/media/virtio-win.iso.gz"
+    # Compressing the driver ISO takes minutes and is deterministic (-n), so keep the result.
+    if [[ ! -f $fetch/$iso_name.gz ]]; then
+        gzip -9n -c "$fetch/$iso_name" > "$fetch/$iso_name.gz.partial"
+        mv "$fetch/$iso_name.gz.partial" "$fetch/$iso_name.gz"
+    fi
+    cp "$fetch/$iso_name.gz" "$stage/nex/media/virtio-win.iso.gz"
     printf '%s  virtio-win.iso\n' "$iso_sha256" > "$stage/nex/media/virtio-win.iso.sha256"
     rm -rf "$retained_source"
     mkdir -p "$retained_source/source"
@@ -333,6 +338,9 @@ fi
 [[ $(dpkg --print-architecture) == amd64 ]]
 cache=/work/.cache/nex-iso
 stage=$cache/stage
+# Pinned downloads are kept between builds and only fetched when missing. CI mounts a
+# persistent Docker volume here (scripts/ci-docker.sh); a local build keeps them in the tree.
+downloads=${NEX_DOWNLOADS:-$cache}
 source_snapshot=${NEX_DEBIAN_SOURCE_SNAPSHOT:?NEX_DEBIAN_SOURCE_SNAPSHOT required}
 security_snapshot=${NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT:?NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT required}
 # The ISO carries exactly one Nex Core version: the nex-core-local package it installs.
@@ -345,7 +353,7 @@ matched_dlm_deb=${MATCHED_DLM_DEB:?matched dlm-controld package path required}
 dpkg-deb -f "$matched_dlm_deb" Depends | grep -Fq 'libstonithd56 (= 3.0.0-2)'
 version=$(dpkg-deb -f "$core_local_deb" Version)
 output=/work/dist/nex-core-${version}-amd64.iso
-mkdir -p "$cache" /work/dist
+mkdir -p "$cache" "$downloads" /work/dist
 trap 'chown -R "${BUILD_UID:-0}:${BUILD_GID:-0}" /work/dist "$cache"' EXIT
 # Explicit release + expected digest; update together only after Debian signature
 # verification. Archive fallback supports rebuilding after current advances.
@@ -367,16 +375,16 @@ fingerprint=DF9B9C49EAA9298432589D76DA87E80D6294BE9B
 gpg --batch --export "$fingerprint" > "$cache/cd-key.gpg"
 gpgv --keyring "$cache/cd-key.gpg" "$cache/SHA256SUMS.sign" "$cache/SHA256SUMS"
 grep -Fx "$expected  $iso" "$cache/SHA256SUMS"
-if [[ ! -f $cache/$iso ]]; then
+if [[ ! -f $downloads/$iso ]]; then
     # Resume across transient TLS/network drops; --retry alone does not cover mid-transfer EOFs.
     curl -fL --retry 5 --retry-all-errors --retry-delay 2 --continue-at - \
-      "$base/$iso" -o "$cache/$iso.partial"
-    mv "$cache/$iso.partial" "$cache/$iso"
+      "$base/$iso" -o "$downloads/$iso.partial"
+    mv "$downloads/$iso.partial" "$downloads/$iso"
 fi
-printf '%s  %s\n' "$expected" "$cache/$iso" | sha256sum --check
+printf '%s  %s\n' "$expected" "$downloads/$iso" | sha256sum --check
 rm -rf "$stage"
 mkdir -p "$stage/nex/repo"
-xorriso -osirrox on -indev "$cache/$iso" -extract / "$stage"
+xorriso -osirrox on -indev "$downloads/$iso" -extract / "$stage"
 chmod -R u+w "$stage"
 # These optional firmware packages are outside the reviewed server-hardware
 # scope. Remove their pool copies and repository metadata together.
@@ -435,23 +443,23 @@ apt_snapshot=(
 )
 apt-get "${apt_snapshot[@]}" update
 : > "$cache/empty-status"
-deb_cache=$(mktemp -d "$cache/debs.XXXXXX")
-mkdir -p "$deb_cache/partial"
 mapfile -t packages < installer/packages.txt
 apt_packages=()
 for package in "${packages[@]}"; do
     [[ $package == ovmf-generic ]] || apt_packages+=("$package")
 done
-apt-get -y --download-only --no-install-recommends \
-    "${apt_snapshot[@]}" \
-    -o Dir::State::status="$cache/empty-status" \
-    -o Dir::Cache::archives="$deb_cache" install "${apt_packages[@]}"
-mapfile -t downloaded_debs < <(find "$deb_cache" -maxdepth 1 -type f -name '*.deb' -printf '%f\n' | sort)
-((${#downloaded_debs[@]})) || { echo 'APT did not download the requested offline package closure' >&2; exit 1; }
-for deb in "${downloaded_debs[@]}"; do
-    cp "$deb_cache/$deb" "$stage/nex/repo/"
-done
-rm -rf "$deb_cache"
+apt_closure=(-y --download-only --no-install-recommends "${apt_snapshot[@]}" -o Dir::State::status="$cache/empty-status")
+# Against an empty archive directory apt lists every file of the closure; the download
+# then runs against the kept archive directory, where apt verifies and reuses what is
+# already there and fetches only the rest.
+resolve=$(mktemp -d "$cache/resolve.XXXXXX")
+mkdir -p "$resolve/partial" "$downloads/debs"
+apt-get "${apt_closure[@]}" --print-uris -o Dir::Cache::archives="$resolve" install "${apt_packages[@]}" \
+    | sed -n "s/^'[^']*' \([^ ]*\) .*/\1/p" | sort > "$cache/debs.list"
+rm -rf "$resolve"
+[[ -s $cache/debs.list ]] || { echo 'APT did not resolve the requested offline package closure' >&2; exit 1; }
+apt-get "${apt_closure[@]}" -o Dir::Cache::archives="$downloads/debs" install "${apt_packages[@]}"
+xargs -a "$cache/debs.list" -I{} cp "$downloads/debs/{}" "$stage/nex/repo/"
 stage_ovmf_generic
 stage_virtio_win
 # Keep only the DLM rebuilt against this media's Pacemaker fencing ABI.
@@ -528,10 +536,10 @@ SOURCES
 # 5.40.1-6+deb13u1; retain the exact dsc/tarballs so the source bundle stays complete.
 ensure_perl_exact_source
 python3 /work/scripts/build-source-bundle.py \
-    --version "$version" --iso "$cache/$iso" --tree "$stage" --repository "$stage/nex/repo" \
+    --version "$version" --iso "$downloads/$iso" --tree "$stage" --repository "$stage/nex/repo" \
     --apt-sources "$cache/source-sources.list" \
     --source-input "$cache/virtio-win-retained-source" --source-input "$stage/nex/third-party" --source-input "$stage/nex/nex-source.tar.gz" \
-    --source-input "$cache/perl-exact-source" \
+    --source-input "$downloads/perl-exact-source" --source-cache "$downloads/sources" \
     --output "/work/dist/nex-core-${version}-source.tar.gz"
 cp installer/assets/boot-splash.png "$stage/isolinux/splash.png"
 cat > "$stage/isolinux/isolinux.cfg" <<'BIOS'
@@ -635,7 +643,7 @@ grep -Fq $'\tsource_retained' "$stage/nex/third-party/virtio-win/manifest.tsv"
 grep -Fq $'\tyes' "$stage/nex/third-party/virtio-win/manifest.tsv"
 [[ $(gzip -dc "$stage/nex/media/virtio-win.iso.gz" | sha256sum | awk '{print $1}') == 303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d ]]
 # Replay original hybrid BIOS/UEFI boot structure and signed EFI binaries.
-xorriso -indev "$cache/$iso" -outdev "$output" \
+xorriso -indev "$downloads/$iso" -outdev "$output" \
     -boot_image any replay -update_r "$stage" / -volid NEX_CORE -commit -end
 cp "$stage/nex/package-manifest.tsv" /work/dist/package-manifest.tsv
 python3 /work/scripts/build-source-bundle.py \

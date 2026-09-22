@@ -106,26 +106,35 @@ def components_for_tree(repository, tree):
     return debs, components
 
 
+def dsc_fields(dsc):
+    fields = {}
+    key = None
+    for line in dsc.read_text(errors='replace').splitlines():
+        if line == '-----BEGIN PGP SIGNATURE-----':
+            break
+        if line[:1].isspace() and key:
+            fields[key] += '\n' + line.strip()
+        elif ':' in line:
+            key, value = line.split(':', 1)
+            fields[key] = value.lstrip()
+    return fields
+
+
+def dsc_checksums(dsc):
+    """(sha256, size, name) for every file the source descriptor lists."""
+    return [row.split(maxsplit=2) for row in dsc_fields(dsc).get('Checksums-Sha256', '').splitlines() if row]
+
+
 def retained_dsc(directory, source, version):
     """Return a complete matching Debian source descriptor, if one is retained."""
     for dsc in Path(directory).rglob('*.dsc'):
-        fields = {}
-        key = None
-        for line in dsc.read_text(errors='replace').splitlines():
-            if line == '-----BEGIN PGP SIGNATURE-----':
-                break
-            if line[:1].isspace() and key:
-                fields[key] += '\n' + line.strip()
-            elif ':' in line:
-                key, value = line.split(':', 1)
-                fields[key] = value.lstrip()
+        fields = dsc_fields(dsc)
         if fields.get('Source') != source or fields.get('Version') != version:
             continue
-        checksums = [row for row in fields.get('Checksums-Sha256', '').splitlines() if row]
+        checksums = dsc_checksums(dsc)
         if not checksums:
             continue
-        for row in checksums:
-            expected, size, name = row.split(maxsplit=2)
+        for expected, size, name in checksums:
             artifact = dsc.parent / name
             if not artifact.is_file() or artifact.stat().st_size != int(size) or digest(artifact) != expected:
                 break
@@ -160,7 +169,9 @@ def archive_directory(source, output):
         info.uname = info.gname = ''
         info.pax_headers = {}
         return info
-    with tarfile.open(output, 'w:gz') as archive:
+    # The bundle is mostly compressed source tarballs: level 1 is several times faster than
+    # the default and the archive is no larger for it.
+    with tarfile.open(output, 'w:gz', compresslevel=1) as archive:
         for path in sorted(source.rglob('*')):
             archive.add(path, arcname=str(Path('nex-iso-source') / path.relative_to(source)),
                         recursive=False, filter=public_metadata)
@@ -185,6 +196,8 @@ def main(argv=None):
                         help='write final ISO/source-bundle binding after mastering')
     parser.add_argument('--source-bundle', type=Path)
     parser.add_argument('--apt-sources', type=Path, help='pinned deb-src list for Debian source retrieval')
+    parser.add_argument('--source-cache', type=Path,
+                        help='directory kept between builds; apt-get source skips files already there')
     parser.add_argument('--source-input', action='append', default=[], type=Path,
                         help='already retained source tree/archive, repeated for rebuilt packages')
     args = parser.parse_args(argv)
@@ -246,7 +259,14 @@ def main(argv=None):
         provided = bundle / 'provided-sources'
         missing = [(source, version) for source, version in needed
                    if not provided.exists() or not retained_dsc(provided, source, version)]
-        if missing:
+        if missing and args.source_cache:
+            args.source_cache.mkdir(parents=True, exist_ok=True)
+            fetch_sources(missing, args.source_cache, args.apt_sources)
+            for source, version in missing:
+                dsc = retained_dsc(args.source_cache, source, version)
+                for name in [dsc.name, *(name for _, _, name in dsc_checksums(dsc))] if dsc else []:
+                    shutil.copy2(dsc.parent / name, fetched / name)
+        elif missing:
             fetch_sources(missing, fetched, args.apt_sources)
         incomplete = [(source, version) for source, version in needed
                       if not retained_dsc(provided, source, version)

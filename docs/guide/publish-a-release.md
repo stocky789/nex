@@ -38,7 +38,13 @@ Website workflow still exists for website-only pushes that skip the ISO build; s
   `0.2.9` only.
 - Maintainer access to the Nex repository on the configured Git forge. The runner needs Docker;
   it may execute jobs inside a container, since the build locates the workspace on the Docker
-  host itself.
+  host itself. Builder containers keep a `nex-build-cache` volume on that Docker host: the
+  pinned Debian packages and source archives, the Windows driver media, the Go build cache and
+  the npm cache survive between runs, so a rebuild at unchanged pins spends its time building
+  rather than downloading. The volume grows by a few gigabytes each time a snapshot pin
+  changes; remove it with `docker volume rm nex-build-cache` on the runner host to reclaim
+  the space or to force every input to be fetched again. The pinned Debian cloud image is
+  restored from the forge's cache server the same way.
 - `CHANGELOG.md` has a `## [X.Y.Z]` or `## [X.Y.Z-preN]` section for the version being released and it is the
   newest version heading. Entries under `[Unreleased]` are not published: move them under the
   version heading.
@@ -143,6 +149,10 @@ the package index does not list the released version.
 - **"ci-docker: refusing to mount ..."** — a build script tried to bind-mount a path outside
   the workspace, which the Docker host cannot see. Build inputs must live under the checkout;
   the workflow points `TMPDIR` there for that reason.
+- **The Release run is slow again** — the runner's Docker host lost the `nex-build-cache`
+  volume (a `docker volume prune`, a rebuilt runner) or a snapshot pin changed, so the first
+  run fetches everything from `snapshot.debian.org`, which is slow per connection. The next run
+  at the same pins reuses it.
 - **"gitea-release: ... HTTP 409"** — the tag is protected or another release still holds it.
   Remove the protection or the stray release and re-run.
 - **"gitea-release: <asset> attempt N failed: ..."** — the connection to the forge dropped while

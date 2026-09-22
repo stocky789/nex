@@ -1,0 +1,42 @@
+{
+  "summary": "Cut the Release ISO build from about 45 minutes of mostly repeated downloads: builder containers share a persistent nex-build-cache Docker volume on the runner host (pinned Debian packages and sources, virtio-win media and its compressed form, Go build cache, npm cache), the workflow restores the pinned cloud image from the forge cache server, the source bundle compresses at level 1, and the appliance build uses KVM when the Docker host can lend /dev/kvm. Only the resolved package closure reaches the media; stale cached files never do. API impact: none.",
+  "paths": [
+    "scripts/ci-docker.sh",
+    "installer/build.sh",
+    "scripts/build-source-bundle.py",
+    "appliance/build.py",
+    ".gitea/workflows/release.yml",
+    ".github/workflows/release.yml",
+    "tests/test_ci_docker.py",
+    "tests/test_iso_payload_efficiency.py",
+    "tests/test_source_bundle.py",
+    "docs/guide/publish-a-release.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "docs/guide/publish-a-release.md records the runner-side cache volume, how to clear it, and why a run after a pin change or a pruned volume is slow again.",
+    "pages": [
+      "docs/guide/publish-a-release.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Build and CI tooling only; no Controller/Core call, agent command or client-facing API changes."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone status changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The cache volume holds only re-downloadable pinned build inputs and compiler caches on the CI runner; nothing about pools, hosts or the Controller lives there."
+  },
+  "verification": {
+    "method": "Unit tests for the docker wrapper, the build script contract and the source-cache path of the bundle script (python3 -m unittest tests/test_ci_docker.py tests/test_iso_payload_efficiency.py tests/test_source_bundle.py tests/test_appliance_build.py); bash -n and shellcheck on the changed shell; a full local ISO build twice in a row to measure the warm-cache gain, recorded in the change hand-off. The runner-side effect is confirmed on the next Release run's step timings.",
+    "evidence": [
+      "tests/test_ci_docker.py",
+      "tests/test_iso_payload_efficiency.py",
+      "tests/test_source_bundle.py"
+    ]
+  }
+}

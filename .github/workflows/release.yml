@@ -88,7 +88,14 @@ jobs:
           echo "workspace=$host" >> "$GITHUB_OUTPUT"
           echo "The Docker host sees the workspace at $host"
 
+      - name: Restore the pinned Debian cloud base image
+        id: base-image
+        uses: https://github.com/actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .cache/appliance
+          key: appliance-base-debian-13-genericcloud-amd64-20260831-2587
       - name: Fetch the pinned Debian cloud base image
+        if: steps.base-image.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           # installer/build.sh verifies this file against its pinned SHA-256 before use.
